@@ -17,7 +17,7 @@ def fill_pose(pose_data, poses, poses_unfixed):
     k = 0
     n_poses = len(poses)
     for i in range(n_poses):
-        if poses_unfixed(i):
+        if poses_unfixed[i]:
             n_e4x4_flat_INPLACE(pose_data[k], poses[i])
             k += 1
     return
@@ -35,7 +35,7 @@ def fill_extr(extr_data, extr, extr_unfixed):
     k = 0
     n_extr = len(extr)
     for i in range(n_extr):
-        if extr_unfixed(i):
+        if extr_unfixed[i]:
             n_e4x4(extr_data[k], extr[i])
             k += 1
     return
@@ -53,7 +53,7 @@ def fill_intr(intr_data, intr, intr_unfixed):
     k = 0
     n_intr = len(intr)
     for i in range(n_intr):
-        if intr_unfixed(i):
+        if intr_unfixed[i]:
             intr[i, 0, 0] = intr_data[k, 0]
             intr[i, 0, 2] = intr_data[k, 1]
             intr[i, 1, 1] = intr_data[k, 2]

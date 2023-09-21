@@ -261,30 +261,28 @@ class AbstractParamHandler:
         """
         cams = self.camset
         self.jac_mask = []
-
         param_array = []
         cam_idx = 0
-
         poses, detected_poses = self.target.pose_in_detections(self.detection, self.camset)
         for idp, pose_unfixed in enumerate(self.bundlePrimitive.poses_unfixed):
-            #how do we handle missing poses - delete the image associated with the missing daata
+            # how do we handle missing poses - delete the image associated with the missing daata
             if pose_unfixed:
-                param_array.extend(ext_4x4_to_rod(poses[idp]))
-
+                ext = ext_4x4_to_rod(poses[idp])
+                param_array.append(ext[0])
+                param_array.append(ext[1])
         for idc, ext_unfixed in enumerate(self.bundlePrimitive.extr_unfixed):
             if ext_unfixed:
-                param_array.extend(ext_4x4_to_rod(cams[idc].extrinsic))
-
+                ext = ext_4x4_to_rod(cams[idc].extrinsic)
+                param_array.append(ext[0])
+                param_array.append(ext[1])
         for idc, intr_unfixed in enumerate(self.bundlePrimitive.intr_unfixed):
             if intr_unfixed:
-                param_array.extend(cams[idc].intrinsic[[0, 0, 1, 1], [0, 2, 1, 2]])
-
+                param_array.append(cams[idc].intrinsic[[0, 0, 1, 1], [0, 2, 1, 2]])
         for idc, intr_unfixed in enumerate(self.bundlePrimitive.dst_unfixed):
             if intr_unfixed:
-                param_array.extend(np.squeeze(cams[idc].distortion_coefs))
-
+                param_array.append(np.squeeze(cams[idc].distortion_coefs))
         param_array = self.add_extra_params(param_array)
-        return np.array(param_array)
+        return np.concatenate(param_array, axis=0)
 
     def get_camset(self, x, return_pose=False) -> CameraSet or tuple[CameraSet, np.ndarray]:
         """

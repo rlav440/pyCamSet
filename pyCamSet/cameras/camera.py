@@ -20,7 +20,7 @@ DEFAULT_CAMERA_MATRIX = np.array(
      [0.0, 0.0, 1.0]])  # mm
 
 
-class Camera():
+class Camera:
     """
     An object oriented camera model.
     Using the pinhole camera model this represents the position and imaging characteristics

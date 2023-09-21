@@ -283,7 +283,7 @@ class AbstractParamHandler:
             if intr_unfixed:
                 param_array.extend(np.squeeze(cams[idc].distortion_coefs))
 
-        self.add_extra_params(param_array)
+        param_array = self.add_extra_params(param_array)
         return np.array(param_array)
 
     def get_camset(self, x, return_pose=False) -> CameraSet or tuple[CameraSet, np.ndarray]:

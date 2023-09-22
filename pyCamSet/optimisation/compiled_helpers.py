@@ -363,7 +363,11 @@ def faster_cf(dct: np.ndarray, im_points: np.ndarray,
     work_pos = np.empty((4, 1))
     work_pos[-1, 0] = 1.0
 
-    if dct.shape[1] == 5:  # TODO fix the weird edge case for single ID targets.
+    if dct.shape[1] == 5:
+        # TODO fix the weird edge case for single ID targets.
+        # except: numba stops compiling the code if the im_points array has ndim == 3.
+        # the function will still run and produce the correct output if it is run uncompiled.
+        # this bug has won.
         for idx in range(len(dct)):
             cam = int(dct[idx, 0])
             measured_uv[:] = dct[idx, -2:]

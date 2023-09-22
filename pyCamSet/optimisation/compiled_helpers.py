@@ -23,7 +23,7 @@ def fill_pose(pose_data, poses, poses_unfixed):
     return
 
 
-@njit(cache=True)
+# @njit(cache=True)
 def fill_extr(extr_data, extr, extr_unfixed):
     """
     Fills an extrinsics array with data from an input param array.
@@ -58,6 +58,7 @@ def fill_intr(intr_data, intr, intr_unfixed):
             intr[i, 0, 2] = intr_data[k, 1]
             intr[i, 1, 1] = intr_data[k, 2]
             intr[i, 1, 2] = intr_data[k, 3]
+            intr[i, 2, 2] = 1
             k += 1
     return
 
@@ -74,26 +75,26 @@ def fill_dst(dst_data, dst, dst_unfixed):
     k = 0
     n_dst = len(dst)
     for i in range(n_dst):
-        if dst_unfixed(i):
+        if dst_unfixed[i]:
             dst[i, :] = dst_data[k, :]
             k += 1
     return
 
 
-@numba.jit(forceobj=True, cache=True)
-def n_e4x4(rog_vec: np.ndarray) -> np.ndarray:
+@njit(cache=True)
+def n_e4x4(rog_vec: np.ndarray, output: np.ndarray):
     """
     Converts a 6dof pose vector into a 4x4 homogenous transform
     :param rog_vec: A 3 axis_angle opencv representation of rotation, followed by a translation
-    :return tfrom: the output transform.
+    :param output: the 4x4 output to write the data too
     """
-    tform = np.empty((4, 4))
-    tform[:] = 0
-    tform[-1, -1] = 1
-    rot, _ = cv2.Rodrigues(rog_vec[:3])  # force this to be nopython unfortunately
-    tform[:-1, -1] = rog_vec[3:]
-    tform[:-1, :-1] = rot
-    return tform
+    angles = rog_vec[:3].reshape((3, 1))
+    blank_rot = np.empty((3, 3))
+    numba_flat_rodrigues_INPLACE(angles, blank_rot)
+    output[:-1, :] = 0
+    output[:-1, :-1] = blank_rot
+    output[-1, -1] = 1
+    output[:-1, -1] = rog_vec[3:]
 
 
 @njit(fastmath=True, cache=True)
@@ -361,6 +362,19 @@ def faster_cf(dct: np.ndarray, im_points: np.ndarray,
     proj_uv = np.empty((3, 1))
     work_pos = np.empty((4, 1))
     work_pos[-1, 0] = 1.0
+
+    if dct.shape[1] == 5:  # TODO fix the weird edge case for single ID targets.
+        for idx in range(len(dct)):
+            cam = int(dct[idx, 0])
+            measured_uv[:] = dct[idx, -2:]
+            work_pos[:-1, 0] = im_points[  # just automatically account for homogenous
+                int(dct[idx, 1]), 0, int(dct[idx, 2]),
+            ]  # this differs
+            np.dot(projection_matrixes[cam], work_pos, out=proj_uv)
+            proj_uv[0, 0], proj_uv[1, 0] = proj_uv[0, 0] / proj_uv[-1, 0], proj_uv[1, 0] / proj_uv[-1, 0]
+            nb_distort_prealloc(proj_uv[:, 0], intrinsics[cam], dists[cam])
+            error[idx * 2] = proj_uv[0, 0] - measured_uv[0]
+            error[idx * 2 + 1] = proj_uv[1, 0] - measured_uv[1]
 
     if dct.shape[1] == 6:
         for idx in range(len(dct)):

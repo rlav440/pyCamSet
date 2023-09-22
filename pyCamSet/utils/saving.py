@@ -111,7 +111,7 @@ def save_camset(
         handler_config['handler_name'] = handler.__class__.__name__
         handler_config['fixed_params'] = numpy_dict_to_list(copy(handler.fixed_params))
         handler_config['options'] = handler.problem_opts
-        handler_config['co_optimise'] = handler.cooptimise
+        handler_config['co_optimise'] = False #handler.cooptimise
         if handler.missing_poses is not None:
             handler_config['missing_poses'] = handler.missing_poses.astype(int).tolist()
 

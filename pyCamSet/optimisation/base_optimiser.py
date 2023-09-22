@@ -9,9 +9,9 @@ from scipy.optimize import least_squares
 
 from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
 from pyCamSet.cameras import CameraSet
-from pyCamSet.utils.general_utils import homogenous_transform, ext_4x4_to_rod
+from pyCamSet.utils.general_utils import ext_4x4_to_rod
 from pyCamSet.optimisation.compiled_helpers import fill_pose, fill_dst, fill_extr, fill_intr
-from pyCamSet.optimisation.compiled_helpers import nb_costfn
+from pyCamSet.optimisation.compiled_helpers import nb_costfn, n_htform_broadcast_prealloc
 
 DEFAULT_OPTIONS = {
     'verbosity': 2,
@@ -156,6 +156,14 @@ class AbstractParamHandler:
         """
         return param_array
 
+    def special_plots(self, params):
+        """
+        A function called during a visualisaiton of the calibration results for any
+        target specific plots to show.
+        :param params: The parameters of the calbiration.
+        """
+        return
+
     def populate_self_from_fixed_params(self):
         """
         Populates the internal data structures from the fixed params.
@@ -182,7 +190,9 @@ class AbstractParamHandler:
         x = self.parse_extra_params_and_setup(x)
         poses, extr, intr, dst = self.bundlePrimitive.return_bundle_primitives(x)
         proj = intr @ extr[:, :3, :]
-        im_points = homogenous_transform(poses, self.target.point_data)
+        im_points = np.empty((len(poses), *self.target.point_data.shape))
+        for idx, pose in enumerate(poses):
+            n_htform_broadcast_prealloc(self.target.point_data, pose, im_points[idx])
         return proj, intr, dst, im_points
 
     def parse_detections_to_reconstructable(self, draw_distribution=False):
@@ -295,7 +305,7 @@ class AbstractParamHandler:
         new_cams = copy(self.camset)
         poses, extr, intr, dst = self.bundlePrimitive.return_bundle_primitives(x)
 
-        for idc, cam_name in self.cam_names:
+        for idc, cam_name in enumerate(self.cam_names):
             temp_cam = new_cams[cam_name]
             temp_cam.extrinsic = extr[idc]
             temp_cam.intrinsic = intr[idc]

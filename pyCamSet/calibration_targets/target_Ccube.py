@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-
 import numpy as np
 import pyvista as pv
 from cv2 import aruco
@@ -13,6 +12,14 @@ from pyCamSet.calibration_targets import AbstractTarget, ImageDetection, FaceToS
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import split_aruco_dictionary, e_4x4, downsample_valid
 
+TFORMS = [
+    e_4x4([1.209,   1.209, 1.209], [ -1.,  -0.5,  0. ]), 
+    e_4x4([ 0.,    -1.571, 0.,   ], [0.5,    0.,  0. ]), 
+    e_4x4([-1.209, -1.209, -1.209], [0.,  -0.5,  0. ]), 
+    e_4x4([1.571,    0.,    0.   ], [0.,    0.5,  0. ]), 
+    e_4x4([0.,      0.,     0.,],   [0.,   0.,  -0.5]), 
+    e_4x4([2.221,   2.221,  0.,  ], [0.,  0.,  0.5,]),
+]
 
 class Ccube(AbstractTarget):
     """
@@ -48,7 +55,7 @@ class Ccube(AbstractTarget):
 
         self.boards = [aruco.CharucoBoard_create(n_points, n_points, self.square_size,
                                                  markerLength=0.75 * self.square_size, dictionary=a_dict)
-                       for a_dict in self.a_dicts()[:6]]
+                       for a_dict in self.a_dicts]
 
         self.n_points = n_points
         self.draw_res = draw_res
@@ -57,10 +64,7 @@ class Ccube(AbstractTarget):
 
         self.faceData = FaceToShape(
             face_local_coords=[board.ChessboardCorners for board in self.boards],
-            face_transforms=[
-                e_4x4(), e_4x4(), e_4x4(),
-                e_4x4(), e_4x4(), e_4x4()
-            ]
+            face_transforms=TFORMS
         )
         self.point_data = self.faceData.point_data
         self._process_data()

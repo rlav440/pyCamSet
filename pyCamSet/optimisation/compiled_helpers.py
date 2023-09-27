@@ -1,4 +1,5 @@
 import math
+from os import walk
 import numba
 from numba import njit
 import numpy as np
@@ -549,25 +550,33 @@ def n_dist_prealloc(x, out):
 
 
 @njit(cache=True)
-def n_rigid_via_svd(v0, v1):
+def n_estimate_rigid_transform(v0, v1) -> tuple[np.ndarray, np.ndarray]:
     """
     Calculates the rigid transform between two sets of points using an svd
     :params v0: The first set of points
     :params v1: The second set of points
     """
-    t0 = np.zeros(3)
-    t1 = np.zeros(3)
+
+    t0 = np.zeros((3))
+    t1 = np.zeros((3))
+
+    work_space = np.zeros((3,3))
     ndims = v0.shape[1]
-    for i in range(v1.shape[0]):
-        t0 += v0[i]
-        t1 += v1[i]
+    for i in range(v1.shape[0]): #gets the mean vectors of both
+        t0 += v0[i, :]
+        t1 += v1[i, :]
     t0 /= -v0.shape[0]
     t1 /= -v1.shape[0]
     v0 += t0
     v1 += t1
-    u, s, vh = np.linalg.svd(np.dot(v1.T, v0))
-    R = np.dot(u, vh)
-    if np.linalg.det(R) < 0.0:
-        R -= np.outer(u[:, ndims - 1], vh[ndims - 1, :] * 2.0)
-    t = t0 @ R.T - t1
-    return R, t
+
+
+
+    np.dot(np.ascontiguousarray(v1.T.copy()).astype("double"), v0, work_space)
+    u, _ , vh = np.linalg.svd(work_space)
+    np.dot(u, vh, work_space)
+    if np.linalg.det(work_space) < 0.0:
+        work_space -= np.outer(u[:, ndims - 1], vh[ndims - 1, :] * 2.0)
+
+    t = t0 - t1
+    return work_space, t

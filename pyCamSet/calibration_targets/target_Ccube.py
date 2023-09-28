@@ -13,13 +13,14 @@ from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import split_aruco_dictionary, e_4x4, downsample_valid
 
 TFORMS = [
-    e_4x4([1.209,   1.209, 1.209], [ -1.,  -0.5,  0. ]), 
-    e_4x4([ 0.,    -1.571, 0.,   ], [0.5,    0.,  0. ]), 
-    e_4x4([-1.209, -1.209, -1.209], [0.,  -0.5,  0. ]), 
-    e_4x4([1.571,    0.,    0.   ], [0.,    0.5,  0. ]), 
-    e_4x4([0.,      0.,     0.,],   [0.,   0.,  -0.5]), 
-    e_4x4([2.221,   2.221,  0.,  ], [0.,  0.,  0.5,]),
+	([-1.209,-1.209,-1.209],[-1. , 0. ,-0.5]),
+	([ 2.221, 0.   ,-2.221],[0.5,0.5,0.5]),
+	([1.209,1.209,1.209],[ 0. ,-1. ,-0.5]),
+	([ 0.   , 2.221,-2.221],[0.5,0.5,0.5]),
+	([0.,0.,0.],[-0.5,-0.5,-0.5]),
+	([2.221,2.221,0.   ],[-0.5,-0.5, 0.5]),
 ]
+
 
 class Ccube(AbstractTarget):
     """
@@ -55,25 +56,35 @@ class Ccube(AbstractTarget):
 
         self.boards = [aruco.CharucoBoard_create(n_points, n_points, self.square_size,
                                                  markerLength=0.75 * self.square_size, dictionary=a_dict)
-                       for a_dict in self.a_dicts]
+            for a_dict in self.a_dicts][:6] #only need 6 of them!
 
         self.n_points = n_points
         self.draw_res = draw_res
         self.dpi = self.draw_res[0] / self.length / 39.3701  # inch conversion
         self.textures = [board.draw(draw_res) for board in self.boards]
+        print(self.boards[0].chessboardCorners.squeeze())
+
+        bd = np.array([board.chessboardCorners for board in self.boards])
+        coord_bump = self.length*border_fraction/2
+        board_coords = bd + [coord_bump, coord_bump, 0]
+        self.base_face = np.array([
+                            [coord_bump, coord_bump,0],
+                            [coord_bump, self.length - coord_bump,0],
+                            [self.length - coord_bump, self.length - coord_bump,0],
+                            [self.length - coord_bump, coord_bump,0],
+                        ])
+        print(self.base_face)
 
         self.faceData = FaceToShape(
-            face_local_coords=[board.ChessboardCorners for board in self.boards],
-            face_transforms=TFORMS
+            face_local_coords=board_coords,
+            face_transforms=[e_4x4(*t) for t in TFORMS],
+            scale_factor= self.length,
         )
         self.point_data = self.faceData.point_data
         self._process_data()
 
     def plot(self):
-        scene = pv.Scene()
-        faces = self.faceData.draw_meshes(self.textures, BLANK)
-        for face, im in faces:
-            scene.add_mesh(face, texture=im)
+        faces = self.faceData.draw_meshes(self.base_face, [board.draw(self.draw_res) for board in self.boards])
 
     def save_to_pdf(
             self,

@@ -13,14 +13,5 @@ def test_cube():
 
 if __name__ == "__main__":
     
-    #test_cube()
-    make_tforms(
-        np.array([
-            [0, 0, 0],
-            [0, 1, 0],
-            [1, 1, 0],
-            [1, 0, 0],
-        ]).astype(float),
-        "cube"
-    )
-    print("Hi")
+    test_cube()
+    

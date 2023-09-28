@@ -550,12 +550,15 @@ def n_dist_prealloc(x, out):
 
 
 @njit(cache=True)
-def n_estimate_rigid_transform(v0, v1) -> tuple[np.ndarray, np.ndarray]:
+def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Calculates the rigid transform between two sets of points using an svd
     :params v0: The first set of points
     :params v1: The second set of points
     """
+
+    v0 = v0.copy()
+    v1 = v1.copy()
 
     t0 = np.zeros((3))
     t1 = np.zeros((3))
@@ -565,18 +568,18 @@ def n_estimate_rigid_transform(v0, v1) -> tuple[np.ndarray, np.ndarray]:
     for i in range(v1.shape[0]): #gets the mean vectors of both
         t0 += v0[i, :]
         t1 += v1[i, :]
-    t0 /= -v0.shape[0]
-    t1 /= -v1.shape[0]
-    v0 += t0
-    v1 += t1
-
-
+    t0 /= v0.shape[0]
+    t1 /= v1.shape[0]
+    v0 -= t0
+    v1 -= t1
 
     np.dot(np.ascontiguousarray(v1.T.copy()).astype("double"), v0, work_space)
     u, _ , vh = np.linalg.svd(work_space)
-    np.dot(u, vh, work_space)
+    work_space = vh @ u.T
     if np.linalg.det(work_space) < 0.0:
         work_space -= np.outer(u[:, ndims - 1], vh[ndims - 1, :] * 2.0)
 
-    t = t0 - t1
+    # the process described here is a transformation from 
+
+    t = - work_space @ t0 + t1
     return work_space, t

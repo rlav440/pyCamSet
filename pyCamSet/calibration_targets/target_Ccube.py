@@ -21,6 +21,21 @@ TFORMS = [
 	([2.221,2.221,0.   ],[-0.5,-0.5, 0.5]),
 ]
 
+def make_blank_square(draw_res, line_fraction, border_fraction):
+    """
+    This function makes a blank face of a square, with surrounding edge lines set to black.
+    As convinience, it also returns the array offset used for the border fraction.
+    :param draw_res: the drawing resolution of the cube face
+    :param line_fraction: the thickness of the line as a fraction of the face width
+    :param border_fraction: the size of the fraction to use as the border of the cube.
+    """
+    canvas = np.ones(draw_res)*255
+    int_line = int(draw_res[0] * line_fraction)
+    canvas[:, :int_line] = 0
+    canvas[:int_line, :] = 0
+    canvas[:, -int_line:] = 0
+    canvas[-int_line:, :] = 0
+    return canvas, int(border_fraction * draw_res[0]/2)
 
 class Ccube(AbstractTarget):
     """
@@ -28,10 +43,10 @@ class Ccube(AbstractTarget):
     """
 
     def __init__(self, length=20, n_points=5,
-                 aruco_dict=aruco.DICT_6X6_250,
+                 aruco_dict=aruco.DICT_4X4_1000,
                  draw_res=(1000, 1000),
-                 border_fraction=0.2,
-                 line_fraction=0.01,
+                 border_fraction=0.1,
+                 line_fraction=0.003,
                  ):
         """
 
@@ -61,17 +76,22 @@ class Ccube(AbstractTarget):
         self.n_points = n_points
         self.draw_res = draw_res
         self.dpi = self.draw_res[0] / self.length / 39.3701  # inch conversion
-        self.textures = [board.draw(draw_res) for board in self.boards]
+        blank_face, board_offset = make_blank_square(draw_res, line_fraction, border_fraction)
+        sub_res = (draw_res[0] - 2 * board_offset, draw_res[1] - 2*board_offset)
+        self.textures = [blank_face.copy() for _ in range(6)]
+        for t, board in zip(self.textures, self.boards):
+            t[board_offset:-board_offset, board_offset:-board_offset] = board.draw(sub_res)
+
         print(self.boards[0].chessboardCorners.squeeze())
 
         bd = np.array([board.chessboardCorners for board in self.boards])
         coord_bump = self.length*border_fraction/2
         board_coords = bd + [coord_bump, coord_bump, 0]
         self.base_face = np.array([
-                            [coord_bump, coord_bump,0],
-                            [coord_bump, self.length - coord_bump,0],
-                            [self.length - coord_bump, self.length - coord_bump,0],
-                            [self.length - coord_bump, coord_bump,0],
+                            [0, 0,0],
+                            [0, self.length,0],
+                            [self.length, self.length,0],
+                            [self.length, 0,0],
                         ])
         print(self.base_face)
 
@@ -84,7 +104,7 @@ class Ccube(AbstractTarget):
         self._process_data()
 
     def plot(self):
-        faces = self.faceData.draw_meshes(self.base_face, [board.draw(self.draw_res) for board in self.boards])
+        faces = self.faceData.draw_meshes(self.base_face, self.textures)
 
     def save_to_pdf(
             self,

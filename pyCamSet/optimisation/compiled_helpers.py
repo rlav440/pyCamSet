@@ -549,7 +549,7 @@ def n_dist_prealloc(x, out):
             out[i, j] = abs(out[i, j]) ** 0.5
 
 
-@njit(cache=True)
+# @njit(cache=True)
 def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Calculates the rigid transform between two sets of points using an svd
@@ -557,29 +557,27 @@ def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray
     :params v1: The second set of points
     """
 
-    v0 = v0.copy()
-    v1 = v1.copy()
-
     t0 = np.zeros((3))
     t1 = np.zeros((3))
 
-    work_space = np.zeros((3,3))
+    matR = np.zeros((3,3))
     ndims = v0.shape[1]
     for i in range(v1.shape[0]): #gets the mean vectors of both
         t0 += v0[i, :]
         t1 += v1[i, :]
     t0 /= v0.shape[0]
     t1 /= v1.shape[0]
-    v0 -= t0
-    v1 -= t1
+    lv0 = v0 - t0
+    lv1 = v1 - t1
 
-    np.dot(np.ascontiguousarray(v1.T.copy()).astype("double"), v0, work_space)
-    u, _ , vh = np.linalg.svd(work_space)
-    work_space = vh @ u.T
-    if np.linalg.det(work_space) < 0.0:
-        work_space -= np.outer(u[:, ndims - 1], vh[ndims - 1, :] * 2.0)
-
+    matR =  lv0.T @ lv1
+    u, _ , vh = np.linalg.svd(matR) 
+    matR = vh.T @ u.T
+    matR = vh.T @ np.diag([1,1, np.linalg.det(matR)]) @ u.T
     # the process described here is a transformation from 
+    t = - matR @ t0 + t1
 
-    t = - work_space @ t0 + t1
-    return work_space, t
+    # error = np.sum(np.abs((matR @ v0.T).T + t - v1))
+    # print(f"default={np.sum(np.abs(v0 - v1))}, tformed = {error}")
+    
+    return matR, t

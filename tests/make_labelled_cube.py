@@ -10,11 +10,15 @@ faces = np.array([
     [1, 0, 0],
 ]).astype("double")
 
-centre = np.array([0.5, 0.5, 0])
+
+
+
+mp  = np.mgrid[2:9,2:9]
+points = np.stack([mp[0].flatten(), mp[1].flatten(), np.zeros_like(mp[0].flatten())]).T/10
 
 tforms = make_tforms(faces, "cube")
 htforms = [e_4x4(*t) for t in tforms]
-extra_points = np.array([homogenous_transform(centre, h) for h in htforms])
+extra_points = np.concatenate([homogenous_transform(points, h) for h in htforms], axis=0)
 scene: pv.Plotter = pv.Plotter()
 
 cube =pv.Cube()

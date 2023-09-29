@@ -71,7 +71,8 @@ class FaceToShape:
 
         
         ppf = face_local_coords.shape[-2] #points per face
-
+        
+        self.sf = scale_factor
         self.face_local_coords = face_local_coords / scale_factor
         self.ur_flocal = self.face_local_coords.reshape((-1, ppf, 3))
         self.face_transforms = face_transforms
@@ -101,12 +102,16 @@ class FaceToShape:
             connections = [num_elems] + list(range(num_elems))
             new_mesh = pv.PolyData(face_corner, faces=connections)
             new_mesh.texture_map_to_plane(use_bounds=True, inplace=True)
-            new_mesh.transform(face_transform)
+            new_mesh.scale(1/self.sf, inplace=True)
+            new_mesh.transform(face_transform, inplace=True)
+            new_mesh.scale(self.sf, inplace=True)
             meshes.append(new_mesh)
          
         scene = pv.Plotter()
         for mesh, texture in zip(meshes, face_images):
-            scene.add_mesh(mesh, texture = pv.numpy_to_texture(texture))
+            scene.add_mesh(mesh, 
+                           texture = pv.numpy_to_texture(texture)
+                           )
         scene.add_mesh(pv.PolyData(self.point_data.reshape((-1,3))), color='r')
         scene.show()
 

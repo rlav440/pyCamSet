@@ -10,7 +10,7 @@ import pyvista as pv
 from matplotlib import pyplot as plt
 from numpy.linalg import norm
 
-from pyCamSet.utils.general_utils import distort_points, homogenous_transform, vector_cam_points
+from pyCamSet.utils.general_utils import distort_points, h_tform, vector_cam_points
 from pyCamSet.utils.general_utils import sensor_map
 
 DEFAULT_RES = [1000, 1000]
@@ -191,7 +191,7 @@ class Camera:
         :return points: points in the uv coordinates
         """
 
-        centered = homogenous_transform(points, self.proj)
+        centered = h_tform(points, self.proj)
         if centered.ndim == 1:
             centered = centered[None, ...]
         if mode == "image":

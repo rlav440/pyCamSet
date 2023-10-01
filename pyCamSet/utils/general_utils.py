@@ -196,7 +196,7 @@ def get_close_square_tuple(n):
     y = m.ceil(n/x)
     return (x,y)
 
-def homogenous_transform(points: np.ndarray, transform:np.ndarray, fill=1) -> np.ndarray:
+def h_tform(points: np.ndarray, transform:np.ndarray, fill=1) -> np.ndarray:
     """
     Performms a homogenous transformation on data
     :param points: the points to transform
@@ -405,7 +405,7 @@ def vector_cam_points(type, pts, intrinsics, cam_to_world):
     if type == "normalised":
         s_map /= np.linalg.norm(s_map, axis=-1, keepdims=True)
 
-    return homogenous_transform(s_map, cam_to_world, fill=0) #.transpose(s_map, (1,0,2))
+    return h_tform(s_map, cam_to_world, fill=0) #.transpose(s_map, (1,0,2))
 
 def sensor_map(type, intrinsics, res=(1600, 1200), dist_coefs=None):
     """

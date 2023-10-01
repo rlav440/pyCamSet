@@ -1,7 +1,7 @@
 import numpy as np
 import pyvista as pv
 from pyCamSet.calibration_targets.shape_by_faces import make_tforms
-from pyCamSet.utils.general_utils import homogenous_transform, e_4x4
+from pyCamSet.utils.general_utils import h_tform, e_4x4
 
 faces = np.array([
     [0, 0, 0],
@@ -18,7 +18,9 @@ points = np.stack([mp[0].flatten(), mp[1].flatten(), np.zeros_like(mp[0].flatten
 
 tforms = make_tforms(faces, "cube")
 htforms = [e_4x4(*t) for t in tforms]
-extra_points = np.concatenate([homogenous_transform(points, h) for h in htforms], axis=0)
+extra_points = np.concatenate([h_tform(points, h) for h in htforms], axis=0)
+centr = np.array([0.5, 0.5, 0])
+centres = np.array([h_tform(centr, h) for h in htforms])
 scene: pv.Plotter = pv.Plotter()
 
 cube =pv.Cube()
@@ -29,5 +31,7 @@ points = pv.PolyData(extra_points)
 scene.add_mesh(cube, style='wireframe')
 scene.add_mesh(points, color='r')
 scene.add_point_labels(corners, labels)
+edges = [str(i) for i in range(6)]
+scene.add_point_labels(pv.PolyData(centres), edges)
 scene.show()
 

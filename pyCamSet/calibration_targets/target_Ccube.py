@@ -21,6 +21,15 @@ TFORMS = [
 	([2.221,2.221,0.   ],[-0.5,-0.5, 0.5]),
 ]
 
+NET_FORMS=[
+	[[1.0,0.0,0.0], [0.0,1.0,0.0],[0.0,0.0,1.0]],
+	[[0.0,-1.0,-1.0], [1.0,0.0,0.0],[0.0,0.0,1.0]],
+	[[0.0,-1.0,0.0], [1.0,0.0,0.0],[0.0,0.0,1.0]],
+	[[1.0,0.0,1.0], [0.0,1.0,0.0],[0.0,0.0,1.0]],
+	[[0.0,1.0,0.0], [-1.0,0.0,0.0],[0.0,0.0,1.0]],
+	[[1.0,0.0,0.0], [0.0,1.0,1.0],[0.0,0.0,1.0]],
+]
+
 def make_blank_square(draw_res, line_fraction, border_fraction):
     """
     This function makes a blank face of a square, with surrounding edge lines set to black.
@@ -82,8 +91,6 @@ class Ccube(AbstractTarget):
         for t, board in zip(self.textures, self.boards):
             t[board_offset:-board_offset, board_offset:-board_offset] = board.draw(sub_res)
 
-        print(self.boards[0].chessboardCorners.squeeze())
-
         bd = np.array([board.chessboardCorners for board in self.boards])
         coord_bump = self.length*border_fraction/2
         board_coords = bd + [coord_bump, coord_bump, 0]
@@ -93,7 +100,6 @@ class Ccube(AbstractTarget):
                             [self.length, self.length,0],
                             [self.length, 0,0],
                         ])
-        print(self.base_face)
 
         self.faceData = FaceToShape(
             face_local_coords=board_coords,
@@ -112,7 +118,7 @@ class Ccube(AbstractTarget):
             border_width: float = 10,
     ):
 
-        im_board = self.texture
+        im_board = self.faceData.draw_net(self.textures, NET_FORMS)
 
         blank_f = np.int(border_width * 0.0393701 * self.dpi)
         dims = np.array(im_board.shape) + blank_f * 2

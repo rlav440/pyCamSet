@@ -556,12 +556,12 @@ def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray
     :params v0: The first set of points
     :params v1: The second set of points
     """
+    ndim = v0.shape[1]
 
-    t0 = np.zeros((3))
-    t1 = np.zeros((3))
+    t0 = np.zeros((ndim))
+    t1 = np.zeros((ndim))
 
-    matR = np.zeros((3,3))
-    ndims = v0.shape[1]
+    matR = np.zeros((ndim,ndim))
     for i in range(v1.shape[0]): #gets the mean vectors of both
         t0 += v0[i, :]
         t1 += v1[i, :]
@@ -573,7 +573,9 @@ def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray
     matR =  lv0.T @ lv1
     u, _ , vh = np.linalg.svd(matR) 
     matR = vh.T @ u.T
-    matR = vh.T @ np.diag([1,1, np.linalg.det(matR)]) @ u.T
+    inp = np.eye(ndim)
+    inp[-1,-1] = np.linalg.det(matR)
+    matR = vh.T @ inp @ u.T
     # the process described here is a transformation from 
     t = - matR @ t0 + t1
 

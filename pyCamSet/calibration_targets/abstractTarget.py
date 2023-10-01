@@ -227,7 +227,6 @@ class AbstractTarget:
 
         if local_view.shape[0] == 1:
             return copy(self.point_data)
-        print(f"found a local view of shape {local_view.shape}") 
         ref_point = local_view[:, 0, :]
         init_dir = local_view[:, 1, :] - ref_point
 

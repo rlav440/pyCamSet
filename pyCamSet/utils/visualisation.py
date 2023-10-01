@@ -5,7 +5,7 @@ from scipy.stats import multivariate_normal
 import numpy as np
 import pyvista as pv
 
-from pyCamSet.utils.general_utils import homogenous_transform, get_close_square_tuple
+from pyCamSet.utils.general_utils import h_tform, get_close_square_tuple
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc, n_inv_pose
 
 def cluster_plot(data_list, ranges = None, titles=None, alphas=None,

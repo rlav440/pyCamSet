@@ -13,6 +13,7 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
     """
     Takes an input list of data, and plots it as a cluster plot.
     for clarity, it also plots the 1, 2, and 3 sigma contours of the data.
+
     :param data_list: the input data (can be a list of arrays, which will plot both methods)
     :param ranges: the ranges to plot the data over (can be a list of ranges)
     :param titles: the titles for each plot (can be a list of titles)
@@ -79,6 +80,7 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
 def fancy_confidence_contours(x,y, ax, ranges):
     """
     Plots the 1, 2, and 3 sigma contours of the data.
+
     :param x: x locations
     :param y: y locations
     :param ax: the axis object to plot too
@@ -117,6 +119,7 @@ def visualise_calibration(
     ):
     """
     A function to draw and plot the errors in a calibration given the results.
+
     :param o_results: The optimisation results
     :param param_handler: The parameter handler that organised the optimisation.
     :return:

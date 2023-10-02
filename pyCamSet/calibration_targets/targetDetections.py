@@ -14,6 +14,7 @@ class ImageDetection:
     def __init__(self,  keys: np.ndarray or list=None, image_points: np.ndarray or list =None):
         """
         Takes a set of keys and detections,
+
         :param keys:
         :param image_points:
         """
@@ -74,6 +75,7 @@ class TargetDetection:
     def get(self, **direction) -> TargetDetection:
         """
         Gets a subset of detections related to a certain camera, key or image number
+        
         :param direction: A kwarg argument of either "cam", "key" or "im_num" and the associated data
         :return: A TargetDetection containing only the requested data
         """
@@ -210,6 +212,7 @@ class TargetDetection:
     def add_detection(self, cam_name, im_num, detection: ImageDetection) -> None:
         """
         Gets the elements of a detection and adds them to an input buffer.
+        
         :param cam_name: The name of a detecting camera
         :param im_num: The image number of the detection.
         :param detection: The detection data, contained as an image detection.
@@ -301,6 +304,7 @@ class TargetDetection:
     def parse_detections_to_reconstructable(self, draw_distribution=False):
         """
         Given the reference detection, detects which localised features can be triangulated, in which frame
+        
         :param draw_distribution: If true will draw an image number x feature number boolean plot, indicating which
             feature can be reconstructed in which image.
         """

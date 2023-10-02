@@ -78,6 +78,7 @@ class AbstractTarget:
     def find_in_image(self, image, draw=False, camera: Camera=None, wait_len = 1) -> ImageDetection:
         """
         Notes: Detects the calibration target in an image
+
         :param image: a mxn or mxnx3 image input
         :param draw: whether to draw the target
         :param camera: A camera object for use in camera aware detections
@@ -89,6 +90,7 @@ class AbstractTarget:
         """
         Notes: A function to detect the camera results in the image folder.
         generally a process wrapper around the previous function
+
         :param folder: the top level folder containing the input images
         :param cam_names:
         :param draw:
@@ -261,6 +263,7 @@ class AbstractTarget:
         calibration on them.
         If the object has a special model of calibration associated, this can
         be overwritten.
+
         :param cam_name: The name of the camera being calibrated
         :param detection: A TargetDetection of only the detections of the currently
             being calibrated camera

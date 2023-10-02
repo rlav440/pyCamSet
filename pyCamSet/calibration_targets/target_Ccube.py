@@ -34,6 +34,7 @@ def make_blank_square(draw_res, line_fraction, border_fraction):
     """
     This function makes a blank face of a square, with surrounding edge lines set to black.
     As convinience, it also returns the array offset used for the border fraction.
+    
     :param draw_res: the drawing resolution of the cube face
     :param line_fraction: the thickness of the line as a fraction of the face width
     :param border_fraction: the size of the fraction to use as the border of the cube.
@@ -136,7 +137,8 @@ class Ccube(AbstractTarget):
     def find_in_image(self, image, draw=False, camera: Camera = None, wait_len=1) -> ImageDetection:
         """
         An implementation of the find in image function for
-        :param image: the iamge
+
+        :param image: the image
         :param self: a charuco cube that has been made
         :param draw:
 

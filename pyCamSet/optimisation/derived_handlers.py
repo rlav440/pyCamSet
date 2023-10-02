@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 class StandardBundleParameters(AbstractParamHandler):
     """
-    Notes: A really thin wrapper around the abstract class, which implements all the functionality
+    A thin wrapper around the abstract class, which implements all the functionality
     needed for a standard bundle adjustment
     """
 

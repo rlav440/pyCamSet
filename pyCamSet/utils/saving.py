@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 def save_pickle(dic, filename):
     """
     Saves an object to a pickle file
+
     :param dic: object to save
     :param filename: filename to save to
     """
@@ -29,6 +30,7 @@ def save_pickle(dic, filename):
 def load_pickle(filename):
     """
     Loads an object from a pickle file
+
     :param filename: filename to load from
     :return: object
     """
@@ -41,6 +43,7 @@ def load_pickle(filename):
 def instance_obj(class_module, class_name, **kwargs):
     """
     A function to instantiate an object from a module and class name
+
     :param class_module: The module name
     :param class_name: The class name
     :param kwargs: The keyword arguments to pass to the class
@@ -53,6 +56,7 @@ def instance_obj(class_module, class_name, **kwargs):
 def numpy_dict_to_list(d):
     """
     A function to convert numpy arrays in a dictionary to lists
+
     :param d: the dict to operate over
     :return: a reshaped dict.
     """
@@ -75,6 +79,7 @@ def save_camset(
     A function to save a CameraSet to a .json formatted file.
     Some useful data, like the optimisation results are also saved.
     These are however compressed, and placed at the base of the file.
+
     :param cams: The camera set to save
     :param f_name: The file to write too.
     :return:
@@ -147,6 +152,7 @@ def save_camset(
 def load_CameraSet(f_loc) -> CameraSet:
     """
     A function to load a CameraSet from a .json formatted file.
+
     :param f_loc: The file to load
     :return: A camera set object.
     """
@@ -224,6 +230,8 @@ def load_CameraSet(f_loc) -> CameraSet:
 def compress(arr, clevel=3, cname='lz4', shuffle=1):
     """
     from https://stackoverflow.com/questions/56708673/python-decompression-relative-performance
+    compresses the input array for writing to file
+
     :param file:  path to file
     :param arr:      numpy nd-array
     :param clevel:   0..9
@@ -280,6 +288,7 @@ def decompress(save_dict, prealloc_arr=None):
     """
     from https://stackoverflow.com/questions/56708673/python-decompression-relative-performance
     Decompresses the data from a saved dictionary
+
     :param save_dict: The raw data to decopress.
     :param prealloc_arr: A preallocated array to store the data.
     """

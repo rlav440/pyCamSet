@@ -26,6 +26,7 @@ def make_cam_dict(camera_names:list, extrinsic_matrices:list, intrinsic_matrices
     """
     A function that takes a list of camera parameters, and creates a dictionary
     of Camera objects from those parameters., filing in defaults.
+    
     :param camera_names: The names of the cameras to use as params for the dict
     :param extrinsic_matrices: A list of matrices representing the camera positions
     :param intrinsic_matrices: A list of intrinsic matrices of the camera as per the pinhole model
@@ -129,12 +130,12 @@ class CameraSet:
     def make_subset(self, inp, cam_key = None) -> CameraSet:
         """
         Returns a subset of the Cameras in the CameraSet as a new CameraSet
+
         :param inp: the slice or list to run over
-        :param cam_key: a key for the camera names
-                optional
+        :param cam_key: a key for the camera names, optional.
                 if used, the dictionary and camera lists are reduced only to
-                the names containing this key.if (f_loc/'optimised_cameras.camset').exists():
-        Returns:
+                the names containing this key.
+        Returns: A sliced camset
 
         """
         new_camset = CameraSet()
@@ -208,6 +209,7 @@ class CameraSet:
         """
         Implements equality for camera sets. Uses the camera names in the camera, then compares
         cameras with the same name to check for equality.
+
         :param other: The other object to compare. False if not a camera.
         """
         if not isinstance(other, CameraSet):
@@ -223,6 +225,7 @@ class CameraSet:
     def write_to_mvs(self, loc: Path, r: ReconParams):
         """
         Writes an entire camera set to MVSnet derived files.
+
         :param loc: the file location to write to
         :param r: the reconstruction parameters to follow
         """
@@ -280,6 +283,7 @@ class CameraSet:
     def project_points_to_all_cams(self, points) -> list[dict[np.ndarray]]:
         """
         Projects a point or list of points to all cameras.
+
         :param points: a list of points nx3 in world reference coordinates
         :return cam_cords: a list of camera:projection dictionaries
         """
@@ -309,6 +313,7 @@ class CameraSet:
         """
         A lsq minimised triangulation of camera point locations to reconstruct.
          Automatically identifies points with shared visibility
+
         :param points: dictioniry of cam name key and camera coordinate values
                     or a list of dictionairies
                     Alternatively, the returned data from a TargetDetection.get_data method
@@ -365,6 +370,7 @@ class CameraSet:
     def plot_np_array(self, points: np.array or list):
         """
         A shorthand plotting function for plotting raw np arrays with reference to the cameras.
+
         :param points: a numpy array or list of numpy arrays with dimension nx3 to draw.
         :return:
         """
@@ -395,10 +401,11 @@ class CameraSet:
     def get_scene(self, scale_factor=0.3/8, view_cones=None, scene: pv.Scene=None) -> pv.Scene:
         """
         Returns a pyvista scene containing the camera meshes.
+
         :param scale_factor: the scale of the camera meshes to use
         :param view_cones: whether to draw camera viewcones.
-        :param scene:
-        :return:
+        :param scene: optionally a scene to which the camera meshes will be added.
+        :return: A scene containing the camera meshes.
         """
         cam_meshes, v_cones = self.get_camera_meshes(viewcone=0.15, scale=scale_factor)
         positions = np.array([cam.position for cam in self])
@@ -446,6 +453,7 @@ class CameraSet:
              view_cones=False):
         """
         Draws a 3D plot of the cameras and any additional meshes
+
         :param scale_factor: the scale of the camera meshes to use
         :param additional_mesh: a mesh or list of meshes to add to the scene
         :param view_cones: whether to draw camera viewcones.
@@ -533,7 +541,6 @@ class CameraSet:
     def draw_camera_distortions(self):
         """
         Draws a quiver plot of the distortion of all cameras in the camera set.
-        :return:
         """
         to_draw = get_close_square_tuple(self.n_cams)
         fix, axes = plt.subplots(*to_draw)
@@ -562,6 +569,7 @@ class CameraSet:
     def save(self, floc: Path or list="saved_cameras.camset"):
         """
         Saves the camera set to a file using .json esque encoding.
+
         :param floc: The file location to save to
         """
         save_camset(self, floc)
@@ -570,6 +578,7 @@ class CameraSet:
         """
         Populates the resolutions of the CameraSet given a folder of images from
             the cameras of the CameraSet.
+
         :param floc: the file location of the images to use.
         """
 
@@ -590,6 +599,7 @@ class CameraSet:
     def scale_set_2n(self, d_factor):
         """
         Scales all cameras in the set to 2^d_factor
+
         :param d_factor: the power of 2 to used in the downsampling
         """
         for cam in self._cam_list:
@@ -598,6 +608,7 @@ class CameraSet:
     def transform(self, transformation_matrix, in_place=True) -> None or CameraSet:
         """
         Transforms all cameras in the set by a transformation matrix.
+
         :param transformation_matrix: A 4x4 homogenous transformation matrix
         :param in_place: whether to transform the camera set in place or not.
         :return: Optionally returns a new camera set with the transformation applied.
@@ -612,6 +623,7 @@ class CameraSet:
     def set_reference_cam(self, cam_id):
         """
         Sets a reference camera to be the centre of world coordinates and transforms the camera set around this
+
         :param cam_id: the camera to use as the reference
         """
 
@@ -636,6 +648,7 @@ class CameraSet:
         """
         Camera sets are representations of data, so provides methods to store the data
         needed to generate a camera set into the camera set itself.
+
         :param optimisation_results: the results of the optimisation from scipy lsq
         :param param_handler: the parameter handler used to manage the optimisation
         """

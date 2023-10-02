@@ -47,6 +47,7 @@ class CameraCalibrator:
                  ):
         """
         This function coordinates the calibration process, from detection to outputing a final camset.
+
         :param f_loc: the folder containing the nested cam images
         :param calibration_target: the calibration target
         :param save: should the final camset be saved
@@ -103,6 +104,7 @@ class CameraCalibrator:
     def get_resolutions_from_file(self, f_loc: Path):
         """
         Scans the file location, taking the camera resolution from the first set of images.
+
         :param f_loc: The top level folder containing the folders of images for each camera
         """
         names = get_subfolder_names(f_loc=f_loc)
@@ -131,6 +133,7 @@ class CameraCalibrator:
         """
         For all of the cameras, runs the calibration method provided by an abstract target.
         The default is an opencv calibration but may be overwritten.
+
         :param detection: the detection data to use for the calibration
         :param calibration_target: the calibration target to use for the calibration
         :param save: should the result be saved
@@ -187,9 +190,10 @@ class CameraCalibrator:
         """
         Takes a set of results from the optimisation and performs outlier rejection on them.
         Will identify which images are outliers, raise a warning, and return a detection set without this data.
+
         :param results:
         :param params:
-        :return:
+        :return: A target detection without the outliers.
         """
         # outliers = mad_outlier_detection(results)
 
@@ -230,6 +234,7 @@ class CameraCalibrator:
         """
         This code runs a multi camera stereo calibration.
         The default behaviour is to run a standard object pose based bundle adjustment.
+
         :param param_handler: The parameter handler to use. If none is provided, a standard one will be created.
         :param save: should the result be saved
         :param save_loc: where should the result be saved
@@ -280,6 +285,7 @@ class CameraCalibrator:
     ) -> TargetDetection:
         """
         This function organises the detection of the image datapoints in a folder of images.
+
         :param f_loc: the file location to find the images in
         :param calibration_target: the calibration target to use for the detection
         :param caching:  should the result be cached
@@ -336,7 +342,6 @@ class CameraCalibrator:
     def validate_detections(self):
         """
         This function checks the detections for each camera, and prints a warning if the detection is poor.
-        :return:
         """
         detected = self.detection
         n_detected = {}
@@ -385,6 +390,7 @@ class CameraCalibrator:
 def sanitise_input_images(detected_sub_folders:list[Path]):
     """
     Takes a list of detected sub folders and checks that they all have the same number of images.
+
     :param detected_sub_folders: A list of detected subfolders in the current location.
     :return:
     """

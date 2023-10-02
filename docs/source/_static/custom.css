@@ -1,0 +1,17 @@
+a {
+  color: #FF69B4;
+}
+
+/* Sidebar header (and topbar for mobile) */
+.wy-side-nav-search, .wy-nav-top {
+    background: #FDD7E4;
+}
+
+.wy-menu-vertical header, .wy-menu-vertical p.caption {
+  color: #FDD7E4;
+}
+
+/* Sidebar */
+.wy-side-nav-search input[type=text] {
+  border-color: #FDD7E4;
+}

@@ -10,6 +10,7 @@ import cv2
 def fill_pose(pose_data, poses, poses_unfixed):
     """
     Fills a pose array with data from an input param array.
+    
     :param pose_data: The pose parameters, an nx6 array
     :param poses: The pose data with missing blocks to fill
     :param poses_unfixed: A boolean array describing which poses are unfixed
@@ -28,6 +29,7 @@ def fill_pose(pose_data, poses, poses_unfixed):
 def fill_extr(extr_data, extr, extr_unfixed):
     """
     Fills an extrinsics array with data from an input param array.
+
     :param extr_data: The extrinsic parameters, an nx6 array
     :param extr: The extrinsic data with missing blocks to fill
     :param extr_unfixed: A boolean array describing which extrinsics are unfixed
@@ -46,6 +48,7 @@ def fill_extr(extr_data, extr, extr_unfixed):
 def fill_intr(intr_data, intr, intr_unfixed):
     """
     Fills an intrinsics array with data from an input param array.
+
     :param intr_data: The intrinsic parameters, an nx4 array
     :param intr: The intrinsic data with missing blocks to fill
     :param intr_unfixed: A boolean array describing which intrinsics are unfixed
@@ -68,6 +71,7 @@ def fill_intr(intr_data, intr, intr_unfixed):
 def fill_dst(dst_data, dst, dst_unfixed):
     """
     Fills a distortion array with data from an input param array.
+    
     :param dst_data: The distortion parameters, an nx5 array
     :param dst: The distortion data with missing blocks to fill
     :param dst_unfixed: A boolean array describing which distortions are unfixed
@@ -86,6 +90,7 @@ def fill_dst(dst_data, dst, dst_unfixed):
 def n_e4x4(rog_vec: np.ndarray, output: np.ndarray):
     """
     Converts a 6dof pose vector into a 4x4 homogenous transform
+
     :param rog_vec: A 3 axis_angle opencv representation of rotation, followed by a translation
     :param output: the 4x4 output to write the data too
     """
@@ -102,6 +107,7 @@ def n_e4x4(rog_vec: np.ndarray, output: np.ndarray):
 def numba_flat_rodrigues_INPLACE(r, blank_rot):
     """
     Converts a 3dof axis angle representation of rotation into a 3x3 rotation matrix
+
     :param r: The rotation vector
     :param blank_rot: the output location
     """
@@ -135,6 +141,7 @@ def numba_flat_rodrigues_INPLACE(r, blank_rot):
 def n_e4x4_flat_INPLACE(rog_vec: np.ndarray, blank_tform: np.ndarray) -> None:
     """
     Converts a 6dof pose vector into a 12x1 homogenous transform representation
+    
     :param rog_vec: A 3 axis_angle opencv representation of rotation, followed by a translation
     :param blank_tform: the output transform array
     """
@@ -149,6 +156,7 @@ def n_e4x4_flat_INPLACE(rog_vec: np.ndarray, blank_tform: np.ndarray) -> None:
 def n_flat_tform_from_aa(pt, vec, ang) -> np.ndarray:
     """
     Converts a 6dof pose vector into a 12x1 homogenous transform representation
+
     :param pt: The point to rotate around
     :param vec: The axis to rotate around
     :param ang: the angle to rotate.
@@ -178,6 +186,7 @@ def n_htform_broadcast_prealloc(points: np.ndarray, t_numba: np.ndarray, out, fi
     """
     Fastest way to do a homogenous transform is not to do a homogenous transform.
     This function is designed to be used with a preallocated output array.
+
     :param points: The points to transform, a nx3 array
     :param t_numba: The transform to apply. a 12x1 array
     :param out: The output array, a nx3 array
@@ -201,6 +210,7 @@ def n_htform_broadcast_prealloc(points: np.ndarray, t_numba: np.ndarray, out, fi
 def n_htform_prealloc(points, t_numba, out, fill=True):
     """
     Does a homogenous transform on a single point to a an ouput array
+
     :param points: the point to transform
     :param t_numba: the transform to apply, as a 12x1 array
     :param out: the output array, a 3x1 array view
@@ -216,6 +226,7 @@ def n_htform_prealloc(points, t_numba, out, fill=True):
 def nb_undistort_prealloc(pt: np.ndarray, intrinsics: np.ndarray, k: np.ndarray, blank):
     """
     this fuction takes points from as detected to the idealised linear pinhole model.
+
     :param pt: the single point to undistort.
     :param intrinsics: The intrinsics of the imaging camera
     :param k: The Brown Conway distortion model of the distorting camera
@@ -244,6 +255,7 @@ def nb_undistort(pts: np.ndarray, intrinsics: np.ndarray, dist_coef: np.ndarray)
     """
     This function takes points from as detected to the idealised linear pinhole model.
     It has some inherent allocations, so is slower than the preallocated version.
+
     :param pts: The input poitns to transform
     :param intrinsics: The intrinsics of the imaging camera
     :param dist_coef: The Brown Conway distortion model of the distorting camera
@@ -271,6 +283,7 @@ def nb_undistort(pts: np.ndarray, intrinsics: np.ndarray, dist_coef: np.ndarray)
 def nb_distort_prealloc(pts: np.ndarray, intrinsics: np.ndarray, k: np.ndarray):
     """
     This function distorts points based on the input values, going from the mathematical ideal to detections.
+
     :params pts: points to distort, which are overwritten
     :params intrinsics. The intrinsics of the imaging camera
     :params k: Brown Conway model of the distorting camera
@@ -297,6 +310,7 @@ def nb_distort(pts: np.ndarray, intrinsics: np.ndarray, dist_coef: np.ndarray) -
     """
     This function distorts points based on the input values, going from the mathematical ideal to detections.
     It has some inherent allocations, so is slower than the preallocated version.
+
     :params pts: points to distort, which are overwritten
     :params intrinsics. The intrinsics of the imaging camera
     :params k: Brown Conway model of the distorting camera
@@ -327,6 +341,7 @@ def nb_costfn(dct: np.ndarray, im_points: np.ndarray,
     """
     This function calculates the bundle adjustment function for a set of points.
     The first dimension of the dct indicates the number of threads that will be used in parrallel.
+
     :param dct: The data to use, which is obtained by a TargetDetection.get_data() call, then reshaped to have
         an additional dimension describing the number of threads to use.
     :param im_points: An (ix(u,v,...n)x3) array of image points, where i is the number of images,
@@ -350,6 +365,7 @@ def faster_cf(dct: np.ndarray, im_points: np.ndarray,
               projection_matrixes: np.ndarray, intrinsics: np.ndarray, dists: np.ndarray):
     """
     This function calculates the bundle adjustment function for a set of points.
+
     :param dct: The detection data
     :param im_points: An (ix(u,v,...n)x3) array of image points, where i is the number of images,
         (u,v, .. n) is the number of points given each points (u,v, ... n) key.
@@ -413,6 +429,7 @@ def make_cartesian(lat, lng):
     """
     converts points from spherical coordinates to cartesian coordinates
     The length is a unit normal by definition.
+
     :param lat: The latitude of the point
     :param lng: The longitude of the point
     :return x: A cartesian x coordinate
@@ -427,6 +444,7 @@ def make_cartesian(lat, lng):
 def make_polar(vec):
     """
     converts points from cartesian coordinates to spherical coordinates
+
     :param vec: The cartesian input points
     :return gamma, theta: the polar coordinates of the input points.
     """
@@ -442,6 +460,7 @@ def nb_triangulate_full(data, proj, start_inds, intr, dist):
     """
     Triangulates a set of points from a set of images, using numba acceleration.
     Data is sorted by point, by image, where at least two cameras see the point
+
     :param data: The data to reconstruct
     :param proj: The camera projection matrices
     :param start_inds: The starting index of each reconstructable point (enabling parrallelisation)
@@ -475,6 +494,7 @@ def nb_triangulate_full(data, proj, start_inds, intr, dist):
 def nb_triangulate_nviews(P, ip, M):
     """
     Triangulate a point visible in n camera views, using numba acceleration
+
     :param P: a 3d array of  camera projection matrices.
     :param ip: a 2d array - shape nx3 - [ [x, y, 1], [x, y, 1] ] in homegenous image points
     :M A preallocated array of shape (3*n, 4+n) for math reasons
@@ -495,6 +515,7 @@ def nb_triangulate_nviews(P, ip, M):
 def n_inv_pose(inp, out):
     """
     Inverts a pose transform given a flat 12x1 representation
+
     :param inp: The input pose to invert
     :param out: The output location.
     :return:
@@ -518,6 +539,7 @@ def n_inv_pose(inp, out):
 def n_dist(x):
     """
     Calculates the distance between a set of points
+
     :param x: The points to calculate the internal distances
     :return:
     """
@@ -533,6 +555,7 @@ def n_dist(x):
 def n_dist_prealloc(x, out):
     """
     Calculates the distance between a set of points
+
     :param x: The points to calculate the internal distances of
     :param out: The output location
     """
@@ -553,6 +576,7 @@ def n_dist_prealloc(x, out):
 def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Calculates the rigid transform between two sets of points using an svd
+
     :params v0: The first set of points
     :params v1: The second set of points
     """

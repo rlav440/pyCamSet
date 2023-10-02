@@ -199,6 +199,7 @@ def get_close_square_tuple(n):
 def h_tform(points: np.ndarray, transform:np.ndarray, fill=1) -> np.ndarray:
     """
     Performms a homogenous transformation on data
+    
     :param points: the points to transform
     :param transform: the 4x4 transformation
     :param fill: 1 for points, 0 for vectors.
@@ -223,6 +224,7 @@ def h_tform(points: np.ndarray, transform:np.ndarray, fill=1) -> np.ndarray:
 def ext_4x4_to_rod(h4):
     """
     Converts a 4x4 extrinsic matrix to a rotation vector
+    
     :param h4: the input 4x4 matrix
     :return rot, trans: the rotation and translation vectors
     """
@@ -240,6 +242,7 @@ def colourmap_to_colour_list(len, colourmap):
 def distort_points(pts:np.ndarray, intrinsics: np.ndarray, dist_coef:np.ndarray) -> np.ndarray:
     """
     Distorts points using the Brown Conway model
+
     :param pts: points to distort
     :param intrinsics. The intrinsics of the imaging camera
     :param dist_coef: Brown Conway model of the distorting camera
@@ -269,6 +272,7 @@ def split_aruco_dictionary(
     ):
     """
     Splits an aruco dictionary into multiple smaller dictionaries.
+
     :param split_size: The size of the output dictionaries
     :param a_dict: The input dictionary to split.
     """
@@ -305,6 +309,7 @@ def split_aruco_dictionary(
 def grouper(iterable, n, fillvalue=None):
     """
     Returns an iterable of n items at a time from some originally iterable object.
+
     :param iterable: The iterable object to group
     :param n: The number of items to group
     :param fillvalue: The value to fill the last group with if it is not full.
@@ -344,6 +349,7 @@ def e_4x4(euler_angles, trans, mode='opencv'):
 def px_array(res=[32, 32], startZero=False,):
     """
     creates the index grid once during the full ingest pipeline
+    
     :param res: The resolution of the camera
     :param startZero: whether to start the grid at zero or have zero be the middle
     :return:
@@ -362,6 +368,7 @@ def px_array(res=[32, 32], startZero=False,):
 def downsample_valid(inp, d_factor, invalid=None):
     """
     An averaging downsample using a numpy array indexing.
+
     :param inp: The input to be be downsampled
     :param d_factor: The factor to downsample
     :param invalid: The value of points to be excluded from the downsampling in the function
@@ -388,6 +395,7 @@ def vector_cam_points(type, pts, intrinsics, cam_to_world):
     """
     Makes a sensor map or a smaller amount of points, designed to
     make running a few smaller things easier
+
     :param type: normalised or linear sensor map
     :param pts: the points to give vectors too
     :param intrinsics: the camera intrinsics
@@ -411,6 +419,7 @@ def sensor_map(type, intrinsics, res=(1600, 1200), dist_coefs=None):
     """
     This creates a sensor map for a representation of a sensor. A sensor map is the ray vector associated with
     each pixel. It is essentially a precomputed ray cast.
+
     :param type: normalised or linear sensor map. Normalised has length 1, linear has z==1.
     :param intrinsics: The camera intrinsics
     :param res: the nominal resolution of the input camera THIS USES OPENCV (y,x) PIXEL ORDER.

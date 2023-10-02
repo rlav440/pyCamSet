@@ -59,6 +59,7 @@ class BundlePrimitive:
     def return_bundle_primitives(self, params):
         """
         Takes an array of parameters and populates all unfixed parameters.
+
         :param params: The input parameters
         """
         pose_end = 6 * self.free_poses
@@ -141,6 +142,7 @@ class AbstractParamHandler:
     def add_extra_params(self, param_array:np.ndarray) -> np.ndarray:
         """
         A function called during the initial parameterisation to allow for the addition of extra parameters.
+
         :param param_array:
         :return:
         """
@@ -151,6 +153,7 @@ class AbstractParamHandler:
         A function called at the start of getting the bundle adjustment inputs
         to allow the addition of different parameter structures to the optimisation.
         It also allows for the implementation of additional non-standard calculations.
+        
         :param param_array:
         :return:
         """
@@ -160,6 +163,7 @@ class AbstractParamHandler:
         """
         A function called during a visualisaiton of the calibration results for any
         target specific plots to show.
+
         :param params: The parameters of the calbiration.
         """
         return
@@ -185,6 +189,7 @@ class AbstractParamHandler:
             - the distortion parameters of the cameras
             - the pose of every object point in every time point
         These are direct inputs to a bundle adjustment based loss.
+
         :param x: The input optimisation parameters.
         """
         x = self.parse_extra_params_and_setup(x)
@@ -198,6 +203,7 @@ class AbstractParamHandler:
     def parse_detections_to_reconstructable(self, draw_distribution=False):
         """
         Given the reference detection, detects which localised features can be triangulated, in which frame
+
         :param draw_distribution: If true will draw an image number x feature number boolean plot, indicating which
             feature can be reconstructed in which image.
         """
@@ -246,6 +252,7 @@ class AbstractParamHandler:
     def set_initial_params(self, x: np.array):
         """
         Sets the initial params from som other parameter array.
+
         :param x: An appropriate param vector for the given problem
         :return: the params
         """
@@ -255,6 +262,7 @@ class AbstractParamHandler:
         """
         Returns initial parameters if they exist, or starts calculating them
         and returns the result if they do not.
+
         :return: the params
         """
 
@@ -267,6 +275,7 @@ class AbstractParamHandler:
         Calculates an initial guess at the parameters for the following optimisation.
         The initial estimate gives parameters based on the provided CameraSet and a rough pose
         estimation of the target given those camera parameters.
+
         :return params: the initial estimate of the parameters.
         """
         cams = self.camset
@@ -297,6 +306,7 @@ class AbstractParamHandler:
     def get_camset(self, x, return_pose=False) -> CameraSet or tuple[CameraSet, np.ndarray]:
         """
         Given a set of parameters, returns a camera set.
+
         :param x: the optimisation parameters.
         :param return_pose: Optionally also return the poses of the target.
         :return: Either a CameraSet, or a CameraSet and a list of object poses.
@@ -343,6 +353,7 @@ class AbstractParamHandler:
     def check_params(self, params):
         """
         A helper function to visualise the problem as sent to the bundle adjustment cost.
+        
         :param params: The input parameters to an optimisation.
         """
         _, _, _, obj_points = self.get_bundle_adjustment_inputs(params)
@@ -356,6 +367,7 @@ def make_optimisation_function(
     """
     Takes a parameter handler and creates a callable cost function that evaluates the
     cost of a parameter array.
+
     :param param_handler: the param handler representing the optimisation
     :param threads: number of evaluation threads
     :return fn: the cost function
@@ -384,6 +396,7 @@ def run_bundle_adjustment(param_handler: AbstractParamHandler) -> tuple[np.ndarr
     """
     A function that takes an abstract parameter handler, turns it into a cost function, and returns the
     optimisation results and the camera set that minimises the optimisation problem defined by the parameter handler.
+
     :param param_handler: The parameter handler that represents the optimisation
     :return: The output of the calibration and the argmin defined CameraSet
     """

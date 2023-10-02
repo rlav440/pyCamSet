@@ -27,6 +27,7 @@ def make_tforms(base_face, shape):
     """
     Takes an input face and a shape name, then recovers the transformation
     to each of the faces of the object. 
+
     :param base_face: the basic face of the object. Points oriented clockwise from bottom left corner.
     """
     #take the face corners and add them 
@@ -54,6 +55,7 @@ class FaceToShape:
         A function that takes some base faces, the transformations of the faces, and an optional scale factor.
         The scale factor is used to scale before and after applying the transformations.
         This is a convineience factor that allows the same transformations to define a scaled family of polygons.
+
         :param face_local_coords: the local coordinates of the corners of the face in anticlockwise order.
             If there is one nx3 face given, it is used as the base face for all transformations.
         :param face_transforms: 4x4 representations of the transformations for a face to the output shape
@@ -91,6 +93,7 @@ class FaceToShape:
     def draw_meshes(self, face_corners, face_images: list[np.ndarray]):
         """
         Draws a mesh given the current face set up
+
         :param face_images: The face images.
         :return: created mesh models.
         """
@@ -143,12 +146,12 @@ class FaceToShape:
             r_bf = h_tform(n_bf, tform, fill=0) * im.shape[1] 
             bounds = np.max(r_bf), np.min(r_bf)
             p_im = im #padd the image here
-            r_im = cv2.warpAffine(im, tform[:2,:2)) 
-            r_im = #crop down to the max and min containing the array.
+            r_im = cv2.warpAffine(im, tform[:2,:2]) 
+            r_im = None #crop down to the max and min containing the array.
             img = Image.new('L', im.shape, 0) # some shapes might use a sub window of the image
             ImageDraw.Draw(img).polygon(bf, outline=1, fill=1)
             r_im *= numpy.array(img)
             # map the face shape over the image, making a mask and doing a bounds check for all faces
-            blank_canvas[] += r_im
+            blank_canvas[0] += r_im
     
         return blank_canvas

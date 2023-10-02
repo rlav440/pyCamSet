@@ -4,11 +4,17 @@ from pyCamSet.optimisation.compiled_helpers import n_estimate_rigid_transform
 
 
 def make_h(rot, trans):
- return np.block([[rot, trans[..., None]], [ 0, 0, 1]])
+    """
+    Turns a 2D transformation and rotation vector into the stacked homogenous transform.
+
+    :return: homogenous transform matrix
+    """
+    return np.block([[rot, trans[..., None]], [ 0, 0, 1]])
 
 def make_ragged_faces(face_array):
     """
     unrolls a 1d face array to a ragged list of the points of each face
+
     :param face_array: the array defining the faces of the geometry
     :return ragged_faces: a list of lists containing the points associated with each face
     """
@@ -38,6 +44,7 @@ def make_net_tforms(base_shape, face_connectivity, connections):
     The first fast is taken as a starting face, then every other face must be connected.
     The structure is:
         [n connnected, base, connected_face_0, ... connected_face_n, ....]
+
     :param base_shape: a definition of a single face (asuming all are the same) or definitions of each face
     :param face_connectivitiy: the connectivity of the points defining the faces.
     :param draw_res: the drawing resolution of the single face

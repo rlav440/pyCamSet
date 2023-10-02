@@ -12,6 +12,7 @@ from pyCamSet.utils.general_utils import ext_4x4_to_rod
 def undistort_im(image, cam: Camera) -> np.ndarray:
     """
     A function to undistort an image using a camera object.
+
     :param image: The image to undistort.
     :param cam: The camera object to undistort with.
     :return:
@@ -23,6 +24,7 @@ def undistort_im(image, cam: Camera) -> np.ndarray:
 def depth_image_ptcloud_mask(depth_im, mind, maxd):
     """
     A function to filter a point cloud based on its associated depth image, applying a minimum and maximum depth.
+
     :param depth_im: A point cloud to filter.
     :param mind: The min depth
     :param maxd: The max depth.
@@ -38,6 +40,7 @@ def depth_image_ptcloud_mask(depth_im, mind, maxd):
 def remap_im(im, cam: Camera, new_rot, new_proj, new_size) -> np.ndarray:
     """
     A function to remap an image using a camera object.
+
     :param im: The impage to remap.
     :param cam: The associated camera.
     :param new_rot: The new rotation matrix.
@@ -60,6 +63,7 @@ def rectify_camera_images(
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     A function to rectify a pair of images using a pair of cameras.
+
     :param cam_0: The reference camera.
     :param cam_1: The comparison camera
     :param im_0: The image of the reference camera.
@@ -81,6 +85,7 @@ def rectify_camera_images(
 def rectify_camera_pair(cam_0: Camera, cam_1:Camera, zero_flag = False):
     """
     Generates the rectification matrices for a pair of cameras.
+
     :param cam_0: The reference Camera
     :param cam_1: The comparison Camera
     :param zero_flag: a flag to force zero distortion.
@@ -105,6 +110,7 @@ def rectify_camera_pair(cam_0: Camera, cam_1:Camera, zero_flag = False):
 def disparity_to_ptcld(disp, q) -> tuple[pv.PolyData, np.ndarray]:
     """
     Converts a disparity image to a point cloud using the associated q matrix.
+
     :param disp: the disparity image from the refence camera.
     :param q: The q matrix.
     :return:
@@ -134,6 +140,7 @@ def disparity_to_ptcld(disp, q) -> tuple[pv.PolyData, np.ndarray]:
 def matlab_stereo(im0, im1, disp_range = (128, 256), uniqueness_thresh=25, plot=False):
     """
     A function to run the matlab stereo algorithm, as it seems to perform better than the opencv one.
+
     :param im0: The reference image, rectified
     :param im1: The comparison image, rectified
     :param disp_range: The disparity range to search
@@ -163,6 +170,7 @@ def matlab_stereo(im0, im1, disp_range = (128, 256), uniqueness_thresh=25, plot=
 def stereo_reconstruct( cam_0:Camera, cam_1:Camera, im_0, im_1, num_disp=256, blockSize=25, matlab=False, plot=False):
     """
     A function to reconstruct a point cloud from a pair of images, using the opencv stereosgbm algorithm.
+
     :param cam_0: the reference camera
     :param cam_1: the comparison camera
     :param im_0: the reference image

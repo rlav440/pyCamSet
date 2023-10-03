@@ -12,7 +12,7 @@ from pyCamSet.utils.general_utils import downsample_valid
 
 
 class ChArUco(AbstractTarget):
-    def __init__(self, num_squares_x, num_squares_y, square_size):
+    def __init__(self, num_squares_x, num_squares_y, square_size, a_dict=cv2.aruco.DICT_4X4_1000):
         super().__init__(inputs=locals())
 
         # define checker and marker size
@@ -23,7 +23,7 @@ class ChArUco(AbstractTarget):
         marker_length = marker_size / 1000
 
         # Create the dictionary for the Charuco board
-        self.a_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_1000)
+        self.a_dict = cv2.aruco.Dictionary_get(a_dict)
         # Create the Charuco board
         self.board = cv2.aruco.CharucoBoard_create(num_squares_x, num_squares_y, squares_length, marker_length,
                                                    self.a_dict)
@@ -34,30 +34,21 @@ class ChArUco(AbstractTarget):
     def find_in_image(self, image, draw=False, camera: Camera = None, wait_len=1) -> ImageDetection:
         params = aruco.DetectorParameters_create()
         params.minMarkerPerimeterRate = 0.01
-        # params.adaptiveThreshConstant = 1 # for low light, but lowers accuracy
+        corners, ids, _ = aruco.detectMarkers(image, self.a_dict, parameters=params)
 
-        corners, ids, rejected = aruco.detectMarkers(image, self.a_dict, parameters=params)
-        draw_rejected = False
-
-        if draw:
-            if corners:
-                im_idea = image.copy()
-                target_size = [640, 480]
-                d_f = int(min(np.array(im_idea.shape[:2]) / target_size))
-                im_idea = downsample_valid(im_idea, d_f).astype(np.uint8)
-                if im_idea.ndim == 2:
-                    im_idea = np.tile(im_idea[..., None], (1, 1, 3))
-
-                # aruco.drawDetectedMarkers(im_idea, np.array(corners)/d_f, ids)
-                if draw_rejected:
-                    for point in rejected:
-                        tmp = point.squeeze()
-                        plt.plot(tmp[:, 0], tmp[:, 1], 'y')
-
-        use_cam = camera is not None
         if len(corners) == 0:
             return ImageDetection() # return an empty detection
 
+        if draw:
+            display_im = image.copy()
+            target_size = [640, 480]
+            d_f = int(min(np.array(display_im.shape[:2]) / target_size))
+            display_im = downsample_valid(display_im, d_f).astype(np.uint8)
+            if display_im.ndim == 2:
+                display_im = np.tile(display_im[..., None], (1, 1, 3))
+
+            # aruco.drawDetectedMarkers(im_idea, np.array(corners)/d_f, ids)
+        use_cam = camera is not None
         n, c_corners, c_ids = aruco.interpolateCornersCharuco(
             corners,
             ids,
@@ -66,19 +57,17 @@ class ChArUco(AbstractTarget):
             camera.intrinsic if use_cam else None,
             camera.distortion_coefs if use_cam else None,
         )
-        if n > 0:
-            if draw:
-                aruco.drawDetectedCornersCharuco(
-                    im_idea,
-                    np.array(c_corners) / d_f,
-                    c_ids,
-                )
+        if n == 0:
+            return ImageDetection()
 
-            seen_points = ImageDetection(c_ids[:, 0], c_corners[:, 0])
-            if draw:
-                if corners:
-                    cv2.imshow('detections', im_idea)
-                    cv2.waitKey(1)
+        if draw:
+            aruco.drawDetectedCornersCharuco(
+                display_im,
+                np.array(c_corners) / d_f,
+                c_ids,
+            )
 
-            return seen_points
-        return ImageDetection() # return an empty detection
+            cv2.imshow('detections', display_im)
+            cv2.waitKey(wait_len)
+
+        return ImageDetection(c_ids[:, 0], c_corners[:, 0])

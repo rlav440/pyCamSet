@@ -2,8 +2,8 @@
 The Pinhole Camera
 =======================
 
-Underlying model
-================
+The Underlying model
+====================
 
 The pinhole camera is a simplification used to represent most cameras.
 It represents the cameras as an infinitely small aperture, projecting to an

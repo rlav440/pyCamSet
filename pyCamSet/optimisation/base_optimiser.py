@@ -312,6 +312,8 @@ class AbstractParamHandler:
         :return: Either a CameraSet, or a CameraSet and a list of object poses.
         """
 
+        x = self.parse_extra_params_and_setup(x)
+
         new_cams = copy(self.camset)
         poses, extr, intr, dst = self.bundlePrimitive.return_bundle_primitives(x)
 

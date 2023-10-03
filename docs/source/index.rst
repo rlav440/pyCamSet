@@ -3,7 +3,7 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to cv_tools's documentation!
+PyCamSet Documentation
 ====================================
 
 .. toctree::
@@ -14,7 +14,6 @@ Welcome to cv_tools's documentation!
    camera_sets/index
    calibration_targets/index
    optimisation_methods/index
-   api_overview
    camera_definition
 
 

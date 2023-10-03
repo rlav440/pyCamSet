@@ -24,8 +24,7 @@ def fill_pose(pose_data, poses, poses_unfixed):
             k += 1
     return
 
-
-# @njit(cache=True)
+@njit(cache=True)
 def fill_extr(extr_data, extr, extr_unfixed):
     """
     Fills an extrinsics array with data from an input param array.

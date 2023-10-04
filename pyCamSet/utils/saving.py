@@ -98,7 +98,7 @@ def save_camset(
             'dst': cam.distortion_coefs.tolist(),
             'res': np.array(cam.res).tolist(),
         }
-        cam_dict[cam.Name] = temp_dict
+        cam_dict[cam.name] = temp_dict
 
     optim_dict = save_dict.setdefault('optim', {})
 

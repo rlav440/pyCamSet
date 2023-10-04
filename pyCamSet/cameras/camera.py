@@ -58,7 +58,7 @@ class Camera:
         self.cam_to_world = None
 
         self.down_scale_factor = 0
-        self.Name = name
+        self.name = name
         self.minimal = minimal
         self._update_state()
 
@@ -164,12 +164,12 @@ class Camera:
         if ax is None:
             plt.quiver(grid[:, 0], grid[:, 1], shift[:, 0], shift[:, 1], angles='xy', scale_units='xy', scale=1)
             plt.set_aspect('equal')
-            plt.title(f'Distortion in camera {self.Name}')
+            plt.title(f'Distortion in camera {self.name}')
             plt.show()
         else:
             ax.quiver(grid[:, 0], grid[:, 1], shift[:, 0], shift[:, 1], angles='xy', scale_units='xy', scale=1)
             ax.set_aspect('equal')
-            ax.set_title(f"Distortion in camera {self.Name}")
+            ax.set_title(f"Distortion in camera {self.name}")
 
     def _cam_fov(self):
         """

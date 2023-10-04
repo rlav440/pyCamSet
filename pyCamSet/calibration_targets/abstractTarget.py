@@ -333,7 +333,7 @@ class AbstractTarget:
                 init_cam.set_extrinsic(fixed_param['ext'])
                 return init_cam
 
-        init_cam.Name = cam_name
+        init_cam.name = cam_name
 
         updated_ext = self.target_pose_in_cam_image(
             detection=detection.get(im_num=pose_im),  # put in the distortion coefficients
@@ -352,7 +352,7 @@ class AbstractTarget:
         :return a 4x4 transformation of the target giving pose relative to the detecting camera
         """
 
-        datum = detection.get(cam=cam.Name).get_data()
+        datum = detection.get(cam=cam.name).get_data()
 
         n_im = np.unique(datum[:, 0])  # check that only one camera and one image is here.
         if len(n_im) > 1:

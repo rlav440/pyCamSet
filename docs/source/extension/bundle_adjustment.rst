@@ -21,8 +21,9 @@ Code example
    :pyobject: bundle_adjustment_costfn
 
 
-The numba implementation has a few limitations.
-The first to note is that as the shape of the object can be complex, there is currently limited support for the dimensions that can be used.
-A future update my fix this by unrolling the image points to a flat array and doing a direct lookup.
+The first is that all input data can only be numpy arrays, as this achieves best performance with numba acceleration.
 
-Secondly, the code will  
+Additionally, the bundle adjustment cost function operates over an unrolled representaiton of the object geometry.
+This unrolled representation has the form (i, x, 3) where i is the number of images, x is the number of unrolled keys and 3 is the world coordinate.
+
+

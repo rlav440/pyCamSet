@@ -335,7 +335,7 @@ def nb_distort(pts: np.ndarray, intrinsics: np.ndarray, dist_coef: np.ndarray) -
 
 
 @njit(parallel=True, cache=True)
-def nb_costfn(dct: np.ndarray, im_points: np.ndarray,
+def bundle_adj_parrallel_solver(dct: np.ndarray, im_points: np.ndarray,
               projection_matrixes: np.ndarray, intrinsics: np.ndarray, dists: np.ndarray):
     """
     This function calculates the bundle adjustment function for a set of points.

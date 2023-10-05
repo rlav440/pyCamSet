@@ -11,7 +11,7 @@ from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
 from pyCamSet.cameras import CameraSet
 from pyCamSet.utils.general_utils import ext_4x4_to_rod
 from pyCamSet.optimisation.compiled_helpers import fill_pose, fill_dst, fill_extr, fill_intr
-from pyCamSet.optimisation.compiled_helpers import nb_costfn, n_htform_broadcast_prealloc
+from pyCamSet.optimisation.compiled_helpers import bundle_adj_parrallel_solver, n_htform_broadcast_prealloc
 
 DEFAULT_OPTIONS = {
     'verbosity': 2,
@@ -392,7 +392,7 @@ def make_optimisation_function(
 
     def bundle_fn(x):
         proj, intr, dists, obj_points = param_handler.get_bundle_adjustment_inputs(x)
-        output = nb_costfn(
+        output = bundle_adj_parrallel_solver(
             data,
             im_points=obj_points,
             projection_matrixes=proj,

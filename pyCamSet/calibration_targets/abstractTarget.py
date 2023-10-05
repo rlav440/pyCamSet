@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+
 import logging
 import numpy as np
 import time
@@ -20,7 +22,7 @@ def get_keys(data):
         keys = np.concatenate((np.zeros_like(keys), keys), axis=1)
     return keys
 
-class AbstractTarget:
+class AbstractTarget(ABC):
     """
     This is an abstract calibration target. It implements most of the functionality
     required to calibrate an object with a calibration target.
@@ -74,7 +76,8 @@ class AbstractTarget:
         recreate
         """
         raise NotImplementedError
-
+    
+    @abstractmethod
     def find_in_image(self, image, draw=False, camera: Camera=None, wait_len = 1) -> ImageDetection:
         """
         Notes: Detects the calibration target in an image

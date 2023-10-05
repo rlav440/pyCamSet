@@ -32,18 +32,11 @@ These are extendable, and examples demonstrate how to extend these components to
 
 .. toctree::
    :maxdepth: 2
-   :caption: Standard Contents:
+   :caption: Contents:
 
    camera
    camera_set
    calibration_targets/index
-   optimisation_methods/index
    extension/index
 
 
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`

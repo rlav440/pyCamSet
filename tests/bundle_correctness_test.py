@@ -4,7 +4,7 @@ import numpy as np
 from tqdm import tqdm
 import pickle
 
-from pyCamSet.optimisation.compiled_helpers import nb_costfn, nb_distort_prealloc
+from pyCamSet.optimisation.compiled_helpers import bundle_adj_parrallel_solver, nb_distort_prealloc
 from pyCamSet.utils.general_utils import h_tform, e_4x4
 
 
@@ -75,7 +75,7 @@ def bundle_correctness():
     dists = np.reshape(distortion_coefficients0, (1, -1))
 
 
-    cost = nb_costfn(dct, im_points, proj_mat, intrinsics, dists)
+    cost = bundle_adj_parrallel_solver(dct, im_points, proj_mat, intrinsics, dists)
     euclid_cost = np.sqrt(np.sum(cost.T**2, axis=1))
     perIm = []
     scratch_cost = euclid_cost.copy()

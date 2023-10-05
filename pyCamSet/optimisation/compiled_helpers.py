@@ -389,47 +389,7 @@ def bundle_adjustment_costfn(dct: np.ndarray, im_points: np.ndarray,
         nb_distort_prealloc(proj_uv[:, 0], intrinsics[cam], dists[cam])
         error[idx * 2] = proj_uv[0, 0] - measured_uv[0]
         error[idx * 2 + 1] = proj_uv[1, 0] - measured_uv[1]
-    if dct.shape[1] == 5:
-        # TODO fix the weird edge case for single ID targets.
-        # except: numba stops compiling the code if the im_points array has ndim == 3.
-        # the function will still run and produce the correct output if it is run uncompiled.
-        for idx in range(len(dct)):
-            cam = int(dct[idx, 0])
-            measured_uv[:] = dct[idx, -2:]
-            work_pos[:-1, 0] = im_points[  # just automatically account for homogenous
-                int(dct[idx, 1]), 0, int(dct[idx, 2]),
-            ]  # this differs
-            np.dot(projection_matrixes[cam], work_pos, out=proj_uv)
-            proj_uv[0, 0], proj_uv[1, 0] = proj_uv[0, 0] / proj_uv[-1, 0], proj_uv[1, 0] / proj_uv[-1, 0]
-            nb_distort_prealloc(proj_uv[:, 0], intrinsics[cam], dists[cam])
-            error[idx * 2] = proj_uv[0, 0] - measured_uv[0]
-            error[idx * 2 + 1] = proj_uv[1, 0] - measured_uv[1]
 
-    if dct.shape[1] == 6:
-        for idx in range(len(dct)):
-            cam = int(dct[idx, 0])
-            measured_uv[:] = dct[idx, -2:]
-            work_pos[:-1, 0] = im_points[  # just automatically account for homogenous
-                int(dct[idx, 1]), int(dct[idx, 2]), int(dct[idx, 3]),
-            ]  # this differs
-            np.dot(projection_matrixes[cam], work_pos, out=proj_uv)
-            proj_uv[0, 0], proj_uv[1, 0] = proj_uv[0, 0] / proj_uv[-1, 0], proj_uv[1, 0] / proj_uv[-1, 0]
-            nb_distort_prealloc(proj_uv[:, 0], intrinsics[cam], dists[cam])
-            error[idx * 2] = proj_uv[0, 0] - measured_uv[0]
-            error[idx * 2 + 1] = proj_uv[1, 0] - measured_uv[1]
-
-    elif dct.shape[1] == 7:
-        for idx in range(len(dct)):
-            cam = int(dct[idx, 0])
-            measured_uv[:] = dct[idx, -2:]
-            work_pos[:-1, 0] = im_points[
-                int(dct[idx, 1]), int(dct[idx, 2]), int(dct[idx, 3]), int(dct[idx, 4]),
-            ]  # this differs
-            np.dot(projection_matrixes[cam], work_pos, out=proj_uv)
-            proj_uv[0, 0], proj_uv[1, 0] = proj_uv[0, 0] / proj_uv[-1, 0], proj_uv[1, 0] / proj_uv[-1, 0]
-            nb_distort_prealloc(proj_uv[:, 0], intrinsics[cam], dists[cam])
-            error[idx * 2] = proj_uv[0, 0] - measured_uv[0]
-            error[idx * 2 + 1] = proj_uv[1, 0] - measured_uv[1]
     return error
 
 

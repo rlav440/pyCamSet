@@ -344,7 +344,7 @@ class AbstractParamHandler:
         # detection data for external use
 
         #calculate the shape of the ojbect
-        dims = self.target_point_shape
+        dims = self.target_point_shape[:-1]
 
 
         if self.missing_poses is not None:

@@ -310,10 +310,9 @@ class TargetDetection:
 
         :return TargetDetection: A new target detection with a set of dim 1 keys.
         """
-
-        data = self._data.copy()
-        prods = np.append(keydims[1:], 1)
         
+        data = self._data.copy()
+        prods = np.cumprod(np.append(keydims[2:], 1)[::-1])[::-1]
         dim_1_keys = np.sum(data[:, 2:-2]*prods, axis=1).reshape((-1, 1))
         new_data = np.concatenate([data[:, :2], dim_1_keys, data[:, -2:]], axis=1)
         return TargetDetection(self.cam_names, new_data, self.max_ims)
@@ -339,7 +338,7 @@ class TargetDetection:
         inds = np.argsort(feature_start_index) #argsort provides the inds as feature -> cam, rather than cam -> feature
         sorted_feature_counts = feature_appearance_counts[inds]
         start_ind = np.append(0, np.cumsum(sorted_feature_counts))
-        # for a key/feature, how many images are in that key over all images in which that feature is visible
+        # for a key/feature, how many images are in that key over all images in which that feature is visibl e
         k_seen, k_index, k_counts = np.unique(reconstructable_data[:, 2:-2], axis=0, return_index=True,
                                               return_counts=True)
         k_inds = np.append(np.sort(k_index), reconstructable_data.shape[0])

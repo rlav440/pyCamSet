@@ -353,21 +353,20 @@ def nb_costfn(dct: np.ndarray, im_points: np.ndarray,
     errors = np.empty((dct.shape[0], dct.shape[1] * 2))
 
     for idt in numba.prange(dct.shape[0]):
-        errors[idt, :] = faster_cf(
+        errors[idt, :] = bundle_adjustment_costfn(
             dct[idt], im_points, projection_matrixes, intrinsics, dists,
         )
     return errors
 
 
 @njit(fastmath=True, cache=True)
-def faster_cf(dct: np.ndarray, im_points: np.ndarray,
+def bundle_adjustment_costfn(dct: np.ndarray, im_points: np.ndarray,
               projection_matrixes: np.ndarray, intrinsics: np.ndarray, dists: np.ndarray):
     """
     This function calculates the bundle adjustment function for a set of points.
 
     :param dct: The detection data
-    :param im_points: An (ix(u,v,...n)x3) array of image points, where i is the number of images,
-        (u,v, .. n) is the number of points given each points (u,v, ... n) key.
+    :param im_points: An (i, x, 3) array of image points, where i is the number of images, x = prod(u,v, ... n) and contains flattened key locations.
     :param projection_matrixes: The projection matrix of all cameras, a (cx3x4) array
     :param intrinsics: The intrinsics of all cameras, a (cx3x3) array
     :param dists: The distortion parameters of all cameras, a (cx5) array
@@ -379,11 +378,21 @@ def faster_cf(dct: np.ndarray, im_points: np.ndarray,
     work_pos = np.empty((4, 1))
     work_pos[-1, 0] = 1.0
 
+    for idx in range(len(dct)):
+        cam = int(dct[idx, 0])
+        measured_uv[:] = dct[idx, -2:]
+        work_pos[:-1, 0] = im_points[  # just automatically account for homogenous
+            int(dct[idx, 1]), int(dct[idx, 2]),
+        ]
+        np.dot(projection_matrixes[cam], work_pos, out=proj_uv)
+        proj_uv[0, 0], proj_uv[1, 0] = proj_uv[0, 0] / proj_uv[-1, 0], proj_uv[1, 0] / proj_uv[-1, 0]
+        nb_distort_prealloc(proj_uv[:, 0], intrinsics[cam], dists[cam])
+        error[idx * 2] = proj_uv[0, 0] - measured_uv[0]
+        error[idx * 2 + 1] = proj_uv[1, 0] - measured_uv[1]
     if dct.shape[1] == 5:
         # TODO fix the weird edge case for single ID targets.
         # except: numba stops compiling the code if the im_points array has ndim == 3.
         # the function will still run and produce the correct output if it is run uncompiled.
-        # this bug has won.
         for idx in range(len(dct)):
             cam = int(dct[idx, 0])
             measured_uv[:] = dct[idx, -2:]
@@ -408,6 +417,7 @@ def faster_cf(dct: np.ndarray, im_points: np.ndarray,
             nb_distort_prealloc(proj_uv[:, 0], intrinsics[cam], dists[cam])
             error[idx * 2] = proj_uv[0, 0] - measured_uv[0]
             error[idx * 2 + 1] = proj_uv[1, 0] - measured_uv[1]
+
     elif dct.shape[1] == 7:
         for idx in range(len(dct)):
             cam = int(dct[idx, 0])

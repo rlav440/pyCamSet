@@ -198,6 +198,8 @@ class AbstractParamHandler:
         im_points = np.empty((len(poses), *self.target.point_data.shape))
         for idx, pose in enumerate(poses):
             n_htform_broadcast_prealloc(self.target.point_data, pose, im_points[idx])
+        
+        im_points = np.reshape(im_points, (len(poses), -1, 3))
         return proj, intr, dst, im_points
 
     def parse_detections_to_reconstructable(self, draw_distribution=False):
@@ -334,12 +336,16 @@ class AbstractParamHandler:
         """
         return TargetDetection(cam_names=self.cam_names, data=self.get_detection_data())
 
-    def get_detection_data(self) -> np.ndarray:
+    def get_detection_data(self, flatten=False) -> np.ndarray:
         """
         :return: The data as used by the calibration target.
         """
         # a function for representing any internal manipulations of the
         # detection data for external use
+
+        #calculate the shape of the ojbect
+        dims = self.target_point_shape
+
 
         if self.missing_poses is not None:
             if np.any(self.missing_poses):
@@ -349,7 +355,11 @@ class AbstractParamHandler:
                 new_data = self.detection.delete_row(im_num=missing_poses)
             else:
                 new_data = self.detection
+            if flatten: 
+                return new_data.return_flattened_keys(dims).get_data()
             return new_data.get_data()
+        if flatten:
+            return self.detection.return_flattened_keys(dims).get_data()
         return self.detection.get_data()
 
     def check_params(self, params):
@@ -376,7 +386,7 @@ def make_optimisation_function(
     """
     #
     init_params = param_handler.get_initial_params()
-    base_data = param_handler.get_detection_data()
+    base_data = param_handler.get_detection_data(flatten=True)
     length, width = base_data.shape
     data = np.resize(copy(base_data), (threads, int(np.ceil(length / threads)), width))
 

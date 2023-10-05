@@ -301,6 +301,23 @@ class TargetDetection:
                     block[im_n, cam_ind] = total_seen
         return block
 
+    def return_flattened_keys(self, keydims) -> TargetDetection:
+        """
+        Flattens the key representations given the internal key dimensions.
+        Unrolls from the last dimension, matching a numpy reshape.
+
+        :param keydims: the maximum dimension of each key index.
+
+        :return TargetDetection: A new target detection with a set of dim 1 keys.
+        """
+
+        data = self._data.copy()
+        prods = np.append(keydims[1:], 1)
+        
+        dim_1_keys = np.sum(data[:, 2:-2]*prods, axis=1).reshape((-1, 1))
+        new_data = np.concatenate([data[:, :2], dim_1_keys, data[:, -2:]], axis=1)
+        return TargetDetection(self.cam_names, new_data, self.max_ims)
+
     def parse_detections_to_reconstructable(self, draw_distribution=False):
         """
         Given the reference detection, detects which localised features can be triangulated, in which frame

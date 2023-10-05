@@ -111,6 +111,7 @@ class AbstractParamHandler:
         self.cam_names = camset.get_names()
         self.detection = detection
         self.target = target
+        self.point_data = target.point_data
         self.target_point_shape = np.array(target.point_data.shape)
         self.initial_params = None
 
@@ -195,63 +196,15 @@ class AbstractParamHandler:
         x = self.parse_extra_params_and_setup(x)
         poses, extr, intr, dst = self.bundlePrimitive.return_bundle_primitives(x)
         proj = intr @ extr[:, :3, :]
-        im_points = np.empty((len(poses), *self.target.point_data.shape))
+        im_points = np.empty((len(poses), *self.point_data.shape))
         for idx, pose in enumerate(poses):
-            n_htform_broadcast_prealloc(self.target.point_data, pose, im_points[idx])
+            n_htform_broadcast_prealloc(self.point_data, pose, im_points[idx])
         
         im_points = np.reshape(im_points, (len(poses), -1, 3))
         return proj, intr, dst, im_points
 
-    def parse_detections_to_reconstructable(self, draw_distribution=False):
-        """
-        Given the reference detection, detects which localised features can be triangulated, in which frame
 
-        :param draw_distribution: If true will draw an image number x feature number boolean plot, indicating which
-            feature can be reconstructed in which image.
-        """
-        data = self.sorted_optimisation.get_data()
-        # find keys that are reconstructable: that is keys that are seen by two+ cameras
-        _, inv, count = np.unique(  # unique im num keys, etc
-            data[:, 1:-2], axis=0, return_inverse=True, return_counts=True
-        )
-        viable_mask = count > 1
-        reconstructable_data = data[viable_mask[inv]]
-        features_reconstructable, feature_start_index, feature_appearance_counts = np.unique(
-            reconstructable_data[:, 1:-2], axis=0, return_index=True, return_counts=True
-        )
-        # note feature here is an image feature pair. This problem is because of the ordering of the feature numbers
-        inds = np.argsort(feature_start_index) #argsort provides the inds as feature -> cam, rather than cam -> feature
-        sorted_feature_counts = feature_appearance_counts[inds]
-        start_ind = np.append(0, np.cumsum(sorted_feature_counts))
-        # for a key/feature, how many images are in that key over all images in which that feature is visible
-        k_seen, k_index, k_counts = np.unique(reconstructable_data[:, 2:-2], axis=0, return_index=True,
-                                              return_counts=True)
-        k_inds = np.append(np.sort(k_index), reconstructable_data.shape[0])
-        im_dst = np.zeros((len(k_inds) - 1, self.detection.max_ims))
-        idx = 0
-        for i in range(len(k_inds) - 1):
-            j = 0
-            while start_ind[idx] < k_inds[i + 1]:
-                im_dst[i, j] = sorted_feature_counts[idx]
-                idx += 1;
-                j += 1
-
-        count = np.sum(im_dst > 0, axis=1)
-
-        if draw_distribution:
-            fig, ax = plt.subplots(1, 2)
-            ax[0].imshow(im_dst)
-            ax[0].set_title('Feature visibility in cameras')
-            ax[1].plot(count, '.')
-            ax[1].set_title('number visible images.')
-            plt.show()
-
-        self.seen_id = k_inds
-        self.im_dist = im_dst
-        self.im_per_feature = count
-        self.update_data = reconstructable_data
-
-    def set_initial_params(self, x: np.array):
+    def set_initial_params(self, x: np.ndarray):
         """
         Sets the initial params from som other parameter array.
 

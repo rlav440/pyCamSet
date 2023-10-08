@@ -49,7 +49,7 @@ class AbstractTarget(ABC):
         inputs.pop('self', None)
         inputs.pop('__class__', None)
 
-        self.point_data = None # An
+        self.point_data: np.ndarray = None # An
 
         self.point_local = None #: np.ndarray = self.make_local()
         self.original_points = None # = self.point_data.copy()

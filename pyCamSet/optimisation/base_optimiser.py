@@ -299,21 +299,16 @@ class AbstractParamHandler:
         #calculate the shape of the ojbect
         dims = self.target_point_shape[:-1]
 
-
+        detection = self.detection
         if self.missing_poses is not None:
             if np.any(self.missing_poses):
                 logging.info("Missing poses required removing detected data from the optimisation")
                 # delete any inds with missing pose numbers.
                 missing_poses = np.where(self.missing_poses)[0]
-                new_data = self.detection.delete_row(im_num=missing_poses)
-            else:
-                new_data = self.detection
-            if flatten: 
-                return new_data.return_flattened_keys(dims).get_data()
-            return new_data.get_data()
+                detection = self.detection.delete_row(im_num=missing_poses)
         if flatten:
-            return self.detection.return_flattened_keys(dims).get_data()
-        return self.detection.get_data()
+            return detection.return_flattened_keys(dims).get_data()
+        return detection.get_data()
 
     def check_params(self, params):
         """

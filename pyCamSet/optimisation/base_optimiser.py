@@ -335,7 +335,7 @@ def estimate_camera_relative_poses(
     :param cams: the list of cameras with no yet known average transformation
     """
 
-    # a indicates that there is a full array allong a dimension
+    # a indicates that there is a full array allong a dimension p3
 
     img_detections = detection.get_image_list()
     Mat_ac = []
@@ -344,15 +344,18 @@ def estimate_camera_relative_poses(
         for id in img_detections:
             pose_per_img.append(calibration_target.target_pose_in_cam_image(id, cam, mode="nan"))
         Mat_ac.append(pose_per_img)
+
         
     Mrc_at = [np.linalg.inv(p) for p in Mat_ac[ref_cam]]
     Marc_ac = [[(Mt_c @ Mrc_t) for Mrc_t, Mt_c in zip(Mrc_at, Mat_c)] for Mat_c in Mat_ac]
     Mac_rc = np.array([np.linalg.inv(average_tforms(Marc_c)) for Marc_c in Marc_ac])
     # ert refcam -> other_cams
     Mat_arc = Mac_rc[:, None, ...] @ Mat_ac
+    plt.imshow(np.isnan(np.array(Mat_arc)[:,:,0,0]))
+    plt.show()
     Mat_rc = np.array([average_tforms(Mat_rc) for Mat_rc in Mat_arc.transpose((1,0,2,3))])
 
-    Mat_rc = Mat_arc[ref_cam, ...]
+    # Mat_rc = Mat_arc[ref_cam, ...] 
 
     #etp refcam -> cube_loc
     Mrt_rc = Mat_rc[ref_pose]

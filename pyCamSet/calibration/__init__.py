@@ -1,1 +1,1 @@
-from .camCalibrator import CameraCalibrator
+from .camCalibrator import calibrate_cameras

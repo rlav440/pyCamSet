@@ -259,8 +259,8 @@ class AbstractTarget(ABC):
         return np.reshape(local_coords, init_shape)
 
     def initial_calibration(self, cam_name, detection: TargetDetection,
-                            res: list, pose_im=0,
-                            fixed_params: dict =None) -> Camera:
+                            res: list, pose_im: int=0,
+                            fixed_params: dict|None =None) -> Camera:
         """
         Takes a single camera's detections, and performs an initial
         calibration on them.
@@ -282,51 +282,46 @@ class AbstractTarget(ABC):
         image_points = []
 
         pre_defined_camera = False
-
+        init_cam = Camera()
+        fixed_param = {}
         if fixed_params is not None:
             fixed_param = fixed_params.get(cam_name, {})
             if "int" in fixed_param and "dst" in fixed_param:
-                pre_defined_camera = True
-                init_cam = Camera(intrinsic=fixed_param['int'], distortion_coefs=fixed_param['dst'])
+                init_cam = Camera(intrinsic=fixed_param['int'], distortion_coefs=fixed_param['dst'], res=res, name=cam_name)
                 logging.info(f'Camera {cam_name} was pre determined. Skipping opencv calibration')
+                return init_cam
 
-        if not pre_defined_camera:
 
-            # to use opencv's initial calibration, it is required that every presented board be flat.
-            # we can get around this by remapping points to be flat.
-            # this introduces the additional constraint that for equal u,v .. w in the key (u, v, ...,  w, n)
-            # the points "n" are co-planar.
-            for im_detect in detections_in_image:
-                data = im_detect.get_data()
-                if data is None:
-                    continue  # no data here, so don't add it to the optimisation
-                keys = get_keys(data) # this slicing is always 2d.
-                boards, board_id, b_counts = np.unique(keys[:, :-1], return_inverse=True, return_counts=True)
-                mask = b_counts > np.prod(self.point_local.shape[:-2])
-                for board in boards[mask]:
-                    key_mask = np.squeeze(keys[:, :-1] == board)
-                    if np.sum(key_mask) > 4:
-                        board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')
-                        board_im = data[key_mask, -2:][None, ...].astype('float32')
-                        object_points.append(board_obj)
-                        image_points.append(board_im)
+        for im_detect in detections_in_image:
+            data = im_detect.get_data()
+            if data is None:
+                continue  # no data here, so don't add it to the optimisation
+            keys = get_keys(data) # this slicing is always 2d.
+            boards, board_id, b_counts = np.unique(keys[:, :-1], return_inverse=True, return_counts=True)
+            mask = b_counts > np.prod(self.point_local.shape[:-2])
+            for board in boards[mask]:
+                key_mask = np.squeeze(keys[:, :-1] == board)
+                if np.sum(key_mask) > 4:
+                    board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')
+                    board_im = data[key_mask, -2:][None, ...].astype('float32')
+                    object_points.append(board_obj)
+                    image_points.append(board_im)
 
-            start = time.time()
-            ic = cv2.calibrateCamera(
-                object_points,
-                image_points,
-                tuple(res[::-1]),
-                None,
-                None,
-            )
-            end = time.time()
+        start = time.time()
+        ic = cv2.calibrateCamera(
+            object_points,
+            image_points,
+            tuple(res[::-1]),
+            None,
+            None,
+        )
+        end = time.time()
 
-            logging.info(f'{cam_name} took {end - start:.1f} seconds'
-                         f', leftover error of {ic[0]:.2f} pixels')
+        logging.info(f'{cam_name} took {end - start:.1f} seconds'
+                     f', leftover error of {ic[0]:.2f} pixels')
 
-            # perform an initial pose estimate on the first images
-            init_cam = Camera(intrinsic=ic[1], distortion_coefs=np.array(ic[2]), res=res)
-
+        # perform an initial pose estimate on the first images
+        init_cam = Camera(intrinsic=ic[1], distortion_coefs=np.array(ic[2]), res=res, name=cam_name)
         if fixed_params is not None:
             if "int" in fixed_param:
                 init_cam.intrinsic = fixed_param['int']
@@ -336,29 +331,29 @@ class AbstractTarget(ABC):
                 init_cam.set_extrinsic(fixed_param['ext'])
                 return init_cam
 
-        init_cam.name = cam_name
-
-        updated_ext = self.target_pose_in_cam_image(
-            detection=detection.get(im_num=pose_im),  # put in the distortion coefficients
-            cam=init_cam
-        )
-        init_cam.set_extrinsic(updated_ext)
-
         return init_cam
 
-    def target_pose_in_cam_image(self, detection: TargetDetection, cam: Camera) -> np.ndarray:
+    def target_pose_in_cam_image(self, detection: TargetDetection, cam: Camera, mode="throw") -> np.ndarray:
         """
         This function gives a pose estimate of the cube in an image as seen by a camera.
 
         :param detection: a detection containing data from a single image.
         :param cam: a camera model to use
-        :return a 4x4 transformation of the target giving pose relative to the detecting camera
+        :param mode: whether to throw an error or return nan arrays.
+
+        :return a 4x4 transformation of the target giving the transformation from target to camera coordinates
         """
 
         datum = detection.get(cam=cam.name).get_data()
+        if datum is None:
+            if mode == "nan":
+                return np.ones((4,4)) * np.nan
+            raise ValueError(f"The detection had no data for camera {cam.name}")
 
         n_im = np.unique(datum[:, 0])  # check that only one camera and one image is here.
         if len(n_im) > 1:
+            if mode == "nan":
+                return np.ones((4,4)) * np.nan
             raise ValueError(f"passed detection contained info from {n_im} ims. \n"
                              "Pose estimation only works with 1 image")
 
@@ -366,6 +361,8 @@ class AbstractTarget(ABC):
         object_points = self.point_data[tuple(keys.astype(int).T)]
         image_points = datum[:, -2:]
         if len(object_points) < 6:
+            if mode == "nan":
+                return np.ones((4,4)) * np.nan
             raise ValueError("Inadequate number of corners for pose estimation")
         _, rvec, tvec = cv2.solvePnP(object_points.astype("float32"),
                                      image_points.astype("float32"),
@@ -377,5 +374,5 @@ class AbstractTarget(ABC):
             tvec,
             mode='opencv'
         )
-        return ext # from cube -> cam coordinates
+        return ext # from target -> cam coordinates
 

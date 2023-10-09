@@ -8,8 +8,8 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
-from pyCamSet.cameras import CameraSet
-from pyCamSet.utils.general_utils import ext_4x4_to_rod
+from pyCamSet.cameras import CameraSet, Camera
+from pyCamSet.utils.general_utils import ext_4x4_to_rod, average_tforms
 from pyCamSet.optimisation.compiled_helpers import fill_pose, fill_dst, fill_extr, fill_intr
 from pyCamSet.optimisation.compiled_helpers import bundle_adj_parrallel_solver, n_htform_broadcast_prealloc
 
@@ -238,15 +238,20 @@ class AbstractParamHandler:
         param_array = []
         cam_idx = 0
         poses, detected_poses = self.target.pose_in_detections(self.detection, self.camset)
+
+        cam_poses, target_poses = estimate_camera_relative_poses(
+            detection=self.detection, cams=self.camset, calibration_target=self.target
+        )
+
         for idp, pose_unfixed in enumerate(self.bundlePrimitive.poses_unfixed):
             # how do we handle missing poses - delete the image associated with the missing daata
             if pose_unfixed:
-                ext = ext_4x4_to_rod(poses[idp])
+                ext = ext_4x4_to_rod(target_poses[idp])
                 param_array.append(ext[0])
                 param_array.append(ext[1])
         for idc, ext_unfixed in enumerate(self.bundlePrimitive.extr_unfixed):
             if ext_unfixed:
-                ext = ext_4x4_to_rod(cams[idc].extrinsic)
+                ext = ext_4x4_to_rod(cam_poses[idc])
                 param_array.append(ext[0])
                 param_array.append(ext[1])
         for idc, intr_unfixed in enumerate(self.bundlePrimitive.intr_unfixed):
@@ -258,7 +263,7 @@ class AbstractParamHandler:
         param_array = self.add_extra_params(param_array)
         return np.concatenate(param_array, axis=0)
 
-    def get_camset(self, x, return_pose=False) -> CameraSet or tuple[CameraSet, np.ndarray]:
+    def get_camset(self, x, return_pose=False) -> CameraSet | tuple[CameraSet, np.ndarray]:
         """
         Given a set of parameters, returns a camera set.
 
@@ -319,6 +324,43 @@ class AbstractParamHandler:
         _, _, _, obj_points = self.get_bundle_adjustment_inputs(params)
         self.get_camset(params).plot_np_array(obj_points.reshape((-1, 3)))
 
+def estimate_camera_relative_poses(
+        calibration_target: AbstractTarget, detection: TargetDetection,
+        cams:list[Camera], ref_cam: int = 0, ref_pose: int = 0
+    ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Uses averaged quaternions to get a rough average of relative camera and target locations from an unoptimised detection.
+
+    :param detection: the detection data that the average estimates should be extracted from
+    :param cams: the list of cameras with no yet known average transformation
+    """
+
+    # a indicates that there is a full array allong a dimension
+
+    img_detections = detection.get_image_list()
+    Mat_ac = []
+    for cam in cams:
+        pose_per_img=[]
+        for id in img_detections:
+            pose_per_img.append(calibration_target.target_pose_in_cam_image(id, cam, mode="nan"))
+        Mat_ac.append(pose_per_img)
+        
+    Mrc_at = [np.linalg.inv(p) for p in Mat_ac[ref_cam]]
+    Marc_ac = [[(Mt_c @ Mrc_t) for Mrc_t, Mt_c in zip(Mrc_at, Mat_c)] for Mat_c in Mat_ac]
+    Mac_rc = np.array([np.linalg.inv(average_tforms(Marc_c)) for Marc_c in Marc_ac])
+    # ert refcam -> other_cams
+    Mat_arc = Mac_rc[:, None, ...] @ Mat_ac
+    Mat_rc = np.array([average_tforms(Mat_rc) for Mat_rc in Mat_arc.transpose((1,0,2,3))])
+
+    Mat_rc = Mat_arc[ref_cam, ...]
+
+    #etp refcam -> cube_loc
+    Mrt_rc = Mat_rc[ref_pose]
+    Mrc_rt = np.linalg.inv(Mrt_rc)  #is reftarget -> refcam
+    Mac_rt = Mrc_rt @ Mac_rc # cam -> refcam -> reftarget
+    Mrt_ac = Mac_rc @ Mrt_rc
+    Mat_rt = Mrc_rt @ Mat_rc  # cube_loc -> refcam -> refcube
+    return Mrt_ac, Mat_rt
 
 def make_optimisation_function(
         param_handler: AbstractParamHandler,

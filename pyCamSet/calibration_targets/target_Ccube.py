@@ -10,7 +10,7 @@ from PIL import Image
 
 from pyCamSet.calibration_targets import AbstractTarget, ImageDetection, FaceToShape
 from pyCamSet.cameras import Camera
-from pyCamSet.utils.general_utils import split_aruco_dictionary, e_4x4, downsample_valid
+from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform, downsample_valid
 
 TFORMS = [
 	([1.209,1.209,1.209],[-0.5,-0.5,-0.5]),
@@ -104,7 +104,7 @@ class Ccube(AbstractTarget):
 
         self.faceData = FaceToShape(
             face_local_coords=board_coords,
-            face_transforms=[e_4x4(*t) for t in TFORMS],
+            face_transforms=[make_4x4h_tform(*t) for t in TFORMS],
             scale_factor= self.length,
         )
         self.point_data = self.faceData.point_data

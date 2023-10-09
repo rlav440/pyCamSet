@@ -11,7 +11,7 @@ import cv2
 from natsort import natsorted
 
 
-from pyCamSet.utils.general_utils import glob_ims, e_4x4, mad_outlier_detection, plane_fit
+from pyCamSet.utils.general_utils import glob_ims, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.calibration_targets.targetDetections import TargetDetection, ImageDetection
 
@@ -372,7 +372,7 @@ class AbstractTarget(ABC):
                                      cam.intrinsic,
                                      cam.distortion_coefs
                                      )
-        ext = e_4x4(
+        ext = make_4x4h_tform(
             rvec,
             tvec,
             mode='opencv'

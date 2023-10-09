@@ -99,9 +99,9 @@ class AbstractParamHandler:
 
     def __init__(self,
                  camset: CameraSet, target: AbstractTarget, detection: TargetDetection,
-                 fixed_params: dict = None,
-                 options: dict = None,
-                 missing_poses=None
+                 fixed_params: dict|None = None,
+                 options: dict | None = None,
+                 missing_poses: list | None =None
                  ):
 
         self.fixed_params = list_dict_to_np_array(fixed_params)

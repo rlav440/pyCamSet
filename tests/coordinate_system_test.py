@@ -1,6 +1,6 @@
 import numpy as np
 from pyCamSet import Camera, CameraSet
-from pyCamSet.utils import e_4x4
+from pyCamSet.utils import make_4x4h_tform
 
 def test_sensor_reprojection_0_offset():
     """
@@ -43,7 +43,7 @@ def test_im_to_world_ray():
 
     names = [str(n) for n in range(n_cam)]
     # generate random extrinsic positions, and use the default camera arrangement
-    extrinsic = [e_4x4(np.random.rand(3) * np.pi,
+    extrinsic = [make_4x4h_tform(np.random.rand(3) * np.pi,
                        np.random.rand(3) * 0.2)
                  for _ in range(n_cam)]
     # A list of a standard calibration

@@ -319,7 +319,7 @@ def grouper(iterable, n, fillvalue=None):
     return zip_longest(*args, fillvalue=fillvalue)
 
 
-def e_4x4(euler_angles, trans, mode='opencv'):
+def make_4x4h_tform(euler_angles, trans, mode='opencv'):
     """
     :param euler_angles: opencv axis angle representation of rotation
         these angles default to being in radians

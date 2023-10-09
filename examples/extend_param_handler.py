@@ -51,7 +51,8 @@ class TwoTargetCalibrator(AbstractParamHandler):
     
     def parse_extra_params_and_setup(self, param_array:np.ndarray) -> np.ndarray:
         """
-        Takes the first 6 components of the param array, and generates additional points."""
+        Takes the first 6 components of the param array, and generates additional points.
+        """
         l_t0 = 1
         tform = np.empty(12)
         n_e4x4_flat_INPLACE(param_array[:6], tform)

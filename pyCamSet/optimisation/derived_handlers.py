@@ -13,7 +13,8 @@ class StandardBundleParameters(AbstractParamHandler):
     needed for a standard bundle adjustment
     """
 
-    def __init__(self, camset: CameraSet, target: AbstractTarget, detection: TargetDetection,
-                 fixed_params=None, options: dict = None):
+    def __init__(self, camset: CameraSet, target: AbstractTarget,
+                 detection: TargetDetection, fixed_params: dict|None=None,
+                 options: dict | None = None):
         super().__init__(camset, target, detection,
                          fixed_params, options)

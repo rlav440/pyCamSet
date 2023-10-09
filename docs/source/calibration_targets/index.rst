@@ -17,6 +17,20 @@ In this library, they always provide a method for detecting the object features,
 Optionally, calibration targets provide methods for reprenting themselves in a 3D plot and providing a printable surface with controlled dimensions.
 As this library provides methods for working with 3D targets, the printable surfaces can be returned as a "net" which can be folded over some underlying geometry.
 
+Examples
+========
+
+
+find_in_image
+-------------
+Every calibration target provides the ability to detect that target in an image.
+
+find_in_imfolder
+----------------
+A natural extension to the ability to calibrate a target in an image is the 
+
+
+
 
 .. toctree::
    :maxdepth: 2

@@ -5,7 +5,7 @@ from tqdm import tqdm
 import pickle
 
 from pyCamSet.optimisation.compiled_helpers import bundle_adj_parrallel_solver, nb_distort_prealloc
-from pyCamSet.utils.general_utils import h_tform, e_4x4
+from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
 
 
@@ -68,7 +68,7 @@ def bundle_correctness():
     dct = np.array(dct)[:-1]
     dct = dct.reshape((2, -1, 6))
     points = board.chessboardCorners.squeeze()
-    im_points = [h_tform(points, e_4x4(r, t, mode='opencv')) for r, t in zip(rotation_vectors, translation_vectors)]
+    im_points = [h_tform(points, make_4x4h_tform(r, t, mode='opencv')) for r, t in zip(rotation_vectors, translation_vectors)]
     im_points = np.array(im_points).reshape(len(all_corners), -1, 1, 3)
     proj_mat = np.concatenate((camera_matrix, np.zeros((3,1))), axis=1).reshape((1,3,4))
     intrinsics = camera_matrix.reshape((1,3,3))

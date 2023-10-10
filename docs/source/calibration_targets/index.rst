@@ -21,13 +21,19 @@ Examples
 ========
 
 
-find_in_image
+calibrating
 -------------
-Every calibration target provides the ability to detect that target in an image.
 
-find_in_imfolder
+The main purpose of a calibration target is to enable the calibration of a camera system, so it can be used later for some computer vision task.
+This functionality is provided with the calibrate_cameras function.
+
+
+target tracking
 ----------------
-A natural extension to the ability to calibrate a target in an image is the 
+
+Another use of a calibration target is as a well characterised and detectable fiducial marker.
+With a calibrated camera set, the find_target_poses function will return a bundle adjustment based estimate of the positions of the target.
+
 
 
 

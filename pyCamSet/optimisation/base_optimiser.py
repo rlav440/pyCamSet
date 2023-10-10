@@ -15,6 +15,9 @@ from pyCamSet.optimisation.compiled_helpers import bundle_adj_parrallel_solver, 
 
 DEFAULT_OPTIONS = {
     'verbosity': 2,
+    'fixed_pose':0,
+    'ref_cam':0,
+    'ref_pose':0,
 }
 
 
@@ -104,9 +107,14 @@ class AbstractParamHandler:
                  missing_poses: list | None =None
                  ):
 
+        self.problem_opts = DEFAULT_OPTIONS
+        if options is not None:
+            self.problem_opts.update(options)
+
         self.fixed_params = list_dict_to_np_array(fixed_params)
         if fixed_params is None:
             self.fixed_params = {}
+
         self.camset = camset
         self.cam_names = camset.get_names()
         self.detection = detection
@@ -125,8 +133,16 @@ class AbstractParamHandler:
 
         self.extr_unfixed = np.array(['ext' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
         self.intr_unfixed = np.array(['int' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
-        self.dst_unfixed = np.array(['dst' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
+        self.dst_unfixed = np.array(['dst' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names]) 
+
+        self.pose_unfixed = np.array(n_poses, dtype=bool)
+        if fixed_pose := self.problem_opts.get("fixed_pose"):
+            self.pose_unfixed[fixed_pose] = False
+            self.poses[fixed_pose, :] = [1,0,0, 0,1,0, 0,0,1, 0,0,0]
+
         self.populate_self_from_fixed_params()
+
+
 
         self.bundlePrimitive = BundlePrimitive(
             self.poses, self.extr, self.intr, self.dst,
@@ -135,9 +151,6 @@ class AbstractParamHandler:
 
         self.param_len = None
         self.jac_mask = None
-        self.problem_opts = DEFAULT_OPTIONS
-        if options is not None:
-            self.problem_opts.update(options)
         self.missing_poses = missing_poses
 
     def add_extra_params(self, param_array:np.ndarray) -> np.ndarray:
@@ -345,10 +358,47 @@ def estimate_camera_relative_poses(
             pose_per_img.append(calibration_target.target_pose_in_cam_image(id, cam, mode="nan"))
         Mat_ac.append(pose_per_img)
 
-        
+    Mat_ac = np.array(Mat_ac)
+
     Mrc_at = [np.linalg.inv(p) for p in Mat_ac[ref_cam]]
-    Marc_ac = [[(Mt_c @ Mrc_t) for Mrc_t, Mt_c in zip(Mrc_at, Mat_c)] for Mat_c in Mat_ac]
+    Marc_ac = np.array([[(Mt_c @ Mrc_t) for Mrc_t, Mt_c in zip(Mrc_at, Mat_c)] for Mat_c in Mat_ac])
     Mac_rc = np.array([np.linalg.inv(average_tforms(Marc_c)) for Marc_c in Marc_ac])
+
+    #how do we use these to estimate that we have different images? look at relative magnitude and rotation size.
+    for ic, Marc_c in enumerate(Marc_ac):
+        if ic == ref_cam:
+            continue
+        angs = np.array([np.arccos((np.trace(t) - 1)/2) for t in Marc_c])
+        mags = [np.linalg.norm(t[:3,-1]) for t in Marc_c]
+        std_ang = np.nanstd(angs)
+        print(std_ang)
+        std_mag = np.nanstd(mags)
+
+        if std_mag > 0.050:
+            logging.critical(f"Found inconsistent relative translation positions (stdev = {std_mag:.2f} m) for camera index {ic}")
+            logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
+        if std_ang > 5 / 180 * np.pi:
+            logging.critical(f"Found inconsistent relative angle magnitudes (stdev = {std_ang/np.pi*180:.2f} degrees) for camera index {ic}")
+            logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
+
+    plt.scatter(angs/np.pi*180, mags)
+    plt.xlim(0, 100)
+    plt.xlabel("Rotation Angle Found Between Cameras (deg)")
+    plt.ylim(0, 0.5)
+    plt.ylabel("Translation Found Between Cameras (m)")
+    plt.show()
+
+
+    
+    Mrt_rc = Mat_ac[ref_cam, ref_pose]
+    Mrt_ac = Mat_ac[:, ref_pose]
+
+    Mat_rc = Mat_ac[ref_cam, :]
+    Mat_rt = np.linalg.inv(Mrt_rc)[None, ...] @ Mat_rc
+    return Mrt_ac, Mat_rt
+
+    
+
     # ert refcam -> other_cams
     Mat_arc = Mac_rc[:, None, ...] @ Mat_ac
     plt.imshow(np.isnan(np.array(Mat_arc)[:,:,0,0]))

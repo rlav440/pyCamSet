@@ -226,6 +226,8 @@ def run_stereo_calibration(
         param_handler=param_handler,
     )
 
+    outlier_rejection(optimisation.fun.reshape((-1,2)), param_handler)
+
     param_handler.camset = optimised_cams
     optimised_cams.set_calibration_history(
         optimisation_results=optimisation,

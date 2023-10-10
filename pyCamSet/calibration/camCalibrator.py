@@ -390,7 +390,6 @@ class CameraCalibrator:
 def sanitise_input_images(detected_sub_folders:list[Path]):
     """
     Takes a list of detected sub folders and checks that they all have the same number of images.
-
     :param detected_sub_folders: A list of detected subfolders in the current location.
     :return:
     """

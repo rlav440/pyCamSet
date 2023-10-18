@@ -4,20 +4,20 @@ import logging
 from pyCamSet import CameraSet  
 from pyCamSet.calibration_targets.abstractTarget import AbstractTarget
 from pyCamSet.calibration_targets.targetDetections import TargetDetection
-from pyCamSet.optimisation.base_optimiser import AbstractParamHandler
+from pyCamSet.optimisation.base_optimiser import StandardParamHandler
 from pyCamSet.optimisation.compiled_helpers import n_e4x4_flat_INPLACE, n_htform_broadcast_prealloc
 
 from pyCamSet.utils.general_utils import ext_4x4_to_rod
 
 
-class TwoTargetCalibrator(AbstractParamHandler):
+class TwoTargetCalibrator(StandardParamHandler):
     """
     Defines a new class that can calibrate with two! targets that are rigidly fixed together
     """
 
     def __init__(self, camset: CameraSet, target0: AbstractTarget, target1: AbstractTarget,
                  detection0: TargetDetection, detection1: TargetDetection, 
-                 fixed_params: dict = None, options: dict = None,
+                 fixed_params: dict|None = None, options: dict|None = None,
                  missing_poses0=None, missing_poses1=None):
         super().__init__(camset, target0, detection0, fixed_params, options, missing_poses0) #use the super to initiate pose, extr, dst and intr automation.
 

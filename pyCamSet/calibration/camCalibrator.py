@@ -9,10 +9,10 @@ from functools import reduce
 import re
 import os
 
+
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
-from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, AbstractParamHandler
-from pyCamSet.optimisation.derived_handlers import StandardBundleParameters
+from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, StandardParamHandler
 from pyCamSet.utils.saving import save_pickle, load_pickle, load_CameraSet
 from pyCamSet.utils.general_utils import average_tforms, get_subfolder_names, glob_ims, mad_outlier_detection
 
@@ -22,7 +22,7 @@ coloredlogs.install(level=logging.INFO)
 
 
 def calibrate_cameras(
-    f_loc: Path,
+    f_loc: Path|str,
     calibration_target: AbstractTarget,
     save: bool = True,
     save_loc: Path|None = None,
@@ -30,7 +30,8 @@ def calibrate_cameras(
     n_lim=None,
     fixed_params: dict | None =None,
     high_distortion=False,
-    threads=max(1, cpu_count()-2)
+    threads=max(1, cpu_count()-2),
+    problem_options: dict|None = None,
     ) -> CameraSet:
     """
     This function coordinates the calibration process, from detection to outputing a final camset.
@@ -44,8 +45,12 @@ def calibrate_cameras(
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
     :param high_distortion: Implements an iterative scheme for high distortion cameras.
     """
+    if isinstance(f_loc, str):
+        f_loc = Path(f_loc)
+
     if save_loc is None:
         save_loc = f_loc
+
 
     detections, camera_res = detect_datapoints_in_imfile(
         f_loc=f_loc,
@@ -94,6 +99,8 @@ def calibrate_cameras(
         save=save,
         save_loc=save_loc/('optimised_cameras' + string_tail),
         fixed_params=fixed_params,
+        threads = threads,
+        problem_options = problem_options,
     )
 
     return calibrated_cameras
@@ -154,7 +161,7 @@ def run_initial_calibration(detection: TargetDetection,
     return cams
 
 
-def outlier_rejection(results, params: AbstractParamHandler) -> tuple[TargetDetection | None, bool]:
+def outlier_rejection(results, params: StandardParamHandler) -> tuple[TargetDetection | None, bool]:
     """
     Takes a set of results from the optimisation and performs outlier rejection on them.
     Will identify which images are outliers, raise a warning, and return a detection set without this data.
@@ -199,7 +206,9 @@ def run_stereo_calibration(
     save: bool=True,
     save_loc: Path|None = None, 
     fixed_params: dict|None=None,
-    floc: Path|None=None
+    floc: Path|None=None,
+    threads: int = 1, 
+    problem_options: dict|None = None,
 ) -> CameraSet:
     """
     This code runs a multi camera stereo calibration.
@@ -217,13 +226,15 @@ def run_stereo_calibration(
         save_loc = Path('optimised_cameras.camset')
 
     if param_handler is None:
-        param_handler = StandardBundleParameters(
+        param_handler = StandardParamHandler(
             detection=detections, target=target, camset=cams,
             fixed_params=fixed_params,
+            options=problem_options,
         )
 
     optimisation, optimised_cams = run_bundle_adjustment(
         param_handler=param_handler,
+        threads = threads,
     )
 
     # outlier_rejection(optimisation.fun.reshape((-1,2)), param_handler)

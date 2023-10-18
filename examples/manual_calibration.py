@@ -1,5 +1,4 @@
-from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment
-from pyCamSet.optimisation.derived_handlers import StandardBundleParameters
+from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, StandardParamHandler
 
 from pyCamSet import ChArUco, CameraSet
 from pyCamSet.calibration_targets import TargetDetection
@@ -12,9 +11,8 @@ init_cams = CameraSet()
 calibration_target = ChArUco()
 detected_data = TargetDetection()
 
-# the StandardBundleParameters class is an implementation of the abstractParamHandler.
 # any implementation of this base class can be initialised here.
-param_handler = StandardBundleParameters(
+param_handler = StandardParamHandler(
     camset=init_cams,
     target=calibration_target,
     detection=detected_data,

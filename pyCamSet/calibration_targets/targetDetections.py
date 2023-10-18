@@ -11,7 +11,7 @@ class ImageDetection:
     at which that key was found.
     Enforces the correct implementation of an AbstractTarget inheretor's find_in_image function.
     """
-    def __init__(self,  keys: np.ndarray or list=None, image_points: np.ndarray or list =None):
+    def __init__(self,  keys: np.ndarray|list|None=None, image_points: np.ndarray|list|None=None):
         """
         Takes a set of keys and detections,
 
@@ -47,7 +47,7 @@ class TargetDetection:
 
     """
 
-    def __init__(self, cam_names: list, data: np.ndarray or None = None, max_ims=0):
+    def __init__(self, cam_names: list, data: np.ndarray | None = None, max_ims=0):
         # this class stores the information as a basic structure, while retaining the ability to be smoothly indexed.
 
         self.cam_names = cam_names

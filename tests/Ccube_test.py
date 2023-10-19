@@ -3,9 +3,6 @@ import numpy as np
 from pyCamSet.calibration_targets.shape_by_faces import make_tforms
 
 
-
-
-
 def test_cube():
 
     test = Ccube(length=40, n_points=15)

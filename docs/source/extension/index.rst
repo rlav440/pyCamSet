@@ -8,8 +8,11 @@ The calibration of the library relies on the interaction of the AbstractTarget c
 Structure
 ==============
 
-The following images detail the structure of the library.
+The following images detail the structure of the library, with functions responsible for extension higlighted.
 
+.. image:: ../source/figs/pyCamSet.png
+  :width: 600
+  :alt: Relationships between extendable components of the pyCamSet library.
 
 Derivates of these classes can be substituted into this framework, which allows customisation of the calibration target, calibration method, and the type of optimisation.
 

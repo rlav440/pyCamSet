@@ -7,18 +7,26 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
 
-from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
-from pyCamSet.cameras import CameraSet
-from pyCamSet.utils.general_utils import ext_4x4_to_rod
-from pyCamSet.optimisation.compiled_helpers import fill_pose, fill_dst, fill_extr, fill_intr
-from pyCamSet.optimisation.compiled_helpers import bundle_adj_parrallel_solver, n_htform_broadcast_prealloc
+from typing import TYPE_CHECKING
+
+import pyCamSet.utils.general_utils as gu
+import pyCamSet.optimisation.compiled_helpers as ch
+    
+if TYPE_CHECKING:
+    from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
+    from pyCamSet.cameras import CameraSet
+
 
 DEFAULT_OPTIONS = {
     'verbosity': 2,
+    'fixed_pose':0,
+    'ref_cam':0,
+    'ref_pose':0,
+    'outliers':'ask'
 }
 
 
-def list_dict_to_np_array(d):
+def list_dict_to_np_array(d) -> dict:
     if isinstance(d, dict):
         for key, val in d.items():
             if isinstance(val, dict):
@@ -72,21 +80,21 @@ class BundlePrimitive:
         intr_data = params[extr_end:intr_end].reshape((-1, 4))
         dst_data = params[intr_end:dst_end].reshape((-1, 5))
 
-        fill_pose(pose_data, self.poses, self.poses_unfixed)
-        fill_extr(extr_data, self.extr, self.extr_unfixed)
-        fill_intr(intr_data, self.intr, self.intr_unfixed)
-        fill_dst(dst_data, self.dst, self.dst_unfixed)
+        ch.fill_pose(pose_data, self.poses, self.poses_unfixed)
+        ch.fill_extr(extr_data, self.extr, self.extr_unfixed)
+        ch.fill_intr(intr_data, self.intr, self.intr_unfixed)
+        ch.fill_dst(dst_data, self.dst, self.dst_unfixed)
         return self.poses, self.extr, self.intr, self.dst
 
 
-class AbstractParamHandler:
+class StandardParamHandler:
     """
-    The abstract param handler is a class that handles the optimisation of camera parameters.
+    The standard param handler is a class that handles the optimisation of camera parameters.
     It is designed to be used with the numba implentation of the bundle adjustment cost function.
     It takes a CameraSet, a Target and the associated TargetDetection.
     Given these, it will return a function that takes a parameter array and returns data structures ready for
     evaluation with the bundle adjustment cost function.
-    The implementation given in the abstract param handler implements a standard object pose based bundle adjustment.
+    The implementation given in the standard param handler implements a standard object pose based bundle adjustment.
 
     Two functions provide the ability to add extra parameters and functionality to the optimisation.
         - add_extra_params: this can be overriden to add initial estimates of additional parameters.
@@ -103,10 +111,16 @@ class AbstractParamHandler:
                  options: dict | None = None,
                  missing_poses: list | None =None
                  ):
+        
+
+        self.problem_opts = DEFAULT_OPTIONS
+        if options is not None:
+            self.problem_opts.update(options)
 
         self.fixed_params = list_dict_to_np_array(fixed_params)
         if fixed_params is None:
-            self.fixed_params = {}
+            self.fixed_params : dict = {}
+
         self.camset = camset
         self.cam_names = camset.get_names()
         self.detection = detection
@@ -125,8 +139,16 @@ class AbstractParamHandler:
 
         self.extr_unfixed = np.array(['ext' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
         self.intr_unfixed = np.array(['int' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
-        self.dst_unfixed = np.array(['dst' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
+        self.dst_unfixed = np.array(['dst' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names]) 
+
+        self.pose_unfixed = np.array(n_poses, dtype=bool)
+        if fixed_pose := self.problem_opts.get("fixed_pose"):
+            self.pose_unfixed[fixed_pose] = False
+            self.poses[fixed_pose, :] = [1,0,0, 0,1,0, 0,0,1, 0,0,0]
+
         self.populate_self_from_fixed_params()
+
+
 
         self.bundlePrimitive = BundlePrimitive(
             self.poses, self.extr, self.intr, self.dst,
@@ -135,9 +157,6 @@ class AbstractParamHandler:
 
         self.param_len = None
         self.jac_mask = None
-        self.problem_opts = DEFAULT_OPTIONS
-        if options is not None:
-            self.problem_opts.update(options)
         self.missing_poses = missing_poses
 
     def add_extra_params(self, param_array:np.ndarray) -> np.ndarray:
@@ -198,11 +217,46 @@ class AbstractParamHandler:
         proj = intr @ extr[:, :3, :]
         im_points = np.empty((len(poses), *self.point_data.shape))
         for idx, pose in enumerate(poses):
-            n_htform_broadcast_prealloc(self.point_data, pose, im_points[idx])
+            ch.n_htform_broadcast_prealloc(self.point_data, pose, im_points[idx])
         
         im_points = np.reshape(im_points, (len(poses), -1, 3))
         return proj, intr, dst, im_points
 
+    def find_and_exclude_transform_outliers(self, poses): 
+        """
+        Given a set of transforms, associated with the missing poses flag, searches for outliers.
+        Uses MAD outlier detection based on the magnitude of the transformation of the homogenous pose.
+        If a pose is found to be an outlier, it is marked as a missing pose internally.
+
+        :param poses: The poses to search for outliers in.
+        """
+
+        cyclic_outlier_detection = True
+        num_loops = 0
+        logging.info("Begining outlier detection")
+        while cyclic_outlier_detection and num_loops < 10:
+            not_missing = np.where(~np.array(self.missing_poses))[0]
+            mloc = np.mean(poses[not_missing, :3, -1], axis=0)
+            condensed_outlier_inds = gu.mad_outlier_detection(
+                [np.linalg.norm(p[:3,3] - mloc) for p in poses[not_missing]],
+                out_thresh=5
+            )
+            outlier_inds = not_missing[condensed_outlier_inds]
+
+            if condensed_outlier_inds is not None:
+                user_in = self.problem_opts['outliers']
+                while not (user_in == 'y' or user_in == 'n'):
+                    print(f"Outliers detected in iteration {num_loops}.")
+                    user_in = input("Do you wish to remove these outlier poses: \n y/n: ")
+
+                if user_in == 'y':
+                    self.missing_poses[outlier_inds] = True
+                if user_in == 'n':
+                    cyclic_outlier_detection = False
+            else:
+                logging.info(f"No outliers detected in iteration {num_loops}.")
+                cyclic_outlier_detection = False
+            num_loops += 1
 
     def set_initial_params(self, x: np.ndarray):
         """
@@ -237,16 +291,22 @@ class AbstractParamHandler:
         self.jac_mask = []
         param_array = []
         cam_idx = 0
-        poses, detected_poses = self.target.pose_in_detections(self.detection, self.camset)
+
+        cam_poses, target_poses = estimate_camera_relative_poses(
+            detection=self.detection, cams=self.camset, calibration_target=self.target
+        )
+        self.missing_poses = np.array([np.isnan(t[0,0]) for t in target_poses])
+        self.find_and_exclude_transform_outliers(target_poses)
+        
         for idp, pose_unfixed in enumerate(self.bundlePrimitive.poses_unfixed):
             # how do we handle missing poses - delete the image associated with the missing daata
             if pose_unfixed:
-                ext = ext_4x4_to_rod(poses[idp])
+                ext = gu.ext_4x4_to_rod(target_poses[idp])
                 param_array.append(ext[0])
                 param_array.append(ext[1])
         for idc, ext_unfixed in enumerate(self.bundlePrimitive.extr_unfixed):
             if ext_unfixed:
-                ext = ext_4x4_to_rod(cams[idc].extrinsic)
+                ext = gu.ext_4x4_to_rod(cam_poses[idc])
                 param_array.append(ext[0])
                 param_array.append(ext[1])
         for idc, intr_unfixed in enumerate(self.bundlePrimitive.intr_unfixed):
@@ -258,7 +318,7 @@ class AbstractParamHandler:
         param_array = self.add_extra_params(param_array)
         return np.concatenate(param_array, axis=0)
 
-    def get_camset(self, x, return_pose=False) -> CameraSet or tuple[CameraSet, np.ndarray]:
+    def get_camset(self, x, return_pose=False) -> CameraSet | tuple[CameraSet, np.ndarray]:
         """
         Given a set of parameters, returns a camera set.
 
@@ -319,9 +379,89 @@ class AbstractParamHandler:
         _, _, _, obj_points = self.get_bundle_adjustment_inputs(params)
         self.get_camset(params).plot_np_array(obj_points.reshape((-1, 3)))
 
+def estimate_camera_relative_poses(
+        calibration_target: AbstractTarget, detection: TargetDetection,
+        cams:CameraSet, ref_cam: int = 0, ref_pose: int = 0
+    ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Given camera estimates, performs a single camera centric pose estimate.
+    This reference camera is used to generate initial estimates of all other camera poses.
+    If the reference pose does not have full visibility, it will pick a new reference pose.
+    This is explicitely not a graphy based solver, and will throw an error if no fully shared
+    target is visible.
+
+    :param detection: the detection data that the average estimates should be extracted from
+    :param cams: the list of cameras with no yet known average transformation
+    """
+
+    # a indicates that there is a full array allong a dimension p3
+
+    img_detections = detection.get_image_list()
+    Mat_ac = []
+    for cam in cams:
+        pose_per_img=[]
+        for id in img_detections:
+            pose_per_img.append(calibration_target.target_pose_in_cam_image(id, cam, mode="nan"))
+        Mat_ac.append(pose_per_img)
+    Mat_ac = np.array(Mat_ac)
+    visibility = np.isnan(Mat_ac[:,:,0,0])
+    visible_pose = ~np.any(visibility, axis=1)
+    vrf_pose = visible_pose[ref_pose]
+    if not vrf_pose:
+        f_index = np.argmax(visible_pose)
+        if f_index == 0 and not visibility[0]:
+            raise ValueError("Couldn't find an initial pose for all cameras.")
+        ref_pose = f_index
+        
+
+    Mrc_at = [np.linalg.inv(p) for p in Mat_ac[ref_cam]]
+    Marc_ac = np.array([[(Mt_c @ Mrc_t) for Mrc_t, Mt_c in zip(Mrc_at, Mat_c)] for Mat_c in Mat_ac])
+    for ic, Marc_c in enumerate(Marc_ac):
+        if ic == ref_cam:
+            continue
+        angs = np.array([np.arccos((np.trace(t[:3,:3]) - 1)/2) for t in Marc_c])
+        mags = [np.linalg.norm(t[:3,-1]) for t in Marc_c]
+        std_ang = np.nanstd(angs)
+        std_mag = np.nanstd(mags)
+        if std_mag > 0.050:
+            logging.critical(f"Found inconsistent relative translation positions (stdev = {std_mag:.2f} m) for camera index {ic}")
+            logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
+        if std_ang > 5 / 180 * np.pi:
+            logging.critical(f"Found inconsistent relative angle magnitudes (stdev = {std_ang/np.pi*180:.2f} degrees) for camera index {ic}")
+            logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
+    
+    Mrt_rc = Mat_ac[ref_cam, ref_pose]
+    Mrt_ac = Mat_ac[:, ref_pose]
+
+    Mat_rc = Mat_ac[ref_cam, :]
+    Mat_rt = np.linalg.inv(Mrt_rc)[None, ...] @ Mat_rc
+    
+    for idm, Mt_rt in enumerate(Mat_rt):
+        if np.isnan(Mt_rt[0,0]):
+            for idc, Mt_c in enumerate(Mat_ac[:, idm]):
+                if not np.isnan(Mt_c[0,0]):
+                    Mat_rt[idm] = np.linalg.inv(Mrt_ac[idc]) @ Mt_c
+
+    return Mrt_ac, Mat_rt
+
+    # ert refcam -> other_cams
+    Mat_arc = Mac_rc[:, None, ...] @ Mat_ac
+    plt.imshow(np.isnan(np.array(Mat_arc)[:,:,0,0]))
+    plt.show()
+    Mat_rc = np.array([gu.average_tforms(Mat_rc) for Mat_rc in Mat_arc.transpose((1,0,2,3))])
+
+    # Mat_rc = Mat_arc[ref_cam, ...] 
+
+    #etp refcam -> cube_loc
+    Mrt_rc = Mat_rc[ref_pose]
+    Mrc_rt = np.linalg.inv(Mrt_rc)  #is reftarget -> refcam
+    Mac_rt = Mrc_rt @ Mac_rc # cam -> refcam -> reftarget
+    Mrt_ac = Mac_rc @ Mrt_rc
+    Mat_rt = Mrc_rt @ Mat_rc  # cube_loc -> refcam -> refcube
+    return Mrt_ac, Mat_rt
 
 def make_optimisation_function(
-        param_handler: AbstractParamHandler,
+        param_handler: StandardParamHandler,
         threads: int = 16,
 ) -> tuple[Callable[[np.ndarray], np.ndarray], np.ndarray]:
     """
@@ -340,7 +480,7 @@ def make_optimisation_function(
 
     def bundle_fn(x):
         proj, intr, dists, obj_points = param_handler.get_bundle_adjustment_inputs(x)
-        output = bundle_adj_parrallel_solver(
+        output = ch.bundle_adj_parrallel_solver(
             data,
             im_points=obj_points,
             projection_matrixes=proj,
@@ -352,7 +492,8 @@ def make_optimisation_function(
     return bundle_fn, init_params
 
 
-def run_bundle_adjustment(param_handler: AbstractParamHandler) -> tuple[np.ndarray, CameraSet]:
+def run_bundle_adjustment(param_handler: StandardParamHandler,
+                          threads: int = 1) -> tuple[np.ndarray, CameraSet]:
     """
     A function that takes an abstract parameter handler, turns it into a cost function, and returns the
     optimisation results and the camera set that minimises the optimisation problem defined by the parameter handler.
@@ -361,7 +502,7 @@ def run_bundle_adjustment(param_handler: AbstractParamHandler) -> tuple[np.ndarr
     :return: The output of the calibration and the argmin defined CameraSet
     """
     loss_fn, init_params = make_optimisation_function(
-        param_handler
+        param_handler, threads
     )
 
     init_err = loss_fn(init_params)
@@ -408,3 +549,4 @@ def run_bundle_adjustment(param_handler: AbstractParamHandler) -> tuple[np.ndarr
     logging.info(f"Check test with a result of {init_euclid:.2f}")
 
     return optimisation, camset
+

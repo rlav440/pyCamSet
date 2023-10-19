@@ -62,12 +62,12 @@ class CameraSet:
     """
 
     def __init__(self,
-                 camera_names:list[str]=None,
-                 extrinsic_matrices:list[np.array]=None,
-                 intrinsic_matrices:list[np.array]=None,
-                 distortion_coefs:list[np.array]=None,
-                 res:list[list or np.array]=None,
-                 camera_dict: dict[str:Camera]=None,
+                 camera_names:list[str]|None=None,
+                 extrinsic_matrices:list[np.ndarray]|None=None,
+                 intrinsic_matrices:list[np.ndarray]|None=None,
+                 distortion_coefs:list[np.ndarray]|None=None,
+                 res:list[list or np.ndarray]|None=None,
+                 camera_dict: dict[str|int,Camera]|None=None,
                  ):
         """
         :param camera_names: Names for cameras
@@ -84,8 +84,8 @@ class CameraSet:
         self.calibration_jac = None
         self.calibration_params = None
 
-        self._cam_list = None
-        self._cam_dict = None
+        self._cam_list: list = None
+        self._cam_dict: dict = None
         self.n_cams = None
 
         all_none = all(
@@ -156,7 +156,7 @@ class CameraSet:
             new_camset.n_cams = new_camset.get_n_cams()
             return new_camset
 
-        if cam_key:
+        else:
             subset = [[key, value] for key, value in self._cam_dict.items() if
                       cam_key in key]
             if not subset:
@@ -178,15 +178,14 @@ class CameraSet:
             new_camset.__update()
             return new_camset
 
-    def __getitem__(self, input) -> Camera:
+    def __getitem__(self, input) -> Camera|CameraSet:
         if isinstance(input, list) or isinstance(input, slice):
             return self.make_subset(input)
         if isinstance(input, numbers.Number):
             if input in self._cam_dict: # preferentially go to dict if given a key number that exists as a key
                 return self._cam_dict[input]
             return self._cam_list[input]
-        else:
-            return self._cam_dict[input]
+        return self._cam_dict[input]
 
     def __setitem__(self, key, value: Camera):
         self._cam_dict[key] = value
@@ -222,16 +221,27 @@ class CameraSet:
             return False
         return True
 
-    def write_to_mvs(self, loc: Path, r: ReconParams):
+    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet'):
         """
-        Writes an entire camera set to MVSnet derived files.
+        Writes an entire camera set to some form of defined camera structure.
+        Currently only MVSnet is defined.
 
         :param loc: the file location to write to
         :param r: the reconstruction parameters to follow
         """
+        if not mode == 'MVSnet':
+            raise NotImplementedError
+
         for cam_n, cam in enumerate(self):
             cam_loc = loc/f"{cam_n:08}_cam.txt"
             cam.to_MVSnet_txt(cam_loc, (r.mindist, r.maxdist), r.steps)
+
+        if ims is not None:
+            im_loc = loc.parent/'images'
+            im_loc.mkdir(exist_ok=True)
+            for idx, im in enumerate(ims):
+                cv2.imwrite(str(im_loc/f"{idx:08}.jpg"), im)
+
         cvwc = np.array(
             [cam.view for cam in self]
         )
@@ -280,7 +290,7 @@ class CameraSet:
 
         return final_mesh
 
-    def project_points_to_all_cams(self, points) -> list[dict[np.ndarray]]:
+    def project_points_to_all_cams(self, points) -> list[dict[str|int,np.ndarray]]|dict[str|int, np.ndarray]:
         """
         Projects a point or list of points to all cameras.
 
@@ -337,23 +347,21 @@ class CameraSet:
 
         else:
             data = to_reconstruct
-        # find the first point at which points are not reconstructed from
-        # this is the location of the wide key, including the image
+
         _, inv, count = np.unique(
             data[:, 1:-2], axis=0, return_inverse=True, return_counts=True
         )
         viable_mask = count > 1
         reconstructable_data = data[viable_mask[inv]]
         _, im_index, im_counts = np.unique(reconstructable_data[:, 1:-2], axis=0, return_index=True, return_counts=True)
-        inds = np.argsort(im_index)
-        count_tracker = im_counts[inds]
-        start_ind = np.append(0, np.cumsum(count_tracker))
+        start_ind = np.append(0, np.cumsum(im_counts[np.argsort(im_index)]))
 
         #build the projection matricies
         proj = np.array([cam.proj for cam in self])
         dists = np.array([cam.distortion_coefs for cam in self])
         intr = np.array([cam.intrinsic for cam in self])
         reconstructed = nb_triangulate_full(reconstructable_data, proj, start_ind, intr, dists)
+    
         if return_used:
             # for every final point find the inds it pulled from in the final array
             where_mask = np.where(viable_mask[inv])[0]
@@ -367,7 +375,7 @@ class CameraSet:
         return reconstructed
 
 
-    def plot_np_array(self, points: np.array or list):
+    def plot_np_array(self, points: np.ndarray | list):
         """
         A shorthand plotting function for plotting raw np arrays with reference to the cameras.
 
@@ -449,7 +457,7 @@ class CameraSet:
         return scene
 
     def plot(self, scale_factor=None,
-             additional_mesh: pv.PolyData or list[pv.PolyData]=None,
+             additional_mesh: pv.PolyData|list[pv.PolyData]|None=None,
              view_cones=False):
         """
         Draws a 3D plot of the cameras and any additional meshes
@@ -566,12 +574,14 @@ class CameraSet:
         """
         return list(self._cam_dict.keys())
 
-    def save(self, floc: Path or list="saved_cameras.camset"):
+    def save(self, floc: Path|str="saved_cameras.camset"):
         """
         Saves the camera set to a file using .json esque encoding.
 
         :param floc: The file location to save to
         """
+        if isinstance(floc, str):
+            floc = Path(floc)
         save_camset(self, floc)
 
     def set_resolutions_from_file(self, floc: Path):
@@ -605,7 +615,7 @@ class CameraSet:
         for cam in self._cam_list:
             cam.scale_self_2n(d_factor)
 
-    def transform(self, transformation_matrix, in_place=True) -> None or CameraSet:
+    def transform(self, transformation_matrix, in_place=True) -> None|CameraSet:
         """
         Transforms all cameras in the set by a transformation matrix.
 
@@ -627,7 +637,7 @@ class CameraSet:
         :param cam_id: the camera to use as the reference
         """
 
-        ref_cam = self[cam_id]
+        ref_cam: Camera = self[cam_id]
         ref_tform = np.linalg.inv(ref_cam.extrinsic)
         self.transform(ref_tform)
 
@@ -638,7 +648,7 @@ class CameraSet:
         if intersection:
             raise ValueError('Camera sets share camera names so cannot be added')
         self._cam_dict = {**self._cam_dict, **other._cam_dict}
-        self._cam_list = self._cam_dict.values()
+        self._cam_list = list(self._cam_dict.values())
         return self
 
     def set_calibration_history(self,

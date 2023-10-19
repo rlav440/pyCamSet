@@ -20,7 +20,8 @@ def find_target_pose_at_timestep(
     """
 
     for cam_name in images.keys():
-        assert (cam_name in cameras.get_names()) f"Image from {cam_name}, when {cam_name} not part of the given CameraSet"
+        if not cam_name in cameras.get_names():
+            raise ValueError(f"Image from {cam_name}, when {cam_name} not part of the given CameraSet")
 
     detection = TargetDetection(cam_names=cameras.get_names())
     for cam_name, image in images.values():
@@ -53,7 +54,8 @@ def find_target_poses(
     ):
 
     for cam_name in image_seq.keys():
-        assert (cam_name in cameras.get_names()) f"Image from {cam_name}, when {cam_name} not part of the given CameraSet"
+        if not cam_name in cameras.get_names():
+            raise ValueError("Image from {cam_name}, when {cam_name} not part of the given CameraSet")
 
     detection = TargetDetection(cam_names=cameras.get_names())
     for cam_name, image_list in image_seq.values():

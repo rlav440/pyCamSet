@@ -11,7 +11,7 @@ class ImageDetection:
     at which that key was found.
     Enforces the correct implementation of an AbstractTarget inheretor's find_in_image function.
     """
-    def __init__(self,  keys: np.ndarray or list=None, image_points: np.ndarray or list =None):
+    def __init__(self,  keys: np.ndarray|list|None=None, image_points: np.ndarray|list|None=None):
         """
         Takes a set of keys and detections,
 
@@ -47,7 +47,7 @@ class TargetDetection:
 
     """
 
-    def __init__(self, cam_names: list, data: np.ndarray or None = None, max_ims=0):
+    def __init__(self, cam_names: list, data: np.ndarray | None = None, max_ims=0):
         # this class stores the information as a basic structure, while retaining the ability to be smoothly indexed.
 
         self.cam_names = cam_names
@@ -241,7 +241,7 @@ class TargetDetection:
             self.max_ims = int(max(self.max_ims - 1, np.amax(self._data[:, 1])) + 1)
             self._update_buffer.clear()
 
-    def sort(self, keys_to_sort: str or list, inplace=False) -> TargetDetection or None:
+    def sort(self, keys_to_sort: str|list[str], inplace=False) -> TargetDetection | None:
         """
         :param keys_to_sort: a single key, or multiple keys to sort by, with sorting order defined by list order.
         :param inplace: If true, replaces the internal data with the sorted array rather than returning new obj
@@ -319,46 +319,54 @@ class TargetDetection:
 
     def parse_detections_to_reconstructable(self, draw_distribution=False):
         """
-        Given the reference detection, detects which localised features can be triangulated, in which frame
+        Given the reference detection, detects which localised features can be triangulated, in which frame.
+        It returns the subset of the data that can be used, and additional data that indicates the slices to use.
+        It also calculates 
         
         :param draw_distribution: If true will draw an image number x feature number boolean plot, indicating which
             feature can be reconstructed in which image.
+
+        :return feature_inds:
+        :return im_dst:
+        :return per_feature_count:
+        :return reconstructable_data: 
         """
-        data = self.get_data()
-        # find keys that are reconstructable: that is keys that are seen by two+ cameras
-        _, inv, count = np.unique(  # unique im num keys, etc
+        data = self.sort(["keys", "images"]).get_data()
+        # find keys that are reconstructable: that is keys that are seen by two+ cameras in a time point
+        _, unique_key_inv, per_feature_count = np.unique(  # unique im num keys, etc
             data[:, 1:-2], axis=0, return_inverse=True, return_counts=True
         )
-        viable_mask = count > 1
-        reconstructable_data = data[viable_mask[inv]]
-        features_reconstructable, feature_start_index, feature_appearance_counts = np.unique(
-            reconstructable_data[:, 1:-2], axis=0, return_index=True, return_counts=True
+
+        viable_mask = per_feature_count > 1 #all features that are viabe
+        data_recon_subset = data[viable_mask[unique_key_inv]] 
+        
+        #each task consists of all detections of a feature at a time point
+        _, task_start_index, task_count = np.unique(
+            data_recon_subset[:, 1:-2], axis=0, return_index=True, return_counts=True
         )
-        # note feature here is an image feature pair. This problem is because of the ordering of the feature numbers
-        inds = np.argsort(feature_start_index) #argsort provides the inds as feature -> cam, rather than cam -> feature
-        sorted_feature_counts = feature_appearance_counts[inds]
-        start_ind = np.append(0, np.cumsum(sorted_feature_counts))
-        # for a key/feature, how many images are in that key over all images in which that feature is visibl e
-        k_seen, k_index, k_counts = np.unique(reconstructable_data[:, 2:-2], axis=0, return_index=True,
-                                              return_counts=True)
-        k_inds = np.append(np.sort(k_index), reconstructable_data.shape[0])
-        im_dst = np.zeros((len(k_inds) - 1, self.max_ims))
+        sorted_task_count = task_count[np.argsort(task_start_index)]
+        task_start_points = np.append(0, np.cumsum(sorted_task_count))
+
+
+        # for a key/feature, how many images are in that key over all images in which that feature is visible
+        _, feature_index = np.unique(data_recon_subset[:, 2:-2], axis=0)
+        feature_inds = np.append(np.sort(feature_index), data_recon_subset.shape[0])
+        im_dst = np.zeros((len(feature_inds) - 1, self.max_ims))
         idx = 0
-        for i in range(len(k_inds) - 1):
+        for i in range(len(feature_inds) - 1):
             j = 0
-            while start_ind[idx] < k_inds[i + 1]:
-                im_dst[i, j] = sorted_feature_counts[idx]
+            while task_start_points[idx] < feature_inds[i + 1]:
+                im_dst[i, j] = sorted_task_count[idx]
                 idx += 1;
                 j += 1
 
-        count = np.sum(im_dst > 0, axis=1)
-
+        per_feature_count = np.sum(im_dst > 0, axis=1)
         if draw_distribution:
             fig, ax = plt.subplots(1, 2)
             ax[0].imshow(im_dst)
             ax[0].set_title('Feature visibility in cameras')
-            ax[1].plot(count, '.')
+            ax[1].plot(per_feature_count, '.')
             ax[1].set_title('number visible images.')
             plt.show()
 
-        return k_inds, im_dst, count, reconstructable_data
+        return feature_inds, im_dst, per_feature_count, data_recon_subset

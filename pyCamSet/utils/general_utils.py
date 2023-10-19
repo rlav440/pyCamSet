@@ -15,6 +15,27 @@ from numpy.linalg import svd
 from tqdm import tqdm
 from uniplot import histogram
 
+from scipy.spatial.transform import Rotation as R
+
+def approx_average_quaternion(quats:list[np.ndarray]) -> np.ndarray:
+    q = np.array([q for q in quats if not np.any(np.isnan(q))])
+    w = np.ones(len(q))/len(q)
+    eig = np.linalg.eigh(np.einsum('ij,ik,i->...jk', q, q, w))[1][:, -1]
+    return eig
+
+def average_tforms(tforms: list[np.ndarray]):
+    tforms = [t for t in tforms if not np.any(np.isnan(t))]
+    if len(tforms) == 0:
+        return np.ones((4,4)) * np.nan
+    if len(tforms) == 1:
+        return tforms[0]
+    average_translation = np.mean([t[:3,-1] for t in tforms], axis=0)
+    quats = [R.from_matrix(t[:3,:3]).as_quat(canonical=True) for t in tforms]
+        
+    average_quat = approx_average_quaternion(quats)
+    average_rot = R.from_quat(average_quat).as_matrix() 
+    return np.block([[average_rot, average_translation.reshape((3,1))],[0,0,0,1]])
+
 
 def flatten_pose_list(pose_list):
     """

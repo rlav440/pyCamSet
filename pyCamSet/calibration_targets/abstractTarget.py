@@ -302,7 +302,7 @@ class AbstractTarget(ABC):
             mask = b_counts > np.prod(self.point_local.shape[:-2])
             for board in boards[mask]:
                 key_mask = np.squeeze(keys[:, :-1] == board)
-                if np.sum(key_mask) > 4:
+                if np.sum(key_mask) > 8:
                     board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')
                     board_im = data[key_mask, -2:][None, ...].astype('float32')
                     object_points.append(board_obj)
@@ -317,7 +317,6 @@ class AbstractTarget(ABC):
             None,
             None,
             None,
-            cv2.CALIB_RATIONAL_MODEL
         )
         end = time.time()
 
@@ -326,7 +325,6 @@ class AbstractTarget(ABC):
 
         # perform an initial pose estimate on the first images
        
-        print(ic[2]) 
         init_cam = Camera(intrinsic=ic[1], distortion_coefs=np.array(ic[2]), res=res, name=cam_name)
         if fixed_params is not None:
             if "int" in fixed_param:

@@ -140,8 +140,7 @@ def run_initial_calibration(detection: TargetDetection,
     # create a lambda based on the inputs
 
     logging.info("Pulling calibration method from target")
-    work_fn = lambda datum: #TODO remove this lambda
-        calibration_target.initial_calibration(
+    work_fn = lambda datum: calibration_target.initial_calibration(
             cam_name=datum[0],
             detection=datum[1],
             res=datum[2],

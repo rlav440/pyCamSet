@@ -1,0 +1,4 @@
+#requirements for building the documentation:
+sphinx
+sphinx-rst-theme
+sphinx-autoapi

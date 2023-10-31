@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from enum import nonmember
 
 import logging
 import numpy as np
@@ -297,7 +298,7 @@ class AbstractTarget(ABC):
             if data is None:
                 continue  # no data here, so don't add it to the optimisation
             keys = get_keys(data) # this slicing is always 2d.
-            boards, board_id, b_counts = np.unique(keys[:, :-1], return_inverse=True, return_counts=True)
+            boards, board_id, b_counts = np.unique(keys[:, :-1], return_inverse=True,   return_counts=True)
             mask = b_counts > np.prod(self.point_local.shape[:-2])
             for board in boards[mask]:
                 key_mask = np.squeeze(keys[:, :-1] == board)
@@ -314,6 +315,9 @@ class AbstractTarget(ABC):
             tuple(res[::-1]),
             None,
             None,
+            None,
+            None,
+            cv2.CALIB_RATIONAL_MODEL
         )
         end = time.time()
 
@@ -321,6 +325,8 @@ class AbstractTarget(ABC):
                      f', leftover error of {ic[0]:.2f} pixels')
 
         # perform an initial pose estimate on the first images
+       
+        print(ic[2]) 
         init_cam = Camera(intrinsic=ic[1], distortion_coefs=np.array(ic[2]), res=res, name=cam_name)
         if fixed_params is not None:
             if "int" in fixed_param:

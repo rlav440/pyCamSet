@@ -84,8 +84,8 @@ class CameraSet:
         self.calibration_jac = None
         self.calibration_params = None
 
-        self._cam_list: list = None
-        self._cam_dict: dict = None
+        self._cam_list: list|None = None
+        self._cam_dict: dict|None = None
         self.n_cams = None
 
         all_none = all(
@@ -132,9 +132,7 @@ class CameraSet:
         Returns a subset of the Cameras in the CameraSet as a new CameraSet
 
         :param inp: the slice or list to run over
-        :param cam_key: a key for the camera names, optional.
-                if used, the dictionary and camera lists are reduced only to
-                the names containing this key.
+        :param cam_key: a key for the camera names, optional. If used, the dictionary and camera lists are reduced only to the names containing this key.
         Returns: A sliced camset
 
         """

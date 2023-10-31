@@ -12,12 +12,12 @@ from pyCamSet.utils.general_utils import downsample_valid
 
 
 class ChArUco(AbstractTarget):
-    def __init__(self, num_squares_x, num_squares_y, square_size, a_dict=cv2.aruco.DICT_4X4_1000):
+    def __init__(self, num_squares_x, num_squares_y, square_size, marker_fraction = 0.8, a_dict=cv2.aruco.DICT_4X4_1000):
         super().__init__(inputs=locals())
 
         # define checker and marker size
         square_size = square_size
-        marker_size = 0.8 * square_size  # 80% of the square size
+        marker_size = marker_fraction * square_size  # 80% of the square size
         # convert to meters
         squares_length = square_size / 1000
         marker_length = marker_size / 1000
@@ -41,14 +41,16 @@ class ChArUco(AbstractTarget):
 
         if draw:
             display_im = image.copy()
-            target_size = [640, 480]
+            target_size = [1080, 1920]
             d_f = int(min(np.array(display_im.shape[:2]) / target_size))
             display_im = downsample_valid(display_im, d_f).astype(np.uint8)
+            # d_f=1
             if display_im.ndim == 2:
                 display_im = np.tile(display_im[..., None], (1, 1, 3))
 
-            # aruco.drawDetectedMarkers(im_idea, np.array(corners)/d_f, ids)
+            # aruco.drawDetectedMarkers(display_im, np.array(corners)/d_f, ids)
         use_cam = camera is not None
+
         n, c_corners, c_ids = aruco.interpolateCornersCharuco(
             corners,
             ids,
@@ -64,10 +66,13 @@ class ChArUco(AbstractTarget):
             aruco.drawDetectedCornersCharuco(
                 display_im,
                 np.array(c_corners) / d_f,
-                c_ids,
             )
 
             cv2.imshow('detections', display_im)
             cv2.waitKey(wait_len)
 
         return ImageDetection(c_ids[:, 0], c_corners[:, 0])
+        
+    def plot(self,imres=(1000,1000)):                           
+        plt.imshow(self.board.draw(imres))
+        plt.show()  

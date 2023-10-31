@@ -54,6 +54,7 @@ def calibrate_cameras(
 
     detections, camera_res = detect_datapoints_in_imfile(
         f_loc=f_loc,
+        caching=save,
         calibration_target=calibration_target,
         draw=draw,
         n_lim=n_lim,
@@ -139,7 +140,7 @@ def run_initial_calibration(detection: TargetDetection,
     # create a lambda based on the inputs
 
     logging.info("Pulling calibration method from target")
-    work_fn = lambda datum: \
+    work_fn = lambda datum: #TODO remove this lambda
         calibration_target.initial_calibration(
             cam_name=datum[0],
             detection=datum[1],
@@ -363,7 +364,8 @@ def validate_detections(detected:TargetDetection, target:AbstractTarget):
     return
 
 
-def sanitise_input_images(detected_sub_folders:list[Path]):
+def sanitise_input_images(detected_sub_folders:list[Path], optmode:str='na'):
+
     """
     Takes a list of detected sub folders and checks that they all have the same number of images.
     :param detected_sub_folders: A list of detected subfolders in the current location.
@@ -375,8 +377,8 @@ def sanitise_input_images(detected_sub_folders:list[Path]):
                          'sub folder')
         logging.critical("Do you wish to remove images not seen by "
                          "every camera? This will be destructive!")
-        accepted_input = False
-        inp_str = False
+        accepted_input = False if optmode =='na' else True
+        inp_str = optmode
         while not accepted_input:
             inp_str = input("y/n:")
             if inp_str == 'y' or inp_str == 'n':

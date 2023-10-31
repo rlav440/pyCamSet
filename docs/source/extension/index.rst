@@ -10,7 +10,7 @@ Structure
 
 The following images detail the structure of the library, with functions responsible for extension higlighted.
 
-.. image:: ../source/figs/pyCamSet.png
+.. image:: ../figs/pyCamSet.png
   :width: 600
   :alt: Relationships between extendable components of the pyCamSet library.
 

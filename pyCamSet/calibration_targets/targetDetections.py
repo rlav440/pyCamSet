@@ -310,9 +310,13 @@ class TargetDetection:
 
         :return TargetDetection: A new target detection with a set of dim 1 keys.
         """
+        if self.get_data().shape[1] == 5: #in this case, the data is already flat
+            return self
         
-        data = self._data.copy()
-        prods = np.cumprod(np.append(keydims[2:], 1)[::-1])[::-1]
+        data = self.get_data().copy()
+        padded_prod = np.append(keydims[1:], 1)
+        prods = np.cumprod(padded_prod[::-1])[::-1]
+
         dim_1_keys = np.sum(data[:, 2:-2]*prods, axis=1).reshape((-1, 1))
         new_data = np.concatenate([data[:, :2], dim_1_keys, data[:, -2:]], axis=1)
         return TargetDetection(self.cam_names, new_data, self.max_ims)

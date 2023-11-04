@@ -15,6 +15,11 @@ def bound_pts(face, res):
     return face/max_bounds * res
 
 def print_formatted_transforms(tforms):
+    """
+    formats ain input array of (rotation, translation tuples) as printed strings
+    
+    :param tforms: the input transformations to print
+    """
     print("TFORMS = [")
     for tform in tforms:
         s0 = np.array2string(tform[0].squeeze(), precision=3, separator=",")
@@ -64,6 +69,7 @@ class FaceToShape:
 
         if isinstance(face_local_coords, list):
             face_local_coords = np.array(face_local_coords)
+            
         if isinstance(face_transforms, list):
             face_transforms = np.array(face_transforms)
 
@@ -111,10 +117,15 @@ class FaceToShape:
             num_elems = len(face_corner)
             connections = [num_elems] + list(range(num_elems))
             new_mesh = pv.PolyData(face_corner, faces=connections)
-            new_mesh.texture_map_to_plane(use_bounds=True, inplace=True)
+
             new_mesh.scale(1/self.sf, inplace=True)
             new_mesh.transform(face_transform, inplace=True)
             new_mesh.scale(self.sf, inplace=True)
+            #todo make this generic.
+            new_mesh.texture_map_to_plane(
+                origin=new_mesh.points[0],
+                point_u=new_mesh.points[1],
+                point_v=new_mesh.points[3], inplace=True)
             meshes.append(new_mesh)
          
         scene = pv.Plotter()
@@ -123,6 +134,10 @@ class FaceToShape:
                            texture = pv.numpy_to_texture(texture.astype(np.uint8))
                            )
         scene.add_mesh(pv.PolyData(self.point_data.reshape((-1,3))), color='r')
+        # a = self.point_data.reshape((-1, 3))
+        # ls = [str(i) for i in range(a.shape[0])]
+        # scene.add_point_labels(a, ls)
+        scene.add_axes()
         scene.show()
 
     def draw_net(self, net_images, net_transforms):

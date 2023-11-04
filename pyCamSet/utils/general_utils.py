@@ -89,7 +89,7 @@ def benchmark(func, repeats=100, mode="ms", timer=time.time_ns):
     run_benchmark()
 
 
-def mad_outlier_detection(data: np.ndarray, out_thresh = 3, draw=True) -> np.ndarray or None:
+def mad_outlier_detection(data: np.ndarray|list, out_thresh = 3, draw=True) -> np.ndarray or None:
     """
     Implemenents Median Absolute Deviation outlier detection.
     :param data: The data to process

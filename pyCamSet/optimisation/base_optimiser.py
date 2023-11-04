@@ -12,9 +12,11 @@ from typing import TYPE_CHECKING
 
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
+
+from pyCamSet.calibration_targets import TargetDetection
     
 if TYPE_CHECKING:
-    from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
+    from pyCamSet.calibration_targets import AbstractTarget
     from pyCamSet.cameras import CameraSet
 
 
@@ -148,9 +150,6 @@ class StandardParamHandler:
             self.poses[fixed_pose, :] = [1,0,0, 0,1,0, 0,0,1, 0,0,0]
 
         self.populate_self_from_fixed_params()
-
-
-
         self.bundlePrimitive = BundlePrimitive(
             self.poses, self.extr, self.intr, self.dst,
             extr_unfixed=self.extr_unfixed, intr_unfixed=self.intr_unfixed, dst_unfixed=self.dst_unfixed
@@ -158,7 +157,7 @@ class StandardParamHandler:
 
         self.param_len = None
         self.jac_mask = None
-        self.missing_poses = missing_poses
+        self.missing_poses: list | None = missing_poses
 
     def add_extra_params(self, param_array:np.ndarray) -> np.ndarray:
         """
@@ -223,33 +222,34 @@ class StandardParamHandler:
         im_points = np.reshape(im_points, (len(poses), -1, 3))
         return proj, intr, dst, im_points
 
-    def find_and_exclude_transform_outliers(self, poses): 
+    def find_and_exclude_transform_outliers(self, per_im_error): 
         """
-        Given a set of transforms, associated with the missing poses flag, searches for outliers.
-        Uses MAD outlier detection based on the magnitude of the transformation of the homogenous pose.
-        If a pose is found to be an outlier, it is marked as a missing pose internally.
+        Given a number of per image errors, finds images that may cause calibration difficulties.
+        Uses MAD outlier detection. If an image/pose is found to be an outlier, it is marked as a missing pose internally.
 
-        :param poses: The poses to search for outliers in.
+        :param per_im_error: The total reprojection error per image.
         """
-
+        if self.missing_poses is None:
+            raise ValueError("missing poses should be initialised before calling this function")
         cyclic_outlier_detection = True
         num_loops = 0
         logging.info("Begining outlier detection")
         while cyclic_outlier_detection and num_loops < 10:
             not_missing = np.where(~np.array(self.missing_poses))[0]
-            mloc = np.mean(poses[not_missing, :3, -1], axis=0)
+            # mloc = np.mean(poses[not_missing, :3, -1], axis=0)
+            mloc = per_im_error
             condensed_outlier_inds = gu.mad_outlier_detection(
-                [np.linalg.norm(p[:3,3] - mloc) for p in poses[not_missing]],
-                out_thresh=5
+                # [np.linalg.norm(p[:3,3] - mloc) for p in poses[not_missing]],
+                mloc,
+                out_thresh=10,
             )
             outlier_inds = not_missing[condensed_outlier_inds]
-
+            
             if condensed_outlier_inds is not None:
                 user_in = self.problem_opts['outliers']
                 while not (user_in == 'y' or user_in == 'n'):
                     print(f"Outliers detected in iteration {num_loops}.")
                     user_in = input("Do you wish to remove these outlier poses: \n y/n: ")
-
                 if user_in == 'y':
                     self.missing_poses[outlier_inds] = True
                 if user_in == 'n':
@@ -293,11 +293,11 @@ class StandardParamHandler:
         param_array = []
         cam_idx = 0
 
-        cam_poses, target_poses = estimate_camera_relative_poses(
+        cam_poses, target_poses, per_im_error = estimate_camera_relative_poses(
             detection=self.detection, cams=self.camset, calibration_target=self.target
         )
         self.missing_poses = np.array([np.isnan(t[0,0]) for t in target_poses])
-        self.find_and_exclude_transform_outliers(target_poses)
+        self.find_and_exclude_transform_outliers(per_im_error)
         
         for idp, pose_unfixed in enumerate(self.bundlePrimitive.poses_unfixed):
             # how do we handle missing poses - delete the image associated with the missing daata
@@ -380,16 +380,55 @@ class StandardParamHandler:
         _, _, _, obj_points = self.get_bundle_adjustment_inputs(params)
         self.get_camset(params).plot_np_array(obj_points.reshape((-1, 3)))
 
+def check_for_target_misalignment(tforms:  np.ndarray, ref_cam:int = 0):
+    """
+    Checks for misalignment in the viewed target by looking at the variances of the relative transformations to the first camera, which is treated as a reference.
+
+    :param tforms: the set of transformations to evaluate. c x p x 4 x 4 array where c is the number of cameras and p the number of poses/images
+    """
+    
+    Mrc_at = [np.linalg.inv(p) for p in tforms[ref_cam]]
+    Marc_ac = np.array([
+        [(Mt_c @ Mrc_t) for Mrc_t, Mt_c in zip(Mrc_at, Mat_c)] 
+        for Mat_c in tforms
+    ])
+
+    for ic, Marc_c in enumerate(Marc_ac):
+        if ic == ref_cam:
+            continue
+        angs = np.array([np.arccos((np.trace(t[:3,:3]) - 1)/2) for t in Marc_c])
+        mags = [np.linalg.norm(t[:3,-1]) for t in Marc_c]
+        std_ang = np.nanstd(angs)
+        std_mag = np.nanstd(mags)
+        if std_mag > 0.050:
+            logging.critical(f"Found inconsistent relative translation positions (stdev = {std_mag:.2f} m) for camera index {ic}")
+            logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
+        if std_ang > 5 / 180 * np.pi:
+            logging.critical(f"Found inconsistent relative angle magnitudes (stdev = {std_ang/np.pi*180:.2f} degrees) for camera index {ic}")
+            logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
+
+def check_feasiblity_and_update_refpose(Mat_ac, ref_pose: int) -> int:
+    """
+    This function examines a set of input transformations, and attemps to find out if there is a possible reference.
+    """
+    visibility = np.isnan(Mat_ac[:,:,0,0])
+    visible_pose = ~np.any(visibility, axis=1)
+    vrf_pose = visible_pose[ref_pose]
+    if not vrf_pose:
+        f_index = np.argmax(visible_pose)
+        if f_index == 0 and not visibility[0]:
+            raise ValueError("Couldn't find an initial pose for all cameras.")
+        ref_pose = f_index
+    return ref_pose
+
 def estimate_camera_relative_poses(
         calibration_target: AbstractTarget, detection: TargetDetection,
         cams:CameraSet, ref_cam: int = 0, ref_pose: int = 0
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Given camera estimates, performs a single camera centric pose estimate.
-    This reference camera is used to generate initial estimates of all other camera poses.
-    If the reference pose does not have full visibility, it will pick a new reference pose.
-    This is explicitely not a graphy based solver, and will throw an error if no fully shared
-    target is visible.
+    This reference camera is used to generate initial estimates of all other camera poses.  If the reference pose does not have full visibility, it will pick a new reference pose. This is explicitely not a graph based solver, and will throw an error if no fully shared target is visible.
+    As it assesses the cost function to pick sane defaults, it also returns an initial evaluation of the per im error of the cost function.
 
     :param detection: the detection data that the average estimates should be extracted from
     :param cams: the list of cameras with no yet known average transformation
@@ -405,45 +444,72 @@ def estimate_camera_relative_poses(
             pose_per_img.append(calibration_target.target_pose_in_cam_image(id, cam, mode="nan"))
         Mat_ac.append(pose_per_img)
     Mat_ac = np.array(Mat_ac)
-    visibility = np.isnan(Mat_ac[:,:,0,0])
-    visible_pose = ~np.any(visibility, axis=1)
-    vrf_pose = visible_pose[ref_pose]
-    if not vrf_pose:
-        f_index = np.argmax(visible_pose)
-        if f_index == 0 and not visibility[0]:
-            raise ValueError("Couldn't find an initial pose for all cameras.")
-        ref_pose = f_index
-        
 
-    Mrc_at = [np.linalg.inv(p) for p in Mat_ac[ref_cam]]
-    Marc_ac = np.array([[(Mt_c @ Mrc_t) for Mrc_t, Mt_c in zip(Mrc_at, Mat_c)] for Mat_c in Mat_ac])
-    for ic, Marc_c in enumerate(Marc_ac):
-        if ic == ref_cam:
-            continue
-        angs = np.array([np.arccos((np.trace(t[:3,:3]) - 1)/2) for t in Marc_c])
-        mags = [np.linalg.norm(t[:3,-1]) for t in Marc_c]
-        std_ang = np.nanstd(angs)
-        std_mag = np.nanstd(mags)
-        if std_mag > 0.050:
-            logging.critical(f"Found inconsistent relative translation positions (stdev = {std_mag:.2f} m) for camera index {ic}")
-            logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
-        if std_ang > 5 / 180 * np.pi:
-            logging.critical(f"Found inconsistent relative angle magnitudes (stdev = {std_ang/np.pi*180:.2f} degrees) for camera index {ic}")
-            logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
+    ref_pose = check_feasiblity_and_update_refpose(Mat_ac, ref_pose) 
+    check_for_target_misalignment(Mat_ac, ref_cam)
     
     Mrt_rc = Mat_ac[ref_cam, ref_pose]
     Mrt_ac = Mat_ac[:, ref_pose]
+    
+    Mac_rt = np.array([np.linalg.inv(Mrt_c) for Mrt_c in Mrt_ac])
+    Mat_rt_ac = Mac_rt[:, None, ...] @ Mat_ac
+    
+
+    # build the projection matrix as an input to the target.
+    dists = np.array([cam.distortion_coefs for cam in cams]).squeeze()
+    ints = np.array([cam.intrinsic for cam in cams])
+    proj = ints @ Mrt_ac[:, :3, :]
+
+    # run a bundle adjustment over the possible target positions.
+    errors = []
+    ps = calibration_target.point_data.reshape((-1, 3)) #could the flattening be failing for things that aren't flat
+    target_shape = calibration_target.point_data.shape
+    dd = detection.return_flattened_keys(target_shape[:-1]).get_data()
+
+    lookups =  []
+    for i in range(detection.max_ims):
+        lookups.append(dd[:,1] == i)
+    
+    for Mat_rt_c in Mat_rt_ac:
+        nanform = np.isnan(Mat_rt_c[:, 0,0])
+        Mat_rt_c[nanform] = np.eye(4) #if this wins, it wins.
+        imlocs = np.array([gu.h_tform(ps,Mt_rt_c) for Mt_rt_c in Mat_rt_c]) 
+        costs = ch.bundle_adjustment_costfn(
+            dd,
+            imlocs,
+            proj,
+            ints,
+            dists,           
+        )
+        costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
+        im_costs = []
+        for l in lookups:
+            im_costs.append(np.sum(costs[l]))
+        errors.append(im_costs)
+
+    errors = np.array(errors)
+    estimate_locs = np.argmin(errors, axis=0)
 
     Mat_rc = Mat_ac[ref_cam, :]
-    Mat_rt = np.linalg.inv(Mrt_rc)[None, ...] @ Mat_rc
+    Mat_rt = np.array([Mt_rt_ac[e] for e, Mt_rt_ac in zip(estimate_locs, Mat_rt_ac.transpose((1,0,2,3)))])
     
-    for idm, Mt_rt in enumerate(Mat_rt):
-        if np.isnan(Mt_rt[0,0]):
-            for idc, Mt_c in enumerate(Mat_ac[:, idm]):
-                if not np.isnan(Mt_c[0,0]):
-                    Mat_rt[idm] = np.linalg.inv(Mrt_ac[idc]) @ Mt_c
 
-    return Mrt_ac, Mat_rt
+    imlocs = np.array([gu.h_tform(ps,Mt_rt) for Mt_rt in Mat_rt]) 
+    costs = ch.bundle_adjustment_costfn(
+        dd,
+        imlocs,
+        proj,
+        ints,
+        dists,           
+    )
+    costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
+    im_costs = []
+    for l in lookups:
+        im_costs.append(np.sum(costs[l]))
+    init_per_im_reproj_err = np.array(im_costs)
+
+    Mat_rt[ref_pose] = np.eye(4)
+    return Mrt_ac, Mat_rt, init_per_im_reproj_err
 
     # ert refcam -> other_cams
     Mat_arc = Mac_rc[:, None, ...] @ Mat_ac

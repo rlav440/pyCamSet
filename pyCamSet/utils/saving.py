@@ -149,7 +149,7 @@ def save_camset(
     return
 
 
-def load_CameraSet(f_loc) -> CameraSet:
+def load_CameraSet(f_loc: Path|str) -> CameraSet:
     """
     A function to load a CameraSet from a .json formatted file.
 

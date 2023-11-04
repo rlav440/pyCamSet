@@ -13,19 +13,21 @@ from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform, downsample_valid
 
 TFORMS = [
-	# ([1.209,1.209,1.209],[-0.5,-0.5,-0.5]),
-	# ([ 0.   ,-1.571, 0.   ],[ 0.5,-0.5,-0.5]),
-	# ([-1.209,-1.209,-1.209],[-0.5,-0.5,-0.5]),
-	# ([1.571,0.   ,0.   ],[-0.5, 0.5,-0.5]),
-	# ([0.,0.,0.],[-0.5,-0.5,-0.5]),
-	# ([2.221,2.221,0.   ],[-0.5,-0.5, 0.5]),
-([ 0.,          2.22144147, -2.22144147],[0.5, 0.5, 0.5]),
-([2.22144147, 2.22144147, 0. ],[-0.5, -0.5, 0.5]),
-    ([1.20919958, 1.20919958, 1.20919958],[-0.5, -0.5, -0.5]),
-([-1.57079633,  0.,          0.,        ],[-0.5, -0.5 , 0.5]),
-([-1.20919958, -1.20919958,  1.20919959],[ 0.5, -0.5,  0.5]),
-([0.,         0.,         1.57079633],[ 0.5, -0.5, -0.5]),
+	([-1.209,-1.209, 1.209],[ 0.5,-0.5, 0.5]),
+	([ 1.209,-1.209, 1.209],[ 0.5, 0.5,-0.5]),
+	([0.   ,0.   ,1.571],[ 0.5,-0.5,-0.5]),
+	([2.221,0.   ,2.221],[-0.5, 0.5,-0.5]),
+	([3.142,0.   ,0.   ],[-0.5, 0.5, 0.5]),
+	([-1.571, 0.   , 0.   ],[-0.5,-0.5, 0.5]),
+]
 
+TFORMS = [
+    (([2.22144147, 2.22144147, 0.        ]), ([-0.5, -0.5,  0.5])),
+    (([-1.57079633,  0.        ,  0.        ]), ([-0.5, -0.5,  0.5])),
+    (([-1.20919958, -1.20919958,  1.20919958]), ([ 0.5, -0.5,  0.5])),
+    (([ 0.        ,  2.22144147, -2.22144147]), ([0.5, 0.5, 0.5])),
+    (([0.        , 0.        , 1.57079633]), ([ 0.5, -0.5, -0.5])),
+    (([1.20919958, 1.20919958, 1.20919958]), ([-0.5, -0.5, -0.5])),
 ]
 
 NET_FORMS=[
@@ -86,8 +88,12 @@ class Ccube(AbstractTarget):
             raise ValueError("Input dictionary of marker didn't contain enough "
                              "markers for this cube")
 
-        self.boards = [aruco.CharucoBoard_create(n_points, n_points, self.square_size,
-                                                 markerLength=0.75 * self.square_size, dictionary=a_dict)
+        self.boards = [
+            aruco.CharucoBoard_create(
+                n_points, n_points, self.square_size,
+                markerLength=0.75 * self.square_size,
+                dictionary=a_dict
+            )
             for a_dict in self.a_dicts][:6] #only need 6 of them!
 
         self.n_points = n_points
@@ -103,10 +109,10 @@ class Ccube(AbstractTarget):
         coord_bump = self.length*border_fraction/2
         board_coords = bd + [coord_bump, coord_bump, 0]
         self.base_face = np.array([
-                            [0, 0,0],
                             [0, self.length,0],
                             [self.length, self.length,0],
                             [self.length, 0,0],
+                            [0, 0,0],
                         ])
 
         self.faceData = FaceToShape(
@@ -141,7 +147,7 @@ class Ccube(AbstractTarget):
         with Image.fromarray(full_im) as im:
             im.save(fp=f_out, resolution=self.dpi)
 
-    def find_in_image(self, image, draw=False, camera: Camera = None, wait_len=1) -> ImageDetection:
+    def find_in_image(self, image, draw=False, camera: Camera = None, wait_len=-1) -> ImageDetection:
         """
         An implementation of the find in image function for
 

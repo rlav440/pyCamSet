@@ -42,7 +42,7 @@ class ChArUco(AbstractTarget):
         if draw:
             display_im = image.copy()
             target_size = [1080, 1920]
-            d_f = int(min(np.array(display_im.shape[:2]) / target_size))
+            d_f = int(max((min(np.array(display_im.shape[:2]) / target_size)), 1))
             display_im = downsample_valid(display_im, d_f).astype(np.uint8)
             # d_f=1
             if display_im.ndim == 2:
@@ -66,6 +66,7 @@ class ChArUco(AbstractTarget):
             aruco.drawDetectedCornersCharuco(
                 display_im,
                 np.array(c_corners) / d_f,
+                c_ids,
             )
 
             cv2.imshow('detections', display_im)
@@ -74,5 +75,5 @@ class ChArUco(AbstractTarget):
         return ImageDetection(c_ids[:, 0], c_corners[:, 0])
         
     def plot(self,imres=(1000,1000)):                           
-        plt.imshow(self.board.draw(imres))
+        plt.imshow(self.board.draw(imres), cmap='gray')
         plt.show()  

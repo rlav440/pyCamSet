@@ -12,7 +12,7 @@ import cv2
 from natsort import natsorted
 
 
-from pyCamSet.utils.general_utils import glob_ims, make_4x4h_tform, mad_outlier_detection, plane_fit
+from pyCamSet.utils.general_utils import glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.calibration_targets.targetDetections import TargetDetection, ImageDetection
 
@@ -77,7 +77,7 @@ class AbstractTarget(ABC):
         recreate
         """
         raise NotImplementedError
-    
+
     @abstractmethod
     def find_in_image(self, image, draw=False, camera: Camera=None, wait_len = 1) -> ImageDetection:
         """
@@ -166,7 +166,7 @@ class AbstractTarget(ABC):
             try:
                 pose = self.target_pose_in_cam_image(im_list, cam)
                 pose = (cam.cam_to_world @  #cam -> world
-                        pose # cube-> cam
+                    pose # cube-> cam
                 )
             except:
                 for other_cam in other_cams:
@@ -225,9 +225,9 @@ class AbstractTarget(ABC):
 
         if self.point_data.ndim == 2:
             self.point_data = self.point_data[None, ...]
-        
+
         init_shape = self.point_data.shape
-        
+
         n = init_shape[-2]
         local_view = np.reshape(self.point_data, (-1, n, 3))
 
@@ -255,7 +255,7 @@ class AbstractTarget(ABC):
         ref_0 = local_view - ref_point[:, None, :]
 
         local_coords = (
-                ref_0 @ cob_mats
+            ref_0 @ cob_mats
         )
         return np.reshape(local_coords, init_shape)
 
@@ -321,10 +321,10 @@ class AbstractTarget(ABC):
         end = time.time()
 
         logging.info(f'{cam_name} took {end - start:.1f} seconds'
-                     f', leftover error of {ic[0]:.2f} pixels')
+            f', leftover error of {ic[0]:.2f} pixels')
 
         # perform an initial pose estimate on the first images
-       
+
         init_cam = Camera(intrinsic=ic[1], distortion_coefs=np.array(ic[2]), res=res, name=cam_name)
         if fixed_params is not None:
             if "int" in fixed_param:
@@ -337,12 +337,15 @@ class AbstractTarget(ABC):
 
         return init_cam
 
-    def target_pose_in_cam_image(self, detection: TargetDetection, cam: Camera, mode="throw") -> np.ndarray:
+    def target_pose_in_cam_image(
+            self, detection: TargetDetection, cam: Camera, 
+            refine:bool = False, mode="throw") -> np.ndarray:
         """
         This function gives a pose estimate of the cube in an image as seen by a camera.
 
         :param detection: a detection containing data from a single image.
         :param cam: a camera model to use
+        :param refine: Whether to use LM refinement of the estimate.
         :param mode: whether to throw an error or return nan arrays.
 
         :return a 4x4 transformation of the target giving the transformation from target to camera coordinates
@@ -359,7 +362,7 @@ class AbstractTarget(ABC):
             if mode == "nan":
                 return np.ones((4,4)) * np.nan
             raise ValueError(f"passed detection contained info from {n_im} ims. \n"
-                             "Pose estimation only works with 1 image")
+                "Pose estimation only works with 1 image")
 
         keys = get_keys(datum)
         object_points = self.point_data[tuple(keys.astype(int).T)]
@@ -368,15 +371,28 @@ class AbstractTarget(ABC):
             if mode == "nan":
                 return np.ones((4,4)) * np.nan
             raise ValueError("Inadequate number of corners for pose estimation")
-        _, rvec, tvec = cv2.solvePnP(object_points.astype("float32"),
-                                     image_points.astype("float32"),
-                                     cam.intrinsic,
-                                     cam.distortion_coefs
-                                     )
+
+        _, rvec, tvec, err_list = cv2.solvePnPGeneric(object_points.astype("float32"),
+                                                      image_points.astype("float32"),
+                                                      cam.intrinsic,
+                                                      cam.distortion_coefs
+                                                      )
+        min_err = np.argmin(err_list)
+        if (err := err_list[min_err].squeeze()) > 5:
+            logging.warning(f"Initial error of {err: .2f} found for a pose detection.")
         ext = make_4x4h_tform(
-            rvec,
-            tvec,
-            mode='opencv'
+            rvec[min_err],
+            tvec[min_err],
         )
-        return ext # from target -> cam coordinates
+        
+        # temp_points = np.array([h_tform(face, ext) for face in self.point_data])
+        # new_obj_points = temp_points[tuple(keys.astype(int).T)]
+        # proj_uv = cam.project_points(new_obj_points)
+        # errors = proj_uv - image_points
+        # print(f"manual error check gave {np.mean(np.abs(errors))}")
+
+        if not refine:
+            return ext # from target -> cam coordinates
+        else: 
+            raise NotImplementedError
 

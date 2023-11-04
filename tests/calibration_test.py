@@ -1,12 +1,13 @@
 from pathlib import Path
 from matplotlib import pyplot as plt
+import cv2
 
 from pyCamSet import load_CameraSet, calibrate_cameras, ChArUco
 
 # we want to load some n camera calibration model
 
 def test_calibration():
-    data_loc = Path("./tests/test_data/calibration")
+    data_loc = Path("./tests/test_data/calibration_charuco")
     ref_loc = Path("")
     target = ChArUco(20, 20, 4)
 

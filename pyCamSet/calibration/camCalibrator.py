@@ -147,12 +147,10 @@ def run_initial_calibration(detection: TargetDetection,
             pose_im=pose_im,
             fixed_params=fixed_params,
         )
-    # take the data & zip it sideways
     cam_names = detection.cam_names
     cam_detections = detection.get_cam_list()
-    # turn work into a pool and go zoom on it
     work_data = zip(cam_names, cam_detections, cam_res)
-    raw_calibration = [work_fn(datum) for datum in tqdm(work_data)]
+    raw_calibration = [work_fn(datum) for datum in work_data]
     cam_dict = {cam_name: cam for cam_name, cam in zip(cam_names, raw_calibration)}
     cams = CameraSet(camera_dict=cam_dict)
 

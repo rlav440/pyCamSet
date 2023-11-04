@@ -1,3 +1,3 @@
-from .targetDetections import TargetDetection, ImageDetection
-from .abstractTarget import AbstractTarget
+from .target_detections import TargetDetection, ImageDetection
+from .abstract_target import AbstractTarget
 from .shape_by_faces import FaceToShape

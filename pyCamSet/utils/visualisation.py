@@ -5,13 +5,15 @@ from scipy.stats import multivariate_normal
 import numpy as np
 import pyvista as pv
 
-from pyCamSet.utils.general_utils import homogenous_transform, get_close_square_tuple
+from pyCamSet.utils.general_utils import h_tform, get_close_square_tuple
+from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc, n_inv_pose
 
 def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
                  s_per=None, save=None):
     """
     Takes an input list of data, and plots it as a cluster plot.
     for clarity, it also plots the 1, 2, and 3 sigma contours of the data.
+
     :param data_list: the input data (can be a list of arrays, which will plot both methods)
     :param ranges: the ranges to plot the data over (can be a list of ranges)
     :param titles: the titles for each plot (can be a list of titles)
@@ -78,6 +80,7 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
 def fancy_confidence_contours(x,y, ax, ranges):
     """
     Plots the 1, 2, and 3 sigma contours of the data.
+
     :param x: x locations
     :param y: y locations
     :param ax: the axis object to plot too
@@ -116,6 +119,7 @@ def visualise_calibration(
     ):
     """
     A function to draw and plot the errors in a calibration given the results.
+
     :param o_results: The optimisation results
     :param param_handler: The parameter handler that organised the optimisation.
     :return:
@@ -173,7 +177,7 @@ def visualise_calibration(
     plotter = pv.Plotter(shape='1|2')
     plotter.title = "Calibration Evaluation"
     plotter.subplot(0)
-    plotter.add_text("Reconstructed Scene Points", position='upper_edge', font_size=10, font="times")
+    plotter.add_text("Reconstructed Points in Scene Coordinates", position='upper_edge', font_size=10, font="times")
     cams.get_scene(scene=plotter)
     seen_pts = pv.PolyData(reconstructed)
     seen_pts['Reprojection error (px)'] = error_subset
@@ -193,7 +197,10 @@ def visualise_calibration(
     mean_dist = np.mean(np.linalg.norm(param_handler.target.point_data, axis=-1))
     bad_points = 0
     for point, im, key, c in zip(reconstructed, im_nums, keys, error_subset):
-        obj_point = homogenous_transform(point, np.linalg.inv(poses[int(im)]))
+        inv_pose = np.empty(12)
+        n_inv_pose(poses[int(im)], inv_pose)
+        obj_point = np.empty(3)
+        n_htform_prealloc(point, inv_pose, obj_point)
 
         if np.linalg.norm(obj_point) > 3 * mean_dist:
             bad_points = bad_points + 1
@@ -205,7 +212,7 @@ def visualise_calibration(
             errors.append(c)
 
     plotter.subplot(1)
-    plotter.add_text("Reconstructed Obj points", position="upper_edge", font_size=10, font='times')
+    plotter.add_text("Reconstructed Points in Target Coordinates", position="upper_edge", font_size=10, font='times')
     plotter.add_text(f"{bad_points} erroneous Points", position='lower_left', font_size=10, font='times')
 
     cube_locs = pv.PolyData(np.array(raw_obj_points))
@@ -224,6 +231,8 @@ def visualise_calibration(
     err_buff = []
     for (key, point_loc), err in zip(point_locs.items(), col_locs.values()):
         if len(point_loc) > 2:
+            if len(key) == 1:
+                key = (0, key[0])
             obj_point = param_handler.target.original_points[key]
             data_array = np.array(point_loc)
             dif = data_array - obj_point

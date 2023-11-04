@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   width="210mm"
+   height="297mm"
+   viewBox="0 0 210 297"
+   version="1.1"
+   id="svg924"
+   inkscape:version="0.92.5 (2060ec1f9f, 2020-04-08)"
+   sodipodi:docname="class_diagram.svg">
+  <defs
+     id="defs918">
+    <marker
+       inkscape:stockid="Arrow1Mend"
+       orient="auto"
+       refY="0.0"
+       refX="0.0"
+       id="Arrow1Mend"
+       style="overflow:visible;"
+       inkscape:isstock="true">
+      <path
+         id="path1526"
+         d="M 0.0,0.0 L 5.0,-5.0 L -12.5,0.0 L 5.0,5.0 L 0.0,0.0 z "
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;stroke-opacity:1;fill:#000000;fill-opacity:1"
+         transform="scale(0.4) rotate(180) translate(10,0)" />
+    </marker>
+    <marker
+       inkscape:stockid="Arrow1Lend"
+       orient="auto"
+       refY="0.0"
+       refX="0.0"
+       id="Arrow1Lend"
+       style="overflow:visible;"
+       inkscape:isstock="true">
+      <path
+         id="path1520"
+         d="M 0.0,0.0 L 5.0,-5.0 L -12.5,0.0 L 5.0,5.0 L 0.0,0.0 z "
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;stroke-opacity:1;fill:#000000;fill-opacity:1"
+         transform="scale(0.8) rotate(180) translate(12.5,0)" />
+    </marker>
+  </defs>
+  <sodipodi:namedview
+     id="base"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageopacity="0.0"
+     inkscape:pageshadow="2"
+     inkscape:zoom="1.979899"
+     inkscape:cx="229.47129"
+     inkscape:cy="950.40897"
+     inkscape:document-units="mm"
+     inkscape:current-layer="layer1"
+     showgrid="true"
+     inkscape:window-width="1920"
+     inkscape:window-height="1043"
+     inkscape:window-x="572"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1">
+    <inkscape:grid
+       type="xygrid"
+       id="grid1469" />
+  </sodipodi:namedview>
+  <metadata
+     id="metadata921">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title></dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <rect
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.26458332;stroke-opacity:1"
+       id="rect1471"
+       width="79.375"
+       height="42.333332"
+       x="10.583333"
+       y="13.895833"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600" />
+    <rect
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.26458332;stroke-opacity:1"
+       id="rect1473"
+       width="25.135416"
+       height="5.2916665"
+       x="10.583333"
+       y="8.604167"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600" />
+    <rect
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.26458332;stroke-opacity:1"
+       id="rect1475"
+       width="33.072918"
+       height="30.427084"
+       x="13.229167"
+       y="23.15625"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600" />
+    <rect
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.26458332;stroke-opacity:1"
+       id="rect1477"
+       width="33.072918"
+       height="30.427084"
+       x="54.239582"
+       y="23.15625"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600" />
+    <rect
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.26458332;stroke-opacity:1"
+       id="rect1479"
+       width="33.072918"
+       height="6.6145835"
+       x="13.229167"
+       y="23.15625"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600" />
+    <rect
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.26458332;stroke-opacity:1"
+       id="rect1481"
+       width="33.072918"
+       height="6.6145835"
+       x="54.239582"
+       y="23.15625"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.49207783px;line-height:1.25;font-family:'CMU Sans Serif';-inkscape-font-specification:'CMU Sans Serif';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.21056615"
+       x="14.250161"
+       y="27.433834"
+       id="text1485"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600"><tspan
+         sodipodi:role="line"
+         id="tspan1483"
+         x="14.250161"
+         y="27.433834"
+         style="stroke-width:0.21056615">Camera</tspan></text>
+    <text
+       id="text1489"
+       y="27.433834"
+       x="55.16608"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.49207783px;line-height:1.25;font-family:'CMU Sans Serif';-inkscape-font-specification:'CMU Sans Serif';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.21056615"
+       xml:space="preserve"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600"><tspan
+         style="stroke-width:0.21056615"
+         y="27.433834"
+         x="55.16608"
+         id="tspan1487"
+         sodipodi:role="line">Camera_Set</tspan></text>
+    <text
+       id="text1493"
+       y="33.008984"
+       x="14.439149"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.49207783px;line-height:1.25;font-family:'CMU Sans Serif';-inkscape-font-specification:'CMU Sans Serif';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.21056615"
+       xml:space="preserve"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600"><tspan
+         style="font-size:3.52777767px;stroke-width:0.21056615"
+         y="33.008984"
+         x="14.439149"
+         id="tspan1491"
+         sodipodi:role="line">-Camera Pose</tspan><tspan
+         style="font-size:3.52777767px;stroke-width:0.21056615"
+         y="38.624081"
+         x="14.439149"
+         sodipodi:role="line"
+         id="tspan1495">-Camera Calibration</tspan><tspan
+         style="font-size:3.52777767px;stroke-width:0.21056615"
+         y="44.239178"
+         x="14.439149"
+         sodipodi:role="line"
+         id="tspan1835">+ Image Projection</tspan><tspan
+         style="font-size:3.52777767px;stroke-width:0.21056615"
+         y="49.854275"
+         x="14.439149"
+         sodipodi:role="line"
+         id="tspan1837">+ World Projection</tspan><tspan
+         style="font-size:3.52777767px;stroke-width:0.21056615"
+         y="55.469372"
+         x="14.439149"
+         sodipodi:role="line"
+         id="tspan1833" /></text>
+    <text
+       id="text1499"
+       y="20.203449"
+       x="12.405461"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.49207783px;line-height:1.25;font-family:'CMU Sans Serif';-inkscape-font-specification:'CMU Sans Serif';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.21056615"
+       xml:space="preserve"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600"><tspan
+         style="stroke-width:0.21056615"
+         y="20.203449"
+         x="12.405461"
+         id="tspan1497"
+         sodipodi:role="line">CV_tools</tspan></text>
+    <flowRoot
+       xml:space="preserve"
+       id="flowRoot1501"
+       style="fill:black;fill-opacity:1;stroke:none;font-family:'CMU Sans Serif';font-style:normal;font-weight:normal;font-size:21.33333333px;line-height:1.25;letter-spacing:0px;word-spacing:0px;-inkscape-font-specification:'CMU Sans Serif';font-stretch:normal;font-variant:normal"><flowRegion
+         id="flowRegion1503"><rect
+           id="rect1505"
+           width="200"
+           height="205"
+           x="80"
+           y="122.51968" /></flowRegion><flowPara
+         id="flowPara1507"></flowPara></flowRoot>    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.49207783px;line-height:1.25;font-family:'CMU Sans Serif';-inkscape-font-specification:'CMU Sans Serif';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.21056615"
+       x="55.638554"
+       y="33.008984"
+       id="text1513"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600"><tspan
+         sodipodi:role="line"
+         id="tspan1509"
+         x="55.638554"
+         y="33.008984"
+         style="font-size:3.52777767px;stroke-width:0.21056615">- Cameras</tspan><tspan
+         id="tspan1511"
+         sodipodi:role="line"
+         x="55.638554"
+         y="38.624081"
+         style="font-size:3.52777767px;stroke-width:0.21056615">+ Set Visualisation</tspan><tspan
+         sodipodi:role="line"
+         x="55.638554"
+         y="44.239178"
+         style="font-size:3.52777767px;stroke-width:0.21056615"
+         id="tspan1831">+ Point Visibility </tspan></text>
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.26499999;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:0.26499999, 0.52999997;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#Arrow1Mend)"
+       d="m 46.302083,32.416667 7.9375,1e-6"
+       id="path1515"
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="cc"
+       inkscape:export-filename="/home/robin/Masters/computer-vision-tools/documentation/source/class_diagram.png"
+       inkscape:export-xdpi="600"
+       inkscape:export-ydpi="600" />
+  </g>
+</svg>

@@ -10,7 +10,7 @@ import pyvista as pv
 from matplotlib import pyplot as plt
 from numpy.linalg import norm
 
-from pyCamSet.utils.general_utils import distort_points, homogenous_transform, vector_cam_points
+from pyCamSet.utils.general_utils import distort_points, h_tform, vector_cam_points
 from pyCamSet.utils.general_utils import sensor_map
 
 DEFAULT_RES = [1000, 1000]
@@ -20,7 +20,7 @@ DEFAULT_CAMERA_MATRIX = np.array(
      [0.0, 0.0, 1.0]])  # mm
 
 
-class Camera():
+class Camera:
     """
     An object oriented camera model.
     Using the pinhole camera model this represents the position and imaging characteristics
@@ -36,7 +36,7 @@ class Camera():
                  minimal = True):
         """
         Initialises a camera
-        Args:
+        
         :param extrinsic: the camera extrinsic matrix
         :param intrinsic: the camera intrinsic matrix
         :param res: the camera resoluiton
@@ -58,13 +58,14 @@ class Camera():
         self.cam_to_world = None
 
         self.down_scale_factor = 0
-        self.Name = name
+        self.name = name
         self.minimal = minimal
         self._update_state()
 
     def __eq__(self, other: Camera):
         """
         Override the equal to basically say the cameras are mathematically identical, ignoring name
+
         :param other: The other object. if it's not a camera, returns false.
         :return: True or false.
         """
@@ -78,6 +79,7 @@ class Camera():
     def set_minimal(self, minimal: bool):
         """
         Either removes or recalculates the sensor map and world sensor map of a camera
+
         :param minimal: If a new camera is a minimal model
         """
         self.minimal = minimal
@@ -88,6 +90,7 @@ class Camera():
     def to_MVSnet_txt(self, f_loc: Path, depth_range: tuple[float, float], depth_steps: int) -> None:
         """
         Writes the camera data to the standard format used by MVSnet and its derivatives.
+
         :param f_loc: The file location
         :param depth_range: The depth range to use.
         :param depth_steps: The number of discrete steps
@@ -125,15 +128,17 @@ class Camera():
     def set_extrinsic(self, new_extrinsic):
         """
         Sets the extrinsic matrix, and updates the camera in place
+
         :param new_extrinsic: A newly defined extrinsic calibration
         """
         self.extrinsic = new_extrinsic
         self._update_state()
 
 
-    def set_distortion_coefs(self, dist_coefs: np.array):
+    def set_distortion_coefs(self, dist_coefs: np.ndarray):
         """
         Sets the distortions coefs and updates in place
+
         :param dist_coefs: A 5 parameter distortion model
         """
         self.distortion_coefs = dist_coefs
@@ -142,6 +147,7 @@ class Camera():
     def view_sensor_distortion(self, ax=None):
         """
         Draws the distortion of the current camera sensor
+
         :param ax: A matplotlib plotting axis to draw the distortion too.
         """
         grid = np.meshgrid(
@@ -158,16 +164,17 @@ class Camera():
         if ax is None:
             plt.quiver(grid[:, 0], grid[:, 1], shift[:, 0], shift[:, 1], angles='xy', scale_units='xy', scale=1)
             plt.set_aspect('equal')
-            plt.title(f'Distortion in camera {self.Name}')
+            plt.title(f'Distortion in camera {self.name}')
             plt.show()
         else:
             ax.quiver(grid[:, 0], grid[:, 1], shift[:, 0], shift[:, 1], angles='xy', scale_units='xy', scale=1)
             ax.set_aspect('equal')
-            ax.set_title(f"Distortion in camera {self.Name}")
+            ax.set_title(f"Distortion in camera {self.name}")
 
     def _cam_fov(self):
         """
         Calculates the fov of the camera
+
         :return the fov
         """
         return 180 / m.pi * (2 * np.arctan2(self.res[1] / 2,
@@ -176,6 +183,7 @@ class Camera():
     def _calc_projection_matrix(self):
         """
         calcs the 3,4 projection matrix of a camera
+
         :return matrix: the projection matrix of the camera
         """
         return self.intrinsic @ self.extrinsic[:3, :4]
@@ -183,6 +191,7 @@ class Camera():
     def project_points(self, points, mode="opencv", distort=True):
         """
         Projects a list of points onto camera coordinates
+
         :param points: The points to project
         :param mode: by default, returns in opencv coordinates.
                     with mode == opencv
@@ -191,7 +200,7 @@ class Camera():
         :return points: points in the uv coordinates
         """
 
-        centered = homogenous_transform(points, self.proj)
+        centered = h_tform(points, self.proj)
         if centered.ndim == 1:
             centered = centered[None, ...]
         if mode == "image":
@@ -208,6 +217,7 @@ class Camera():
     def _is_in_image(self, cords) -> bool:
         """
         A bounds check on image points
+
         :param cords: Some coordinate in UV, int
         :return view: BOOL indicating if point is on image array
         """
@@ -220,6 +230,7 @@ class Camera():
     def can_image(self, pt) -> bool:
         """
         Uses projection to work out if a camera images a point
+
         :param pt: a point in world space coordinates
         :return True if the camera images that world coordinate
 
@@ -230,6 +241,7 @@ class Camera():
     def get_mesh(self, scale=0.025):
         """
         Creates a pyvista mesh of the camera in world coordinates.
+
         :param scale: the display length of the camera in world coordinates.
         :return mesh: A PV mesh detailing the camera
         """
@@ -272,6 +284,7 @@ class Camera():
     def get_viewcone(self, view_len=1, triangle=False):
         """
         Calculates a viewcone, indicating the region which projects to the viewed camera.
+
         :param view_len: the view length of the camera
         :param triangle: forces the mesh to only use triangular faces.
         :returns mesh: A PV mesh showing the camera object's viewcone
@@ -336,6 +349,7 @@ class Camera():
     def get_image_cord_sensor_map(self):
         """
         Returns a version of the sensor map in image coordinates, rather than the default opencv
+        
         :returns sensor_map: a model of the intrinsic directions of the camera rays
         """
         return np.transpose(self.world_sensor_map, (1, 0, 2))
@@ -364,6 +378,7 @@ class Camera():
     def _make_sensormap(self, mode='linear', distort=True):
         """
         Calculates a model of the ray direction of each pixel of the camera.
+
         :param mode: "linear" or "normalised".
             linear mode produces constant z components of each direction (good for depth maps)
             normalised produces constant length vectors (this is the blender convention as of writing).
@@ -392,6 +407,7 @@ class Camera():
         Given an image coordinate in opencv cords, nx2, returns a normalised ray.
         If the depth image is given, uses the depth at the coordinate to set the
         length instead.
+
         :param cord: points to project
         :param depth_im: the depht image, if not none
         :param distort: whether the coordinate needs to be distorted before projection.
@@ -418,6 +434,7 @@ class Camera():
     def scale_self_2n(self, down_scale_factor=1):
         """
         Downscales the intrinsics of the camera
+
         :param down_scale_factor: the power of two by which to scale
         """
         self.down_scale_factor = down_scale_factor
@@ -440,6 +457,7 @@ class Camera():
         """
         This function alters the intrinsics to mimic camera that takes
         a subset of the calibrated image size.
+
         :param roi: [xmin, xmax, ymin, ymax]
         """
         [ymin, xmin, xmax, ymax] = roi
@@ -462,6 +480,7 @@ class Camera():
     def transform(self, transformation_matrix):
         """
         Transforms the camera with a homogenous transformation
+
         :param transformation_matrix: a homogenous 4x4 transform
         """
         self.extrinsic = self.extrinsic @ transformation_matrix

@@ -5,6 +5,10 @@ import numpy as np
 # make and print a Ccube target
 @dataclass
 class ReconParams:
+    """
+    This is a data class that contains the expected parameters for ACMMP/mvsnet.
+
+    """
     def __init__(
             self, mindist=0.1, maxdist=0.8, steps=192, minangle=3, maxangle=45,
             max_n_view=9
@@ -18,6 +22,12 @@ class ReconParams:
 
 
 def write_pair_file(f: TextIOWrapper, pair_list):
+    """
+    Given a list of pairs and a file handler, writes that pair list to the file.
+
+    :param f: the handle of the file to write.
+    :param pair_list: a list of camera pairs to write to the file.
+    """
     f.write(f"{int(len(pair_list))}" + '\n')
     for idi, list_vals in enumerate(pair_list):
         f.write(f"{idi}" + '\n')
@@ -27,9 +37,25 @@ def write_pair_file(f: TextIOWrapper, pair_list):
     return
 
 def get_v_vec(ext):
+    """
+    Gets the view vector of a camera given the extrinsic
+
+    :param ext: The extrinsic matrix of a camera.
+    """
     return ext[:3,:3] @ np.array([0,0,1])
 
 def calc_pairs(c_vec, r_param: ReconParams, rng=None, pick_closest=False):
+    """
+    Calclulates the likely pairs from camera view vectors.
+
+    :param c_vec: the camera view vectors.
+    :param r_param: the parameters of the reconsturction. Places limits on
+    acceptable pairs.
+    :param rng: an rng seed for reproducibility.
+    :param pick_closest: whether to sort the cameras by angle, or use random selection
+    :return pairs: a list of lists of the acceptable pairs for each camera.
+
+    """
     if rng is None:
         rng = np.random.default_rng()
     c_vec /= np.linalg.norm(c_vec, axis=1, keepdims=True)

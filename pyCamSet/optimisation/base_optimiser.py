@@ -100,12 +100,14 @@ class StandardParamHandler:
     The implementation given in the standard param handler implements a standard object pose based bundle adjustment.
 
     Two functions provide the ability to add extra parameters and functionality to the optimisation.
-        - add_extra_params: this can be overriden to add initial estimates of additional parameters.
-        - parse_extra_params_and_setup: this can be overriden to parse additional parameters given to the optimisation.
-            Manipulations of the object data/state can be done here, and will be reflected in the cost function.
-            As an example: if a higher level structure for camera poses is defined, self.extr_unfixed can be set to all
-             false. The parameters can then be parsed, translated into specific extrinsics for each camera, written
-             to self.extr, and the cost function will use these extrinsics to define the camera.
+    
+    - add_extra_params: this can be overriden to add initial estimates of additional parameters.
+    - parse_extra_params_and_setup: this can be overriden to parse additional parameters given to the optimisation.
+    Manipulations of the object data/state can be done here, and will be reflected in the cost function.
+    As an example: if a higher level structure for camera poses is defined, self.extr_unfixed can be set to all
+    false. The parameters can then be parsed, translated into specific extrinsics for each camera, written
+    to self.extr, and the cost function will use these extrinsics to define the camera.
+
     """
 
     def __init__(self,
@@ -204,10 +206,12 @@ class StandardParamHandler:
         """
         This function uses the state of the parameter handler, and the given params
         to build np arrays that describe:
+
             - the projection matrices of the cameras
             - the intrinsic matrices of the cameras
             - the distortion parameters of the cameras
             - the pose of every object point in every time point
+
         These are direct inputs to a bundle adjustment based loss.
 
         :param x: The input optimisation parameters.

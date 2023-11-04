@@ -5,14 +5,23 @@ import numpy as np
 from cv2 import aruco
 from matplotlib import pyplot as plt
 
-from pyCamSet.calibration_targets.abstractTarget import AbstractTarget
-from pyCamSet.calibration_targets.targetDetections import ImageDetection
+from pyCamSet.calibration_targets.abstract_target import AbstractTarget
+from pyCamSet.calibration_targets.target_detections import ImageDetection
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import downsample_valid
 
 
 class ChArUco(AbstractTarget):
     def __init__(self, num_squares_x, num_squares_y, square_size, marker_fraction = 0.8, a_dict=cv2.aruco.DICT_4X4_1000):
+        """
+        Initialises a ChArUco board in mm.
+
+        :param num_squares_x: number of squares in the x direction
+        :param num_squares_y: number of squares in the y direction
+        :param square_size: the size of a square in mm
+        :param marker_fraction: the percentage of a chessboard square occupied by a marker
+        :param a_dict: the aruco dictionairy to use.
+        """
         super().__init__(inputs=locals())
 
         # define checker and marker size
@@ -31,7 +40,17 @@ class ChArUco(AbstractTarget):
 
         self._process_data()
 
-    def find_in_image(self, image, draw=False, camera: Camera = None, wait_len=1) -> ImageDetection:
+    def find_in_image(self, image, draw=False, camera: Camera|None = None, wait_len=1) -> ImageDetection:
+        """
+        Detects features of this target in the input image.
+
+        :param image: The image to detect in.
+        :param draw: Whether or not the detected corners should be drawn.
+        :param camera: optional. A camera target for more accurate detection.
+        :param wait_len: time to pause to allow drawing of detections. -1 waits for key press.
+        
+        :return ImageDetection: a data class wrapping the data detected in the image.
+        """
         params = aruco.DetectorParameters_create()
         params.minMarkerPerimeterRate = 0.01
         corners, ids, _ = aruco.detectMarkers(image, self.a_dict, parameters=params)
@@ -75,5 +94,8 @@ class ChArUco(AbstractTarget):
         return ImageDetection(c_ids[:, 0], c_corners[:, 0])
         
     def plot(self,imres=(1000,1000)):                           
+        """
+        Draws the target as a matplotlib plot.
+        """
         plt.imshow(self.board.draw(imres), cmap='gray')
         plt.show()  

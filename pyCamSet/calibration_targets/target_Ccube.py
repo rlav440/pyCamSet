@@ -58,7 +58,7 @@ def make_blank_square(draw_res, line_fraction, border_fraction):
 
 class Ccube(AbstractTarget):
     """
-    Notes: This class defines a calibration that is the result of multiple
+    This class defines a calibration target that consists of a Cube of ChArUco boards.
     """
 
     def __init__(self, length=20, n_points=5,
@@ -67,10 +67,6 @@ class Ccube(AbstractTarget):
                  border_fraction=0.1,
                  line_fraction=0.003,
                  ):
-        """
-
-
-        """
         super().__init__(inputs=locals())
         self.input_border_fraction = border_fraction
         self.actual_border_fraction = None
@@ -124,6 +120,9 @@ class Ccube(AbstractTarget):
         self._process_data()
 
     def plot(self):
+        """
+        Draws a 3D model of the calibration target using pyVista
+        """
         faces = self.faceData.draw_meshes(self.base_face, self.textures)
 
     def save_to_pdf(
@@ -147,13 +146,14 @@ class Ccube(AbstractTarget):
         with Image.fromarray(full_im) as im:
             im.save(fp=f_out, resolution=self.dpi)
 
-    def find_in_image(self, image, draw=False, camera: Camera = None, wait_len=-1) -> ImageDetection:
+    def find_in_image(self, image, draw=False, camera: Camera|None = None, wait_len=-1) -> ImageDetection:
         """
         An implementation of the find in image function for
 
         :param image: the image
-        :param self: a charuco cube that has been made
-        :param draw:
+        :param draw: whether to draw the visualisation of the cube,
+        :param camera: an optional camera model, for more accurate detections.
+        :param wait_len: the wait time for the visualisation. -1 waits for user keypress.
 
         Returns:
 

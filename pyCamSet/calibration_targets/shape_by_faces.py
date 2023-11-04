@@ -89,8 +89,6 @@ class FaceToShape:
         self.face_local_coords = face_local_coords
         self.ur_flocal = self.face_local_coords.reshape((-1, ppf, 3))
         self.face_transforms = face_transforms
-        for f in face_transforms:
-            print(np.array2string(f, precision=2, suppress_small=True))
         self.ur_ftform = self.face_transforms.reshape((-1, 4, 4))
         self.point_data = np.empty_like(face_local_coords)
         self.ur_pdata = self.point_data.reshape((-1, ppf, 3))

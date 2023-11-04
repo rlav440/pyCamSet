@@ -163,13 +163,23 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
     # make the camerasets
     cam_dict = {}
     cam_config = saved_structure['cam_config']
+
+    cam_module = 'pyCamSet.cameras.camera'
+    camset_module = 'pyCamSet.cameras.camera_set'
+
     for cam_name, data in saved_structure['cams'].items():
+        
+
         cam_dict[cam_name] = instance_obj(
-            cam_config['camset_module'], cam_config['cam_name'],
+            cam_module,
+            'Camera',
             extrinsic=np.array(data['ext']), intrinsic=np.array(data['int']),
             distortion_coefs=np.array(data['dst']), res=np.array(data['res']),
             name=cam_name)
-    camset = instance_obj(cam_config['camset_module'], cam_config['camset_name'], camera_dict=cam_dict)
+    camset = instance_obj(
+        camset_module,
+        'CameraSet',
+        camera_dict=cam_dict)
 
     try:
         optim = saved_structure['optim']

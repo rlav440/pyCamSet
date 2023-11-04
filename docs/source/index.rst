@@ -18,11 +18,26 @@ While openCV provides methods for calibrating and working with cameras (many of 
 
 Standard Components 
 ===================
-At the heart of the library are the Camera and CameraSet objects, and the CameraCalibrator which constructs them from calibration images.
+At the heart of the library are the Camera and CameraSet objects, and the calibrate_cameras function, which constructs Cameras and CameraSet objects from calibration images.
 CameraSets are save-able to a .json formatted file.
 
 The calibration process is defined by two extensible classes: an abstract model of the calibration target, and an extensible representation of the standard bundle adjustment.
 
+Getting Started
+===============
+
+This library can either be installed via pypi:
+
+.. ::
+   pip install pyCamSet
+
+or can be cloned from github and then installed with:
+
+.. ::
+   git clone https://github.com/rlav440/pyCamSet
+   pip install -e . 
+
+Which enables development and extension.
 
 Library extension
 =================
@@ -36,6 +51,7 @@ These are extendable, and examples demonstrate how to extend these components to
 
    camera
    camera_set
+   calibration
    calibration_targets/index
    extension/index
 

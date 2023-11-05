@@ -1,7 +1,7 @@
 
-# {pyCamSet}
+# pyCamSet
 
-{SHORT PROJECT DESCRIPTION}
+pyCamSet is a python library for multi-camera calibration for MVS systems and instrumentation.
 
 ![Python 3](https://img.shields.io/badge/Python->=3.11-blue)
 [![Contributors][contributors-shield]][contributors-url]

@@ -389,7 +389,6 @@ class Camera:
             mode,
             self.intrinsic,
             self.res,
-            d_factor=1,
             dist_coefs=self.distortion_coefs if distort else None)
         self.world_sensor_map = self._compute_world_sensor_map()
 

@@ -1,22 +1,23 @@
 from pathlib import Path
 from matplotlib import pyplot as plt
 import cv2
+import numpy as np
 
-from pyCamSet import load_CameraSet, calibrate_cameras, ChArUco
+from pyCamSet import calibrate_cameras, ChArUco
 
 # we want to load some n camera calibration model
 
-def test_calibration():
+def test_calibration_charuco():
     data_loc = Path("./tests/test_data/calibration_charuco")
-    ref_loc = Path("")
     target = ChArUco(20, 20, 4)
 
-    camera_model = calibrate_cameras(f_loc=data_loc, calibration_target=target, draw=True)
-    camera_model.visualise_calibration()
-    reference_cams = None #load_CameraSet(ref_loc)
-    assert camera_model == reference_cams
+    cams = calibrate_cameras(f_loc=data_loc, calibration_target=target, draw=True)
 
+    final_euclid = np.mean(np.linalg.norm(np.reshape(
+        cams.calibration_result, (-1, 2)
+    ), axis=1))
+    assert final_euclid < 1.3, "The calibration accuracy did not pass for ChArUco targets" 
 
 if __name__ == '__main__':
-    test_calibration()
+    test_calibration_charuco()
     

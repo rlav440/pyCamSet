@@ -603,7 +603,6 @@ def run_bundle_adjustment(param_handler: StandardParamHandler,
     )
     end = time.time()
 
-    time.sleep(0.25)
     final_euclid = np.mean(np.linalg.norm(np.reshape(optimisation.fun, (-1, 2)), axis=1))
     logging.info(f'Final Euclidean error: {final_euclid:.2f} px')
     logging.info(f'Optimisation took {end - start: .2f} seconds.')

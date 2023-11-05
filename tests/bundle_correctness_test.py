@@ -9,20 +9,19 @@ from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
 
 
-def bundle_correctness():
+def test_bundle_correctness():
     # for an input file, use opencv to detect a charuco board and calibrate a camera
-    data_loc = Path('test_data/cam_0')
+    data_loc = Path('tests/test_data/calibration_charuco/1')
     adict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
-    board = cv2.aruco.CharucoBoard_create(12, 12, 0.010, 0.008, adict)
+    board = cv2.aruco.CharucoBoard_create(20, 20, 0.004, 0.0032, adict)
     all_corners = []
     all_ids = []
-    cache_loc = Path('test_data/cam_0/cache.pkl')
+    cache_loc = Path('tests/test_data/cam_test_cache.pkl')
     if cache_loc.exists():
         with open(cache_loc, 'rb') as f:
             all_corners, all_ids, imsize = pickle.load(f)
-        print("loaded from cache")
     else:
-        images = list(data_loc.glob("*.tiff"))
+        images = list(data_loc.glob("*.jpg"))
         for frame in tqdm(images):
             im = cv2.imread(str(frame))
             gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
@@ -30,14 +29,13 @@ def bundle_correctness():
             corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(gray, adict)
             if len(corners) > 0:
                 ret, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(corners, ids, gray, board)
-                if ret > 0:
+                if ret > 4:
                     all_corners.append(charuco_corners)
                     all_ids.append( charuco_ids)
 
         imsize = gray.shape
         with open(cache_loc, 'wb') as f:
             pickle.dump((all_corners, all_ids, imsize), f)
-            print("saved to cache")
     # now we have a list of detections, we can calibrate the camera
     camera_matrix_init = np.array([[ 1000.,    0., imsize[0]/2.],
                                      [    0., 1000., imsize[1]/2.],
@@ -73,8 +71,6 @@ def bundle_correctness():
     proj_mat = np.concatenate((camera_matrix, np.zeros((3,1))), axis=1).reshape((1,3,4))
     intrinsics = camera_matrix.reshape((1,3,3))
     dists = np.reshape(distortion_coefficients0, (1, -1))
-
-
     cost = bundle_adj_parrallel_solver(dct, im_points, proj_mat, intrinsics, dists)
     euclid_cost = np.sqrt(np.sum(cost.T**2, axis=1))
     perIm = []
@@ -83,9 +79,8 @@ def bundle_correctness():
         perIm.append(np.mean(scratch_cost[:len(id)]))
         scratch_cost = scratch_cost[len(id):]
 
-    print(f"found a mean difference of {np.mean(np.array(perIm) - perViewErrors.squeeze()):.4f}")
     errors = []
-    for idim, (corners, ids) in enumerate(zip(tqdm(all_corners), all_ids)):
+    for idim, (corners, ids) in enumerate(zip((all_corners), all_ids)):
         for corner, id in zip(corners.squeeze(), ids.squeeze()):
             pro_loc_0 = cv2.projectPoints(
                 board.chessboardCorners[id], rotation_vectors[idim],
@@ -100,7 +95,11 @@ def bundle_correctness():
             nb_distort_prealloc(proj_loc_1, camera_matrix, distortion_coefficients0.squeeze())
 
             errors.append(np.linalg.norm(pro_loc_0 - proj_loc_1))
-            print(f"found a difference of {np.linalg.norm(pro_loc_0 - proj_loc_1):.4f}")
+    
+    mean_err  =np.mean(errors)
+    # print(f"found a mean difference of {mean_err:.5f}")
 
+    assert mean_err < 1e-4
 
-    assert np.isclose(np.array(perIm), perViewErrors.squeeze())
+if __name__ == "__main__":
+    test_bundle_correctness()

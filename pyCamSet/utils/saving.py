@@ -252,8 +252,8 @@ def compress(arr, clevel=3, cname='lz4', shuffle=1):
 
     shape=arr.shape
     #dtype np.object is not implemented
-    if arr.dtype==np.object:
-        raise(TypeError("dtype np.object is not implemented"))
+    if arr.dtype==object:
+        raise(TypeError("dtype object is not implemented"))
 
     #Handling of fortran ordered arrays (avoid copy)
     is_f_contiguous=False

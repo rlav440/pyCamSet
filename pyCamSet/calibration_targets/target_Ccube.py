@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import numpy as np
-import pyvista as pv
 from cv2 import aruco
 import cv2
 from PIL import Image
@@ -127,13 +126,13 @@ class Ccube(AbstractTarget):
 
     def save_to_pdf(
             self,
-            f_out: Path = None,
+            f_out: Path | None = None,
             border_width: float = 10,
     ):
 
         im_board = self.faceData.draw_net(self.textures, NET_FORMS)
 
-        blank_f = np.int(border_width * 0.0393701 * self.dpi)
+        blank_f = int(border_width * 0.0393701 * self.dpi)
         dims = np.array(im_board.shape) + blank_f * 2
         full_im = np.ones((dims)) * 255
         full_im[blank_f:-blank_f, blank_f:-blank_f] = im_board
@@ -146,7 +145,7 @@ class Ccube(AbstractTarget):
         with Image.fromarray(full_im) as im:
             im.save(fp=f_out, resolution=self.dpi)
 
-    def find_in_image(self, image, draw=False, camera: Camera|None = None, wait_len=-1) -> ImageDetection:
+    def find_in_image(self, image, draw=False, camera: Camera|None = None, wait_len=1) -> ImageDetection:
         """
         An implementation of the find in image function for
 
@@ -180,8 +179,8 @@ class Ccube(AbstractTarget):
         if ids is not None:
             # then split the detections by floor div
             board_marker_id = ids % self.markers_per_face
-            board_origin = np.floor(np.array(ids) / self.markers_per_face).astype(np.int)
-            seen_boards = np.unique(board_origin).astype(np.int)
+            board_origin = np.floor(np.array(ids) / self.markers_per_face).astype(int)
+            seen_boards = np.unique(board_origin).astype(int)
 
             if np.any(seen_boards >= 6):
                 logging.warning(

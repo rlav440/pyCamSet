@@ -183,7 +183,7 @@ def write_colour_ply(f_name, verts, cols):
         f.write("")
 
 
-def get_subfolder_names(f_loc: Path, return_full_path = False) -> list:
+def get_subfolder_names(f_loc: Path, return_full_path = False) -> list[Path] | list[str]:
     """
     Notes: This is a function that returns a list of subfolder names.
         for the purposes of this library, it's usually used to grab camera names

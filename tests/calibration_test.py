@@ -11,7 +11,10 @@ def test_calibration_charuco():
     data_loc = Path("./tests/test_data/calibration_charuco")
     target = ChArUco(20, 20, 4)
 
-    cams = calibrate_cameras(f_loc=data_loc, calibration_target=target, draw=True)
+    cams = calibrate_cameras(f_loc=data_loc, calibration_target=target, 
+                             # draw=True,
+                             save=False,
+                             )
 
     final_euclid = np.mean(np.linalg.norm(np.reshape(
         cams.calibration_result, (-1, 2)

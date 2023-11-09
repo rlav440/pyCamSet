@@ -416,7 +416,7 @@ def check_feasiblity_and_update_refpose(Mat_ac, ref_pose: int) -> int:
     This function examines a set of input transformations, and attemps to find out if there is a possible reference.
     """
     visibility = np.isnan(Mat_ac[:,:,0,0])
-    visible_pose = ~np.any(visibility, axis=1)
+    visible_pose = ~np.any(visibility, axis=0)
     vrf_pose = visible_pose[ref_pose]
     if not vrf_pose:
         f_index = np.argmax(visible_pose)

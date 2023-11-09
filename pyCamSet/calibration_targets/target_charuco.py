@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 from pyCamSet.calibration_targets.abstract_target import AbstractTarget
 from pyCamSet.calibration_targets.target_detections import ImageDetection
 from pyCamSet.cameras import Camera
-from pyCamSet.utils.general_utils import downsample_valid
+from pyCamSet.utils.general_utils import downsample_valid, adaptive_decimated_charuco_detection_stereo
 
 
 class ChArUco(AbstractTarget):
@@ -51,14 +51,14 @@ class ChArUco(AbstractTarget):
         
         :return ImageDetection: a data class wrapping the data detected in the image.
         """
-        params = aruco.DetectorParameters_create()
-        params.minMarkerPerimeterRate = 0.01
-        corners, ids, _ = aruco.detectMarkers(image, self.a_dict, parameters=params)
+        c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, BOARD=self.board, ARUCO_DICT=self.a_dict)
 
-        if len(corners) == 0:
+        if c_corners is None:
             return ImageDetection() # return an empty detection
 
-        if draw:
+            # aruco.drawDetectedMarkers(display_im, np.array(corners)/d_f, ids)
+
+        if draw:           
             display_im = image.copy()
             target_size = [1080, 1920]
             d_f = int(max((min(np.array(display_im.shape[:2]) / target_size)), 1))
@@ -66,22 +66,6 @@ class ChArUco(AbstractTarget):
             # d_f=1
             if display_im.ndim == 2:
                 display_im = np.tile(display_im[..., None], (1, 1, 3))
-
-            # aruco.drawDetectedMarkers(display_im, np.array(corners)/d_f, ids)
-        use_cam = camera is not None
-
-        n, c_corners, c_ids = aruco.interpolateCornersCharuco(
-            corners,
-            ids,
-            image,
-            self.board,
-            camera.intrinsic if use_cam else None,
-            camera.distortion_coefs if use_cam else None,
-        )
-        if n == 0:
-            return ImageDetection()
-
-        if draw:
             aruco.drawDetectedCornersCharuco(
                 display_im,
                 np.array(c_corners) / d_f,

@@ -244,8 +244,8 @@ class StandardParamHandler:
             mloc = per_im_error
             condensed_outlier_inds = gu.mad_outlier_detection(
                 # [np.linalg.norm(p[:3,3] - mloc) for p in poses[not_missing]],
-                mloc,
-                out_thresh=10,
+                mloc[not_missing],
+                out_thresh=20,
             )
             outlier_inds = not_missing[condensed_outlier_inds]
             

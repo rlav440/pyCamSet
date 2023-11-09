@@ -15,7 +15,8 @@ def test_calibration_charuco():
                              # draw=True,
                              save=False,
                              )
-
+    cams.visualise_calibration()
+    
     final_euclid = np.mean(np.linalg.norm(np.reshape(
         cams.calibration_result, (-1, 2)
     ), axis=1))

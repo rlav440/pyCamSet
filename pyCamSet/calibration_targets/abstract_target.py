@@ -87,11 +87,11 @@ class AbstractTarget(ABC):
         Notes: A function to detect the camera results in the image folder.
         generally a process wrapper around the previous function
 
-        :param folder: the top level folder containing the input images
-        :param cam_names:
-        :param draw:
+        :param file: the top level folder containing the input images
+        :param cam_names: the names of the cameras we expect to find
+        :param draw: whether to draw the detected images
         :param n_lim: limit on the number of images used
-        :param camera:
+        :param camera: A Camera object, used to optionally increase detection accuracy if the intrinsics are known.
 
         :return detections: a TargetDetection container for the detection.
                 This function is responsible for giving image numbers and camera type to the detector.
@@ -100,6 +100,9 @@ class AbstractTarget(ABC):
 
         cam_name = file.parts[-1]
         im_locs = [str(x) for x in glob_ims(file)]
+        if len(im_locs) == 0:
+            ValueError(f"No images were found in the given folder {file}")
+            
         im_locs = natsorted(im_locs)
         if n_lim is not None:
             im_locs = im_locs[:n_lim]

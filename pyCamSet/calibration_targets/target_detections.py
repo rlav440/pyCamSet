@@ -71,6 +71,16 @@ class TargetDetection:
     @max_ims.setter
     def max_ims(self, val):
         self._max_ims = val
+        
+    def has_data(self) -> Bool:
+        """
+        Queries if the detection has any data associated with it.
+        
+        :return have_data: bool indicating if the detection has data.
+        """
+        self._glomp_buffer()
+        return self._data is not None
+        
 
     def get(self, **direction) -> TargetDetection:
         """

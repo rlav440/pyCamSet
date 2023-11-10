@@ -345,6 +345,12 @@ class AbstractTarget(ABC):
 
         :return a 4x4 transformation of the target giving the transformation from target to camera coordinates
         """
+        
+        if not detection.has_data():
+            if mode == "nan":
+                return np.ones((4,4)) * np.nan
+            raise ValueError(f"The detection had no data  at all, including for camera {cam.name}")
+            
 
         datum = detection.get(cam=cam.name).get_data()
         if datum is None:

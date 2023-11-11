@@ -64,15 +64,18 @@ class TargetDetection:
 
     @property
     def max_ims(self):
-        temp_data = int(np.max(self._data[:, 1])) + 1
-        self._max_ims = max(temp_data, self._max_ims)
+        if not self.has_data():
+            self._max_ims = 0
+        else:
+            temp_data = int(np.max(self._data[:, 1])) + 1
+            self._max_ims = max(temp_data, self._max_ims)
         return self._max_ims
 
     @max_ims.setter
     def max_ims(self, val):
         self._max_ims = val
         
-    def has_data(self) -> Bool:
+    def has_data(self) -> bool:
         """
         Queries if the detection has any data associated with it.
         

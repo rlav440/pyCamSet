@@ -82,6 +82,7 @@ class TargetDetection:
         return self._data is not None
         
 
+
     def get(self, **direction) -> TargetDetection:
         """
         Gets a subset of detections related to a certain camera, key or image number

@@ -100,9 +100,11 @@ class AbstractTarget(ABC):
 
         cam_name = file.parts[-1]
         im_locs = [str(x) for x in glob_ims(file)]
+
         if len(im_locs) == 0:
             ValueError(f"No images were found in the given folder {file}")
             
+
         im_locs = natsorted(im_locs)
         if n_lim is not None:
             im_locs = im_locs[:n_lim]
@@ -350,7 +352,7 @@ class AbstractTarget(ABC):
             if mode == "nan":
                 return np.ones((4,4)) * np.nan
             raise ValueError(f"The detection had no data  at all, including for camera {cam.name}")
-            
+
 
         datum = detection.get(cam=cam.name).get_data()
         if datum is None:

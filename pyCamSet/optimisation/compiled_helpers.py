@@ -358,9 +358,7 @@ def bundle_adj_parrallel_solver(dct: np.ndarray, im_points: np.ndarray,
         )
     return errors
 
-
-@njit(fastmath=True, cache=True)
-def bundle_adjustment_costfn(dct: np.ndarray, im_points: np.ndarray,
+def numpy_bundle_adjustment_costfn(dct: np.ndarray, im_points: np.ndarray,
               projection_matrixes: np.ndarray, intrinsics: np.ndarray, dists: np.ndarray):
     """
     This function calculates the bundle adjustment function for a set of points.
@@ -392,6 +390,7 @@ def bundle_adjustment_costfn(dct: np.ndarray, im_points: np.ndarray,
 
     return error
 
+bundle_adjustment_costfn = njit(numpy_bundle_adjustment_costfn, fastmath=True, cache=True)
 
 @numba.njit(cache=True)
 def make_cartesian(lat, lng):

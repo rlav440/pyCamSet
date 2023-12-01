@@ -485,13 +485,23 @@ def estimate_camera_relative_poses(
         nanform = np.isnan(Mat_rt_c[:, 0,0])
         Mat_rt_c[nanform] = np.eye(4) #if this wins, it wins.
         imlocs = np.array([gu.h_tform(ps,Mt_rt_c) for Mt_rt_c in Mat_rt_c]) 
-        costs = ch.bundle_adjustment_costfn(
-            dd,
-            imlocs,
-            proj,
-            ints,
-            dists,           
-        )
+        try:
+            costs = ch.bundle_adjustment_costfn(
+                dd,
+                imlocs,
+                proj,
+                ints,
+                dists,           
+            )
+        except ZeroDivisionError:
+            costs = ch.numpy_bundle_adjustment_costfn(
+                dd,
+                imlocs,
+                proj,
+                ints,
+                dists,           
+            )
+
         costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
         im_costs = []
         for l in lookups:

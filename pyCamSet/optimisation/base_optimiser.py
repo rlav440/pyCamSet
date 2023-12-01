@@ -172,7 +172,7 @@ class StandardParamHandler:
         A function called during the initial parameterisation to allow for the addition of extra parameters.
 
         :param param_array:
-        :return:
+        :return: the input param array, with extra params concatenated to the end.
         """
         return param_array
 
@@ -183,7 +183,7 @@ class StandardParamHandler:
         It also allows for the implementation of additional non-standard calculations.
         
         :param param_array:
-        :return:
+        :return: param_array: The input param array, without the extra params
         """
         return param_array
 

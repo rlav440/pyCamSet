@@ -1,6 +1,6 @@
 #requirements for developing the library:
 
 sphinx
-sphinx-rst-theme
+sphinx-rtd-theme
 sphinx-autoapi
 pytest

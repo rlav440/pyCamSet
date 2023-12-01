@@ -258,6 +258,7 @@ def detect_datapoints_in_imfile(
     draw=False,
     n_lim=None,
     camset:CameraSet|None = None,
+    subfolder_string: str|None = None,
 ) -> tuple[TargetDetection, list[tuple]]:
     """
     This function organises the detection of the image datapoints in a folder of images.
@@ -269,6 +270,7 @@ def detect_datapoints_in_imfile(
     :param draw: Should the detection be drawn
     :param n_lim: The maximum number of images to use for the detection
     :param camset: Optional, a camera set to use for the detections (for high distortion cameras)
+    :param subfolder_string: Optional, the name of an intermediate folder bewtween the camera name folder and the image data. 
     :return: A target detection.
     """
 
@@ -289,9 +291,10 @@ def detect_datapoints_in_imfile(
 
         cam_names = get_subfolder_names(f_loc=f_loc)
         use_cams = camset is not None
+
         work_fn = lambda file, cam=None: \
             calibration_target.find_in_imfolder(
-                file,
+                file if subfolder_string is None else file/subfolder_string,
                 cam_names=cam_names,
                 draw=draw,
                 n_lim=n_lim,
@@ -370,36 +373,4 @@ def sanitise_input_images(detected_sub_folders:list[Path], optmode:str='na'):
     """
     equal_ims = [len(glob_ims(fol)) for fol in detected_sub_folders]
     if not len(set(equal_ims)) <= 1:
-        logging.critical('Found an unequal number of images in each '
-                         'sub folder')
-        logging.critical("Do you wish to remove images not seen by "
-                         "every camera? This will be destructive!")
-        accepted_input = False if optmode =='na' else True
-        inp_str = optmode
-        while not accepted_input:
-            inp_str = input("y/n:")
-            if inp_str == 'y' or inp_str == 'n':
-                accepted_input = True
-        if inp_str == 'n':
-            logging.critical("Aborting run, please fix images.")
-        elif inp_str == 'y':
-            im_nums = [glob_ims(fol) for fol in detected_sub_folders]
-            found_nums = []
-            found_sets = []
-            for im_strings in im_nums:
-                # get out numbers
-                ns = [int(re.findall(r'\d+', nam.parts[-1])[-1])
-                      for nam in im_strings]
-                found_nums.append(ns)
-                found_sets.append(set(ns))
-            # get whether numbers are good by some lookup
-
-            for id, (x, y) in enumerate(zip(found_sets, found_sets[1:])):
-                found_sets[id + 1] = x.intersection(y)
-
-            cons_ims = np.array(list(found_sets[-1]))
-            for im_string, found_num in zip(im_nums, found_nums):
-                mask = np.isin(found_num, cons_ims)
-                for im, mask_item in zip(im_string, mask):
-                    if not mask_item:
-                        os.remove(im)
+        raise ValueError("An unequal number of calibration images were passed in the input folders.")

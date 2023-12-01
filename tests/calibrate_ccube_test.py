@@ -8,7 +8,7 @@ def test_calib_ccube():
     loc="tests/test_data/calibration_ccube"
     cams = calibrate_cameras(loc, target, 
                       # draw=True,
-                      # save=False
+                      save=False,
                       )
 
     final_euclid = np.mean(np.linalg.norm(np.reshape(

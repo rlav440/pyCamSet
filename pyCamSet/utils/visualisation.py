@@ -47,7 +47,7 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
         if alp is None:
             alp = 0.2
 
-        ds = lambda x: np.random.choice(x, np.int(s * len(x)))
+        ds = lambda x: np.random.choice(x, int(s * len(x)))
         ax.scatter(ds(x_1), ds(y_1), s=0.2, alpha=alp)
         ranges = list(ax.get_ylim()) + list(ax.get_xlim())
         sd = fancy_confidence_contours(x_1, y_1, ax=ax, ranges=ranges)

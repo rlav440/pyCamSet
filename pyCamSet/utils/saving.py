@@ -116,7 +116,6 @@ def save_camset(
         handler_config['handler_name'] = handler.__class__.__name__
         handler_config['fixed_params'] = numpy_dict_to_list(copy(handler.fixed_params))
         handler_config['options'] = handler.problem_opts
-        handler_config['co_optimise'] = False #handler.cooptimise
         if handler.missing_poses is not None:
             handler_config['missing_poses'] = handler.missing_poses.astype(int).tolist()
 
@@ -207,23 +206,23 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
         logging.warning("Failed to load calibration target, returning just the CameraSet")
         return camset
 
-    # try:
-    handler_config = optim['handler_config']
+    try:
+        handler_config = optim['handler_config']
 
-    input_args = dict(
-        camset=camset, target=target, detection=detection,
-        fixed_params=handler_config['fixed_params'], target_cooptimise=handler_config['co_optimise'],
-        options=handler_config['options']
-    )
-    if "missing_poses" in handler_config:
-        input_args["missing_poses"] = np.array(handler_config["missing_poses"]).astype(bool)
+        input_args = dict(
+            camset=camset, target=target, detection=detection,
+            fixed_params=handler_config['fixed_params'], 
+            options=handler_config['options']
+        )
+        if "missing_poses" in handler_config:
+            input_args["missing_poses"] = np.array(handler_config["missing_poses"]).astype(bool)
 
-    handler = instance_obj(
-        handler_config['handler_module'], handler_config['handler_name'], **input_args
-    )
-    # except:
-    #     logging.warning("Failed to intialise the Parameterhandler, returning just the CameraSet")
-    #     return camset
+        handler = instance_obj(
+            handler_config['handler_module'], handler_config['handler_name'], **input_args
+        )
+    except:
+        logging.warning("Failed to intialise the Parameterhandler, returning just the CameraSet")
+        return camset
 
     try:
         camset.calibration_result = decompress(optim['results'])

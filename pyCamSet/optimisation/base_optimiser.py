@@ -17,7 +17,7 @@ from pyCamSet.calibration_targets import TargetDetection
     
 if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
-    from pyCamSet.cameras import CameraSet
+    from pyCamSet.cameras import CameraSet, Camera
 
 
 DEFAULT_OPTIONS = {
@@ -62,10 +62,20 @@ class BundlePrimitive:
         self.dst = dst
         self.dst_unfixed = dst_unfixed if dst_unfixed is not None else np.ones(dst.shape[0], dtype=bool)
 
+        self.calc_free_poses()
+
+    def calc_free_poses(self):
+
         self.free_poses = np.sum(self.poses_unfixed)
         self.free_extr = np.sum(self.extr_unfixed)
         self.free_intr = np.sum(self.intr_unfixed)
         self.free_dst = np.sum(self.dst_unfixed)
+        
+        
+        self.pose_end = 6 * self.free_poses
+        self.extr_end = 6 * self.free_extr + self.pose_end
+        self.intr_end = 4 * self.free_intr + self.extr_end
+        self.dst_end = 5 * self.free_dst + self.intr_end
 
     def return_bundle_primitives(self, params):
         """
@@ -73,15 +83,11 @@ class BundlePrimitive:
 
         :param params: The input parameters
         """
-        pose_end = 6 * self.free_poses
-        extr_end = 6 * self.free_extr + pose_end
-        intr_end = 4 * self.free_intr + extr_end
-        dst_end = 5 * self.free_dst + intr_end
 
-        pose_data = params[:pose_end].reshape((-1, 6))
-        extr_data = params[pose_end:extr_end].reshape((-1, 6))
-        intr_data = params[extr_end:intr_end].reshape((-1, 4))
-        dst_data = params[intr_end:dst_end].reshape((-1, 5))
+        pose_data = params[:self.pose_end].reshape((-1, 6))
+        extr_data = params[self.pose_end:self.extr_end].reshape((-1, 6))
+        intr_data = params[self.extr_end:self.intr_end].reshape((-1, 4))
+        dst_data = params[self.intr_end:self.dst_end].reshape((-1, 5))
 
         ch.fill_pose(pose_data, self.poses, self.poses_unfixed)
         ch.fill_extr(extr_data, self.extr, self.extr_unfixed)
@@ -166,7 +172,7 @@ class StandardParamHandler:
         A function called during the initial parameterisation to allow for the addition of extra parameters.
 
         :param param_array:
-        :return:
+        :return: the input param array, with extra params concatenated to the end.
         """
         return param_array
 
@@ -177,7 +183,7 @@ class StandardParamHandler:
         It also allows for the implementation of additional non-standard calculations.
         
         :param param_array:
-        :return:
+        :return: param_array: The input param array, without the extra params
         """
         return param_array
 
@@ -244,8 +250,8 @@ class StandardParamHandler:
             mloc = per_im_error
             condensed_outlier_inds = gu.mad_outlier_detection(
                 # [np.linalg.norm(p[:3,3] - mloc) for p in poses[not_missing]],
-                mloc,
-                out_thresh=10,
+                mloc[not_missing],
+                out_thresh=20,
             )
             outlier_inds = not_missing[condensed_outlier_inds]
             
@@ -320,8 +326,9 @@ class StandardParamHandler:
         for idc, intr_unfixed in enumerate(self.bundlePrimitive.dst_unfixed):
             if intr_unfixed:
                 param_array.append(np.squeeze(cams[idc].distortion_coefs))
+        param_array = np.concatenate(param_array, axis=0)
         param_array = self.add_extra_params(param_array)
-        return np.concatenate(param_array, axis=0)
+        return param_array
 
     def get_camset(self, x, return_pose=False) -> CameraSet | tuple[CameraSet, np.ndarray]:
         """
@@ -338,7 +345,7 @@ class StandardParamHandler:
         poses, extr, intr, dst = self.bundlePrimitive.return_bundle_primitives(x)
 
         for idc, cam_name in enumerate(self.cam_names):
-            temp_cam = new_cams[cam_name]
+            temp_cam: Camera = new_cams[cam_name]
             temp_cam.extrinsic = extr[idc]
             temp_cam.intrinsic = intr[idc]
             temp_cam.distortion_coefs = dst[idc]
@@ -416,7 +423,7 @@ def check_feasiblity_and_update_refpose(Mat_ac, ref_pose: int) -> int:
     This function examines a set of input transformations, and attemps to find out if there is a possible reference.
     """
     visibility = np.isnan(Mat_ac[:,:,0,0])
-    visible_pose = ~np.any(visibility, axis=1)
+    visible_pose = ~np.any(visibility, axis=0)
     vrf_pose = visible_pose[ref_pose]
     if not vrf_pose:
         f_index = np.argmax(visible_pose)
@@ -478,13 +485,23 @@ def estimate_camera_relative_poses(
         nanform = np.isnan(Mat_rt_c[:, 0,0])
         Mat_rt_c[nanform] = np.eye(4) #if this wins, it wins.
         imlocs = np.array([gu.h_tform(ps,Mt_rt_c) for Mt_rt_c in Mat_rt_c]) 
-        costs = ch.bundle_adjustment_costfn(
-            dd,
-            imlocs,
-            proj,
-            ints,
-            dists,           
-        )
+        try:
+            costs = ch.bundle_adjustment_costfn(
+                dd,
+                imlocs,
+                proj,
+                ints,
+                dists,           
+            )
+        except ZeroDivisionError:
+            costs = ch.numpy_bundle_adjustment_costfn(
+                dd,
+                imlocs,
+                proj,
+                ints,
+                dists,           
+            )
+
         costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
         im_costs = []
         for l in lookups:

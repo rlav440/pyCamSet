@@ -1,12 +1,9 @@
 from __future__ import annotations
 import logging
-import time
 from copy import copy
-from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.optimize import least_squares
 
 from typing import TYPE_CHECKING
 
@@ -20,28 +17,7 @@ if TYPE_CHECKING:
     from pyCamSet.cameras import CameraSet, Camera
 
 
-DEFAULT_OPTIONS = {
-    'verbosity': 2,
-    'fixed_pose':0,
-    'ref_cam':0,
-    'ref_pose':0,
-    'outliers':'ask'
-}
-
-
-def list_dict_to_np_array(d) -> dict:
-    if isinstance(d, dict):
-        for key, val in d.items():
-            if isinstance(val, dict):
-                list_dict_to_np_array(val)
-            elif isinstance(val, list):
-                d[key] = np.array(val)
-            else:
-                pass
-    return d
-
-
-class BundlePrimitive:
+class TemplateBundlePrimitive:
     """
     A class that contains a set of base arrays.
     These arrays contain the pose, extrinsic, intrinsic and distortion params
@@ -95,18 +71,17 @@ class BundlePrimitive:
         ch.fill_dst(dst_data, self.dst, self.dst_unfixed)
         return self.poses, self.extr, self.intr, self.dst
 
-
-class StandardParamHandler:
+class TemplateBundleHandler:
     """
-    The standard param handler is a class that handles the optimisation of camera parameters.
+    The standard bundle handler is a class that handles the optimisation of camera parameters.
     It is designed to be used with the numba implentation of the bundle adjustment cost function.
     It takes a CameraSet, a Target and the associated TargetDetection.
     Given these, it will return a function that takes a parameter array and returns data structures ready for
     evaluation with the bundle adjustment cost function.
-    The implementation given in the standard param handler implements a standard object pose based bundle adjustment.
+    The implementation given in the standard param handler implements a target based, but feature unconstrained
+    pose based bundle adjustment.
 
     Two functions provide the ability to add extra parameters and functionality to the optimisation.
-    
     - add_extra_params: this can be overriden to add initial estimates of additional parameters.
     - parse_extra_params_and_setup: this can be overriden to parse additional parameters given to the optimisation.
     Manipulations of the object data/state can be done here, and will be reflected in the cost function.
@@ -158,7 +133,7 @@ class StandardParamHandler:
             self.poses[fixed_pose, :] = [1,0,0, 0,1,0, 0,0,1, 0,0,0]
 
         self.populate_self_from_fixed_params()
-        self.bundlePrimitive = BundlePrimitive(
+        self.bundlePrimitive = TemplateBundlePrimitive(
             self.poses, self.extr, self.intr, self.dst,
             extr_unfixed=self.extr_unfixed, intr_unfixed=self.intr_unfixed, dst_unfixed=self.dst_unfixed
         )
@@ -391,6 +366,7 @@ class StandardParamHandler:
         _, _, _, obj_points = self.get_bundle_adjustment_inputs(params)
         self.get_camset(params).plot_np_array(obj_points.reshape((-1, 3)))
 
+
 def check_for_target_misalignment(tforms:  np.ndarray, ref_cam:int = 0):
     """
     Checks for misalignment in the viewed target by looking at the variances of the relative transformations to the first camera, which is treated as a reference.
@@ -547,93 +523,3 @@ def estimate_camera_relative_poses(
     Mrt_ac = Mac_rc @ Mrt_rc
     Mat_rt = Mrc_rt @ Mat_rc  # cube_loc -> refcam -> refcube
     return Mrt_ac, Mat_rt
-
-def make_optimisation_function(
-        param_handler: StandardParamHandler,
-        threads: int = 16,
-) -> tuple[Callable[[np.ndarray], np.ndarray], np.ndarray]:
-    """
-    Takes a parameter handler and creates a callable cost function that evaluates the
-    cost of a parameter array.
-
-    :param param_handler: the param handler representing the optimisation
-    :param threads: number of evaluation threads
-    :return fn: the cost function
-    """
-    #
-    init_params = param_handler.get_initial_params()
-    base_data = param_handler.get_detection_data(flatten=True)
-    length, width = base_data.shape
-    data = np.resize(copy(base_data), (threads, int(np.ceil(length / threads)), width))
-
-    def bundle_fn(x):
-        proj, intr, dists, obj_points = param_handler.get_bundle_adjustment_inputs(x)
-        output = ch.bundle_adj_parrallel_solver(
-            data,
-            im_points=obj_points,
-            projection_matrixes=proj,
-            intrinsics=intr,
-            dists=dists,
-        )
-        return output.reshape((-1))[:length * 2]
-
-    return bundle_fn, init_params
-
-
-def run_bundle_adjustment(param_handler: StandardParamHandler,
-                          threads: int = 1) -> tuple[np.ndarray, CameraSet]:
-    """
-    A function that takes an abstract parameter handler, turns it into a cost function, and returns the
-    optimisation results and the camera set that minimises the optimisation problem defined by the parameter handler.
-
-    :param param_handler: The parameter handler that represents the optimisation
-    :return: The output of the calibration and the argmin defined CameraSet
-    """
-    loss_fn, init_params = make_optimisation_function(
-        param_handler, threads
-    )
-
-    init_err = loss_fn(init_params)
-    init_euclid = np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1))
-    logging.info(f'found {len(init_params):.2e} parameters')
-    logging.info(f'found {len(init_err):.2e} control points')
-    logging.info(f'Initial Euclidean error: {init_euclid:.2f} px')
-
-    if (init_euclid > 150) or (init_euclid == np.nan):
-        logging.critical("Found worryingly high/NaN initial error: check that the initial parametisation is sensible")
-        logging.info(
-            "This can often indicate failure to place a camera or target correctly, giving nonsensical errors.")
-        param_handler.check_params(init_params)
-
-    start = time.time()
-    optimisation = least_squares(
-        loss_fn,
-        init_params,
-        # ftol=1e-4,
-        verbose=param_handler.problem_opts['verbosity'],
-        # method='lm', #dogbox', #trf',
-        # tr_solver='lsmr',
-        # jac_sparsity=sparsity,
-        # loss='soft_l1',
-        max_nfev=100,
-        x_scale='jac',
-    )
-    end = time.time()
-
-    final_euclid = np.mean(np.linalg.norm(np.reshape(optimisation.fun, (-1, 2)), axis=1))
-    logging.info(f'Final Euclidean error: {final_euclid:.2f} px')
-    logging.info(f'Optimisation took {end - start: .2f} seconds.')
-
-    if final_euclid > 5:
-        logging.critical("Remaining error is very large: please check the output results")
-        param_handler.check_params(optimisation.x)
-
-    camset = param_handler.get_camset(optimisation.x)
-    camset.set_calibration_history(optimisation, param_handler)
-
-    init_err = loss_fn(optimisation.x)
-    init_euclid = np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1))
-    logging.info(f"Check test with a result of {init_euclid:.2f}")
-
-    return optimisation, camset
-

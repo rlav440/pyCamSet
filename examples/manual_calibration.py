@@ -1,4 +1,4 @@
-from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, StandardParamHandler
+from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, TemplateBundleHandler
 
 from pyCamSet import ChArUco, CameraSet
 from pyCamSet.calibration_targets import TargetDetection
@@ -12,7 +12,7 @@ calibration_target = ChArUco()
 detected_data = TargetDetection()
 
 # any implementation of this base class can be initialised here.
-param_handler = StandardParamHandler(
+param_handler = TemplateBundleHandler(
     camset=init_cams,
     target=calibration_target,
     detection=detected_data,

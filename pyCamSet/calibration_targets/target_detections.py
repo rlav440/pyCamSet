@@ -22,13 +22,16 @@ class ImageDetection:
             keys = np.array(keys)
         if not isinstance(image_points, np.ndarray) and image_points is not None:
             image_points = np.array(image_points)
-        if keys is not None and image_points is not None:
+
+        kp = keys.size != 0
+        ip = image_points.size != 0
+        if kp and ip:
             assert len(keys) == len(image_points), "Detected keys must be the same length as detected points"
             self.keys = keys
             self.image_points = image_points
             self.has_data = True
             self.data_len = len(keys)
-        elif keys is None and image_points is None:
+        elif not kp and not ip:
             self.has_data = False
         else:
             raise ValueError("A detection requires both identifying keys and detected image points.")

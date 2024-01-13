@@ -4,6 +4,7 @@ import math as m
 import time
 from itertools import zip_longest, chain
 from pathlib import Path
+import os
 
 import cv2
 import numba
@@ -62,7 +63,7 @@ def benchmark(func, repeats=100, mode="ms", timer=time.time_ns):
             "ms":1e-6,
             "s":1e-9,
         }
-        starting_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
+        # starting_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
         times = []
         for _ in range(repeats):
             start = timer()
@@ -84,8 +85,8 @@ def benchmark(func, repeats=100, mode="ms", timer=time.time_ns):
                   y_unit=" freq",
                   x_unit=mode,
                   )
-        final_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
-        print(f"Mean numba allocations: {(final_alloc - starting_alloc)/repeats:.0f}")
+        # final_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
+        # print(f"Mean numba allocations: {(final_alloc - starting_alloc)/repeats:.0f}")
     run_benchmark()
 
 

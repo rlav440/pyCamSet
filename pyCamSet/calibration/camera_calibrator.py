@@ -12,7 +12,7 @@ import os
 
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
-from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, TemplateBundleHandler
+# from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, TemplateBundleHandler
 from pyCamSet.utils.saving import save_pickle, load_pickle, load_CameraSet
 from pyCamSet.utils.general_utils import average_tforms, get_subfolder_names, glob_ims, mad_outlier_detection
 
@@ -159,7 +159,7 @@ def run_initial_calibration(detection: TargetDetection,
     return cams
 
 
-def outlier_rejection(results, params: TemplateBundleHandler) -> tuple[TargetDetection | None, bool]:
+def outlier_rejection(results, params) -> tuple[TargetDetection | None, bool]:
     """
     Takes a set of results from the optimisation and performs outlier rejection on them.
     Will identify which images are outliers, raise a warning, and return a detection set without this data.

@@ -93,11 +93,11 @@ def n_e4x4(rog_vec: np.ndarray, output: np.ndarray):
     :param rog_vec: A 3 axis_angle opencv representation of rotation, followed by a translation
     :param output: the 4x4 output to write the data too
     """
-    angles = rog_vec[:3].reshape((3, 1))
-    blank_rot = np.empty((3, 3))
+    angles = rog_vec[:3]
+    blank_rot = np.empty(3*3)
     numba_flat_rodrigues_INPLACE(angles, blank_rot)
     output[:-1, :] = 0
-    output[:-1, :-1] = blank_rot
+    output[:-1, :-1] = blank_rot.reshape((3,3))
     output[-1, -1] = 1
     output[:-1, -1] = rog_vec[3:]
 
@@ -108,33 +108,86 @@ def numba_flat_rodrigues_INPLACE(r, blank_rot):
     Converts a 3dof axis angle representation of rotation into a 3x3 rotation matrix
 
     :param r: The rotation vector
-    :param blank_rot: the output location
+    :param blank_rot: the output location, this is a flat memory array
     """
-    theta = math.sqrt(r[0, 0] ** 2 + r[1, 0] ** 2 + r[2, 0] ** 2)
-    if theta == 0.0:
+    theta = math.sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2)
+    if theta < 1e-10:
         blank_rot[:] = 0
-        blank_rot[0, 0] = 1
-        blank_rot[1, 1] = 1
-        blank_rot[2, 2] = 1
+        blank_rot[0*3 + 0] = 1
+        blank_rot[1*3 + 1] = 1
+        blank_rot[2*3 + 2] = 1
         return
+
     scalar = 1 / theta
     s2 = scalar ** 2
     ct = math.cos(theta)
     st = math.sin(theta) * scalar
 
-    np.dot(r, r.T, blank_rot)
+    #dot product 
+    for i in range(3):
+        for j in range(i,3):
+            blank_rot[3*i + j] = r[i] * r[j]
+            blank_rot[3*j + i] = r[i] * r[j]
+
+
     blank_rot *= (1 - ct) * s2
-    blank_rot[0, 0] += ct
-    blank_rot[1, 1] += ct
-    blank_rot[2, 2] += ct
-    blank_rot[0, 1] -= r[2, 0] * st
-    blank_rot[1, 0] += r[2, 0] * st
-    blank_rot[0, 2] += r[1, 0] * st
-    blank_rot[2, 0] -= r[1, 0] * st
-    blank_rot[1, 2] -= r[0, 0] * st
-    blank_rot[2, 1] += r[0, 0] * st
+    blank_rot[0*3 +0] += ct
+    blank_rot[1*3 +1] += ct
+    blank_rot[2*3 +2] += ct
+    blank_rot[0*3 +1] -= r[2] * st
+    blank_rot[1*3 +0] += r[2] * st
+    blank_rot[0*3 +2] += r[1] * st
+    blank_rot[2*3 +0] -= r[1] * st
+    blank_rot[1*3 +2] -= r[0] * st
+    blank_rot[2*3 +1] += r[0] * st
     return
 
+@njit(fastmath = True, cache=True)
+def numba_rodrigues_jac(r, out):
+    """
+    A numba remplementation of the opencv method of defining the jacobean of the rodrigues tform, from:
+    https://github.com/opencv/opencv/blob/be1373f01a6bcdc40e4a397cfb266338050cc195/modules/calib3d/src/calibration.cpp#L251
+    """
+
+    theta = math.sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2)
+
+    if theta < 1e-10:
+        out[:] = 0 
+        out[5] = out[15] = out[19] = -1
+        out[7] = out[11] = out[21] = 1
+        return
+
+    i_theta = 0 if theta == 0 else 1/theta
+
+    ct = math.cos(theta)
+    ct_1 = 1 - ct
+    st = math.sin(theta) 
+
+    x,y,z = r[0]*i_theta, r[1]*i_theta, r[2]* i_theta
+
+    rrt = [x*x, x*y, x*z, x*y, y*y, y*z, x*z, y*z, z*z]
+    r_x = [  0, -z,  y, # 
+             z,  0, -x, #
+            -y,  x,  0] #
+
+    eye = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+    drrt = [x+x, y, z, y, 0, 0, z, 0, 0,
+          0,   x, 0, x, y+y, z, 0, z, 0,
+          0,   0, x, 0, 0, y, x, y, z+z]
+
+    d_r_x_ = [0, 0, 0, 0, 0, -1, 0, 1, 0,
+              0, 0, 1, 0, 0, 0, -1, 0, 0,
+              0, -1, 0, 1, 0, 0, 0, 0, 0]
+
+    for i, ri in enumerate([x,y,z]):
+        a0 = -st*ri
+        a1 = (st - 2*ct_1*i_theta)*ri
+        a2 = ct_1*i_theta
+        a3 = (ct - st*i_theta)*ri 
+        a4 = st*i_theta
+        for k in range(9):
+            out[i*9+k] = a0*eye[k]  +  a1*rrt[k] + a2*drrt[i*9+k] + a3*r_x[k] + a4*d_r_x_[i*9+k];
 
 @njit(cache=True)
 def n_e4x4_flat_INPLACE(rog_vec: np.ndarray, blank_tform: np.ndarray) -> None:
@@ -146,8 +199,8 @@ def n_e4x4_flat_INPLACE(rog_vec: np.ndarray, blank_tform: np.ndarray) -> None:
     """
     # returns a flattened memory contigous version
     numba_flat_rodrigues_INPLACE(
-        rog_vec[:3].reshape((3, 1)),
-        blank_tform[:9].reshape((3, 3))
+        rog_vec[:3],
+        blank_tform[:9],
     )
     blank_tform[9:] = rog_vec[3:]
 

@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from enum import IntEnum    
 import numpy as np
 from numba import njit, prange
-from numba.typed import List 
+from numba.typed import List
+from numba.types import UniTuple
 import numba
 from typing import Callable, Optional, TYPE_CHECKING, Type
 
@@ -35,13 +36,20 @@ class param_type:
         self.n_params = n_params
         self.sparse_param = False # used to implement ordering for schops decomp
 
+
         if mod_function is None:
             self.mod_function = njit(lambda x: x)
         else:
             self.mod_function = mod_function
 
+    def __key(self):
+        return (int(self.link_type), self.n_params, self.sparse_param) 
     def __hash__(self):
-        return hash((int(self.link_type), self.n_params, self.sparse_param))
+        key = self.__key 
+        return hash((key))
+
+    def __eq__(self, other):
+        return self.__key == other.__key
 
     
 
@@ -52,47 +60,37 @@ class optimisation_function:
         self.function_blocks = function_blocks
         self.n_blocks = len(function_blocks)
 
-        self.loss_jac
-        self.loss_fun
+        self.loss_jac = None
+        self.loss_fun = None
 
         #required working memory:
         self.working_memories = [b.array_memory for b in function_blocks]
         self.wrk_mem_req = max(self.working_memories)
 
         #required output_memory:
-        self.grad_outputsize = [b.num_inp * b.num_out for b in function_blocks]
+        self.grad_outputsize = [(b.num_inp + b.params.n_params) * b.num_out for b in function_blocks]
+
         self.out_mem_req = max(
             max(self.grad_outputsize),
             max([b.num_out for b in function_blocks]) #uses the same memory to store outpute 
             )
         self.inp_mem_req = max([b.num_inp for b in function_blocks])
 
-        self.param_starts = []
-        self.param_offset = []
-        self.associated = []
-        starting_point = 0
-        for link_ind in self.unique_link_inds:
-            self.param_starts.append(starting_point)
-            self.param_offset.append(link_ind.n_params)
-            self.associated.append(int(link_ind.n_params))
-
-        self.normal_params = np.sum(self.param_offset)
-        self.linking_params = np.sum([b.num_out for b in self.function_blocks[1:]]) 
-        self.param_len = self.normal_params + self.linking_params
-
         # this defines the locations of the 
 
         self.param_slices: np.ndarray
+        self.param_line_length = None
 
         self.templated = function_blocks[-1].template
 
         self.ready_to_compute = False
 
     def _prep_for_computation(self):
-
+        if self.ready_to_compute:
+            return
         # create numba compatible containers of functions
 
-        ftemplate = numba.types.FunctionType(
+        self.ftemplate = numba.types.FunctionType(
             numba.void(
                 numba.types.Array(numba.float64, 1, "C"),
                 numba.types.Array(numba.float64, 1, "C"),
@@ -100,22 +98,20 @@ class optimisation_function:
                 numba.types.Array(numba.float64, 1, "C"),
             )
         )
-        self.loss_jac = List.empty_list(ftemplate)
-        self.loss_fun = List.empty_list(ftemplate)
-
-        for block in self.function_blocks:
-            self.loss_jac.append(block.compute_jac)# a bunch of function objects to call
-            self.loss_fun.append(block.compute_fun)# a bunch of function objects to call
-
 
         # point locations within the jacobean matrix that will be used
-        self.unique_link_inds = list(set([fb.params for fb in self.function_blocks]))
+        self.unique_link_inds = []
+        for fb in self.function_blocks:
+            if not fb.params in self.unique_link_inds:
+                self.unique_link_inds.append(fb.params)
         self.block_param_inds = [self.unique_link_inds.index(fb.params) for fb in self.function_blocks]
+
         self.param_starts = np.cumsum([0] + [b.n_params for b in self.unique_link_inds])
 
 
         self.n_outs = np.array([b.num_out for b in self.function_blocks])
         self.n_inps = np.array([b.num_inp for b in self.function_blocks])
+        self.n_params = np.array([b.params.n_params for b in self.function_blocks])
 
         slice = []                       
         for idb, block in enumerate(self.function_blocks):
@@ -124,22 +120,27 @@ class optimisation_function:
             slice.append(self.param_starts[b_ind + 1]) 
 
 
+        self.param_line_length = self.param_starts[-1] #the length of the params passed in is the last of the param starts vector.
+
         #so we get the number of params: with a buffer for the first function
         inp_buffer = np.cumsum([0] + [b.num_out for b in  self.function_blocks] + [0])      
 
         #input and output are a sliding window along an array 
         #define the shape of the jacobean, as the shape of the param structure + a little more for the 
+        
 
-        for i in range(len(self.function_blocks)):
-            slice.append(inp_buffer[i]) 
-            slice.append(inp_buffer[i + 1]) 
+        for i in range(len(self.function_blocks) + 1):
+            slice.append(inp_buffer[i]  + self.param_line_length) 
+            slice.append(inp_buffer[i + 1] + self.param_line_length) 
         
         self.param_slices = np.array(slice)
+    
 
         self.ready_to_compute = True
 
 
     def make_loss_per_line_function(self) -> Callable:
+        self._prep_for_computation()
 
         @njit
         def loss_fn(dense_param_arr, input_memory, output_memory, working_memory):
@@ -167,55 +168,84 @@ class optimisation_function:
         For every parameter in the final jacobian, it's values are calculated
 
         """
+        self._prep_for_computation()
+        
+
+        loss_jac = List.empty_list(self.ftemplate)
+        loss_fun = List.empty_list(self.ftemplate)
+
+        for block in self.function_blocks:
+            loss_jac.append(block.compute_jac)# a bunch of function objects to call
+            loss_fun.append(block.compute_fun)# a bunch of function objects to call
+
+        n_blocks = self.n_blocks
+        param_slices = self.param_slices
+        grad_outputsize = np.array(self.grad_outputsize)
+        working_memories = np.array(self.working_memories)
+        n_params  = np.array(self.n_params)
+        n_outs = np.array(self.n_outs)
+
+        self.loss_jac = loss_jac
+        self.loss_fun = loss_fun
+
+
         @njit 
         def make_jacobean(dense_param_arr,
                           base, jac, per_block, #memory for storing jacobean calcs
                           input_memory, output_memory, #inputs and outputs for the functions
                           working_memory, #space filled template memory 
+                          loss_jac0,
+                          loss_fun0,
                           ):
             jac[:] = base[:] 
 
-            for i in reversed(range(self.n_blocks)):
+            for i in range(n_blocks-1, -1, -1):
                 per_block[:] = base[:]  
                 # param, inp, output, memory
-                grads = self.loss_jac[i](
-                    dense_param_arr[self.param_slices[2*i]:self.param_slices[2*i+1]], 
+                i0 = dense_param_arr[param_slices[2*i]:param_slices[2*i+1]]
+
+                # numba.gdb_init()
+                loss_jac0[i](
+                    i0,
                     input_memory,
-                    output_memory[:self.grad_outputsize[i]],
-                    working_memory[:self.working_memories[i]],
+                    output_memory[:grad_outputsize[i]],
+                    working_memory[:working_memories[i]],
                 )
 
-               
-                out_ind_start = self.param_slices[2*self.n_blocks + 2*(i)] 
-                out_ind_end = self.param_slices[2*self.n_blocks + 2*(i) + 1]
+                out_ind_start = param_slices[2*n_blocks + 2*(i)] 
+                out_ind_end = param_slices[2*n_blocks + 2*(i) + 1]
                 n_outputs = out_ind_end - out_ind_start
                 
-                inp_ind_start = self.param_slices[2*self.n_blocks + 2*i + 2] 
-                inp_ind_end = self.param_slices[2*self.n_blocks + 2*i + 1 + 2]
+                inp_ind_start = param_slices[2*n_blocks + 2*i + 2] 
+                inp_ind_end = param_slices[2*n_blocks + 2*i + 1 + 2]
                 n_inputs = inp_ind_end - inp_ind_start
                 #write the derivatives of the parameters
-                n_params  = self.n_params[i]
+                n_param  = n_params[i]
 
-                ll = n_inputs + n_params
+
+                param_start = param_slices[2*i]
+                param_end = param_slices[2*i + 1]
+                ll = n_inputs + n_param
 
                 for idc, output_var in enumerate(range(out_ind_start, out_ind_end)):
+
                     #write the derivative with respect to the controlling params
-                    per_block[output_var, self.param_slices[2*i]:self.param_slices[2*i+1]] = grads[idc*ll:idc*ll + n_params] #envisions this as a dense array
+                    per_block[output_var, param_start:param_end] = output_memory[idc*ll:idc*ll + n_param] #envisions this as a dense array
                     #write the derivative with respect to the inputs
                     if n_inputs != 0:
-                        per_block[output_var, inp_ind_start:inp_ind_end] = grads[idc*ll + n_params:(idc + 1)*ll] #envisions this as a dense array
+                        per_block[output_var, inp_ind_start:inp_ind_end] = output_memory[idc*ll + n_param:(idc + 1)*ll] #envisions this as a dense array
 
 
                 jac = per_block @ jac
-                
-                self.loss_fun[i](
-                    dense_param_arr[self.param_slices[2*i]:self.param_slices[2*i+1]], 
+
+
+                loss_fun0[i](
+                    dense_param_arr[param_slices[2*i]:param_slices[2*i+1]], 
                     input_memory,
-                    output_memory[:self.n_outs[i]],
-                    working_memory[:self.working_memories[i]],
+                    output_memory,
+                    working_memory,
                 )
-                # compute the value for the current points 
-                input_memory[:self.n_outs[i]] = output_memory[:self.n_outs[i]]
+                input_memory[:n_outs[i]] = output_memory[:n_outs[i]]
             return jac
         return make_jacobean
 

@@ -142,18 +142,23 @@ class optimisation_function:
     def make_loss_per_line_function(self) -> Callable:
         self._prep_for_computation()
 
-        @njit
-        def loss_fn(dense_param_arr, input_memory, output_memory, working_memory):
-            for i in reversed(range(self.n_blocks)):
+        param_slices = self.param_slices
+        n_outs = self.n_outs
+        working_memories = np.array(self.working_memories)
+        n_blocks = self.n_blocks
+
+        @njit(cache=True)
+        def loss_fn(dense_param_arr, input_memory, output_memory, working_memory, loss_fn):
+            for i in range(n_blocks -1, -1, -1):
                 # param, inp, output, memory 
-                self.loss_fun[i](
-                    dense_param_arr[self.param_slices[2*i]:self.param_slices[2*i+1]], 
+                loss_fn[i](
+                    dense_param_arr[param_slices[2*i]:param_slices[2*i+1]], 
                     input_memory,
-                    output_memory[:self.n_outs[i]],
-                    working_memory[:self.working_memories[i]],
+                    output_memory[:n_outs[i]],
+                    working_memory[:working_memories[i]],
                 )
                 # compute the value for the current points 
-                input_memory[:self.n_outs[i]] = output_memory[:self.n_outs[i]]
+                input_memory[:n_outs[i]] = output_memory[:n_outs[i]]
             return output_memory
         return loss_fn
 
@@ -189,7 +194,7 @@ class optimisation_function:
         self.loss_fun = loss_fun
 
 
-        @njit 
+        @njit(cache=True)
         def make_jacobean(dense_param_arr,
                           base, jac, per_block, #memory for storing jacobean calcs
                           input_memory, output_memory, #inputs and outputs for the functions
@@ -276,7 +281,7 @@ class abstract_function_block(ABC):
 
     num_inp: int #number of differentiable inputs
 
-    @property
+    @property 
     @abstractmethod
     def num_out(self):
         pass

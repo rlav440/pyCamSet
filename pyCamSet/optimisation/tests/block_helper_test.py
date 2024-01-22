@@ -12,6 +12,7 @@ op_fun: afb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.temp
 
 
 jac_line = op_fun.block_string_to_compiled_jacobian_line()
+fun_line = op_fun.make_loss_per_line_function()
 
 # for block in op_fun.function_blocks:
 #     test = block.compute_jac
@@ -37,11 +38,16 @@ a1 = np.eye(op_fun.param_line_length + np.sum(op_fun.n_outs))
 a2 = np.eye(op_fun.param_line_length + np.sum(op_fun.n_outs))
 
 
-mat = jac_line(params, a0, a1, a2, inp, out, working_mem, op_fun.loss_jac, op_fun.loss_fun)
-l = lambda : jac_line(params, a0, a1, a2, inp, out, working_mem, op_fun.loss_jac, op_fun.loss_fun)
+mat = fun_line(params, inp, out, working_mem, op_fun.loss_fun)
+a = lambda : fun_line(params, inp, out, working_mem, op_fun.loss_fun)
 # mat = l()
 
+mat = jac_line(params, a0, a1, a2, inp, out, working_mem, op_fun.loss_jac, op_fun.loss_fun)
+l = lambda : jac_line(params, a0, a1, a2, inp, out, working_mem, op_fun.loss_jac, op_fun.loss_fun)
+print("Time to compute the jacobean")
 benchmark(l, repeats =10000, mode = "us")
+print("Time to compute the function")
+benchmark(a, repeats =10000, mode = "us")
 plt.imshow(np.abs(mat)>0)
 plt.show()
 

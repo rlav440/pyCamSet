@@ -12,7 +12,7 @@ op_fun: afb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.temp
 
 
 jac_line = op_fun.block_string_to_compiled_jacobian_line()
-fun_line = op_fun.make_loss_per_line_function()
+fun_line = op_fun._make_loss_per_line_function()
 
 # for block in op_fun.function_blocks:
 #     test = block.compute_jac

@@ -139,31 +139,6 @@ class optimisation_function:
         self.ready_to_compute = True
 
 
-    def make_loss_per_line_function(self) -> Callable:
-        self._prep_for_computation()
-
-        param_slices = self.param_slices
-        n_outs = self.n_outs
-        working_memories = np.array(self.working_memories)
-        n_blocks = self.n_blocks
-
-        @njit(cache=True)
-        def loss_fn(dense_param_arr, input_memory, output_memory, working_memory, loss_fn):
-            for i in range(n_blocks -1, -1, -1):
-                # param, inp, output, memory 
-                loss_fn[i](
-                    dense_param_arr[param_slices[2*i]:param_slices[2*i+1]], 
-                    input_memory,
-                    output_memory[:n_outs[i]],
-                    working_memory[:working_memories[i]],
-                )
-                # compute the value for the current points 
-                input_memory[:n_outs[i]] = output_memory[:n_outs[i]]
-            return output_memory
-        return loss_fn
-
-
-
     def block_string_to_compiled_jacobian_line(self) -> Callable:
 
         """
@@ -253,6 +228,77 @@ class optimisation_function:
                 input_memory[:n_outs[i]] = output_memory[:n_outs[i]]
             return jac
         return make_jacobean
+
+    def _make_lookup_fn(self):
+        return lambda x:x
+
+    def _make_loss_per_line_function(self) -> Callable:
+        self._prep_for_computation()
+
+        param_slices = self.param_slices
+        n_outs = self.n_outs
+        working_memories = np.array(self.working_memories)
+        n_blocks = self.n_blocks
+
+        @njit(cache=True)
+        def loss_fn(dense_param_arr, input_memory, output_memory, working_memory, loss_fn):
+            for i in range(n_blocks -1, -1, -1):
+                # param, inp, output, memory 
+                loss_fn[i](
+                    dense_param_arr[param_slices[2*i]:param_slices[2*i+1]], 
+                    input_memory,
+                    output_memory[:n_outs[i]],
+                    working_memory[:working_memories[i]],
+                )
+                # compute the value for the current points 
+                input_memory[:n_outs[i]] = output_memory[:n_outs[i]]
+            return output_memory
+        return loss_fn
+
+    
+    def make_full_loss_fn(self, detections, threads):
+        n_threads = threads
+
+        self._prep_for_computation():
+
+        line_loss_fn = self._make_loss_per_line_function()
+        lookup_fn = self._make_lookup_fn()
+
+        #take and reshape the detections?
+        d_shape = detections.shape
+        p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape)
+        detection_data = np.resize(detections, p_shape)
+
+        # get the shape of the jacobean from the data
+        n_lines = detection_data.shape[1]
+        inp_mem = self.inp_mem_req
+        out_mem = self.out_mem_req
+        wrk_mem = self.wrk_mem_req
+
+        @njit(cache=True)
+        def full_loss(params, per_line_loss, loss_fns, lookup_make):
+            losses = np.empty((n_threads, n_lines, 2))
+            for i in prange(n_threads):
+                #make the memory components required
+                inp_memory = np.empty(inp_mem)
+                out_memory = np.empty(out_mem)
+                wrk_memory = np.empty(wrk_mem)
+
+                for ii in range(n_lines):
+                    datum = detection_data[i, ii]
+                    lookup = lookup_make(datum)
+                    param_lst = params[lookup]
+                    line_loss = per_line_loss(param_lst, inp_memory, out_memory, wrk_memory, loss_fns)
+                    losses[i, ii] = line_loss[:2]
+            return losses
+
+        #have to return a python function that wraps the code in order to get the right result.
+        def loss_evaluator(params):
+            return full_loss(params, line_loss_fn, self.loss_fun, lookup_fn).flatten() 
+
+        return loss_evaluator
+    
+    def make_jacobean(self):
 
 
 class abstract_function_block(ABC):

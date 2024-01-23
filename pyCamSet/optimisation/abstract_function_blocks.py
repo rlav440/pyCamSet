@@ -299,6 +299,22 @@ class optimisation_function:
         return loss_evaluator
     
     def make_jacobean(self):
+        jac_maker = lambda x:x
+        return jac_maker
+
+    def build_param_list(self, *args: list[np.ndarray]):
+        """
+        Takes a list of matrices representing the params to use, which is then turned into a 1D param string as expected by the loss function
+        The params have the same order as the functional list
+        """
+        param_list = []
+
+        for param_chunk in args:
+            #check it matches what is expected for the param in terms of dimension.
+            #flatten then concatenate to one ginormous array
+            param_list.append(param_chunk.flatten())
+        return np.array(param_list)
+
 
 
 class abstract_function_block(ABC):

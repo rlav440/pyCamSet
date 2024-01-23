@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
+import pyCamSet.optimisation.function_block_implementations as fb
+import pyCamSet.optimisation.abstract_function_blocks as afb
 
 from pyCamSet.calibration_targets import TargetDetection
     
@@ -142,25 +144,27 @@ class TemplateBundleHandler:
         self.jac_mask = None
         self.missing_poses: list | None = missing_poses
 
-    def add_extra_params(self, param_array:np.ndarray) -> np.ndarray:
-        """
-        A function called during the initial parameterisation to allow for the addition of extra parameters.
+        # we define an abstract function block to handle the calibration
+        self.op_fun: afb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.template_points()
 
-        :param param_array:
-        :return: the input param array, with extra params concatenated to the end.
-        """
-        return param_array
+    def make_loss_fun(self, threads):
+        return self.op_fun.make_full_loss_fn(self.detection.get_data(), threads)
 
-    def parse_extra_params_and_setup(self, param_array:np.ndarray) -> np.ndarray:
-        """
-        A function called at the start of getting the bundle adjustment inputs
-        to allow the addition of different parameter structures to the optimisation.
-        It also allows for the implementation of additional non-standard calculations.
-        
-        :param param_array:
-        :return: param_array: The input param array, without the extra params
-        """
-        return param_array
+    def make_loss_jac(self, threads):
+        #work out which params were actually exposed to the optimiser.
+        # cut out these parameters
+        jac_mask = None
+        jac_fun = self.op_fun.make_jacobean(thread)
+        # if nothing is held back in the optimisation, just return
+        if np.all(jac_mask):
+            return jac_fun
+
+        def jac_fn(params):
+            #splat the params to what is expected by the loss jac
+            splat_params = params 
+            return jac_fun(splat_params)[:, jac_mask]
+        return jac_fun
+
 
     def special_plots(self, params):
         """

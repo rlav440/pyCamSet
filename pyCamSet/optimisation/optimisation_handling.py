@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
+import pyCamSet.optimisation.template_handler as th
 
 from pyCamSet.calibration_targets import TargetDetection
     
@@ -98,9 +99,9 @@ class TemplateBundlePrimitive:
 
 
 def make_optimisation_function(
-        param_handler: TemplateBundleHandler,
+        param_handler: th.TemplateBundleHandler,
         threads: int = 16,
-) -> tuple[Callable[[np.ndarray], np.ndarray], np.ndarray]:
+) -> tuple[Callable[[np.ndarray], np.ndarray], Callable[[np.ndarray], np.ndarray], np.ndarray]:
     """
     Takes a parameter handler and creates a callable cost function that evaluates the
     cost of a parameter array.
@@ -114,19 +115,16 @@ def make_optimisation_function(
     base_data = param_handler.get_detection_data(flatten=True)
     length, width = base_data.shape
     data = np.resize(copy(base_data), (threads, int(np.ceil(length / threads)), width))
+    
+    bundle_loss_fun = param_handler.make_loss_fun(threads)
 
-    def bundle_fn(x):
-        proj, intr, dists, obj_points = param_handler.get_bundle_adjustment_inputs(x)
-        output = ch.bundle_adj_parrallel_solver(
-            data,
-            im_points=obj_points,
-            projection_matrixes=proj,
-            intrinsics=intr,
-            dists=dists,
-        )
-        return output.reshape((-1))[:length * 2]
 
-    return bundle_fn, init_params
+    if param_handler.can_make_jac():
+        bundle_loss_jac = param_handler.make_loss_jac(threads)
+    else: 
+        bundle_loss_jac = None
+
+    return bundle_loss_fun, bundle_loss_jac, init_params
 
 
 def run_bundle_adjustment(param_handler: TemplateBundleHandler,

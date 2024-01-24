@@ -71,7 +71,7 @@ class TemplateBundlePrimitive:
         ch.fill_extr(extr_data, self.extr, self.extr_unfixed)
         ch.fill_intr(intr_data, self.intr, self.intr_unfixed)
         ch.fill_dst(dst_data, self.dst, self.dst_unfixed)
-        return self.poses, self.extr, self.intr, self.dst
+        return np.concatenate((self.intr, self.dst), axis=1), self.extr, self.poses
 
 class TemplateBundleHandler:
     """
@@ -148,22 +148,38 @@ class TemplateBundleHandler:
         self.op_fun: afb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.template_points()
 
     def make_loss_fun(self, threads):
-        return self.op_fun.make_full_loss_fn(self.detection.get_data(), threads)
+        temp_loss = self.op_fun.make_full_loss_fn(self.detection.get_data(), threads)
+        def loss_fun(params):
+            inps = self.get_bundle_adjustment_inputs(params)
+            param_str = self.op_fun.build_param_list(*inps)
+            return temp_loss(param_str)
+        return loss_fun
 
     def make_loss_jac(self, threads):
         #work out which params were actually exposed to the optimiser.
         # cut out these parameters
-        jac_mask = None
-        jac_fun = self.op_fun.make_jacobean(thread)
+        #bloat the mask with the number of parameters
+        #concatenate the intrinsics and distortions
+        intr = self.bundlePrimitive.intr_unfixed
+        dst = self.bundlePrimitive.dst_unfixed
+        pr = np.concatenate([intr, dst], axis=-1)
+        extr = self.bundlePrimitive.extr_unfixed
+        pose = self.bundlePrimitive.poses_unfixed
+        jac_mask = np.concatenate([pr.flatten(), extr.flatten(), pose.flatten()])
+        jac_fun = self.op_fun.make_jacobean(threads)
         # if nothing is held back in the optimisation, just return
         if np.all(jac_mask):
-            return jac_fun
+            def jac_function(params):
+                inps = self.get_bundle_adjustment_inputs(params)
+                param_str = self.op_fun.build_param_list(*inps)
+                return jac_fun(param_str)
+            return jac_function
 
         def jac_fn(params):
             #splat the params to what is expected by the loss jac
             splat_params = params 
             return jac_fun(splat_params)[:, jac_mask]
-        return jac_fun
+        return jac_fn
 
 
     def special_plots(self, params):

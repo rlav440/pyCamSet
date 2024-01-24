@@ -256,7 +256,7 @@ class optimisation_function:
         return loss_fn
 
     
-    def make_full_loss_fn(self, detections, threads):
+    def make_full_loss_fn(self, detections, threads, template: np.ndarray = None):
         n_threads = threads
 
         self._prep_for_computation():
@@ -275,6 +275,11 @@ class optimisation_function:
         out_mem = self.out_mem_req
         wrk_mem = self.wrk_mem_req
 
+        use_template = self.templated and (template is not None)
+        if self.templated and not use_template:
+            raise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")
+        t_data: np.ndarray = template if use_template else np.zeros(3)
+
         @njit(cache=True)
         def full_loss(params, per_line_loss, loss_fns, lookup_make):
             losses = np.empty((n_threads, n_lines, 2))
@@ -288,6 +293,8 @@ class optimisation_function:
                     datum = detection_data[i, ii]
                     lookup = lookup_make(datum)
                     param_lst = params[lookup]
+                    if use_template:
+                        inp_memory[:3] = t_data[datum[2]] 
                     line_loss = per_line_loss(param_lst, inp_memory, out_memory, wrk_memory, loss_fns)
                     losses[i, ii] = line_loss[:2]
             return losses
@@ -298,11 +305,11 @@ class optimisation_function:
 
         return loss_evaluator
     
-    def make_jacobean(self):
+    def make_jacobean(self, threads):
         jac_maker = lambda x:x
         return jac_maker
 
-    def build_param_list(self, *args: list[np.ndarray]):
+    def build_param_list(self, *args: list[np.ndarray])->np.ndarray:
         """
         Takes a list of matrices representing the params to use, which is then turned into a 1D param string as expected by the loss function
         The params have the same order as the functional list
@@ -313,7 +320,7 @@ class optimisation_function:
             #check it matches what is expected for the param in terms of dimension.
             #flatten then concatenate to one ginormous array
             param_list.append(param_chunk.flatten())
-        return np.array(param_list)
+        return np.concatenate(param_list, axis=0)
 
 
 
@@ -340,21 +347,18 @@ class abstract_function_block(ABC):
     @abstractmethod
     def num_inp(self):
         pass
-
     num_inp: int #number of differentiable inputs
 
     @property 
     @abstractmethod
     def num_out(self):
         pass
-
     num_out: int #number of function return values
 
     @property
     @abstractmethod
     def params(self): 
         pass
-
     params: param_type #number of parameters to use.
 
     @abstractmethod
@@ -449,7 +453,7 @@ def make_lookup_fn(function_blocks : list[abstract_function_block], detection_da
         return param_data
     return lookups
 
-def make_jacobean_evaluator(function_def: optimisation_function, detections: np.ndarray, threads, template: np.ndarray| None) -> Callable:
+def make_jacobean_evaluator(function_def: optimisation_function, detections: np.ndarray, threads, template: np.ndarray=None) -> Callable:
 
     #take and reshape the detections?
     d_shape = detections.shape

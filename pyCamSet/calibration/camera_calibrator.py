@@ -13,6 +13,8 @@ import os
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
 # from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, TemplateBundleHandler
+from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment
+from pyCamSet.optimisation.template_handler import TemplateBundleHandler
 from pyCamSet.utils.saving import save_pickle, load_pickle, load_CameraSet
 from pyCamSet.utils.general_utils import average_tforms, get_subfolder_names, glob_ims, mad_outlier_detection
 

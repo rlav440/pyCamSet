@@ -21,25 +21,7 @@ if TYPE_CHECKING:
     from pyCamSet.cameras import CameraSet, Camera
 
 
-DEFAULT_OPTIONS = {
-    'verbosity': 2,
-    'fixed_pose':0,
-    'ref_cam':0,
-    'ref_pose':0,
-    'outliers':'ask'
-}
 
-
-def list_dict_to_np_array(d) -> dict:
-    if isinstance(d, dict):
-        for key, val in d.items():
-            if isinstance(val, dict):
-                list_dict_to_np_array(val)
-            elif isinstance(val, list):
-                d[key] = np.array(val)
-            else:
-                pass
-    return d
 
 
 class TemplateBundlePrimitive:

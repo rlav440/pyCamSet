@@ -20,6 +20,13 @@ if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
     from pyCamSet.cameras import CameraSet, Camera
 
+DEFAULT_OPTIONS = {
+    'verbosity': 2,
+    'fixed_pose':0,
+    'ref_cam':0,
+    'ref_pose':0,
+    'outliers':'ask'
+}
 
 class StandardBundleHandler:
     """

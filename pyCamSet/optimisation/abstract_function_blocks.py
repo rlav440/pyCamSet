@@ -259,7 +259,7 @@ class optimisation_function:
     def make_full_loss_fn(self, detections, threads, template: np.ndarray = None):
         n_threads = threads
 
-        self._prep_for_computation():
+        self._prep_for_computation()
 
         line_loss_fn = self._make_loss_per_line_function()
         lookup_fn = self._make_lookup_fn()

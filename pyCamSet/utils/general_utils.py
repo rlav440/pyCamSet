@@ -18,6 +18,17 @@ from uniplot import histogram
 
 from scipy.spatial.transform import Rotation as R
 
+def list_dict_to_np_array(d) -> dict:
+    if isinstance(d, dict):
+        for key, val in d.items():
+            if isinstance(val, dict):
+                list_dict_to_np_array(val)
+            elif isinstance(val, list):
+                d[key] = np.array(val)
+            else:
+                pass
+    return d
+
 def approx_average_quaternion(quats:list[np.ndarray]) -> np.ndarray:
     q = np.array([q for q in quats if not np.any(np.isnan(q))])
     w = np.ones(len(q))/len(q)

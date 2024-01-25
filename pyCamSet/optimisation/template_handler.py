@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
     from pyCamSet.cameras import CameraSet, Camera
 
+from pyCamSet.optimisation.standard_bundle_handler import DEFAULT_OPTIONS
 
 class TemplateBundlePrimitive:
     """
@@ -105,7 +106,7 @@ class TemplateBundleHandler:
         if options is not None:
             self.problem_opts.update(options)
 
-        self.fixed_params = list_dict_to_np_array(fixed_params)
+        self.fixed_params = gu.list_dict_to_np_array(fixed_params)
         if fixed_params is None:
             self.fixed_params : dict = {}
 

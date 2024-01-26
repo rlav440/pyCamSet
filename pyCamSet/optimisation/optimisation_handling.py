@@ -118,7 +118,7 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     :param param_handler: The parameter handler that represents the optimisation
     :return: The output of the calibration and the argmin defined CameraSet
     """
-    loss_fn, init_params = make_optimisation_function(
+    loss_fn, bundle_jac, init_params = make_optimisation_function(
         param_handler, threads
     )
 
@@ -127,6 +127,9 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     logging.info(f'found {len(init_params):.2e} parameters')
     logging.info(f'found {len(init_err):.2e} control points')
     logging.info(f'Initial Euclidean error: {init_euclid:.2f} px')
+
+    test = lambda : loss_fn(init_params)
+    gu.benchmark(test, repeats=100)
 
     if (init_euclid > 150) or (init_euclid == np.nan):
         logging.critical("Found worryingly high/NaN initial error: check that the initial parametisation is sensible")
@@ -144,6 +147,7 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
         # tr_solver='lsmr',
         # jac_sparsity=sparsity,
         # loss='soft_l1',
+        jacobian = bundle_jac, #pass the function for the jacobian if it exists
         max_nfev=100,
         x_scale='jac',
     )

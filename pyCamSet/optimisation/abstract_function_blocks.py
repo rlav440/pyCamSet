@@ -107,8 +107,6 @@ class optimisation_function:
         self.block_param_inds = [self.unique_link_inds.index(fb.params) for fb in self.function_blocks]
 
         self.param_starts = np.cumsum([0] + [b.n_params for b in self.unique_link_inds])
-
-
         self.n_outs = np.array([b.num_out for b in self.function_blocks])
         self.n_inps = np.array([b.num_inp for b in self.function_blocks])
         self.n_params = np.array([b.params.n_params for b in self.function_blocks])
@@ -164,9 +162,6 @@ class optimisation_function:
         working_memories = np.array(self.working_memories)
         n_params  = np.array(self.n_params)
         n_outs = np.array(self.n_outs)
-
-        self.loss_jac = loss_jac
-        self.loss_fun = loss_fun
 
 
         @njit(cache=True)
@@ -229,8 +224,34 @@ class optimisation_function:
             return jac
         return make_jacobean
 
-    def _make_lookup_fn(self):
-        return lambda x:x
+    def _make_lookup_fn(self, detection_data):
+        """
+        builds a lookup function that takes the cam, im and feature number and returns the correct params for each feature.
+        """
+
+        #takes in the input function blocks.
+        #finds all of the unique params used within the optimisation
+        
+        starts, block_n_params, param_inds, key_type = make_param_struct(self.function_blocks, detection_data) 
+
+        # point locations within the jacobean matrix that will be used
+        param_len = np.sum(block_n_params)
+        param_slices = self.param_slices
+
+        @njit
+        def lookups(param_line):
+            """
+            Constructs an array that indexes the input param structure for the param elements relevant to this computation
+            """
+            param_data = np.empty(param_len)
+            nblocks = len(param_inds)
+            for idb in range(nblocks):
+                s_num = param_line[key_type[idb]] #the index value of the associated parameter
+                p_ind = param_inds[idb] # maps the param to it's index in the unique params
+                start = starts[p_ind] + s_num * block_n_params[p_ind] #and the associated change in the start location
+                param_data[param_slices[2*idb]:param_slices[2*idb + 1]] = np.arange(start=int(start), stop=int(start + block_n_params[p_ind]))
+            return param_data
+        return lookups
 
     def _make_loss_per_line_function(self) -> Callable:
         self._prep_for_computation()
@@ -261,12 +282,8 @@ class optimisation_function:
 
         self._prep_for_computation()
 
-        line_loss_fn = self._make_loss_per_line_function()
-        lookup_fn = self._make_lookup_fn()
-
-        #take and reshape the detections?
         d_shape = detections.shape
-        p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape)
+        p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape[1:])
         detection_data = np.resize(detections, p_shape)
 
         # get the shape of the jacobean from the data
@@ -275,12 +292,14 @@ class optimisation_function:
         out_mem = self.out_mem_req
         wrk_mem = self.wrk_mem_req
 
+        line_n_params = self.param_line_length
+
         use_template = self.templated and (template is not None)
         if self.templated and not use_template:
             raise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")
         t_data: np.ndarray = template if use_template else np.zeros(3)
-
-        @njit(cache=True)
+#
+        @njit
         def full_loss(params, per_line_loss, loss_fns, lookup_make):
             losses = np.empty((n_threads, n_lines, 2))
             for i in prange(n_threads):
@@ -288,20 +307,30 @@ class optimisation_function:
                 inp_memory = np.empty(inp_mem)
                 out_memory = np.empty(out_mem)
                 wrk_memory = np.empty(wrk_mem)
+                param_lst = np.empty(line_n_params)
 
                 for ii in range(n_lines):
                     datum = detection_data[i, ii]
                     lookup = lookup_make(datum)
-                    param_lst = params[lookup]
+                    for idl, l in enumerate(lookup):
+                        param_lst[idl] = params[int(l)]
+                    # param_lst = params[lookup.astype(int)]
                     if use_template:
-                        inp_memory[:3] = t_data[datum[2]] 
+                        inp_memory[:3] = t_data[int(datum[2])] 
                     line_loss = per_line_loss(param_lst, inp_memory, out_memory, wrk_memory, loss_fns)
                     losses[i, ii] = line_loss[:2]
             return losses
 
         #have to return a python function that wraps the code in order to get the right result.
+        line_loss_fn = self._make_loss_per_line_function()
+        lookup_fn = self._make_lookup_fn(detection_data=detections)
+        loss_fun = List.empty_list(self.ftemplate)
+
+        for block in self.function_blocks:
+            loss_fun.append(block.compute_fun)# a bunch of function objects to call
+
         def loss_evaluator(params):
-            return full_loss(params, line_loss_fn, self.loss_fun, lookup_fn).flatten() 
+            return full_loss(params, line_loss_fn, loss_fun, lookup_fn).flatten() 
 
         return loss_evaluator
     
@@ -385,7 +414,7 @@ class abstract_function_block(ABC):
         raise ValueError(f"could not combine function block with {other}")
 
 def make_param_struct(
-        function_blocks : list[abstract_function_block], detection_data
+        function_blocks : list[Type[abstract_function_block]], detection_data
     ) -> tuple[np.ndarray,np.ndarray, np.ndarray, np.ndarray]:
     """
     Takes an input function block definition and detection data, then defines a structure
@@ -409,20 +438,29 @@ def make_param_struct(
         key_type.PER_KEY:max_keys,
     }
 
+    print(param_numbers)
+
     #TODO account for the mod function here, modifying the numbers of params
 
     # find all of the unique instances of link indicators
-    unique_link_inds = list(set([fb.params for fb in function_blocks]))
+    unique_link_inds = []
+    for fb in function_blocks:
+        if not fb.params in unique_link_inds:
+            unique_link_inds.append(fb.params)
+
     block_param_inds = [unique_link_inds.index(fb.params) for fb in function_blocks]
     param_starts = []
     param_offset = []
     associated = []
-    starting_point = 0
+    starting_point = 0 
     for link_ind in unique_link_inds:
         param_starts.append(starting_point)
         param_offset.append(link_ind.n_params)
-        associated.append(int(link_ind.n_params))
+        associated.append(int(link_ind.link_type))
         starting_point += link_ind.n_params * param_numbers[link_ind.link_type] 
+    print("testing")
+    print(param_offset)
+    print(associated)
 
     return np.array(param_starts), np.array(param_offset), np.array(block_param_inds), np.array(associated)
     

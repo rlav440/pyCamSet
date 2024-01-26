@@ -68,10 +68,10 @@ class TemplateBundlePrimitive:
         intr_data = params[self.extr_end:self.intr_end].reshape((-1, 4))
         dst_data = params[self.intr_end:self.dst_end].reshape((-1, 5))
 
-        ch.fill_pose(pose_data, self.poses, self.poses_unfixed)
-        ch.fill_extr(extr_data, self.extr, self.extr_unfixed)
-        ch.fill_intr(intr_data, self.intr, self.intr_unfixed)
-        ch.fill_dst(dst_data, self.dst, self.dst_unfixed)
+        ch.fill_flat(pose_data, self.poses, self.poses_unfixed)
+        ch.fill_flat(extr_data, self.extr, self.extr_unfixed)
+        ch.fill_flat(intr_data, self.intr, self.intr_unfixed)
+        ch.fill_flat(dst_data, self.dst, self.dst_unfixed)
         return np.concatenate((self.intr, self.dst), axis=1), self.extr, self.poses
 
 class TemplateBundleHandler:
@@ -121,9 +121,9 @@ class TemplateBundleHandler:
         n_poses = detection.max_ims
         n_cams = camset.get_n_cams()
 
-        self.poses = np.zeros((n_poses, 12))
-        self.extr = np.zeros((n_cams, 4, 4))
-        self.intr = np.zeros((n_cams, 3, 3))
+        self.poses = np.zeros((n_poses, 6))
+        self.extr = np.zeros((n_cams, 6))
+        self.intr = np.zeros((n_cams, 4))
         self.dst = np.zeros((n_cams, 5))
 
         self.extr_unfixed = np.array(['ext' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
@@ -148,12 +148,19 @@ class TemplateBundleHandler:
         # we define an abstract function block to handle the calibration
         self.op_fun: afb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.template_points()
 
+    def can_make_jac(self):
+        return False
+
     def make_loss_fun(self, threads):
-        temp_loss = self.op_fun.make_full_loss_fn(self.detection.get_data(), threads)
+        
+        #flatten the object shape
+        obj_data = self.target.point_data.reshape((-1, 3))
+
+        temp_loss = self.op_fun.make_full_loss_fn(self.detection.get_data(), threads, template=obj_data)
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params)
             param_str = self.op_fun.build_param_list(*inps)
-            return temp_loss(param_str)
+            return temp_loss(param_str, )
         return loss_fun
 
     def make_loss_jac(self, threads):
@@ -204,7 +211,7 @@ class TemplateBundleHandler:
             if 'dst' in self.fixed_params.get(cam_name, {}):
                 self.dst[idx] = self.fixed_params[cam_name]['dst']
 
-    def get_bundle_adjustment_inputs(self, x) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def get_bundle_adjustment_inputs(self, x, make_points=False) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         This function uses the state of the parameter handler, and the given params
         to build np arrays that describe:
@@ -218,15 +225,19 @@ class TemplateBundleHandler:
 
         :param x: The input optimisation parameters.
         """
-        x = self.parse_extra_params_and_setup(x)
-        poses, extr, intr, dst = self.bundlePrimitive.return_bundle_primitives(x)
-        proj = intr @ extr[:, :3, :]
-        im_points = np.empty((len(poses), *self.point_data.shape))
-        for idx, pose in enumerate(poses):
-            ch.n_htform_broadcast_prealloc(self.point_data, pose, im_points[idx])
-        
-        im_points = np.reshape(im_points, (len(poses), -1, 3))
-        return proj, intr, dst, im_points
+        proj, extr, poses = self.bundlePrimitive.return_bundle_primitives(x)
+        # proj = intr @ extr[:, :3, :]
+        if make_points:
+            im_points = np.empty((len(poses), *self.point_data.shape))
+            for idx, pose in enumerate(poses):
+                blank = np.zeros((12))
+                ch.n_e4x4_flat_INPLACE(pose, blank)
+                ch.n_htform_broadcast_prealloc(self.point_data, blank, im_points[idx])
+
+            im_points = np.reshape(im_points, (len(poses), -1, 3))
+            return im_points
+        # return proj, intr, dst, im_points
+        return proj, extr, poses
 
     def find_and_exclude_transform_outliers(self, per_im_error): 
         """
@@ -323,7 +334,6 @@ class TemplateBundleHandler:
             if intr_unfixed:
                 param_array.append(np.squeeze(cams[idc].distortion_coefs))
         param_array = np.concatenate(param_array, axis=0)
-        param_array = self.add_extra_params(param_array)
         return param_array
 
     def get_camset(self, x, return_pose=False) -> CameraSet | tuple[CameraSet, np.ndarray]:
@@ -335,16 +345,21 @@ class TemplateBundleHandler:
         :return: Either a CameraSet, or a CameraSet and a list of object poses.
         """
 
-        x = self.parse_extra_params_and_setup(x)
 
         new_cams = copy(self.camset)
-        poses, extr, intr, dst = self.bundlePrimitive.return_bundle_primitives(x)
+        proj, extr, poses = self.bundlePrimitive.return_bundle_primitives(x)
 
         for idc, cam_name in enumerate(self.cam_names):
+            blank_intr = np.eye(3)
+
+            blank_intr[0, 0] = proj[idc][0]
+            blank_intr[0, 2] = proj[idc][1]
+            blank_intr[1, 1] = proj[idc][2]
+            blank_intr[1, 2] = proj[idc][3]
             temp_cam: Camera = new_cams[cam_name]
-            temp_cam.extrinsic = extr[idc]
-            temp_cam.intrinsic = intr[idc]
-            temp_cam.distortion_coefs = dst[idc]
+            temp_cam.extrinsic = gu.make_4x4h_tform(extr[idc][:3], extr[idc][3:])
+            temp_cam.intrinsic = blank_intr
+            temp_cam.distortion_coefs = proj[idc][4:]
             temp_cam._update_state()
         if not return_pose:
             return new_cams
@@ -384,7 +399,7 @@ class TemplateBundleHandler:
         
         :param params: The input parameters to an optimisation.
         """
-        _, _, _, obj_points = self.get_bundle_adjustment_inputs(params)
+        obj_points = self.get_bundle_adjustment_inputs(params, make_points=True)
         self.get_camset(params).plot_np_array(obj_points.reshape((-1, 3)))
 
 

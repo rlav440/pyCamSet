@@ -86,6 +86,25 @@ def fill_dst(dst_data, dst, dst_unfixed):
 
 
 @njit(cache=True)
+def fill_flat(src, dst, dst_unfixed):
+    """
+    Fills a distortion array with data from an input param array.
+    
+    :param dst_data: The distortion parameters, an nx5 array
+    :param dst: The distortion data with missing blocks to fill
+    :param dst_unfixed: A boolean array describing which distortions are unfixed
+    :return:
+    """
+    k = 0
+    n_dst = len(dst)
+    for i in range(n_dst):
+        if dst_unfixed[i]:
+            dst[i, :] = src[k, :]
+            k += 1
+    return
+
+
+@njit(cache=True)
 def n_e4x4(rog_vec: np.ndarray, output: np.ndarray):
     """
     Converts a 6dof pose vector into a 4x4 homogenous transform

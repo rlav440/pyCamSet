@@ -183,7 +183,7 @@ class template_points(rigidTform3d):
     template = True
     num_inp = 0
     num_out = 3
-    params = param_type(key_type.PER_KEY, 6)
+    params = param_type(key_type.PER_IMG, 6)
   
     @staticmethod
     @njit(ftemplate, cache=True)

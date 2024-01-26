@@ -13,7 +13,7 @@ def test_calibration_charuco():
 
     cams = calibrate_cameras(f_loc=data_loc, calibration_target=target, 
                              # draw=True,
-                             save=False,
+                             # save=False,
                              )
     # cams.visualise_calibration()
     

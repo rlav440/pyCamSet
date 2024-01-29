@@ -396,7 +396,7 @@ class optimisation_function:
 
         loc = Path(__file__)
         # with open(loc.parent/"template_functions/test.py", 'w') as f:
-            # f.write(str_fn)
+        #     f.write(str_fn)
 
         from . import template_functions
         loss_fn: Callable = template_functions.test.make_full_loss(self, detections, template, threads)
@@ -561,13 +561,12 @@ class optimisation_function:
         The params have the same order as the functional list
         """
         param_list = []
-        print("param_chunks")
+        # print("param_chunks")
         for param_chunk in args:
             #check it matches what is expected for the param in terms of dimension.
             #flatten then concatenate to one ginormous array
             param_list.append(param_chunk.flatten())
-            print(param_chunk[0,:])
-
+            # print(param_chunk[0,:])
         return np.concatenate(param_list, axis=0)
 
 

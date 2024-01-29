@@ -160,7 +160,7 @@ class TemplateBundleHandler:
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
-            return temp_loss(param_str, )
+            return temp_loss(param_str).flatten()
         return loss_fun
 
     def make_loss_jac(self, threads):

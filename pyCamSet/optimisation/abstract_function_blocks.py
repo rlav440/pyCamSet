@@ -561,12 +561,13 @@ class optimisation_function:
         The params have the same order as the functional list
         """
         param_list = []
-
+        print("param_chunks")
         for param_chunk in args:
             #check it matches what is expected for the param in terms of dimension.
             #flatten then concatenate to one ginormous array
             param_list.append(param_chunk.flatten())
-            # print(param_chunk[0,:])
+            print(param_chunk[0,:])
+
         return np.concatenate(param_list, axis=0)
 
 

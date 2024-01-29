@@ -158,7 +158,7 @@ class TemplateBundleHandler:
 
         temp_loss = self.op_fun.make_full_loss_fn(self.detection.get_data(), threads, template=obj_data)
         def loss_fun(params):
-            inps = self.get_bundle_adjustment_inputs(params)
+            inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
             return temp_loss(param_str, )
         return loss_fun

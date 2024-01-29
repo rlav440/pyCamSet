@@ -1,15 +1,35 @@
 from __future__ import annotations
 
+from pathlib import Path
+import inspect
 from abc import ABC, abstractmethod 
 from dataclasses import dataclass
 from enum import IntEnum    
+
 import numpy as np
 from numba import njit, prange
 from numba.typed import List
 from numba.types import UniTuple
 import numba
 from typing import Callable, Optional, TYPE_CHECKING, Type
+import ast
+from collections import namedtuple
 
+Import = namedtuple("Import", ["module", "name", "alias"])
+
+def get_imports(path):
+    with open(path) as fh:        
+       root = ast.parse(fh.read(), path)
+
+    for node in ast.iter_child_nodes(root):
+        if isinstance(node, ast.Import):
+            module = ()
+        elif isinstance(node, ast.ImportFrom):  
+            module = (node.module,)
+        else:
+            continue
+        for n in node.names:
+            yield Import(module, (n.name,), n.asname)
 
 def alloc_wrap(alloc_size, memory):
     """
@@ -132,8 +152,6 @@ class optimisation_function:
             slice.append(inp_buffer[i + 1] + self.param_line_length) 
         
         self.param_slices = np.array(slice)
-    
-
         self.ready_to_compute = True
 
 
@@ -253,6 +271,138 @@ class optimisation_function:
             return param_data
         return lookups
 
+    def _get_loss_fn_strings(self) -> tuple[list[str],list[str],list[str]]:
+        self._prep_for_computation()
+
+        n_blocks = self.n_blocks
+
+        import_set = set()
+
+        for block in self.function_blocks[::-1]:
+            base =  inspect.unwrap(block.compute_fun)
+            base_code = inspect.getsource(base)
+            base_code = inspect.getsourcefile(base)
+            for imp in get_imports(base_code):
+                import_set.add(imp)
+
+        import_lines = []
+        for s in import_set:
+            # print(s)
+            if len(s.module) == 0:
+                st = f"import {s.name[0]}" + (f" as {s.alias}" if s.alias is not None else "")
+            else:
+                st = f"from {s.module[0]} import {s.name[0]}" + (f" as {s.alias}" if s.alias is not None else "")
+            import_lines.append(st)
+        import_lines.append("\n")
+        
+        needed_preamble = [
+            # "def make_loss_fn(op_fun):"
+            "param_slices = op_fun.param_slices",
+            "n_outs = op_fun.n_outs",
+            "working_memories = np.array(op_fun.working_memories)",
+            "n_blocks = op_fun.n_blocks",
+        ]
+
+        fn_content = []
+        for i in range(n_blocks-1, -1, -1):
+            prep = [ 
+            f"\tparams = dense_param_arr[param_slices[2*{i}]:param_slices[2*{i}+1]]",
+            ]
+            base =  inspect.unwrap(self.function_blocks[i].compute_fun)
+            base_code = inspect.getsource(base)
+            section = base_code.split('\n')[3:-2] #TODO replace this with AST parsing
+            section = [s.replace("        ", "    ") for s in section]
+            end = f"\tinp[:n_outs[{i}]] = output[:n_outs[{i}]]"
+            fn_content.extend(prep) 
+            fn_content.extend(section) 
+            fn_content.append(end)
+
+        return import_lines, needed_preamble, fn_content
+
+    def make_full_loss_template(self, detections, template, threads) -> Callable:
+
+        def t(l):
+            return ["\t" + li for li in l]
+
+        needed_imports, addittional_preamble, content = self._get_loss_fn_strings()
+        
+
+        start = ["from numba import prange",
+                "from pyCamSet.optimisation.abstract_function_blocks import make_param_struct",
+                 " ",
+                "def make_full_loss(op_fun, detections, template, threads):"
+        ]
+        preamble = [
+            f"n_threads = threads",
+            f"op_fun._prep_for_computation()",
+            f"d_shape = detections.shape",
+            f"p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape[1:])",
+            f"detection_data = np.resize(detections, p_shape)",
+
+            f"n_lines = detection_data.shape[1]",
+            f"inp_mem = op_fun.inp_mem_req",
+            f"out_mem = op_fun.out_mem_req",
+            f"wrk_mem = op_fun.wrk_mem_req",
+
+            "starts, block_n_params, param_inds, key_type = make_param_struct(op_fun.function_blocks, detections)",
+            "param_len = np.sum(block_n_params)",
+
+            f"line_n_params = op_fun.param_line_length",
+            f"param_slices = op_fun.param_slices",
+
+            f"use_template = op_fun.templated and (template is not None)",
+            f"if op_fun.templated and not use_template:",
+            f'\traise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")',
+            f"t_data: np.ndarray = template if use_template else np.zeros(3)",
+            f"@njit",
+            f"def full_loss(inp_params):",
+            f"\tlosses = np.empty((n_threads, n_lines, 2))",
+            f"\tfor i in prange(n_threads):",
+            f"\t\t#make the memory components required",
+            f"\t\tinp = np.empty(inp_mem)",
+            f"\t\toutput = np.empty(out_mem)",
+            f"\t\tmemory = np.empty(wrk_mem)",
+            f"\t\tdense_param_arr = np.empty(line_n_params)",
+
+            f"\t\tfor ii in range(n_lines):",
+            f"\t\t\tdatum = detection_data[i, ii]",
+        ]
+        # write the script that populates the array here
+        param_slicing = [
+            f"\t\t\tfor idb in range(n_blocks):",
+            f"\t\t\t\ts_num = datum[key_type[idb]] #the index value of the associated parameter",
+            f"\t\t\t\tp_ind = param_inds[idb] # maps the param to it's index in the unique params",
+            f"\t\t\t\tstart = starts[p_ind] + s_num * block_n_params[p_ind] #and the associated change in the start location",
+
+            f"\t\t\t\tdense_param_arr[param_slices[2*idb]:param_slices[2*idb + 1]] = inp_params[int(start):int(start + block_n_params[p_ind])]",
+        ]
+
+
+        mid_amble = [
+            f"\t\t\tif use_template:",
+            f"\t\t\t\tinp[:3] = t_data[int(datum[2])] ",
+        ]
+
+        loss_calc = [ '\t\t' + c for c in content] #this really needs to be AST
+
+        postamble = [
+            f"\t\t\tlosses[i, ii] = [output[0] - datum[3], output[1] - datum[4]]",
+            f"\treturn losses",
+            f"return full_loss"
+        ]
+
+        fn = needed_imports + start + t(addittional_preamble) + t(preamble) + t(param_slicing) + t(mid_amble) + t(loss_calc) + t(postamble)
+        str_fn = "\n".join(fn).replace("\t", "    ")
+
+        loc = Path(__file__)
+        # with open(loc.parent/"template_functions/test.py", 'w') as f:
+            # f.write(str_fn)
+
+        from . import template_functions
+        loss_fn: Callable = template_functions.test.make_full_loss(self, detections, template, threads)
+        print(loss_fn)
+        return loss_fn
+
     def _make_loss_per_line_function(self) -> Callable:
         self._prep_for_computation()
 
@@ -261,19 +411,81 @@ class optimisation_function:
         working_memories = np.array(self.working_memories)
         n_blocks = self.n_blocks
 
-        @njit(cache=True)
-        def loss_fn(dense_param_arr, input_memory, output_memory, working_memory, loss_fn):
-            for i in range(n_blocks -1, -1, -1):
-                # param, inp, output, memory 
-                loss_fn[i](
-                    dense_param_arr[param_slices[2*i]:param_slices[2*i+1]], 
-                    input_memory,
-                    output_memory[:n_outs[i]],
-                    working_memory[:working_memories[i]],
-                )
-                # compute the value for the current points 
-                input_memory[:n_outs[i]] = output_memory[:n_outs[i]]
-            return output_memory
+        import_set = set()
+
+        for block in self.function_blocks[::-1]:
+            base =  inspect.unwrap(block.compute_fun)
+            base_code = inspect.getsource(base)
+            base_code = inspect.getsourcefile(base)
+            # section = '\n'.join(base_code.split('\n')[3:-2])
+            for imp in get_imports(base_code):
+                import_set.add(imp)
+
+        import_lines = []
+        for s in import_set:
+            # print(s)
+            if len(s.module) == 0:
+                st = f"import {s.name[0]}" + (f" as {s.alias}" if s.alias is not None else "")
+            else:
+                st = f"from {s.module[0]} import {s.name[0]}" + (f" as {s.alias}" if s.alias is not None else "")
+            import_lines.append(st)
+        import_lines.append("\n")
+            #find all lines tat are either from or import
+
+        def_function = "\n".join([
+            # "def make_loss_fn(op_fun):"
+            "param_slices = op_fun.param_slices",
+            "n_outs = op_fun.n_outs",
+            "working_memories = np.array(op_fun.working_memories)",
+            "n_blocks = op_fun.n_blocks",
+            "@njit",
+            "def loss_fn(dense_param_arr, input_memory, output_memory, working_memory):" 
+        ])
+        for i in range(n_blocks-1, -1, -1):
+            prep = [ 
+            f"\tparams = dense_param_arr[param_slices[2*{i}]:param_slices[2*{i}+1]]",
+            f"\tinp = input_memory",
+            f"\toutput = output_memory[:n_outs[{i}]]",
+            f"\tmemory = working_memory[:working_memories[{i}]]",
+            ]
+            base =  inspect.unwrap(self.function_blocks[i].compute_fun)
+            base_code = inspect.getsource(base)
+            section = base_code.split('\n')[3:-2]
+            end = f"\tinput_memory[:n_outs[{i}]] = output[:n_outs[{i}]]"
+            def_function = "\n".join([def_function] + prep + section + [end])
+        end = "\treturn output"
+        def_function = "\n".join([def_function, end]).replace("        ", "    ").replace("\t", "    ")
+        def_function = ("def make_loss_fn(op_fun):\n" + def_function).replace("\n", "\n    ")
+        end = "\n    return loss_fn" 
+        def_function += end
+
+        def_function = "\n".join(import_lines) + def_function
+        print(def_function)
+
+        loc = Path(__file__)
+        with open(loc.parent/"template_functions/test.py", 'w') as f:
+            f.write(def_function)
+
+        from . import template_functions
+        loss_fn = template_functions.test.make_loss_fn(self)
+        # @njit
+        # def loss_fn(dense_param_arr, input_memory, output_memory, working_memory, loss_fn):
+        #     for i in range(n_blocks -1, -1, -1):
+        #         # param, inp, output, memory 
+        #         loss_fn[i](
+        #             dense_param_arr[param_slices[2*i]:param_slices[2*i+1]], 
+        #             input_memory,
+        #             output_memory[:n_outs[i]],
+        #             working_memory[:working_memories[i]],
+        #         )
+        #         # compute the value for the current points 
+        #         # print(f"block {i}")
+        #         # print(f"params {dense_param_arr[param_slices[2*i]:param_slices[2*i+1]]}" )
+        #         # print(f"input memory: {input_memory}")
+        #         # print(f"ourput mems {output_memory[:n_outs[i]]}")
+        #         # print(f"working mems {working_memory[:working_memories[i]]}")
+        #         input_memory[:n_outs[i]] = output_memory[:n_outs[i]]
+        #     return output_memory
         return loss_fn
 
     
@@ -282,57 +494,62 @@ class optimisation_function:
 
         self._prep_for_computation()
 
-        d_shape = detections.shape
-        p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape[1:])
-        detection_data = np.resize(detections, p_shape)
+        return self.make_full_loss_template(detections, template, threads)
 
-        # get the shape of the jacobean from the data
-        n_lines = detection_data.shape[1]
-        inp_mem = self.inp_mem_req
-        out_mem = self.out_mem_req
-        wrk_mem = self.wrk_mem_req
-
-        line_n_params = self.param_line_length
-
-        use_template = self.templated and (template is not None)
-        if self.templated and not use_template:
-            raise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")
-        t_data: np.ndarray = template if use_template else np.zeros(3)
+#         d_shape = detections.shape
+#         p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape[1:])
+#         detection_data = np.resize(detections, p_shape)
 #
-        @njit
-        def full_loss(params, per_line_loss, loss_fns, lookup_make):
-            losses = np.empty((n_threads, n_lines, 2))
-            for i in prange(n_threads):
-                #make the memory components required
-                inp_memory = np.empty(inp_mem)
-                out_memory = np.empty(out_mem)
-                wrk_memory = np.empty(wrk_mem)
-                param_lst = np.empty(line_n_params)
-
-                for ii in range(n_lines):
-                    datum = detection_data[i, ii]
-                    lookup = lookup_make(datum)
-                    for idl, l in enumerate(lookup):
-                        param_lst[idl] = params[int(l)]
-                    # param_lst = params[lookup.astype(int)]
-                    if use_template:
-                        inp_memory[:3] = t_data[int(datum[2])] 
-                    line_loss = per_line_loss(param_lst, inp_memory, out_memory, wrk_memory, loss_fns)
-                    losses[i, ii] = line_loss[:2]
-            return losses
-
-        #have to return a python function that wraps the code in order to get the right result.
-        line_loss_fn = self._make_loss_per_line_function()
-        lookup_fn = self._make_lookup_fn(detection_data=detections)
-        loss_fun = List.empty_list(self.ftemplate)
-
-        for block in self.function_blocks:
-            loss_fun.append(block.compute_fun)# a bunch of function objects to call
-
-        def loss_evaluator(params):
-            return full_loss(params, line_loss_fn, loss_fun, lookup_fn).flatten() 
-
-        return loss_evaluator
+#         # get the shape of the jacobean from the data
+#         n_lines = detection_data.shape[1]
+#         inp_mem = self.inp_mem_req
+#         out_mem = self.out_mem_req
+#         wrk_mem = self.wrk_mem_req
+#
+#         line_n_params = self.param_line_length
+#
+#         use_template = self.templated and (template is not None)
+#         if self.templated and not use_template:
+#             raise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")
+#         t_data: np.ndarray = template if use_template else np.zeros(3)
+# #
+#         @njit
+#         def full_loss(params, per_line_loss, loss_fns, lookup_make):
+#             losses = np.empty((n_threads, n_lines, 2))
+#             for i in prange(n_threads):
+#                 #make the memory components required
+#                 inp_memory = np.empty(inp_mem)
+#                 out_memory = np.empty(out_mem)
+#                 wrk_memory = np.empty(wrk_mem)
+#                 param_lst = np.empty(line_n_params)
+#
+#                 for ii in range(n_lines):
+#                     datum = detection_data[i, ii]
+#                     lookup = lookup_make(datum)
+#                     for idl, l in enumerate(lookup):
+#                         param_lst[idl] = params[int(l)]
+#                     # param_lst = params[lookup.astype(int)]
+#                     if use_template:
+#                         inp_memory[:3] = t_data[int(datum[2])] 
+#                     line_loss = per_line_loss(param_lst, inp_memory,
+#                                               out_memory, wrk_memory, 
+#                                               # loss_fns,
+#                                               )
+#                     losses[i, ii] = line_loss[:2]
+#             return losses
+#
+#         #have to return a python function that wraps the code in order to get the right result.
+#         line_loss_fn = self._make_loss_per_line_function()
+#         lookup_fn = self._make_lookup_fn(detection_data=detections)
+#         loss_fun = List.empty_list(self.ftemplate)
+#
+#         for block in self.function_blocks:
+#             loss_fun.append(block.compute_fun)# a bunch of function objects to call
+#
+#         def loss_evaluator(params):
+#             return full_loss(params, line_loss_fn, loss_fun, lookup_fn).flatten() 
+#
+#         return loss_evaluator
     
     def make_jacobean(self, threads):
         jac_maker = lambda x:x
@@ -349,6 +566,7 @@ class optimisation_function:
             #check it matches what is expected for the param in terms of dimension.
             #flatten then concatenate to one ginormous array
             param_list.append(param_chunk.flatten())
+            # print(param_chunk[0,:])
         return np.concatenate(param_list, axis=0)
 
 
@@ -413,6 +631,7 @@ class abstract_function_block(ABC):
             return optimisation_function(other.function_blocks + [self])
         raise ValueError(f"could not combine function block with {other}")
 
+
 def make_param_struct(
         function_blocks : list[Type[abstract_function_block]], detection_data
     ) -> tuple[np.ndarray,np.ndarray, np.ndarray, np.ndarray]:
@@ -428,10 +647,11 @@ def make_param_struct(
     :returns param_ids: the id mapping from each function block to the unique params associated.
     :returns param_assoc: the id of the associated parameter in the detection data structure.
     """
-    max_imgs = np.max(detection_data[:, 1])
-    max_keys = np.max(detection_data[:, 2])
-    max_cams = np.max(detection_data[:, 0])
-
+    max_imgs = np.max(detection_data[:, 1]) + 1
+    max_keys = np.max(detection_data[:, 2]) + 1
+    max_cams = np.max(detection_data[:, 0]) + 1
+       
+ 
     param_numbers = {
         key_type.PER_CAM:max_cams,
         key_type.PER_IMG:max_imgs,
@@ -460,6 +680,7 @@ def make_param_struct(
         starting_point += link_ind.n_params * param_numbers[link_ind.link_type] 
     print("testing")
     print(param_offset)
+    print(param_starts) 
     print(associated)
 
     return np.array(param_starts), np.array(param_offset), np.array(block_param_inds), np.array(associated)

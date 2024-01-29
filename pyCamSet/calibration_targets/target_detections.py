@@ -18,12 +18,17 @@ class ImageDetection:
         :param keys:
         :param image_points:
         """
+
+        if keys is None:
+            keys = []
+        if image_points is None:
+            image_points = []
         if not isinstance(keys, np.ndarray) and keys is not None:
             keys = np.array(keys)
         if not isinstance(image_points, np.ndarray) and image_points is not None:
             image_points = np.array(image_points)
 
-        kp = keys.size != 0
+        kp = keys.size != 0 
         ip = image_points.size != 0
         if kp and ip:
             assert len(keys) == len(image_points), "Detected keys must be the same length as detected points"

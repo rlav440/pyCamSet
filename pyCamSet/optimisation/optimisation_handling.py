@@ -21,63 +21,6 @@ if TYPE_CHECKING:
     from pyCamSet.cameras import CameraSet, Camera
 
 
-
-class TemplateBundlePrimitive:
-    """
-    A class that contains a set of base arrays.
-    These arrays contain the pose, extrinsic, intrinsic and distortion params
-    that will be used to create the bundle adjustment problem.
-    If a param is fixed, it can be marked as fixed in the *_fixed data structure.
-    A fixed value will not be dependent on the standard parameters.
-    """
-
-    def __init__(self, poses: np.ndarray, extr: np.ndarray, intr: np.ndarray, dst: np.ndarray,
-                 poses_unfixed=None, extr_unfixed=None, intr_unfixed=None, dst_unfixed=None
-                 ):
-        self.poses = poses
-        self.poses_unfixed = poses_unfixed if poses_unfixed is not None else np.ones(poses.shape[0], dtype=bool)
-        self.extr = extr
-        self.extr_unfixed = extr_unfixed if extr_unfixed is not None else np.ones(extr.shape[0], dtype=bool)
-        self.intr = intr
-        self.intr_unfixed = intr_unfixed if intr_unfixed is not None else np.ones(intr.shape[0], dtype=bool)
-        self.dst = dst
-        self.dst_unfixed = dst_unfixed if dst_unfixed is not None else np.ones(dst.shape[0], dtype=bool)
-
-        self.calc_free_poses()
-
-    def calc_free_poses(self):
-
-        self.free_poses = np.sum(self.poses_unfixed)
-        self.free_extr = np.sum(self.extr_unfixed)
-        self.free_intr = np.sum(self.intr_unfixed)
-        self.free_dst = np.sum(self.dst_unfixed)
-        
-        
-        self.pose_end = 6 * self.free_poses
-        self.extr_end = 6 * self.free_extr + self.pose_end
-        self.intr_end = 4 * self.free_intr + self.extr_end
-        self.dst_end = 5 * self.free_dst + self.intr_end
-
-    def return_bundle_primitives(self, params):
-        """
-        Takes an array of parameters and populates all unfixed parameters.
-
-        :param params: The input parameters
-        """
-
-        pose_data = params[:self.pose_end].reshape((-1, 6))
-        extr_data = params[self.pose_end:self.extr_end].reshape((-1, 6))
-        intr_data = params[self.extr_end:self.intr_end].reshape((-1, 4))
-        dst_data = params[self.intr_end:self.dst_end].reshape((-1, 5))
-
-        ch.fill_pose(pose_data, self.poses, self.poses_unfixed)
-        ch.fill_extr(extr_data, self.extr, self.extr_unfixed)
-        ch.fill_intr(intr_data, self.intr, self.intr_unfixed)
-        ch.fill_dst(dst_data, self.dst, self.dst_unfixed)
-        return self.poses, self.extr, self.intr, self.dst
-
-
-
 def make_optimisation_function(
         param_handler: th.TemplateBundleHandler,
         threads: int = 16,
@@ -129,14 +72,6 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     # test = lambda : loss_fn(init_params)
     # gu.benchmark(test, repeats=100)
 
-    test = bundle_jac(init_params)
-    test_2  = approx_fprime(init_params, loss_fn)
-    fig, ax = plt.subplots(1,3)
-    ax[0].imshow((test[:250,:]), )
-    ax[1].imshow((test_2[:250, :]),)
-    ax[2].imshow((test[:250,:] - test_2[:250, :]))
-    plt.show()
-    # print("ran jac successfully")
     # test = lambda : bundle_jac(init_params)
     # gu.benchmark(test, repeats=100)
 

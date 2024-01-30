@@ -1,14 +1,14 @@
-from time import sleep
-from pyCamSet.optimisation.abstract_function_blocks import param_type
-import numba
-from pyCamSet.optimisation.abstract_function_blocks import key_type
-from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc
-from numba import gdb_init
-from pyCamSet.optimisation.abstract_function_blocks import abstract_function_block
-from numba import njit
 from pyCamSet.optimisation.compiled_helpers import numba_rodrigues_jac
-from pyCamSet.optimisation.compiled_helpers import n_e4x4_flat_INPLACE
+from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc
 import numpy as np
+from numba import njit
+from time import sleep
+from pyCamSet.optimisation.abstract_function_blocks import abstract_function_block
+from pyCamSet.optimisation.abstract_function_blocks import key_type
+from pyCamSet.optimisation.abstract_function_blocks import param_type
+from numba import gdb_init
+from pyCamSet.optimisation.compiled_helpers import n_e4x4_flat_INPLACE
+import numba
 
 
 from numba import prange

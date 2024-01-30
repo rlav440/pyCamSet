@@ -133,8 +133,8 @@ class projection(abstract_function_block):
             + y*(k_0*z**4*(x**2 + y**2) + k_1*z**2*(x**2 + y**2)**2 + k_2*(x**2 + y**2)**3 + z**6)
         )/z**8
         output[:24] = [
-            dxdp_x,dxdp_y,dxdf_x,dxdf_y,dxdk_0,dxdk_1,dxdk_2,dxdp_0,dxdp_1,dxdxw,dxdyw,dxdzw, 
-            dydp_x,dydp_y,dydf_x,dydf_y,dydk_0,dydk_1,dydk_2,dydp_0,dydp_1,dydxw,dydyw,dydzw]
+            dxdf_x,dxdp_x,dxdf_y,dxdp_y,dxdk_0,dxdk_1,dxdp_0,dxdp_1,dxdk_2,dxdxw,dxdyw,dxdzw, 
+            dydf_x,dydp_x,dydf_y,dydp_y,dydk_0,dydk_1,dydp_0,dydp_1,dydk_2,dydxw,dydyw,dydzw]
         return
 
 
@@ -160,9 +160,12 @@ class rigidTform3d(abstract_function_block):
 
         for op in range(3):
             for ang_comp in range(3):
-                output[op * 12 + ang_comp] = memory[9 * ang_comp + 0] * inp[0] + \
-                                             memory[9 * ang_comp + 1] * inp[1] + \
-                                             memory[9 * ang_comp + 2] * inp[2]
+                k = op * 9 + ang_comp
+                output[k] = (
+                    memory[9 * ang_comp + op * 3 + 0] * inp[0] + 
+                    memory[9 * ang_comp + op * 3 + 1] * inp[1] + 
+                    memory[9 * ang_comp + op * 3 + 2] * inp[2]
+                )
         # do the translations 
         output[0 * 9 + 3] = 1
         output[1 * 9 + 4] = 1
@@ -172,7 +175,8 @@ class rigidTform3d(abstract_function_block):
         n_e4x4_flat_INPLACE(params, memory[:12])
         for op in range(3):
             for inval in range(3):
-                output[op*9 + 6 + inval] = memory[inval + 4 * op]
+                k = op*9 + 6 + inval
+                output[k] = memory[inval + 3 * op]
         return 
 
 class extrinsic3D(rigidTform3d):
@@ -192,9 +196,12 @@ class template_points(rigidTform3d):
         output[:18] = 0 
         for op in range(3):
             for ang_comp in range(3):
-                output[op * 6 + ang_comp] = memory[6 * ang_comp + 0] * inp[0] + \
-                                            memory[6 * ang_comp + 1] * inp[1] + \
-                                            memory[6 * ang_comp + 2] * inp[2]    
+                k = op * 6 + ang_comp
+                output[k] = (
+                    memory[9 * ang_comp + op * 3 + 0] * inp[0] + 
+                    memory[9 * ang_comp + op * 3 + 1] * inp[1] + 
+                    memory[9 * ang_comp + op * 3 + 2] * inp[2]
+                )
         # do the translations 
         output[0 * 6 + 3] = 1
         output[1 * 6 + 4] = 1

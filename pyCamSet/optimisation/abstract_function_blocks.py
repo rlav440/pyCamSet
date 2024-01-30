@@ -356,7 +356,7 @@ class optimisation_function:
 
         postamble = [
             f"\t\t\tlosses[i, ii] = [output[0] - datum[3], output[1] - datum[4]]",
-            f"\treturn losses",
+            f"\treturn np.resize(losses, (d_shape[0], 2))",
             f"return full_loss"
         ]
 

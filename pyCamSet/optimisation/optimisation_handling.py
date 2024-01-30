@@ -6,7 +6,7 @@ from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, approx_fprime
 
 from typing import TYPE_CHECKING
 
@@ -129,10 +129,16 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     # test = lambda : loss_fn(init_params)
     # gu.benchmark(test, repeats=100)
 
-    bundle_jac(init_params)
-    print("ran jac successfully")
-    test = lambda : bundle_jac(init_params)
-    gu.benchmark(test, repeats=100)
+    test = bundle_jac(init_params)
+    test_2  = approx_fprime(init_params, loss_fn)
+    fig, ax = plt.subplots(1,3)
+    ax[0].imshow((test[:250,:]), )
+    ax[1].imshow((test_2[:250, :]),)
+    ax[2].imshow((test[:250,:] - test_2[:250, :]))
+    plt.show()
+    # print("ran jac successfully")
+    # test = lambda : bundle_jac(init_params)
+    # gu.benchmark(test, repeats=100)
 
     if (init_euclid > 150) or (init_euclid == np.nan):
         logging.critical("Found worryingly high/NaN initial error: check that the initial parametisation is sensible")
@@ -140,6 +146,7 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
             "This can often indicate failure to place a camera or target correctly, giving nonsensical errors.")
         param_handler.check_params(init_params)
 
+    # bundle_jac = lambda x: approx_fprime(x, loss_fn)
     start = time.time()
     optimisation = least_squares(
         loss_fn,
@@ -150,7 +157,7 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
         # tr_solver='lsmr',
         # jac_sparsity=sparsity,
         # loss='soft_l1',
-        # jacobian = bundle_jac, #pass the function for the jacobian if it exists
+        jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
         max_nfev=100,
         x_scale='jac',
     )

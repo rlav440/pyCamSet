@@ -1,4 +1,5 @@
 from time import sleep
+from matplotlib import pyplot as plt
 from pyCamSet.optimisation.abstract_function_blocks import key_type
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc
 from pyCamSet.optimisation.compiled_helpers import n_e4x4_flat_INPLACE
@@ -31,6 +32,7 @@ def make_full_jac(op_fun, detections, template, threads):
     p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape[1:])
     detection_data = np.resize(detections, p_shape)
     n_lines = detection_data.shape[1]
+    print(d_shape)
     inp_mem = op_fun.inp_mem_req
     out_mem = op_fun.out_mem_req
     wrk_mem = op_fun.wrk_mem_req
@@ -46,10 +48,11 @@ def make_full_jac(op_fun, detections, template, threads):
         raise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")
     t_data: np.ndarray = template if use_template else np.zeros(3)
 
-    @njit
+    # @njit
     def full_jac(inp_params):
         p_size = len(inp_params)
-        out_jac = np.empty((n_threads, n_lines * f_outs, p_size))
+        out_jac = np.zeros((n_threads, n_lines * f_outs, p_size))
+        print(out_jac.shape)
         for i in prange(n_threads):
             #make the memory components required
             inp = np.empty(inp_mem)
@@ -77,9 +80,9 @@ def make_full_jac(op_fun, detections, template, threads):
                 output[:18] = 0 
                 for op in range(3):
                     for ang_comp in range(3):
-                        output[op * 6 + ang_comp] = memory[6 * ang_comp + 0] * inp[0] + \
-                                                    memory[6 * ang_comp + 1] * inp[1] + \
-                                                    memory[6 * ang_comp + 2] * inp[2]    
+                        output[op * 6 + ang_comp] = memory[9 * ang_comp + 0] * inp[0] + \
+                                                    memory[9 * ang_comp + 1] * inp[1] + \
+                                                    memory[9 * ang_comp + 2] * inp[2]    
                 # do the translations 
                 output[0 * 6 + 3] = 1
                 output[1 * 6 + 4] = 1
@@ -105,6 +108,9 @@ def make_full_jac(op_fun, detections, template, threads):
                     if n_inputs != 0:
                         per_block[output_var, inp_ind_start:inp_ind_end] = output[idc*ll + n_param:(idc + 1)*ll] #envisions this as a dense array
                 jac = per_block @ jac
+
+                plt.imshow(jac!=0)
+                plt.show()
                 params = dense_param_arr[param_slices[2*2]:param_slices[2*2+1]]
                 n_e4x4_flat_INPLACE(params, memory[:12])
                 n_htform_prealloc(inp, memory[:12], out=output[:3])
@@ -149,6 +155,9 @@ def make_full_jac(op_fun, detections, template, threads):
                     if n_inputs != 0:
                         per_block[output_var, inp_ind_start:inp_ind_end] = output[idc*ll + n_param:(idc + 1)*ll] #envisions this as a dense array
                 jac = per_block @ jac
+
+                plt.imshow(per_block!=0)
+                plt.show()
                 params = dense_param_arr[param_slices[2*1]:param_slices[2*1+1]]
                 n_e4x4_flat_INPLACE(params, memory[:12])
                 n_htform_prealloc(inp, memory[:12], out=output[:3])
@@ -260,6 +269,8 @@ def make_full_jac(op_fun, detections, template, threads):
                     if n_inputs != 0:
                         per_block[output_var, inp_ind_start:inp_ind_end] = output[idc*ll + n_param:(idc + 1)*ll] #envisions this as a dense array
                 jac = per_block @ jac
+                plt.imshow(per_block!=0)
+                plt.show()
                 for idb in range(n_blocks):
                     s_num = datum[key_type[idb]] #the index value of the associated parameter
                     p_ind = param_inds[idb] # maps the param to it's index in the unique params
@@ -267,5 +278,6 @@ def make_full_jac(op_fun, detections, template, threads):
                     for i_out in range(f_outs):
                         # print(start, block_n_params[p_ind])
                         out_jac[i, ii*f_outs + i_out, int(start):int(start + block_n_params[p_ind])] = jac[                        out_param_start + i_out, param_slices[2*idb]:param_slices[2*idb + 1]                    ]
-        return np.resize(out_jac, (d_shape[0], param_len))
+
+        return np.resize(out_jac, (2*d_shape[0], p_size))
     return full_jac

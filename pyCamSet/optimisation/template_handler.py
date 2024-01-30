@@ -29,8 +29,8 @@ class TemplateBundlePrimitive:
     A fixed value will not be dependent on the standard parameters.
     """
 
-    def __init__(self, poses: np.ndarray, extr: np.ndarray, intr: np.ndarray, dst: np.ndarray,
-                 poses_unfixed=None, extr_unfixed=None, intr_unfixed=None, dst_unfixed=None
+    def __init__(self, poses: np.ndarray, extr: np.ndarray, intr: np.ndarray,
+                 poses_unfixed=None, extr_unfixed=None, intr_unfixed=None, 
                  ):
         self.poses = poses
         self.poses_unfixed = poses_unfixed if poses_unfixed is not None else np.ones(poses.shape[0], dtype=bool)
@@ -38,9 +38,6 @@ class TemplateBundlePrimitive:
         self.extr_unfixed = extr_unfixed if extr_unfixed is not None else np.ones(extr.shape[0], dtype=bool)
         self.intr = intr
         self.intr_unfixed = intr_unfixed if intr_unfixed is not None else np.ones(intr.shape[0], dtype=bool)
-        self.dst = dst
-        self.dst_unfixed = dst_unfixed if dst_unfixed is not None else np.ones(dst.shape[0], dtype=bool)
-
         self.calc_free_poses()
 
     def calc_free_poses(self):
@@ -48,13 +45,11 @@ class TemplateBundlePrimitive:
         self.free_poses = np.sum(self.poses_unfixed)
         self.free_extr = np.sum(self.extr_unfixed)
         self.free_intr = np.sum(self.intr_unfixed)
-        self.free_dst = np.sum(self.dst_unfixed)
         
         
-        self.pose_end = 6 * self.free_poses
-        self.extr_end = 6 * self.free_extr + self.pose_end
-        self.intr_end = 4 * self.free_intr + self.extr_end
-        self.dst_end = 5 * self.free_dst + self.intr_end
+        self.intr_end = 9 * self.free_intr
+        self.extr_end = 6 * self.free_extr + self.intr_end
+        self.pose_end = 6 * self.free_poses + self.free_extr
 
     def return_bundle_primitives(self, params):
         """
@@ -63,16 +58,14 @@ class TemplateBundlePrimitive:
         :param params: The input parameters
         """
 
-        pose_data = params[:self.pose_end].reshape((-1, 6))
-        extr_data = params[self.pose_end:self.extr_end].reshape((-1, 6))
-        intr_data = params[self.extr_end:self.intr_end].reshape((-1, 4))
-        dst_data = params[self.intr_end:self.dst_end].reshape((-1, 5))
+        intr_data = params[:self.intr_end].reshape((-1, 9))
+        extr_data = params[self.intr_end:self.extr_end].reshape((-1, 6))
+        pose_data = params[self.extr_end:self.pose_end].reshape((-1, 6))
 
         ch.fill_flat(pose_data, self.poses, self.poses_unfixed)
         ch.fill_flat(extr_data, self.extr, self.extr_unfixed)
         ch.fill_flat(intr_data, self.intr, self.intr_unfixed)
-        ch.fill_flat(dst_data, self.dst, self.dst_unfixed)
-        return np.concatenate((self.intr, self.dst), axis=1), self.extr, self.poses
+        return self.intr, self.extr, self.poses
 
 class TemplateBundleHandler:
     """
@@ -121,14 +114,12 @@ class TemplateBundleHandler:
         n_poses = detection.max_ims
         n_cams = camset.get_n_cams()
 
-        self.poses = np.zeros((n_poses, 6))
+        self.intr = np.zeros((n_cams, 9))
         self.extr = np.zeros((n_cams, 6))
-        self.intr = np.zeros((n_cams, 4))
-        self.dst = np.zeros((n_cams, 5))
+        self.poses = np.zeros((n_poses, 6))
 
         self.extr_unfixed = np.array(['ext' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
         self.intr_unfixed = np.array(['int' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
-        self.dst_unfixed = np.array(['dst' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names]) 
 
         self.pose_unfixed = np.array(n_poses, dtype=bool)
         if fixed_pose := self.problem_opts.get("fixed_pose"):
@@ -136,9 +127,10 @@ class TemplateBundleHandler:
             self.poses[fixed_pose, :] = [1,0,0, 0,1,0, 0,0,1, 0,0,0]
 
         self.populate_self_from_fixed_params()
+
         self.bundlePrimitive = TemplateBundlePrimitive(
-            self.poses, self.extr, self.intr, self.dst,
-            extr_unfixed=self.extr_unfixed, intr_unfixed=self.intr_unfixed, dst_unfixed=self.dst_unfixed
+            self.poses, self.extr, self.intr,
+            extr_unfixed=self.extr_unfixed, intr_unfixed=self.intr_unfixed
         )
 
         self.param_len = None
@@ -170,7 +162,7 @@ class TemplateBundleHandler:
         def jac_fn(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
-            return temp_loss(param_str).flatten()
+            return temp_loss(param_str)
         return jac_fn
 
 
@@ -193,8 +185,6 @@ class TemplateBundleHandler:
                 self.extr[idx] = self.fixed_params[cam_name]['ext']
             if 'int' in self.fixed_params.get(cam_name, {}):
                 self.intr[idx] = self.fixed_params[cam_name]['int']
-            if 'dst' in self.fixed_params.get(cam_name, {}):
-                self.dst[idx] = self.fixed_params[cam_name]['dst']
 
     def get_bundle_adjustment_inputs(self, x, make_points=False) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -301,23 +291,26 @@ class TemplateBundleHandler:
         self.missing_poses = np.array([np.isnan(t[0,0]) for t in target_poses])
         self.find_and_exclude_transform_outliers(per_im_error)
         
+        for idc, intr_unfixed in enumerate(self.bundlePrimitive.intr_unfixed):
+            if intr_unfixed:
+                param_array.append(
+                    np.concatenate(
+                        (cams[idc].intrinsic[[0, 0, 1, 1], [0, 2, 1, 2]].squeeze(), 
+                         cams[idc].distortion_coefs.squeeze()),
+                        axis=0,
+                    )
+                )
+        for idc, ext_unfixed in enumerate(self.bundlePrimitive.extr_unfixed):
+            if ext_unfixed:
+                ext = gu.ext_4x4_to_rod(cam_poses[idc])
+                param_array.append(ext[0])
+                param_array.append(ext[1])
         for idp, pose_unfixed in enumerate(self.bundlePrimitive.poses_unfixed):
             # how do we handle missing poses - delete the image associated with the missing daata
             if pose_unfixed:
                 ext = gu.ext_4x4_to_rod(target_poses[idp])
                 param_array.append(ext[0])
                 param_array.append(ext[1])
-        for idc, ext_unfixed in enumerate(self.bundlePrimitive.extr_unfixed):
-            if ext_unfixed:
-                ext = gu.ext_4x4_to_rod(cam_poses[idc])
-                param_array.append(ext[0])
-                param_array.append(ext[1])
-        for idc, intr_unfixed in enumerate(self.bundlePrimitive.intr_unfixed):
-            if intr_unfixed:
-                param_array.append(cams[idc].intrinsic[[0, 0, 1, 1], [0, 2, 1, 2]])
-        for idc, intr_unfixed in enumerate(self.bundlePrimitive.dst_unfixed):
-            if intr_unfixed:
-                param_array.append(np.squeeze(cams[idc].distortion_coefs))
         param_array = np.concatenate(param_array, axis=0)
         return param_array
 

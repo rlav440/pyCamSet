@@ -1,14 +1,14 @@
-from pyCamSet.optimisation.abstract_function_blocks import abstract_function_block
-import numba
-import numpy as np
-from pyCamSet.optimisation.abstract_function_blocks import key_type
-from numba import njit
-from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc
-from pyCamSet.optimisation.compiled_helpers import n_e4x4_flat_INPLACE
 from time import sleep
-from numba import gdb_init
 from pyCamSet.optimisation.abstract_function_blocks import param_type
+import numba
+from pyCamSet.optimisation.abstract_function_blocks import key_type
+from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc
+from numba import gdb_init
+from pyCamSet.optimisation.abstract_function_blocks import abstract_function_block
+from numba import njit
 from pyCamSet.optimisation.compiled_helpers import numba_rodrigues_jac
+from pyCamSet.optimisation.compiled_helpers import n_e4x4_flat_INPLACE
+import numpy as np
 
 
 from numba import prange
@@ -81,5 +81,5 @@ def make_full_loss(op_fun, detections, template, threads):
                 output[1] =  yD * params[2] + params[3]
                 inp[:n_outs[0]] = output[:n_outs[0]]
                 losses[i, ii] = [output[0] - datum[3], output[1] - datum[4]]
-        return losses
+        return np.resize(losses, (d_shape[0], 2))
     return full_loss

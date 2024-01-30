@@ -172,8 +172,12 @@ def numba_rodrigues_jac(r, out):
 
     if theta < 1e-10:
         out[:] = 0 
-        out[5] = out[15] = out[19] = -1
-        out[7] = out[11] = out[21] = 1
+        out[5] = -1
+        out[15] = -1
+        out[19] = -1
+        out[7] = 1
+        out[11] = 1
+        out[21] = 1
         return
 
     i_theta = 0 if theta == 0 else 1/theta

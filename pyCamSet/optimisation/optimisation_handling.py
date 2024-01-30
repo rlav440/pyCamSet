@@ -22,8 +22,6 @@ if TYPE_CHECKING:
 
 
 
-
-
 class TemplateBundlePrimitive:
     """
     A class that contains a set of base arrays.
@@ -83,7 +81,7 @@ class TemplateBundlePrimitive:
 def make_optimisation_function(
         param_handler: th.TemplateBundleHandler,
         threads: int = 16,
-) -> tuple[Callable[[np.ndarray], np.ndarray], Callable[[np.ndarray], np.ndarray], np.ndarray]:
+) -> tuple[Callable[[np.ndarray], np.ndarray], Callable[[np.ndarray], np.ndarray]|None, np.ndarray]:
     """
     Takes a parameter handler and creates a callable cost function that evaluates the
     cost of a parameter array.
@@ -128,7 +126,12 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     logging.info(f'found {len(init_err):.2e} control points')
     logging.info(f'Initial Euclidean error: {init_euclid:.2f} px')
 
-    test = lambda : loss_fn(init_params)
+    # test = lambda : loss_fn(init_params)
+    # gu.benchmark(test, repeats=100)
+
+    bundle_jac(init_params)
+    print("ran jac successfully")
+    test = lambda : bundle_jac(init_params)
     gu.benchmark(test, repeats=100)
 
     if (init_euclid > 150) or (init_euclid == np.nan):

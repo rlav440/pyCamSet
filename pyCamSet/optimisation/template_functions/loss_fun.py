@@ -1,14 +1,14 @@
-from pyCamSet.optimisation.compiled_helpers import n_e4x4_flat_INPLACE
-from pyCamSet.optimisation.abstract_function_blocks import key_type
-from pyCamSet.optimisation.abstract_function_blocks import param_type
-import numpy as np
+from pyCamSet.optimisation.abstract_function_blocks import abstract_function_block
 import numba
+import numpy as np
+from pyCamSet.optimisation.abstract_function_blocks import key_type
+from numba import njit
+from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc
+from pyCamSet.optimisation.compiled_helpers import n_e4x4_flat_INPLACE
 from time import sleep
 from numba import gdb_init
-from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc
+from pyCamSet.optimisation.abstract_function_blocks import param_type
 from pyCamSet.optimisation.compiled_helpers import numba_rodrigues_jac
-from numba import njit
-from pyCamSet.optimisation.abstract_function_blocks import abstract_function_block
 
 
 from numba import prange
@@ -30,13 +30,11 @@ def make_full_loss(op_fun, detections, template, threads):
     wrk_mem = op_fun.wrk_mem_req
     starts, block_n_params, param_inds, key_type = make_param_struct(op_fun.function_blocks, detections)
     param_len = np.sum(block_n_params)
-    line_n_params = op_fun.param_line_length
     param_slices = op_fun.param_slices
     use_template = op_fun.templated and (template is not None)
     if op_fun.templated and not use_template:
         raise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")
     t_data: np.ndarray = template if use_template else np.zeros(3)
-
     @njit
     def full_loss(inp_params):
         losses = np.empty((n_threads, n_lines, 2))
@@ -45,7 +43,7 @@ def make_full_loss(op_fun, detections, template, threads):
             inp = np.empty(inp_mem)
             output = np.empty(out_mem)
             memory = np.empty(wrk_mem)
-            dense_param_arr = np.empty(line_n_params)
+            dense_param_arr = np.empty(param_len)
             for ii in range(n_lines):
                 datum = detection_data[i, ii]
                 for idb in range(n_blocks):
@@ -57,18 +55,17 @@ def make_full_loss(op_fun, detections, template, threads):
                     inp[:3] = t_data[int(datum[2])] 
                 params = dense_param_arr[param_slices[2*2]:param_slices[2*2+1]]
                 n_e4x4_flat_INPLACE(params, memory[:12])
-                n_htform_prealloc(inp, memory[:12], out=output[:3]) #correct up to here
+                n_htform_prealloc(inp, memory[:12], out=output[:3])
                 inp[:n_outs[2]] = output[:n_outs[2]]
                 params = dense_param_arr[param_slices[2*1]:param_slices[2*1+1]]
-                n_e4x4_flat_INPLACE(params, memory[:12]) #assume this is right?
+                n_e4x4_flat_INPLACE(params, memory[:12])
                 n_htform_prealloc(inp, memory[:12], out=output[:3])
                 inp[:n_outs[1]] = output[:n_outs[1]]
                 params = dense_param_arr[param_slices[2*0]:param_slices[2*0+1]]
-                x, y, z = inp[0], inp[1],inp[2]
-                inv_z = 1/z
+                x, y, inv_z = inp[0], inp[1], 1/inp[2]
                 #params have order fx,px,fy,py k0,k1, p0, p1
-                u = (params[0] *x + params[1]*z) * inv_z
-                v = (params[2] *y + params[3]*z) * inv_z
+                u = (params[0] *x + params[1]* inp[2]) * inv_z
+                v = (params[2] *y + params[3]* inp[2]) * inv_z
                 k = params[4:]
                 x, y = (u - params[1]) / params[0], (v - params[3]) / params[2]
                 r2 = x ** 2 + y ** 2

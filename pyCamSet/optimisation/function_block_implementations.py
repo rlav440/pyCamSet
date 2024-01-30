@@ -29,8 +29,8 @@ class projection(abstract_function_block):
     def compute_fun(params, inp, output, memory): 
         x, y, inv_z = inp[0], inp[1], 1/inp[2]
         #params have order fx,px,fy,py k0,k1, p0, p1
-        u = (params[0] *x + params[1]) * inv_z
-        v = (params[2] *y + params[3]) * inv_z
+        u = (params[0] *x + params[1]* inp[2]) * inv_z
+        v = (params[2] *y + params[3]* inp[2]) * inv_z
         k = params[4:]
         x, y = (u - params[1]) / params[0], (v - params[3]) / params[2]
         r2 = x ** 2 + y ** 2

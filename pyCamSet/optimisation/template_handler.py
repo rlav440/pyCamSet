@@ -149,7 +149,7 @@ class TemplateBundleHandler:
         self.op_fun: afb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.template_points()
 
     def can_make_jac(self):
-        return False
+        return self.op_fun.can_make_jac() 
 
     def make_loss_fun(self, threads):
         
@@ -163,31 +163,16 @@ class TemplateBundleHandler:
             return temp_loss(param_str).flatten()
         return loss_fun
 
-    def make_loss_jac(self, threads):
-        #work out which params were actually exposed to the optimiser.
-        # cut out these parameters
-        #bloat the mask with the number of parameters
-        #concatenate the intrinsics and distortions
-        intr = self.bundlePrimitive.intr_unfixed
-        dst = self.bundlePrimitive.dst_unfixed
-        pr = np.concatenate([intr, dst], axis=-1)
-        extr = self.bundlePrimitive.extr_unfixed
-        pose = self.bundlePrimitive.poses_unfixed
-        jac_mask = np.concatenate([pr.flatten(), extr.flatten(), pose.flatten()])
-        jac_fun = self.op_fun.make_jacobean(threads)
-        # if nothing is held back in the optimisation, just return
-        if np.all(jac_mask):
-            def jac_function(params):
-                inps = self.get_bundle_adjustment_inputs(params)
-                param_str = self.op_fun.build_param_list(*inps)
-                return jac_fun(param_str)
-            return jac_function
-
+    def make_loss_jac(self, threads): 
+        #TODO implement proper culling
+        obj_data = self.target.point_data.reshape((-1, 3))
+        temp_loss = self.op_fun.make_jacobean(self.detection.get_data(), threads, template=obj_data)
         def jac_fn(params):
-            #splat the params to what is expected by the loss jac
-            splat_params = params 
-            return jac_fun(splat_params)[:, jac_mask]
+            inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
+            param_str = self.op_fun.build_param_list(*inps)
+            return temp_loss(param_str).flatten()
         return jac_fn
+
 
 
     def special_plots(self, params):

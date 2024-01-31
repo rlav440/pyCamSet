@@ -102,36 +102,86 @@ def clean_fn_data(fn):
             output.append(clean_string)
     return output
 
-def extract_cachable(line_sequence, function_block):
+def ast_get_token_flow(code_chunk):
+    mod_data = ast.parse(code_chunk)
+    per_line_new = []
+    per_line_used = []
+    for syntax_chunk in mod_data.body:
+        for node in ast.walk(syntax_chunk):
+            for child in ast.iter_child_nodes(node):
+                child.parent = node
+
+        used_tokens = []
+        new_tokens = []
+
+        if isinstance(syntax_chunk, ast.Assign):
+            new_tokens = []
+            for t_list in syntax_chunk.targets:
+                for node in ast.walk(t_list):
+                    if isinstance(node, ast.Name):
+                        new_tokens.append(node.id)
+            for node in ast.walk(syntax_chunk.value):
+                if isinstance(node, ast.Name):
+                    if not isinstance(node.parent, ast.Call):
+                        used_tokens.append(node.id)
+        elif isinstance(syntax_chunk, ast.AugAssign):
+            new_tokens = []
+            for node in ast.walk(syntax_chunk.target):
+                if isinstance(node, ast.Name):
+                    new_tokens.append(node.id)
+            for node in ast.walk(syntax_chunk.value):
+                if isinstance(node, ast.Name):
+                    if not isinstance(node.parent, ast.Call):
+                        used_tokens.append(node.id)
+                    
+        else:
+            for node in ast.walk(syntax_chunk):
+                if isinstance(node, ast.Name):
+                    if not isinstance(node.parent, ast.Call):
+                        used_tokens.append(node.id)
+        per_line_new.append(new_tokens)
+        per_line_used.append(used_tokens)
+
+
+def extract_cachable(line_sequence, function_block:abstract_function_block):
     known_tokens = {"params", "output", "memory"}
-    if function_block.templated:
+    if function_block.template:
         known_tokens.add("inp")
     line_cachable = []
     needs_cached_state_recall = []
     tokens_cached = []
-    for line_statement in line_sequence:
-        data = ast.parse(line_statement)
 
-        all_inp_known = False
-        some_inp_known = False
-        if all_inp_known:
-            line_cachable.append(True)
-            needs_cached_state_recall.append(False)
+    for l in line_sequence:
+        print(l)
+    ast_get_token_flow("\n".join(line_sequence))
+    data = ast.parse("\n".join(line_sequence))
+    
+    for idl, line_statement in enumerate(line_sequence):
+        # data = ast.parse(line_statement)
+        # print(f"line {idl}")
+        # print(line_statement)
+        # print(ast.dump(data, indent=4))
 
-            if data.output.exists():
-                known_tokens.add(data.output)
-            tokens_cached.append(known_tokens)
-
-        elif some_inp_known:
-            line_cachable.append(False)
-            tokens_cached.append(tokens_cached[-1])
-            needs_cached_state_recall.append(True)
-            #know which tokens are needed for this state.
-        else:
-            line_cachable.append(False)
-            tokens_cached.append(tokens_cached[-1])
-            needs_cached_state_recall.append(False)
-
+        # all_inp_known = False
+        # some_inp_known = False
+        # if all_inp_known:
+        #     line_cachable.append(True)
+        #     needs_cached_state_recall.append(False)
+        #
+        #     if data.output.exists():
+        #         known_tokens.add(data.output)
+        #     tokens_cached.append(known_tokens)
+        #
+        # elif some_inp_known:
+        #     line_cachable.append(False)
+        #     tokens_cached.append(tokens_cached[-1])
+        #     needs_cached_state_recall.append(True)
+        #     #know which tokens are needed for this state.
+        # else:
+        #     line_cachable.append(False)
+        #     tokens_cached.append(tokens_cached[-1])
+        #     needs_cached_state_recall.append(False)
+        pass
     #now need to write the caching code
     #look at continuous runs.
     cache_list = []
@@ -225,55 +275,6 @@ class optimisation_function:
         self.ready_to_compute = True
 
 
-    def block_string_to_compiled_jacobian_line(self) -> Callable:
-
-        """
-        This function takes a list of abstract function blocks and converts them 
-        to function that calculates the jacobean for a line of the output function.
-
-        For every parameter in the final jacobian, it's values are calculated
-
-        """
-        self._prep_for_computation()
-        
-
-        loss_jac = List.empty_list(self.ftemplate)
-        loss_fun = List.empty_list(self.ftemplate)
-
-        for block in self.function_blocks:
-            loss_jac.append(block.compute_jac)# a bunch of function objects to call
-            loss_fun.append(block.compute_fun)# a bunch of function objects to call
-
-    def _make_lookup_fn(self, detection_data):
-        """
-        builds a lookup function that takes the cam, im and feature number and returns the correct params for each feature.
-        """
-
-        #takes in the input function blocks.
-        #finds all of the unique params used within the optimisation
-        
-        starts, block_n_params, param_inds, key_type = make_param_struct(self.function_blocks, detection_data) 
-
-        # point locations within the jacobean matrix that will be used
-        param_len = np.sum(block_n_params)
-        param_slices = self.param_slices
-
-        @njit
-        def lookups(param_line):
-            """
-            Constructs an array that indexes the input param structure for the param elements relevant to this computation
-            """
-            param_data = np.empty(param_len)
-            nblocks = len(param_inds)
-            for idb in range(nblocks):
-                s_num = param_line[key_type[idb]] #the index value of the associated parameter
-                p_ind = param_inds[idb] # maps the param to it's index in the unique params
-                start = starts[p_ind] + s_num * block_n_params[p_ind] #and the associated change in the start location
-                param_data[param_slices[2*idb]:param_slices[2*idb + 1]] = np.arange(start=int(start), stop=int(start + block_n_params[p_ind]))
-            return param_data
-        return lookups
-
-
     def _get_loss_fn_strings(self) -> tuple[set[Import],list[str],list[str]]:
         self._prep_for_computation()
 
@@ -305,8 +306,11 @@ class optimisation_function:
             base =  inspect.unwrap(self.function_blocks[i].compute_fun)
             base_code = inspect.getsource(base)
             section = clean_fn_data(base_code)
+            cached = extract_cachable(section, self.function_blocks[i])
             end = f"inp[:n_outs[{i}]] = output[:n_outs[{i}]]"
             fn_content.append([prep, section, [end]])
+
+        raise ValueError()
         return import_set, needed_preamble, fn_content
 
     def make_full_loss_template(self, detections, template, threads) -> Callable:

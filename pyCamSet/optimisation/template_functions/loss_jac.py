@@ -37,7 +37,7 @@ def make_full_jac(op_fun, detections, template, threads):
     out_mem = op_fun.out_mem_req
     wrk_mem = op_fun.wrk_mem_req
     grad_outputsize = np.max(op_fun.grad_outputsize)
-    starts, block_n_params, param_inds, key_type = make_param_struct(op_fun.function_balocks, detections)
+    starts, block_n_params, param_inds, key_type = make_param_struct(op_fun.function_blocks, detections)
     param_len = np.sum(block_n_params)
     param_slices = op_fun.param_slices
     out_param_start = param_len

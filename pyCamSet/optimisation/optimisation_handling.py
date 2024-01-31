@@ -92,7 +92,7 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
         # tr_solver='lsmr',
         # jac_sparsity=sparsity,
         # loss='soft_l1',
-        jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
+        # jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
         max_nfev=100,
         x_scale='jac',
     )

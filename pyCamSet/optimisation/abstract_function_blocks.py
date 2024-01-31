@@ -5,6 +5,8 @@ import inspect
 from abc import ABC, abstractmethod 
 from dataclasses import dataclass
 from enum import IntEnum    
+from copy import copy
+from scipy.optimize import approx_fprime
 
 import numpy as np
 from numba import njit, prange
@@ -31,14 +33,6 @@ def get_imports(path):
         for n in node.names:
             yield Import(module, (n.name,), n.asname)
 
-def alloc_wrap(alloc_size, memory):
-    """
-    If the input function has a zero for memory, returns a function d
-    """
-    if isinstance(memory, np.ndarray):
-        return memory
-    else:
-        return np.zeros(alloc_size)
 
 
 class key_type(IntEnum):
@@ -108,7 +102,46 @@ def clean_fn_data(fn):
             output.append(clean_string)
     return output
 
+def extract_cachable(line_sequence, function_block):
+    known_tokens = {"params", "output", "memory"}
+    if function_block.templated:
+        known_tokens.add("inp")
+    line_cachable = []
+    needs_cached_state_recall = []
+    tokens_cached = []
+    for line_statement in line_sequence:
+        data = ast.parse(line_statement)
 
+        all_inp_known = False
+        some_inp_known = False
+        if all_inp_known:
+            line_cachable.append(True)
+            needs_cached_state_recall.append(False)
+
+            if data.output.exists():
+                known_tokens.add(data.output)
+            tokens_cached.append(known_tokens)
+
+        elif some_inp_known:
+            line_cachable.append(False)
+            tokens_cached.append(tokens_cached[-1])
+            needs_cached_state_recall.append(True)
+            #know which tokens are needed for this state.
+        else:
+            line_cachable.append(False)
+            tokens_cached.append(tokens_cached[-1])
+            needs_cached_state_recall.append(False)
+
+    #now need to write the caching code
+    #look at continuous runs.
+    cache_list = []
+    cached_tokens= []
+    uncached_code = [] #sections of code that need to be run
+    # cache code 
+    # all of the lines of code that can be run as a block
+
+    return cache_list, cached_tokens, uncached_code
+    
 
 
 class optimisation_function:
@@ -564,8 +597,6 @@ class optimisation_function:
 
     
     def make_full_loss_fn(self, detections, threads, template: np.ndarray = None):
-        n_threads = threads
-
         self._prep_for_computation()
 
         return self.make_full_loss_template(detections, template, threads)
@@ -656,6 +687,33 @@ class abstract_function_block(ABC):
             return optimisation_function(other.function_blocks + [self])
         raise ValueError(f"could not combine function block with {other}")
 
+    def test_self(self):
+        params = np.ones(self.params.n_params)
+
+        outsize = (self.params.n_params + self.num_inp) * self.num_out
+        jac_output = np.empty(outsize)
+
+        def fn(params):
+            output = np.empty(self.num_out)
+            self.compute_fun(
+                params[:self.params.n_params],
+                params[-self.num_inp:],
+                output, 
+                np.empty(self.array_memory),
+            )
+            return output
+
+        self.compute_jac(
+            params, 
+            np.ones(self.num_inp), 
+            jac_output, 
+            np.empty((self.array_memory))
+        )
+        error = (
+            jac_output.reshape((self.num_out, -1)) 
+            -approx_fprime(np.ones(self.num_inp + self.params.n_params), fn)
+        )
+        assert np.all(error < 1e-4)
 
 def make_param_struct(
         function_blocks : list[Type[abstract_function_block]], detection_data

@@ -102,19 +102,26 @@ def clean_fn_data(fn):
             output.append(clean_string)
     return output
 
-def ast_get_token_flow(code_chunk):
+def ast_get_token_flow(code_chunk, templated):
     mod_data = ast.parse(code_chunk)
     per_line_new = []
     per_line_used = []
+    worth_caching = []
+
     for syntax_chunk in mod_data.body:
+
+        call_dict = {}
+        worthit = False
         for node in ast.walk(syntax_chunk):
-            for child in ast.iter_child_nodes(node):
-                child.parent = node
+            if isinstance(node, ast.Call):
+                call_dict[node.func.id] = True
+                worthit = True
 
         used_tokens = []
         new_tokens = []
 
         if isinstance(syntax_chunk, ast.Assign):
+            worthit = False
             new_tokens = []
             for t_list in syntax_chunk.targets:
                 for node in ast.walk(t_list):
@@ -122,75 +129,105 @@ def ast_get_token_flow(code_chunk):
                         new_tokens.append(node.id)
             for node in ast.walk(syntax_chunk.value):
                 if isinstance(node, ast.Name):
-                    if not isinstance(node.parent, ast.Call):
+                    if not node.id in call_dict:
                         used_tokens.append(node.id)
         elif isinstance(syntax_chunk, ast.AugAssign):
+            worthit = False
             new_tokens = []
             for node in ast.walk(syntax_chunk.target):
                 if isinstance(node, ast.Name):
                     new_tokens.append(node.id)
             for node in ast.walk(syntax_chunk.value):
                 if isinstance(node, ast.Name):
-                    if not isinstance(node.parent, ast.Call):
+                    if not node.id in call_dict:
                         used_tokens.append(node.id)
                     
         else:
             for node in ast.walk(syntax_chunk):
                 if isinstance(node, ast.Name):
-                    if not isinstance(node.parent, ast.Call):
+                    if not node.id in call_dict:
                         used_tokens.append(node.id)
+
+        valid_tokens = {"output", "memory", "param"}
+        if templated:
+            valid_tokens.add("inp")
+        if not set(used_tokens).issubset(valid_tokens):
+            worthit = False
+        worth_caching.append(worthit)
         per_line_new.append(new_tokens)
         per_line_used.append(used_tokens)
+    return per_line_new, per_line_used, worth_caching
+
+def check_content(line):
+        return True if line.split("#",1)[0].strip() else False
 
 
-def extract_cachable(line_sequence, function_block:abstract_function_block):
+def extract_cachable(line_sequence, function_block:Type[abstract_function_block]):
     known_tokens = {"params", "output", "memory"}
+    unknown_tokens = {"inp"}
     if function_block.template:
         known_tokens.add("inp")
+        unknown_tokens.remove("inp")
+
     line_cachable = []
-    needs_cached_state_recall = []
     tokens_cached = []
+    line_blank = []
 
-    for l in line_sequence:
-        print(l)
-    ast_get_token_flow("\n".join(line_sequence))
-    data = ast.parse("\n".join(line_sequence))
-    
+    new_tokens, used_tokens, worth_caching = ast_get_token_flow(
+        "\n".join(line_sequence),
+        function_block.template,
+    ) 
+    ntok_iter = iter(new_tokens)
+    utok_iter = iter(used_tokens)
     for idl, line_statement in enumerate(line_sequence):
-        # data = ast.parse(line_statement)
-        # print(f"line {idl}")
-        # print(line_statement)
-        # print(ast.dump(data, indent=4))
+        if not check_content(line_statement): #check if comment
+            line_blank.append(True)
+            continue
 
-        # all_inp_known = False
-        # some_inp_known = False
-        # if all_inp_known:
-        #     line_cachable.append(True)
-        #     needs_cached_state_recall.append(False)
-        #
-        #     if data.output.exists():
-        #         known_tokens.add(data.output)
-        #     tokens_cached.append(known_tokens)
-        #
-        # elif some_inp_known:
-        #     line_cachable.append(False)
-        #     tokens_cached.append(tokens_cached[-1])
-        #     needs_cached_state_recall.append(True)
-        #     #know which tokens are needed for this state.
-        # else:
-        #     line_cachable.append(False)
-        #     tokens_cached.append(tokens_cached[-1])
-        #     needs_cached_state_recall.append(False)
-        pass
-    #now need to write the caching code
-    #look at continuous runs.
-    cache_list = []
-    cached_tokens= []
-    uncached_code = [] #sections of code that need to be run
-    # cache code 
-    # all of the lines of code that can be run as a block
+        line_blank.append(False)
+        l_new_tokens = next(ntok_iter)
+        l_used_tokens = next(utok_iter)
 
-    return cache_list, cached_tokens, uncached_code
+        known_inp = [t in known_tokens for t in l_used_tokens]
+        all_known_inp = all(known_inp)
+        any_known_inp = any(known_inp)
+
+
+        if all_known_inp:
+            line_cachable.append(True)
+            tokens_cached.append(known_tokens)
+            #if there are any outputs, these are still known tokens.
+            for out_token in l_new_tokens:
+                known_tokens.add(out_token)
+
+        elif any_known_inp:
+            line_cachable.append(False)
+            tokens_cached.append(tokens_cached)
+            #know which tokens are needed for this state.
+        else:
+            line_cachable.append(False)
+            tokens_cached.append(tokens_cached)
+
+
+    idl = 0
+    lines_cache = []
+    indexes_to_cache = []
+    vals_to_retrieve_at_cache = []
+    cache_line_ind = []
+
+    for true_line_num, (line, is_blank) in enumerate(zip(line_sequence, line_blank)): 
+        if is_blank:
+            continue
+
+        if line_cachable[idl]:
+            lines_cache.append(line)
+            if worth_caching[idl]:
+                cache_line_ind.append(len(lines_cache) - 1)
+                indexes_to_cache.append(true_line_num)
+                vals_to_retrieve_at_cache.append(tokens_cached)            
+        idl += 1
+
+    return lines_cache, indexes_to_cache, cache_line_ind, vals_to_retrieve_at_cache
     
 
 
@@ -306,9 +343,62 @@ class optimisation_function:
             base =  inspect.unwrap(self.function_blocks[i].compute_fun)
             base_code = inspect.getsource(base)
             section = clean_fn_data(base_code)
-            cached = extract_cachable(section, self.function_blocks[i])
+            block = self.function_blocks[i]
+            lines_cache, main_indexes_to_cache, cache_line_inds, vals_to_retrieve_at_cache = extract_cachable(section, block)
+
+            #so we need to think about - what is the parameter that the current function block scales with.
+            #this determines the output sizes.
+            block_param = block.params.link_type
+            key_scaling = [block_param]  
+            if block.template:
+                key_scaling.append(key_type.PER_KEY)
+            max_inds = [param_type for k in key_scaling]
+            num_key_scalars = len(max_inds)
+            
+            if len(main_indexes_to_cache) == 0:
+                pre_cache = []
+                cache = []
+                main_lines = section
+
+            else:
+                #determine the cache array sizes.
+                out_size = self.function_blocks[i].num_out
+                mem_size = self.function_blocks[i].array_memory
+                num_worth_caching  = len(main_indexes_to_cache)
+                
+                pre_cache = [] #allocate the right memory here
+                cache = []
+                main_lines = []
+
+                tab = '\t'
+                cache.append(f"for i in prange({max_inds[0]}):")
+                for idr, max_n in enumerate(max_inds[1:]):
+                    cache.append(f"{tab*(idr + 1)}for {'i'*(idr + 2)} in prange({max_n}):")
+
+                    #get the param, and inp if necesarry
+
+                for icd, line in enumerate(lines_cache):
+                    cache.append(tab * num_key_scalars + line)
+                    if icd in cache_line_inds:
+                        loc = cache_line_inds.index(icd)
+                        mem_line = f"{tab*num_key_scalars}block_{i}_mem_{loc}_loss[,:] = memory[:{mem_size}]"
+                        out_line = f"{tab*num_key_scalars}block_{i}_out_{loc}_loss[,:] = output[:{out_size}]"
+                        cache.append(mem_line)
+                        cache.append(out_line)
+                        #only cache the memory and output variables for now because easiest.
+                for ind, line in enumerate(section):
+                    if ind in main_indexes_to_cache:
+                        loc = main_indexes_to_cache.index(ind)
+                        mem_line = f"{tab*num_key_scalars}memory[:{mem_size}] = block_{i}_mem_{loc}[,:]_loss"
+                        out_line = f"{tab*num_key_scalars}output[:{out_size}] = block_{i}_out_{loc}[,:]_loss"
+                        main_lines.append(mem_line)
+                        main_lines.append(out_line)
+                    else:
+                        main_lines.append(line)
+                        
+
             end = f"inp[:n_outs[{i}]] = output[:n_outs[{i}]]"
-            fn_content.append([prep, section, [end]])
+            fn_content.append([cache, prep, main_lines, [end]])
 
         raise ValueError()
         return import_set, needed_preamble, fn_content

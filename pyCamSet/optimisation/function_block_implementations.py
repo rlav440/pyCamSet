@@ -132,9 +132,11 @@ class projection(abstract_function_block):
             + 2*y*(x**2 + y**2)*(k_0*z**4 + 2*k_1*z**2*(x**2 + y**2) + 3*k_2*(x**2 + y**2)**2)\
             + y*(k_0*z**4*(x**2 + y**2) + k_1*z**2*(x**2 + y**2)**2 + k_2*(x**2 + y**2)**3 + z**6)
         )/z**8
-        output[:24] = [
+        derive_list =[
             dxdf_x,dxdp_x,dxdf_y,dxdp_y,dxdk_0,dxdk_1,dxdp_0,dxdp_1,dxdk_2,dxdxw,dxdyw,dxdzw, 
             dydf_x,dydp_x,dydf_y,dydp_y,dydk_0,dydk_1,dydp_0,dydp_1,dydk_2,dydxw,dydyw,dydzw]
+        for i_local in range(24):
+            output[i_local] = derive_list[i_local]
         return
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 import inspect
 from abc import ABC, abstractmethod 
@@ -7,6 +8,7 @@ from dataclasses import dataclass
 from enum import IntEnum    
 from copy import copy
 from scipy.optimize import approx_fprime
+from datetime import datetime
 
 import numpy as np
 from numba import njit, prange
@@ -311,8 +313,8 @@ class optimisation_function:
         with open(loc.parent/"template_functions/loss_fun.py", 'w') as f:
             f.write(str_fn)
 
-        from . import template_functions
-        loss_fn: Callable = template_functions.loss_fun.make_full_loss(self, detections, template, threads)
+        from .template_functions.loss_fun import make_full_loss
+        loss_fn = make_full_loss(self, detections, template, threads)
         return loss_fn
 
     def _get_loss_jac_strings(self):
@@ -420,9 +422,6 @@ class optimisation_function:
 
             "starts, block_n_params, param_inds, key_type = make_param_struct(op_fun.function_blocks, detections)",
             "param_len = np.sum(block_n_params)",
-
-            
-
             f"param_slices = op_fun.param_slices",
             f"out_param_start = param_len",
 
@@ -432,21 +431,21 @@ class optimisation_function:
             f"if op_fun.templated and not use_template:",
             f'\traise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")',
             f"t_data: np.ndarray = template if use_template else np.zeros(3)",
-            # f"@njit(parallel=True,fastmath=True)",
-            f"@njit(parallel=False,fastmath=True)",
+            f"#workingtag {datetime.now().strftime('%H:%M:%S')}",
+            f"@njit(parallel=True,fastmath=True)",
+            # f"@njit(parallel=False,fastmath=True)",
             f"def full_jac(inp_params):",
-            f"\tout_jac = np.empty((n_threads, n_lines * f_outs, param_len))", 
+            f"\tp_size = len(inp_params)",
+            f"\tout_jac = np.zeros((n_threads, n_lines * f_outs, p_size))", 
             f"\tfor i in prange(n_threads):", #below here is parallel scoped
             f"\t\t#make the memory components required",
             f"\t\tinp = np.empty(inp_mem)",
             f"\t\toutput = np.empty(grad_outputsize)",
             f"\t\tmemory = np.empty(wrk_mem)",
             f"\t\tdense_param_arr = np.empty(param_len)",
-
             f"\t\tbase = np.eye(jac_size)",
             f"\t\tjac = np.eye(jac_size)",
             f"\t\tper_block = np.eye(jac_size)",
-
             f"\t\tfor ii in range(n_lines):",
             f"\t\t\tdatum = detection_data[i, ii]",
             f"\t\t\tjac[:] = base[:]",
@@ -455,10 +454,9 @@ class optimisation_function:
         # write the script that populates the array here
         param_slicing = [
             f"\t\t\tfor idb in range(n_blocks):",
-            f"\t\t\t\ts_num = datum[key_type[idb]] #the index value of the associated parameter",
-            f"\t\t\t\tp_ind = param_inds[idb] # maps the param to it's index in the unique params",
-            f"\t\t\t\tstart = starts[p_ind] + s_num * block_n_params[p_ind] #and the associated change in the start location",
-
+            f"\t\t\t\ts_num = datum[key_type[idb]]",
+            f"\t\t\t\tp_ind = param_inds[idb]",
+            f"\t\t\t\tstart = starts[p_ind] + s_num * block_n_params[p_ind]",
             f"\t\t\t\tdense_param_arr[param_slices[2*idb]:param_slices[2*idb + 1]] = inp_params[int(start):int(start + block_n_params[p_ind])]",
         ]
 
@@ -467,8 +465,6 @@ class optimisation_function:
             f"\t\t\tif use_template:",
             f"\t\t\t\tinp[:3] = t_data[int(datum[2])] ",
         ]
-
-
 
         pre_calcs = [val for pair in zip(jac_content, content) for val in pair]
         total_content = []
@@ -488,7 +484,7 @@ class optimisation_function:
         ]
 
         postamble = [
-            f"\treturn np.resize(out_jac, (d_shape[0], param_len))",
+            f"\treturn np.resize(out_jac, (2*d_shape[0], p_size))",
             f"return full_jac"
         ] 
 
@@ -500,17 +496,16 @@ class optimisation_function:
         str_fn = "\n".join(fn).replace("\t", "    ")
 
         loc = Path(__file__)
-        # with open(loc.parent/"template_functions/loss_jac.py", 'w') as f:
-        #     f.write(str_fn)
+        with open(loc.parent/"template_functions/loss_jac.py", 'w') as f:
+            f.write(str_fn)
 
-        from . import template_functions
-        jac_fn: Callable = template_functions.loss_jac.make_full_jac(self, detections, template, threads)
+        from .template_functions.loss_jac import make_full_jac
+        jac_fn: Callable = make_full_jac(self, detections, template, threads)
         return jac_fn
 
     
     def make_full_loss_fn(self, detections, threads, template: np.ndarray = None):
         self._prep_for_computation()
-
         return self.make_full_loss_template(detections, template, threads)
 
     
@@ -546,7 +541,6 @@ class abstract_function_block(ABC):
     This is similar to ceres.
 
     The class needs to define how to calculate it's index from a line datum
-
     How does the class optimise for cached variables?
     """
 

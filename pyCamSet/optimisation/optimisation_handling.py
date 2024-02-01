@@ -36,11 +36,7 @@ def make_optimisation_function(
     #
     init_params = param_handler.get_initial_params()
     base_data = param_handler.get_detection_data(flatten=True)
-    length, width = base_data.shape
-    data = np.resize(copy(base_data), (threads, int(np.ceil(length / threads)), width))
-    
     bundle_loss_fun = param_handler.make_loss_fun(threads)
-
 
     if param_handler.can_make_jac():
         bundle_loss_jac = param_handler.make_loss_jac(threads)
@@ -87,15 +83,11 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     optimisation = least_squares(
         loss_fn,
         init_params,
-        # ftol=1e-4,
         verbose=param_handler.problem_opts['verbosity'],
-        # method='lm', #dogbox', #trf',
         # tr_solver='lsmr',
-        # jac_sparsity=sparsity,
-        # loss='soft_l1',
-        # jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
+        jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
         max_nfev=100,
-        x_scale='jac',
+        # x_scale='jac',
     )
     end = time.time()
 

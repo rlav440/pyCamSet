@@ -102,96 +102,6 @@ def clean_fn_data(fn):
             output.append(clean_string)
     return output
 
-def ast_get_token_flow(code_chunk):
-    mod_data = ast.parse(code_chunk)
-    per_line_new = []
-    per_line_used = []
-    for syntax_chunk in mod_data.body:
-        for node in ast.walk(syntax_chunk):
-            for child in ast.iter_child_nodes(node):
-                child.parent = node
-
-        used_tokens = []
-        new_tokens = []
-
-        if isinstance(syntax_chunk, ast.Assign):
-            new_tokens = []
-            for t_list in syntax_chunk.targets:
-                for node in ast.walk(t_list):
-                    if isinstance(node, ast.Name):
-                        new_tokens.append(node.id)
-            for node in ast.walk(syntax_chunk.value):
-                if isinstance(node, ast.Name):
-                    if not isinstance(node.parent, ast.Call):
-                        used_tokens.append(node.id)
-        elif isinstance(syntax_chunk, ast.AugAssign):
-            new_tokens = []
-            for node in ast.walk(syntax_chunk.target):
-                if isinstance(node, ast.Name):
-                    new_tokens.append(node.id)
-            for node in ast.walk(syntax_chunk.value):
-                if isinstance(node, ast.Name):
-                    if not isinstance(node.parent, ast.Call):
-                        used_tokens.append(node.id)
-                    
-        else:
-            for node in ast.walk(syntax_chunk):
-                if isinstance(node, ast.Name):
-                    if not isinstance(node.parent, ast.Call):
-                        used_tokens.append(node.id)
-        per_line_new.append(new_tokens)
-        per_line_used.append(used_tokens)
-
-
-def extract_cachable(line_sequence, function_block:abstract_function_block):
-    known_tokens = {"params", "output", "memory"}
-    if function_block.template:
-        known_tokens.add("inp")
-    line_cachable = []
-    needs_cached_state_recall = []
-    tokens_cached = []
-
-    for l in line_sequence:
-        print(l)
-    ast_get_token_flow("\n".join(line_sequence))
-    data = ast.parse("\n".join(line_sequence))
-    
-    for idl, line_statement in enumerate(line_sequence):
-        # data = ast.parse(line_statement)
-        # print(f"line {idl}")
-        # print(line_statement)
-        # print(ast.dump(data, indent=4))
-
-        # all_inp_known = False
-        # some_inp_known = False
-        # if all_inp_known:
-        #     line_cachable.append(True)
-        #     needs_cached_state_recall.append(False)
-        #
-        #     if data.output.exists():
-        #         known_tokens.add(data.output)
-        #     tokens_cached.append(known_tokens)
-        #
-        # elif some_inp_known:
-        #     line_cachable.append(False)
-        #     tokens_cached.append(tokens_cached[-1])
-        #     needs_cached_state_recall.append(True)
-        #     #know which tokens are needed for this state.
-        # else:
-        #     line_cachable.append(False)
-        #     tokens_cached.append(tokens_cached[-1])
-        #     needs_cached_state_recall.append(False)
-        pass
-    #now need to write the caching code
-    #look at continuous runs.
-    cache_list = []
-    cached_tokens= []
-    uncached_code = [] #sections of code that need to be run
-    # cache code 
-    # all of the lines of code that can be run as a block
-
-    return cache_list, cached_tokens, uncached_code
-    
 
 
 class optimisation_function:
@@ -306,11 +216,8 @@ class optimisation_function:
             base =  inspect.unwrap(self.function_blocks[i].compute_fun)
             base_code = inspect.getsource(base)
             section = clean_fn_data(base_code)
-            cached = extract_cachable(section, self.function_blocks[i])
             end = f"inp[:n_outs[{i}]] = output[:n_outs[{i}]]"
             fn_content.append([prep, section, [end]])
-
-        raise ValueError()
         return import_set, needed_preamble, fn_content
 
     def make_full_loss_template(self, detections, template, threads) -> Callable:
@@ -357,7 +264,7 @@ class optimisation_function:
             f"if op_fun.templated and not use_template:",
             f'\traise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")',
             f"t_data: np.ndarray = template if use_template else np.zeros(3)",
-            f"@njit",
+            f"@njit(parallel=True, fastmath=True)",
             f"def full_loss(inp_params):",
             f"\tlosses = np.empty((n_threads, n_lines, 2))",
             f"\tfor i in prange(n_threads):",
@@ -525,7 +432,8 @@ class optimisation_function:
             f"if op_fun.templated and not use_template:",
             f'\traise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")',
             f"t_data: np.ndarray = template if use_template else np.zeros(3)",
-            # f"@njit",
+            # f"@njit(parallel=True,fastmath=True)",
+            f"@njit(parallel=False,fastmath=True)",
             f"def full_jac(inp_params):",
             f"\tout_jac = np.empty((n_threads, n_lines * f_outs, param_len))", 
             f"\tfor i in prange(n_threads):", #below here is parallel scoped
@@ -668,12 +576,14 @@ class abstract_function_block(ABC):
         pass
     params: param_type #number of parameters to use.
 
+    @staticmethod
     @abstractmethod
-    def compute_fun(param, input, output, memory=0):
+    def compute_fun(param, input, output, memory: int | np.ndarray = 0):
         pass
 
+    @staticmethod
     @abstractmethod
-    def compute_jac(param, input, output, memory=0):
+    def compute_jac(param, input, output, memory: int | np.ndarray = 0):
         pass
 
     def __add__(self, other: Type[abstract_function_block]|optimisation_function) -> optimisation_function:
@@ -703,7 +613,7 @@ class abstract_function_block(ABC):
                 params[:self.params.n_params],
                 params[-self.num_inp:],
                 output, 
-                np.empty(self.array_memory),
+                memory=np.empty(self.array_memory),
             )
             return output
 
@@ -713,10 +623,9 @@ class abstract_function_block(ABC):
             jac_output, 
             np.empty((self.array_memory))
         )
-        error = (
-            jac_output.reshape((self.num_out, -1)) 
-            -approx_fprime(np.ones(self.num_inp + self.params.n_params), fn)
-        )
+        given_jac = jac_output.reshape((self.num_out, -1)) 
+        numeric_jac = approx_fprime(np.ones(self.num_inp + self.params.n_params), fn)
+        error = given_jac - numeric_jac
         assert np.all(error < 1e-4)
 
 def make_param_struct(
@@ -744,12 +653,10 @@ def make_param_struct(
         key_type.PER_IMG:max_imgs,
         key_type.PER_KEY:max_keys,
     }
-
-    print(param_numbers)
-
     #TODO account for the mod function here, modifying the numbers of params
 
     # find all of the unique instances of link indicators
+    #TODO use memory location of link indicators to compare (is) I think
     unique_link_inds = []
     for fb in function_blocks:
         if not fb.params in unique_link_inds:
@@ -765,102 +672,5 @@ def make_param_struct(
         param_offset.append(link_ind.n_params)
         associated.append(int(link_ind.link_type))
         starting_point += link_ind.n_params * param_numbers[link_ind.link_type] 
-    print("testing")
-    print(param_offset)
-    print(param_starts) 
-    print(associated)
-
     return np.array(param_starts), np.array(param_offset), np.array(block_param_inds), np.array(associated)
     
-
-def make_lookup_fn(function_blocks : list[abstract_function_block], detection_data):
-    """
-    builds a lookup function that takes the cam, im and feature number and returns the correct params for each feature.
-    """
-
-    #takes in the input function blocks.
-    #finds all of the unique params used within the optimisation
-    
-    starts, offset, param_inds, key_type = make_param_struct(function_blocks, detection_data) 
-    param_len = np.sum(offset)
-
-    @njit
-    def lookups(param_line):
-        param_data = np.empty(param_len)
-        nblocks = len(param_inds)
-        k = 0
-        for idb in range(nblocks):
-            s_num = param_line[key_type[idb]] #optionally we have some numba function on this value.
-            p_ind = param_inds[idb]
-            start = starts[p_ind] + s_num * offset[p_ind] #and the associated change in the start location
-            new_k = k + s_num * offset[p_ind]
-            param_data[k:new_k] = np.arange(start, start + offset[p_ind])
-            k += offset[p_ind]
-        return param_data
-    return lookups
-
-def make_jacobean_evaluator(function_def: optimisation_function, detections: np.ndarray, threads, template: np.ndarray=None) -> Callable:
-
-    #take and reshape the detections?
-    d_shape = detections.shape
-    p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape)
-    p_detect = np.resize(detections, p_shape)
-
-    # get the shape of the jacobean from the data
-    j_shape = 2 * d_shape[0]
-
-    j_line = block_string_to_compiled_jacobian_line(function_def)
-
-    lookups = make_lookup_fn(function_def.function_blocks, detections)
-
-    templated = True if template is not None else False
-    template_point = np.zeros(3)
-
-    @njit
-    def compute_jacobean(params):
-        output_jacobean = np.zeros((j_shape,len(params)))
-        for idp in prange(threads):
-            d_data = p_detect[idp]
-            l = len(d_data)
-            base_array = np.eye(function_def.param_len) 
-            jac_array = np.eye(function_def.param_len) 
-            out_array = np.eye(function_def.param_len) 
-            #allocate the right amount of memory
-            output_memory = np.empty(function_def.out_mem_req)
-            input_memory = np.empty(function_def.inp_mem_req)
-
-
-            if function_def.can_determine_working_memory:
-                working_memory = np.empty(function_def.wrk_mem_req)
-            else:
-                working_memory = 0
-
-            for idl in range(l):
-                d = d_data[idl]
-                #get the associated indexes for each detection
-
-                if templated:
-                    input_memory[:3] = template[d[2]] # use unrolled keys 
-
-                lookup = lookups(d)
-                param_string = params[lookup]
-                jacs = j_line(
-                    param_string,
-                    base_array, 
-                    jac_array,
-                    out_array,
-                    input_memory,
-                    output_memory,
-                    working_memory,
-                )
-                output_jacobean[idp, lookup] = jacs
-        
-        output_jacobean = output_jacobean.reshape()#and then drop the latter parts of the jacobean.
-        return output_jacobean
-
-    return compute_jacobean
-
-
-
-
-

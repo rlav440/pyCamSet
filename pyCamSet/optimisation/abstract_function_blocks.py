@@ -108,6 +108,7 @@ def ast_get_token_flow(code_chunk, templated):
     per_line_used = []
     worth_caching = []
 
+
     for syntax_chunk in mod_data.body:
 
         call_dict = {}
@@ -148,7 +149,7 @@ def ast_get_token_flow(code_chunk, templated):
                     if not node.id in call_dict:
                         used_tokens.append(node.id)
 
-        valid_tokens = {"output", "memory", "param"}
+        valid_tokens = {"output", "memory", "params"}
         if templated:
             valid_tokens.add("inp")
         if not set(used_tokens).issubset(valid_tokens):
@@ -179,6 +180,7 @@ def extract_cachable(line_sequence, function_block:Type[abstract_function_block]
     ) 
     ntok_iter = iter(new_tokens)
     utok_iter = iter(used_tokens)
+
     for idl, line_statement in enumerate(line_sequence):
         if not check_content(line_statement): #check if comment
             line_blank.append(True)
@@ -215,6 +217,8 @@ def extract_cachable(line_sequence, function_block:Type[abstract_function_block]
     vals_to_retrieve_at_cache = []
     cache_line_ind = []
 
+    all_cachable = sum(line_cachable) == len(line_cachable)
+    
     for true_line_num, (line, is_blank) in enumerate(zip(line_sequence, line_blank)): 
         if is_blank:
             continue
@@ -227,7 +231,7 @@ def extract_cachable(line_sequence, function_block:Type[abstract_function_block]
                 vals_to_retrieve_at_cache.append(tokens_cached)            
         idl += 1
 
-    return lines_cache, indexes_to_cache, cache_line_ind, vals_to_retrieve_at_cache
+    return lines_cache, indexes_to_cache, cache_line_ind, vals_to_retrieve_at_cache, all_cachable
     
 
 
@@ -312,7 +316,7 @@ class optimisation_function:
         self.ready_to_compute = True
 
 
-    def _get_loss_fn_strings(self) -> tuple[set[Import],list[str],list[str]]:
+    def _get_loss_fn_strings(self, max_keys, write_cache=True):
         self._prep_for_computation()
 
         n_blocks = self.n_blocks
@@ -334,8 +338,10 @@ class optimisation_function:
             "working_memories = np.array(op_fun.working_memories)",
             "n_blocks = op_fun.n_blocks",
         ]
-
+        cache_lines = []
+        cache_preamble = []
         fn_content = []
+
         for i in range(n_blocks-1, -1, -1):
             prep = [ 
             f"params = dense_param_arr[param_slices[2*{i}]:param_slices[2*{i}+1]]",
@@ -344,7 +350,7 @@ class optimisation_function:
             base_code = inspect.getsource(base)
             section = clean_fn_data(base_code)
             block = self.function_blocks[i]
-            lines_cache, main_indexes_to_cache, cache_line_inds, vals_to_retrieve_at_cache = extract_cachable(section, block)
+            lines_cache, main_inds, cache_inds, cache_tokens, all_cached = extract_cachable(section, block)
 
             #so we need to think about - what is the parameter that the current function block scales with.
             #this determines the output sizes.
@@ -352,63 +358,115 @@ class optimisation_function:
             key_scaling = [block_param]  
             if block.template:
                 key_scaling.append(key_type.PER_KEY)
-            max_inds = [param_type for k in key_scaling]
+            max_inds = [int(max_keys[k]) for k in key_scaling]
             num_key_scalars = len(max_inds)
             
-            if len(main_indexes_to_cache) == 0:
+            if (len(main_inds) == 0) or not write_cache:
                 pre_cache = []
                 cache = []
                 main_lines = section
 
             else:
-                #determine the cache array sizes.
-                out_size = self.function_blocks[i].num_out
-                mem_size = self.function_blocks[i].array_memory
-                num_worth_caching  = len(main_indexes_to_cache)
-                
+                #outputs
                 pre_cache = [] #allocate the right memory here
                 cache = []
                 main_lines = []
 
+                #determine the cache array sizes.
+                out_size = self.function_blocks[i].num_out
+                mem_size = self.function_blocks[i].array_memory
+                num_worth_caching  = len(main_inds)
+                
                 tab = '\t'
                 cache.append(f"for i in prange({max_inds[0]}):")
+                
+                post_cache_setup = [
+                    f"\toutput = np.empty({out_size})",
+                    f"\tmemory = np.empty({mem_size})",
+                    f"\tp_ind = param_inds[{i}]",
+                    f"\tn_params = block_n_params[p_ind]",
+                    f"\tstart = int(starts[p_ind])",
+                ]
+                cache.extend(post_cache_setup)
                 for idr, max_n in enumerate(max_inds[1:]):
-                    cache.append(f"{tab*(idr + 1)}for {'i'*(idr + 2)} in prange({max_n}):")
+                    cache.append(f"{tab*(idr + 1)}for {'i'*(idr + 2)} in range({max_n}):")
 
-                    #get the param, and inp if necesarry
+                # now the cache needs to be created 
 
-                for icd, line in enumerate(lines_cache):
-                    cache.append(tab * num_key_scalars + line)
-                    if icd in cache_line_inds:
-                        loc = cache_line_inds.index(icd)
-                        mem_line = f"{tab*num_key_scalars}block_{i}_mem_{loc}_loss[,:] = memory[:{mem_size}]"
-                        out_line = f"{tab*num_key_scalars}block_{i}_out_{loc}_loss[,:] = output[:{out_size}]"
-                        cache.append(mem_line)
-                        cache.append(out_line)
-                        #only cache the memory and output variables for now because easiest.
-                for ind, line in enumerate(section):
-                    if ind in main_indexes_to_cache:
-                        loc = main_indexes_to_cache.index(ind)
-                        mem_line = f"{tab*num_key_scalars}memory[:{mem_size}] = block_{i}_mem_{loc}[,:]_loss"
-                        out_line = f"{tab*num_key_scalars}output[:{out_size}] = block_{i}_out_{loc}[,:]_loss"
-                        main_lines.append(mem_line)
-                        main_lines.append(out_line)
-                    else:
-                        main_lines.append(line)
+                # to start the cache we need to make an output, an appropriate memory, and params
+                cache.append(f"{tab*(num_key_scalars)}params = inp_params[start + i*n_params:start + (i+1)*n_params]")
+                if block.template:
+                    #templated always goes on the last value
+                    cache.append(f"{tab*num_key_scalars}inp = template[{'i'*num_key_scalars},:]")
+
+                ind_str = "".join(["i"*(r+1) + ", " for r in range(len(max_inds))])
+                max_str = "".join([str(m) + ", " for m in max_inds])
+
+                    
+                load_str = "".join([f"int(datum[{int(k)}])," for k in key_scaling])
+                if all_cached:
+
+                    alloc_out = f"block_{i}_out_loss = np.empty(({max_str}{out_size}))"
+                    pre_cache.append(alloc_out)
+
+                    for line in section:
+                        cache.append(tab * num_key_scalars + line)
+                    
+                    out_line = f"{tab*num_key_scalars}block_{i}_out_loss[{ind_str}:] = output[:{out_size}]"
+                    cache.append(out_line)
+                    
+                    load_line = f"output[:{out_size}] = block_{i}_out_loss[{load_str}:]"
+                    main_lines.append(load_line)
+
+                else:
+                    for icd, line in enumerate(lines_cache):
+                        cache.append(tab * num_key_scalars + line)
+                        if icd in cache_inds:
+
+                            loc = cache_inds.index(icd)
+                            alloc_mem = f"block_{i}_mem_{loc}_loss = np.empty(({max_str}{mem_size}))"
+                            alloc_out = f"block_{i}_out_{loc}_loss = np.empty(({max_str}{out_size}))"
+                            pre_cache.append(alloc_mem)
+                            pre_cache.append(alloc_out)
+
+                            mem_line = f"{tab*num_key_scalars}block_{i}_mem_{loc}_loss[{ind_str}:] = memory[:{mem_size}]"
+                            out_line = f"{tab*num_key_scalars}block_{i}_out_{loc}_loss[{ind_str}:] = output[:{out_size}]"
+                            cache.append(mem_line)
+                            cache.append(out_line)
+                            #only cache the memory and output variables for now because easiest.
+                    for ind, line in enumerate(section):
+                        if ind in main_inds:
+                            loc = main_inds.index(ind)
+                            #this doesn't use ind string
+                            mem_line = f"memory[:{mem_size}] = block_{i}_mem_{loc}_loss[{load_str}:]"
+                            out_line = f"output[:{out_size}] = block_{i}_out_{loc}_loss[{load_str}:]"
+                            main_lines.append(mem_line)
+                            main_lines.append(out_line)
+                        else:
+                            main_lines.append(line)
+            cache_preamble.extend(pre_cache)
+            cache_lines.extend(cache)
                         
-
             end = f"inp[:n_outs[{i}]] = output[:n_outs[{i}]]"
-            fn_content.append([cache, prep, main_lines, [end]])
+            fn_content.append([prep, main_lines, [end]])
 
-        raise ValueError()
-        return import_set, needed_preamble, fn_content
+        return import_set, cache_preamble, cache_lines, needed_preamble, fn_content
 
     def make_full_loss_template(self, detections, template, threads) -> Callable:
 
         def t(l):
             return ["\t" + li for li in l]
 
-        needed_import_set, additional_preamble, content = self._get_loss_fn_strings()
+        max_imgs = np.max(detections[:, 1]) + 1
+        max_keys = np.max(detections[:, 2]) + 1
+        max_cams = np.max(detections[:, 0]) + 1
+            
+        param_numbers = {
+            key_type.PER_CAM:max_cams,
+            key_type.PER_IMG:max_imgs,
+            key_type.PER_KEY:max_keys,
+        }
+        needed_import_set, cache_preamble, cache, additional_preamble, content = self._get_loss_fn_strings(param_numbers, write_cache=True)
         
         needed_import = []
         for s in needed_import_set:
@@ -426,7 +484,7 @@ class optimisation_function:
                  " ",
                 "def make_full_loss(op_fun, detections, template, threads):"
         ]
-        preamble = [
+        preamble_0 = [
             f"n_threads = threads",
             f"op_fun._prep_for_computation()",
             f"d_shape = detections.shape",
@@ -447,8 +505,14 @@ class optimisation_function:
             f"if op_fun.templated and not use_template:",
             f'\traise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")',
             f"t_data: np.ndarray = template if use_template else np.zeros(3)",
-            f"@njit",
+            f"@njit(fastmath=True, parallel=True)",
             f"def full_loss(inp_params):",
+        ]
+
+        cache_p = ['\t' + c for c in cache_preamble]
+        cache_l = ['\t' + c for c in cache]
+
+        preamble_1 = [
             f"\tlosses = np.empty((n_threads, n_lines, 2))",
             f"\tfor i in prange(n_threads):",
             f"\t\t#make the memory components required",
@@ -487,7 +551,19 @@ class optimisation_function:
             f"return full_loss"
         ]
 
-        fn = needed_import + start + t(additional_preamble) + t(preamble) + t(param_slicing) + t(mid_amble) + t(loss_calc) + t(postamble)
+        fn = (
+            needed_import + 
+            start + 
+            t(additional_preamble) +
+            t(preamble_0) + 
+            t(cache_p) +
+            t(cache_l) +
+            t(preamble_1) + 
+            t(param_slicing) +
+            t(mid_amble) +
+            t(loss_calc) + 
+            t(postamble)
+        )
         str_fn = "\n".join(fn).replace("\t", "    ")
 
         loc = Path(__file__)
@@ -567,7 +643,17 @@ class optimisation_function:
         def t(l):
             return ["\t" + li for li in l]
 
-        needed_import_set, additional_preamble, content = self._get_loss_fn_strings()
+        max_imgs = np.max(detections[:, 1]) + 1
+        max_keys = np.max(detections[:, 2]) + 1
+        max_cams = np.max(detections[:, 0]) + 1
+            
+        param_numbers = {
+            key_type.PER_CAM:max_cams,
+            key_type.PER_IMG:max_imgs,
+            key_type.PER_KEY:max_keys,
+        }
+
+        needed_import_set, cache_p, cache_l, additional_preamble, content = self._get_loss_fn_strings(param_numbers)
         jac_needed_imports_set, jac_additional_preamble, jac_content = self._get_loss_jac_strings()
         
         needed_import = []
@@ -835,7 +921,6 @@ def make_param_struct(
         key_type.PER_KEY:max_keys,
     }
 
-    print(param_numbers)
 
     #TODO account for the mod function here, modifying the numbers of params
 

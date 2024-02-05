@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
+import pyCamSet.optimisation.function_block_implementations as fb
 
 from pyCamSet.calibration_targets import TargetDetection
     
@@ -28,7 +29,7 @@ DEFAULT_OPTIONS = {
     'outliers':'ask'
 }
 
-class StandardBundleHandler:
+class SelfBundleHandler:
     """
     The standard bundle handler is a class that handles the optimisation of camera parameters.
     It is designed to be used with the numba implentation of the bundle adjustment cost function.
@@ -99,25 +100,7 @@ class StandardBundleHandler:
         self.jac_mask = None
         self.missing_poses: list | None = missing_poses
 
-    def add_extra_params(self, param_array:np.ndarray) -> np.ndarray:
-        """
-        A function called during the initial parameterisation to allow for the addition of extra parameters.
-
-        :param param_array:
-        :return: the input param array, with extra params concatenated to the end.
-        """
-        return param_array
-
-    def parse_extra_params_and_setup(self, param_array:np.ndarray) -> np.ndarray:
-        """
-        A function called at the start of getting the bundle adjustment inputs
-        to allow the addition of different parameter structures to the optimisation.
-        It also allows for the implementation of additional non-standard calculations.
-        
-        :param param_array:
-        :return: param_array: The input param array, without the extra params
-        """
-        return param_array
+        self.op_fun: fb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.rigidTform3d() +  fb.free_point()
 
     def special_plots(self, params):
         """

@@ -2,7 +2,7 @@ from numba import njit, gdb_init
 from time import sleep
 import numpy as np
 
-from pyCamSet.optimisation.abstract_function_blocks import abstract_function_block, param_type, key_type
+from pyCamSet.optimisation.abstract_function_blocks import abstract_function_block, param_type, key_type, optimisation_function
 
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc, n_e4x4_flat_INPLACE, numba_rodrigues_jac
 import numba  

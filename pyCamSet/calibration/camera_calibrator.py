@@ -75,6 +75,8 @@ def calibrate_cameras(
         fixed_params=fixed_params
     )
 
+
+
     if high_distortion:
         detections, _ = detect_datapoints_in_imfile(
             f_loc=f_loc,

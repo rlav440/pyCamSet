@@ -1,4 +1,5 @@
 from __future__ import annotations
+from math import copysign
 from copy import copy
 import matplotlib.pyplot as plt
 from scipy.stats import multivariate_normal
@@ -133,22 +134,35 @@ def visualise_calibration(
     # the coverage for each camera
     n_cams = cams.get_n_cams()
     windows = get_close_square_tuple(n_cams)
-    fig, axes = plt.subplots(*windows)
+    fig, axes = plt.subplots(*windows[::-1])
     ax = axes.ravel()
     euclidean_err = np.linalg.norm(np.reshape(o_results['err'], (-1,2)), axis=1)
+    e_lim = np.median(euclidean_err) * 3
     err_buff = copy(euclidean_err)
+    full_err = copy(o_results['err'].reshape((-1,2)))
 
     if param_handler.missing_poses is not None:
         icam_n = np.cumsum(~param_handler.missing_poses) - 1
 
-    for cam_detection in detection.get_cam_list():
+
+    for idc_cam, cam_detection in enumerate(detection.get_cam_list()):
         datum = cam_detection.get_data()
         if datum is not None:
             cam_n = int(datum[0,0])
+
+            p_x = cams[cam_n].intrinsic[0,2]
+            p_y = cams[cam_n].intrinsic[1,2]
+
             loc_x, loc_y = datum[:,-2], datum[:, -1]
             error, err_buff = err_buff[:len(datum)], err_buff[len(datum):]
-            im = ax[cam_n].scatter(loc_x, loc_y, c=error, vmin=0, vmax=np.amax(euclidean_err), s=0.1)
-            ax[cam_n].set_title(detection.cam_names[cam_n], fontsize=8)
+            m_error = np.mean(error)
+            err, full_err = full_err[:len(datum)], full_err[len(datum):]
+            #what we can do is calculate if the error is going away or towards the principle axis
+            away_vec = np.copysign(np.ones(datum.shape[0]), (loc_x - p_x) * err[:, 0] + (loc_y - p_y) * err[:, 1])
+
+            
+            im = ax[cam_n].scatter(loc_x, loc_y, c=error*away_vec, vmin=-e_lim, vmax=e_lim, s=2, alpha=0.4, cmap="coolwarm")
+            ax[cam_n].set_title(detection.cam_names[cam_n] + f" mean error {m_error:.2f}", fontsize=8)
             ax[cam_n].set_xlim([0, cams[cam_n].res[0]])
             ax[cam_n].set_ylim([0, cams[cam_n].res[1]])
             ax[cam_n].set_aspect('equal')
@@ -162,7 +176,7 @@ def visualise_calibration(
         fig.delaxes(ax[i])
 
     cbar = fig.colorbar(im, ax=axes.ravel().tolist())
-    cbar.set_label("Reprojection Error (px)")
+    cbar.set_label("Polarised Reprojection Error (px)")
     fig.suptitle("Per Camera Coverage")
     plt.show()
 

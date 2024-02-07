@@ -233,11 +233,13 @@ class CameraSet:
             cam_loc = loc/f"{cam_n:08}_cam.txt"
             cam.to_MVSnet_txt(cam_loc, (r.mindist, r.maxdist), r.steps)
 
+
         if ims is not None:
             im_loc = loc.parent/'images'
             im_loc.mkdir(exist_ok=True)
             for idx, im in enumerate(ims):
-                cv2.imwrite(str(im_loc/f"{idx:08}.jpg"), im)
+                im_temp = self[idx].undistort(im)
+                cv2.imwrite(str(im_loc/f"{idx:08}.jpg"), im_temp,  [cv2.IMWRITE_JPEG_QUALITY, 100])
 
         cvwc = np.array(
             [cam.view for cam in self]

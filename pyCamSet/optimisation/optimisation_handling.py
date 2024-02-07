@@ -69,8 +69,8 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     # gu.benchmark(test, repeats=100)
 
     bundle_jac(init_params)
-    test = lambda : bundle_jac(init_params)
-    gu.benchmark(test, repeats=100)
+    # test = lambda : bundle_jac(init_params)
+    # gu.benchmark(test, repeats=100)
 
     if (init_euclid > 150) or (init_euclid == np.nan):
         logging.critical("Found worryingly high/NaN initial error: check that the initial parametisation is sensible")

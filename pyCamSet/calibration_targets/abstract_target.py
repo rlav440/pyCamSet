@@ -312,9 +312,17 @@ class AbstractTarget(ABC):
             tuple(res[::-1]),
             None,
             None,
-            None,
+            # flags=(
+            #     cv2.CALIB_RATIONAL_MODEL + \
+            #     cv2.CALIB_THIN_PRISM_MODEL +\
+            #     cv2.CALIB_TILTED_MODEL
+            # ),
             None,
         )
+
+        for k in ic:
+            if hasattr(k, "shape"):
+                print(k.shape)
         end = time.time()
 
         logging.info(f'{cam_name} took {end - start:.1f} seconds'

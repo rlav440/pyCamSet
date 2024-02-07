@@ -45,11 +45,11 @@ class TemplateBundlePrimitive:
         self.free_poses = np.sum(self.poses_unfixed)
         self.free_extr = np.sum(self.extr_unfixed)
         self.free_intr = np.sum(self.intr_unfixed)
-        
-        
+
         self.intr_end = 9 * self.free_intr
         self.extr_end = 6 * self.free_extr + self.intr_end
-        self.pose_end = 6 * self.free_poses + self.free_extr
+        self.pose_end = 6 * self.free_poses + self.extr_end
+
 
     def return_bundle_primitives(self, params):
         """
@@ -58,9 +58,10 @@ class TemplateBundlePrimitive:
         :param params: The input parameters
         """
 
-        intr_data = params[:self.intr_end].reshape((-1, 9))
-        extr_data = params[self.intr_end:self.extr_end].reshape((-1, 6))
-        pose_data = params[self.extr_end:self.pose_end].reshape((-1, 6))
+
+        intr_data = params[:self.intr_end].reshape((self.free_intr, 9))
+        extr_data = params[self.intr_end:self.extr_end].reshape((self.free_extr, 6))
+        pose_data = params[self.extr_end:self.pose_end].reshape((self.free_poses, 6))
 
         ch.fill_flat(pose_data, self.poses, self.poses_unfixed)
         ch.fill_flat(extr_data, self.extr, self.extr_unfixed)
@@ -121,16 +122,17 @@ class TemplateBundleHandler:
         self.extr_unfixed = np.array(['ext' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
         self.intr_unfixed = np.array(['int' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
 
-        self.pose_unfixed = np.array(n_poses, dtype=bool)
-        if fixed_pose := self.problem_opts.get("fixed_pose"):
+        self.pose_unfixed = np.ones(n_poses, dtype=bool)
+        if "fixed_pose" in self.problem_opts:
+            fixed_pose = self.problem_opts["fixed_pose"]
             self.pose_unfixed[fixed_pose] = False
-            self.poses[fixed_pose, :] = [1,0,0, 0,1,0, 0,0,1, 0,0,0]
+            self.poses[fixed_pose, :] = [0,0,0,0,0,0]
 
         self.populate_self_from_fixed_params()
 
         self.bundlePrimitive = TemplateBundlePrimitive(
             self.poses, self.extr, self.intr,
-            extr_unfixed=self.extr_unfixed, intr_unfixed=self.intr_unfixed
+            extr_unfixed=self.extr_unfixed, intr_unfixed=self.intr_unfixed, poses_unfixed=self.pose_unfixed,
         )
 
         self.param_len = None
@@ -159,13 +161,27 @@ class TemplateBundleHandler:
         #TODO implement proper culling
         obj_data = self.target.point_data.reshape((-1, 3))
         temp_loss = self.op_fun.make_jacobean(self.detection.get_data(), threads, template=obj_data)
-        def jac_fn(params):
-            inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
-            param_str = self.op_fun.build_param_list(*inps)
-            return temp_loss(param_str)
-        return jac_fn
+        mask = np.concatenate(
+            ( 
+                np.repeat(self.intr_unfixed, 9),
+                np.repeat(self.extr_unfixed, 6),
+                np.repeat(self.pose_unfixed, 6),
+            ), axis=0
+        )
+        if np.all(mask):
+        
+            def jac_fn(params):
+                inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
+                param_str = self.op_fun.build_param_list(*inps)
+                return temp_loss(param_str)
+            return jac_fn
+        else:
 
-
+            def jac_fn(params):
+                inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
+                param_str = self.op_fun.build_param_list(*inps)
+                return temp_loss(param_str)[:, mask]
+            return jac_fn
 
     def special_plots(self, params):
         """
@@ -283,11 +299,11 @@ class TemplateBundleHandler:
         cams = self.camset
         self.jac_mask = []
         param_array = []
-        cam_idx = 0
 
         cam_poses, target_poses, per_im_error = estimate_camera_relative_poses(
             detection=self.detection, cams=self.camset, calibration_target=self.target
         )
+
         self.missing_poses = np.array([np.isnan(t[0,0]) for t in target_poses])
         self.find_and_exclude_transform_outliers(per_im_error)
         
@@ -300,17 +316,21 @@ class TemplateBundleHandler:
                         axis=0,
                     )
                 )
+
         for idc, ext_unfixed in enumerate(self.bundlePrimitive.extr_unfixed):
             if ext_unfixed:
                 ext = gu.ext_4x4_to_rod(cam_poses[idc])
                 param_array.append(ext[0])
                 param_array.append(ext[1])
+
+
         for idp, pose_unfixed in enumerate(self.bundlePrimitive.poses_unfixed):
             # how do we handle missing poses - delete the image associated with the missing daata
             if pose_unfixed:
                 ext = gu.ext_4x4_to_rod(target_poses[idp])
                 param_array.append(ext[0])
                 param_array.append(ext[1])
+
         param_array = np.concatenate(param_array, axis=0)
         return param_array
 

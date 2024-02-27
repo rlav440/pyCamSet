@@ -3,6 +3,7 @@ import logging
 from copy import copy
 
 import matplotlib.pyplot as plt
+
 import numpy as np
 
 from typing import TYPE_CHECKING
@@ -343,7 +344,6 @@ class TemplateBundleHandler:
         :return: Either a CameraSet, or a CameraSet and a list of object poses.
         """
 
-
         new_cams = copy(self.camset)
         proj, extr, poses = self.bundlePrimitive.return_bundle_primitives(x)
 
@@ -362,7 +362,11 @@ class TemplateBundleHandler:
         if not return_pose:
             return new_cams
 
-        return new_cams, poses
+        ps = np.empty((len(poses), 12))
+        for pn, p in zip(ps, poses):
+            ch.n_e4x4_flat_INPLACE(p, pn)
+
+        return new_cams, ps
 
     def get_detection(self) -> TargetDetection:
         """

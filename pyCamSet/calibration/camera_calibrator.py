@@ -34,6 +34,7 @@ def calibrate_cameras(
     high_distortion=False,
     threads=max(1, cpu_count()-2),
     problem_options: dict|None = None,
+    initial_cams: CameraSet | None= None,
     ) -> CameraSet:
     """
     This function coordinates the calibration process, from detection to outputing a final camset.
@@ -53,7 +54,6 @@ def calibrate_cameras(
     if save_loc is None:
         save_loc = f_loc
 
-
     detections, camera_res = detect_datapoints_in_imfile(
         f_loc=f_loc,
         caching=save,
@@ -65,36 +65,39 @@ def calibrate_cameras(
     validate_detections(detections, calibration_target)
 
     string_tail = '.camset'
-
-    initial_cams = run_initial_calibration(
-        detections,
-        calibration_target,
-        camera_res,
-        save=save,
-        save_loc=save_loc / ('initial_cameras' + string_tail),
-        fixed_params=fixed_params
-    )
-
-
-
-    if high_distortion:
-        detections, _ = detect_datapoints_in_imfile(
-            f_loc=f_loc,
-            calibration_target=calibration_target,
-            draw=draw,
-            n_lim=n_lim,
-            camset=initial_cams
-        )
+    if initial_cams is None:
 
         initial_cams = run_initial_calibration(
             detections,
             calibration_target,
             camera_res,
             save=save,
-            save_loc=save_loc / ('initial_cameras_high_distortion' + string_tail),
+            save_loc=save_loc / ('initial_cameras' + string_tail),
+            fixed_params=fixed_params
+        )
+
+
+
+        if high_distortion:
+            detections, _ = detect_datapoints_in_imfile(
+                f_loc=f_loc,
+                calibration_target=calibration_target,
+                draw=draw,
+                n_lim=n_lim,
+                camset=initial_cams
             )
 
-        initial_cams.draw_camera_distortions()
+            initial_cams = run_initial_calibration(
+                detections,
+                calibration_target,
+                camera_res,
+                save=save,
+                save_loc=save_loc / ('initial_cameras_high_distortion' + string_tail),
+                )
+
+            initial_cams.draw_camera_distortions()
+    else:
+        logging.info("Using the provided initial cameras.")
 
     initial_cams.set_resolutions_from_file(floc=f_loc)
     calibrated_cameras = run_stereo_calibration(

@@ -1,15 +1,15 @@
-from numba import gdb_init
 from pyCamSet.optimisation.abstract_function_blocks import abstract_function_block
-from pyCamSet.optimisation.abstract_function_blocks import key_type
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc
-from time import sleep
-from pyCamSet.optimisation.compiled_helpers import numba_rodrigues_jac
 from pyCamSet.optimisation.abstract_function_blocks import param_type
+from time import sleep
 import numpy as np
 from pyCamSet.optimisation.abstract_function_blocks import optimisation_function
+from pyCamSet.optimisation.compiled_helpers import numba_rodrigues_jac
 import numba
-from numba import njit
 from pyCamSet.optimisation.compiled_helpers import n_e4x4_flat_INPLACE
+from numba import njit
+from pyCamSet.optimisation.abstract_function_blocks import key_type
+from numba import gdb_init
 
 
 from numba import prange
@@ -46,7 +46,7 @@ def make_full_jac(op_fun, detections, template, threads):
     if op_fun.templated and not use_template:
         raise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")
     t_data: np.ndarray = template if use_template else np.zeros(3)
-    #workingtag 16:39:23
+    #workingtag 16:08:29
     @njit(parallel=True,fastmath=True)
     def full_jac(inp_params):
         p_size = len(inp_params)

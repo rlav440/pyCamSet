@@ -193,17 +193,12 @@ def visualise_calibration(
     plotter.subplot(0)
     plotter.add_text("Reconstructed Points in Scene Coordinates", position='upper_edge', font_size=10, font="times")
     cams.get_scene(scene=plotter)
-    seen_pts = pv.PolyData(reconstructed)
-    seen_pts['Reprojection error (px)'] = error_subset
-    plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=4)
     ## Triangulation of points in target space
     inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True,)[1])
     im_nums = reconstructed_subset[inv, 1]
     keys = reconstructed_subset[inv, 2:-2]
     #point_errors = error_subset[inv]
-
-
-
+    mask = []
     point_locs = {}
     col_locs = {}
     raw_obj_points  = []
@@ -215,7 +210,7 @@ def visualise_calibration(
         n_inv_pose(poses[int(im)], inv_pose)
         obj_point = np.empty(3)
         n_htform_prealloc(point, inv_pose, obj_point)
-
+        mask.append(np.linalg.norm(obj_point) < 3 * mean_dist)
         if np.linalg.norm(obj_point) > 3 * mean_dist:
             bad_points = bad_points + 1
         else:
@@ -225,13 +220,18 @@ def visualise_calibration(
             col_locs.setdefault(tuple(key.astype(int)), []).append(c)
             errors.append(c)
 
+    m = np.array(mask)
+    seen_pts = pv.PolyData(reconstructed[m])
+    seen_pts['Reprojection error (px)'] = error_subset[m]
+    plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=4, clim=[0, e_lim])
+
     plotter.subplot(1)
     plotter.add_text("Reconstructed Points in Target Coordinates", position="upper_edge", font_size=10, font='times')
     plotter.add_text(f"{bad_points} erroneous Points", position='lower_left', font_size=10, font='times')
 
     cube_locs = pv.PolyData(np.array(raw_obj_points))
     cube_locs['Reprojection Error (px)'] = errors
-    plotter.add_mesh(cube_locs, render_points_as_spheres=True, point_size=4)
+    plotter.add_mesh(cube_locs, render_points_as_spheres=True, point_size=4, clim=[0, e_lim])
 
     def reject_outliers(data, m=2.):
         d = np.abs(data - np.median(data))
@@ -259,7 +259,7 @@ def visualise_calibration(
 
     if len(raw_data) > 0:
         norm = plt.Normalize()
-        colours = (plt.cm.viridis(norm(err_buff))[:,:3] * 255).astype(np.uint8)
+        colours = (plt.cm.viridis(norm(np.clip(err_buff, 0, e_lim)))[:,:3] * 255).astype(np.uint8)
 
         chart = pv.Chart2D()
         chart.title = 'Accuracy vs Precision of target feature locations'

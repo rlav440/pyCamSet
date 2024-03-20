@@ -214,6 +214,12 @@ class TargetDetection:
                              f'Detection 1 names: {other.names}')
         self._glomp_buffer()
         other._glomp_buffer()
+        if self._data is None:
+            if other._data is None:
+                return self
+            return other
+        if other._data is None:
+            return self
         if self._data.shape[0] == 0:
             if other._data.shape[0] == 0:
                 shared_data = self._data
@@ -246,6 +252,7 @@ class TargetDetection:
                 [np.ones((detection.data_len, 2))*[ind, im_num], keys, detection.image_points]
                 , axis=1)
             self._update_buffer.append(observation)
+
 
     def _glomp_buffer(self) -> None:
         """

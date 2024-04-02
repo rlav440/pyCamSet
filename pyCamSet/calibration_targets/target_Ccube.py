@@ -177,15 +177,18 @@ class Ccube(AbstractTarget):
         seen_data = []
 
         if ids is not None:
+            wait_key = wait_len
             # then split the detections by floor div
             board_marker_id = ids % self.markers_per_face
             board_origin = np.floor(np.array(ids) / self.markers_per_face).astype(int)
+            print(np.max(ids))
             seen_boards = np.unique(board_origin).astype(int)
 
             if np.any(seen_boards >= 6):
                 logging.warning(
                     "A marker was detected with an unfeasibly high board number."
                 )
+                # wait_key = -1
 
             for n_board in seen_boards[seen_boards < 6]:
                 board = self.boards[n_board]
@@ -208,8 +211,9 @@ class Ccube(AbstractTarget):
                 if n > 0:
                     if draw:
                         pass
-                        aruco.drawDetectedCornersCharuco(im_idea,
-                                        np.array(c_corners)/d_f, c_ids)
+                        # aruco.drawDetectedCornersCharuco(im_idea,
+                        #                 np.array(c_corners)/d_f, c_ids)
+                        aruco.drawDetectedMarkers(im_idea, np.array(corners)/d_f, ids)
 
                     for cid, corner in zip(c_ids[:, 0], c_corners[:, 0, :]):
                         seen_keys.append([n_board, cid])
@@ -218,7 +222,7 @@ class Ccube(AbstractTarget):
         if draw:
             if corners:
                 cv2.imshow('detections', im_idea)
-                cv2.waitKey(wait_len)
+                cv2.waitKey(wait_key)
 
         return ImageDetection(keys=seen_keys, image_points=seen_data)
 

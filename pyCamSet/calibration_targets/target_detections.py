@@ -147,7 +147,7 @@ class TargetDetection:
         """
         :return: a list of target detections containing a unique index
         """
-        unique_keys = np.unique(self.get_data(), axis=0)
+        unique_keys = np.unique(self.get_data()[:, 2:-2], axis=0)
         return [self.get(key=k) for k in unique_keys]
 
     def _get_cam(self, cam):

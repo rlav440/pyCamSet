@@ -17,6 +17,7 @@ from pyCamSet.utils.general_utils import get_close_square_tuple, glob_ims_local
 
 
 from pyCamSet.optimisation.compiled_helpers import nb_triangulate_full
+import pyCamSet.optimisation.compiled_helpers as ch
 from pyCamSet.utils.saving import save_camset
 from pyCamSet.reconstruction.acmmp_utils import ReconParams, write_pair_file, calc_pairs
 
@@ -452,8 +453,9 @@ class CameraSet:
 
         return scene
 
-    def plot(self, scale_factor=None,
+    def plot(self, 
              additional_mesh: pv.PolyData|list[pv.PolyData]|None=None,
+             scale_factor=None,
              view_cones=False):
         """
         Draws a 3D plot of the cameras and any additional meshes
@@ -518,6 +520,8 @@ class CameraSet:
             colours = colours[:cls]
             for mesh, col in zip(additional_mesh, colours):
                 if not isinstance(mesh, CameraSet):
+                    if isinstance(mesh, np.ndarray):
+                        mesh = pv.PolyData(mesh)
                     # if mesh has no colour
                     if mesh.active_scalars is None:
                         scene.add_mesh(mesh, col, opacity=0.1)
@@ -679,5 +683,32 @@ class CameraSet:
             self.calibration_handler,
         )
 
+    def get_calibration_points(self):
+        if self.calibration_handler is None:
+            raise ValueError("No calibration history was found")
+
+        detection = self.calibration_handler.get_detection()
+        to_reconstruct = detection.sort(['key', 'im_num']).get_data()
 
 
+
+        _, poses = self.calibration_handler.get_camset(self.calibration_params, return_pose=True)
+
+        ## Triangulation of points in world space
+        reconstructed, reconstructed_subset,  where_mask = self.multi_cam_triangulate(to_reconstruct, return_used=True)
+
+        ## Triangulation of points in target space to determine outliers
+        inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True,)[1])
+        im_nums = reconstructed_subset[inv, 1]
+        keys = reconstructed_subset[inv, 2:-2]
+        #point_errors = error_subset[inv]
+        mean_dist = np.mean(np.linalg.norm(self.calibration_handler.target.point_data, axis=-1))
+        mask = []
+        for point, im in zip(reconstructed, im_nums):
+            inv_pose = np.empty(12)
+            ch.n_inv_pose(poses[int(im)], inv_pose)
+            obj_point = np.empty(3)
+            ch.n_htform_prealloc(point, inv_pose, obj_point)
+            mask.append(np.linalg.norm(obj_point) < 3 * mean_dist)
+        
+        return reconstructed[np.array(mask)]

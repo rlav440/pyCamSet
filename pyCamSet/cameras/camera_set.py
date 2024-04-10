@@ -352,6 +352,7 @@ class CameraSet:
         )
         viable_mask = count > 1
         reconstructable_data = data[viable_mask[inv]]
+
         _, im_index, im_counts = np.unique(reconstructable_data[:, 1:-2], axis=0, return_index=True, return_counts=True)
         start_ind = np.append(0, np.cumsum(im_counts[np.argsort(im_index)]))
 
@@ -359,6 +360,7 @@ class CameraSet:
         proj = np.array([cam.proj for cam in self])
         dists = np.array([cam.distortion_coefs for cam in self])
         intr = np.array([cam.intrinsic for cam in self])
+        
         reconstructed = nb_triangulate_full(reconstructable_data, proj, start_ind, intr, dists)
     
         if return_used:

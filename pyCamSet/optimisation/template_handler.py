@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-from copy import copy
+from copy import copy, deepcopy
 
 import matplotlib.pyplot as plt
 
@@ -19,8 +19,14 @@ if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
     from pyCamSet.cameras import CameraSet, Camera
 
-from pyCamSet.optimisation.standard_bundle_handler import DEFAULT_OPTIONS
 
+DEFAULT_OPTIONS = {
+    'verbosity': 2,
+    'fixed_pose':0,
+    'ref_cam':0,
+    'ref_pose':0,
+    'outliers':'ask'
+}
 class TemplateBundlePrimitive:
     """
     A class that contains a set of base arrays.
@@ -107,9 +113,9 @@ class TemplateBundleHandler:
 
         self.camset = camset
         self.cam_names = camset.get_names()
-        self.detection = detection
+        self.detection = deepcopy(detection)
         self.target = target
-        self.point_data = target.point_data
+        self.point_data = deepcopy(target.point_data)
         self.target_point_shape = np.array(target.point_data.shape)
         self.initial_params = None
 
@@ -151,17 +157,17 @@ class TemplateBundleHandler:
         #flatten the object shape
         obj_data = self.target.point_data.reshape((-1, 3))
 
-        temp_loss = self.op_fun.make_full_loss_fn(self.detection.get_data(), threads, template=obj_data)
+        temp_loss = self.op_fun.make_full_loss_fn(self.detection.get_data(), threads) 
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
-            return temp_loss(param_str).flatten()
+            return temp_loss(param_str, obj_data).flatten()
         return loss_fun
 
     def make_loss_jac(self, threads): 
         #TODO implement proper culling
         obj_data = self.target.point_data.reshape((-1, 3))
-        temp_loss = self.op_fun.make_jacobean(self.detection.get_data(), threads, template=obj_data)
+        temp_loss = self.op_fun.make_jacobean(self.detection.get_data(), threads)
         mask = np.concatenate(
             ( 
                 np.repeat(self.intr_unfixed, 9),
@@ -174,14 +180,14 @@ class TemplateBundleHandler:
             def jac_fn(params):
                 inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
                 param_str = self.op_fun.build_param_list(*inps)
-                return temp_loss(param_str)
+                return temp_loss(param_str, obj_data)
             return jac_fn
         else:
 
             def jac_fn(params):
                 inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
                 param_str = self.op_fun.build_param_list(*inps)
-                return temp_loss(param_str)[:, mask]
+                return temp_loss(param_str, obj_data)[:, mask]
             return jac_fn
 
     def special_plots(self, params):
@@ -209,7 +215,6 @@ class TemplateBundleHandler:
         to build np arrays that describe:
 
             - the projection matrices of the cameras
-            - the intrinsic matrices of the cameras
             - the distortion parameters of the cameras
             - the pose of every object point in every time point
 
@@ -403,6 +408,15 @@ class TemplateBundleHandler:
         """
         obj_points = self.get_bundle_adjustment_inputs(params, make_points=True)
         self.get_camset(params).plot_np_array(obj_points.reshape((-1, 3)))
+    
+    def gauge_fixes(self):
+        """
+        Defines the lagrange multiplier conditions of this optimiser that fix any gauge symmetries in the optimisation.
+
+        :returns fn or None: if no lagrange multipliers, returns None, otherwise returns a function that evals the multipliers. f
+        """
+        return None
+        
 
 
 def check_for_target_misalignment(tforms:  np.ndarray, ref_cam:int = 0):

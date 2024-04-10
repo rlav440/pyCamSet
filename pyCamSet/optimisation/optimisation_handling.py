@@ -65,10 +65,11 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     logging.info(f'found {len(init_err):.2e} control points')
     logging.info(f'Initial Euclidean error: {init_euclid:.2f} px')
 
+    # raise ValueError
     # test = lambda : loss_fn(init_params)
     # gu.benchmark(test, repeats=100)
 
-    bundle_jac(init_params)
+    # bundle_jac(init_params)
     # test = lambda : bundle_jac(init_params)
     # gu.benchmark(test, repeats=100)
 

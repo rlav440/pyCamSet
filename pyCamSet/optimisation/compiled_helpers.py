@@ -500,6 +500,33 @@ def make_polar(vec):
 
 
 @njit(cache=True)
+def nb_triangulate_st(data, proj, intr, dist):
+    """
+    Triangulates a single set of points from a set of images, using numba acceleration.
+
+    :param data: The data to reconstruct
+    :param proj: The camera projection matrices
+    :param intr: The intrinsics of each camera
+    :param dist: The distortion parameters of each camera
+    :return:
+    """
+    diff = data.shape[0]
+
+    input_uv = np.empty((diff, 3))
+    input_proj = np.empty((diff, 3, 4))
+    M = np.empty((3 * diff, 4 + diff))
+    M[:] = 0
+
+    for idt in range(diff):
+        datum = data[idt]
+        cam = int(datum[0])
+        ud_uv = nb_undistort(datum[-2:], intr[cam], dist[cam])
+        input_uv[idt] = [ud_uv[0], ud_uv[1], 1]
+        input_proj[idt] = proj[cam]
+
+    return nb_triangulate_nviews(input_proj, input_uv, M)
+
+@njit(cache=True)
 def nb_triangulate_full(data, proj, start_inds, intr, dist):
     """
     Triangulates a set of points from a set of images, using numba acceleration.
@@ -524,9 +551,10 @@ def nb_triangulate_full(data, proj, start_inds, intr, dist):
         M[:] = 0
 
         for idt in range(diff):
-            datum = data[start_pt + idt]
+            datum = data[start_pt + idt, :]
             cam = int(datum[0])
-            ud_uv = nb_undistort(datum[-2:], intr[cam], dist[cam])
+            loc = datum[-2:]
+            ud_uv = nb_undistort(loc, intr[cam], dist[cam])
             input_uv[idt] = [ud_uv[0], ud_uv[1], 1]
             input_proj[idt] = proj[cam]
 
@@ -616,7 +644,7 @@ def n_dist_prealloc(x, out):
             out[i, j] = abs(out[i, j]) ** 0.5
 
 
-# @njit(cache=True)
+@njit(cache=True)
 def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Calculates the rigid transform between two sets of points using an svd

@@ -222,7 +222,18 @@ class optimisation_function:
             fn_content.append([prep, section, [end]])
         return import_set, needed_preamble, fn_content
 
-    def make_full_loss_template(self, detections, template, threads) -> Callable:
+    def make_full_loss_template(self, detections, threads, overwrite_function = False) -> Callable:
+
+        strings = "loss_" +  "_".join([str(name.__class__.__name__) for name in self.function_blocks])
+        file_name = "template_functions/" + strings + ".py"
+        write_file = (Path(__file__).parent)/file_name
+
+        if write_file.exists() and not overwrite_function:
+            file_string = 'pyCamSet.optimisation.template_functions.'  + strings
+            importlib.invalidate_caches()
+            top_module = importlib.import_module(file_string)
+            loss_fn: Callable = top_module.make_full_loss(self, detections, threads)
+            return loss_fn
 
         def t(l):
             return ["\t" + li for li in l]
@@ -241,9 +252,10 @@ class optimisation_function:
 
 
         start = ["from numba import prange",
+                 "from datetime import datetime",
                 "from pyCamSet.optimisation.abstract_function_blocks import make_param_struct",
                  " ",
-                "def make_full_loss(op_fun, detections, template, threads):"
+                "def make_full_loss(op_fun, detections, threads):"
         ]
         preamble = [
             f"n_threads = threads",
@@ -259,15 +271,14 @@ class optimisation_function:
 
             "starts, block_n_params, param_inds, key_type = make_param_struct(op_fun.function_blocks, detections)",
             "param_len = np.sum(block_n_params)",
-
             f"param_slices = op_fun.param_slices",
+            f"use_template = op_fun.templated",
 
-            f"use_template = op_fun.templated and (template is not None)",
-            f"if op_fun.templated and not use_template:",
-            f'\traise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")',
-            f"t_data: np.ndarray = template if use_template else np.zeros(3)",
-            f"@njit(parallel=True, fastmath=True)",
-            f"def full_loss(inp_params):",
+            f"workingtag = datetime.now().strftime('%H:%M:%S')",
+            f"@njit(parallel=True, fastmath=True, cache=True)",
+            f"def full_loss(inp_params, template = None):",
+            # f"\tprint(workingtag)",
+            f"\tt_data: np.ndarray = template if use_template else np.zeros(3)",
             f"\tlosses = np.empty((n_threads, n_lines, 2))",
             f"\tfor i in prange(n_threads):",
             f"\t\t#make the memory components required",
@@ -309,12 +320,13 @@ class optimisation_function:
         fn = needed_import + start + t(additional_preamble) + t(preamble) + t(param_slicing) + t(mid_amble) + t(loss_calc) + t(postamble)
         str_fn = "\n".join(fn).replace("\t", "    ")
 
-        loc = Path(__file__)
-        with open(loc.parent/"template_functions/loss_fun.py", 'w') as f:
+        with open(write_file, 'w') as f:
             f.write(str_fn)
 
-        from .template_functions.loss_fun import make_full_loss
-        loss_fn = make_full_loss(self, detections, template, threads)
+        file_string = 'pyCamSet.optimisation.template_functions.'  + strings
+        importlib.invalidate_caches()
+        top_module = importlib.import_module(file_string)
+        loss_fn: Callable = top_module.make_full_loss(self, detections, threads)
         return loss_fn
 
     def _get_loss_jac_strings(self):
@@ -381,7 +393,18 @@ class optimisation_function:
 
         return import_set, needed_preamble, fn_content
 
-    def make_full_jac_template(self, detections, template, threads) -> Callable:
+    def make_full_jac_template(self, detections, threads, overwrite_function=False) -> Callable:
+
+        strings = "jac_" +  "_".join([str(name.__class__.__name__) for name in self.function_blocks])
+        file_name = "template_functions/" + strings + ".py"
+        write_file = (Path(__file__).parent)/file_name
+
+        if write_file.exists() and not overwrite_function:
+            file_string = 'pyCamSet.optimisation.template_functions.'  + strings
+            importlib.invalidate_caches()
+            top_module = importlib.import_module(file_string)
+            jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
+            return jac_fn
 
         def t(l):
             return ["\t" + li for li in l]
@@ -402,9 +425,12 @@ class optimisation_function:
 
 
         start = ["from numba import prange",
+                 "from numba.types import int_",
+                 "import scipy",
+                 "from datetime import datetime",
                 "from pyCamSet.optimisation.abstract_function_blocks import make_param_struct",
                  " ",
-                "def make_full_jac(op_fun, detections, template, threads):"
+                "def make_full_jac(op_fun, detections, threads):"
         ]
         preamble = [
             f"n_threads = threads",
@@ -427,16 +453,21 @@ class optimisation_function:
 
             f"jac_size = param_slices[-1]", 
             f"f_outs = op_fun.n_outs[0]", 
-            f"use_template = op_fun.templated and (template is not None)",
-            f"if op_fun.templated and not use_template:",
-            f'\traise ValueError("A templated optimisation was defined, but no template data was given to create the loss function")',
-            f"t_data: np.ndarray = template if use_template else np.zeros(3)",
-            f"#workingtag {datetime.now().strftime('%H:%M:%S')}",
-            f"@njit(parallel=True,fastmath=True)",
+            f"use_template = op_fun.templated",
+            f"@njit",
+            f"def u(data):",
+            f"\treturn np.resize(data, f_outs * d_shape[0] * param_len)",
+            f"workingtag = datetime.now().strftime('%H:%M:%S')",
+            f"@njit(parallel=True,fastmath=True,cache=True)",
             # f"@njit(parallel=False,fastmath=True)",
-            f"def full_jac(inp_params):",
+            f"def full_jac(inp_params, template = None):",
+            # f"\tprint(workingtag)",
+            f"\tt_data: np.ndarray = template if use_template else np.zeros(3)",
             f"\tp_size = len(inp_params)",
-            f"\tout_jac = np.zeros((n_threads, n_lines * f_outs, p_size))", 
+            f"\tdata_size = param_len * n_lines * f_outs",
+            f"\tdata_rows = np.empty((n_threads, data_size), dtype=int_)",
+            f"\tdata_cols = np.empty((n_threads, data_size), dtype=int_)",
+            f"\tdata_val = np.empty((n_threads, data_size))",
             f"\tfor i in prange(n_threads):", #below here is parallel scoped
             f"\t\t#make the memory components required",
             f"\t\tinp = np.empty(inp_mem)",
@@ -446,6 +477,7 @@ class optimisation_function:
             f"\t\tbase = np.eye(jac_size)",
             f"\t\tjac = np.eye(jac_size)",
             f"\t\tper_block = np.eye(jac_size)",
+            f"\t\tparam_col_numbers = np.empty(param_len)",
             f"\t\tfor ii in range(n_lines):",
             f"\t\t\tdatum = detection_data[i, ii]",
             f"\t\t\tjac[:] = base[:]",
@@ -457,10 +489,10 @@ class optimisation_function:
             f"\t\t\t\ts_num = datum[key_type[idb]]",
             f"\t\t\t\tp_ind = param_inds[idb]",
             f"\t\t\t\tstart = starts[p_ind] + s_num * block_n_params[p_ind]",
-            f"\t\t\t\tdense_param_arr[param_slices[2*idb]:param_slices[2*idb + 1]] = inp_params[int(start):int(start + block_n_params[p_ind])]",
+            f"\t\t\t\tind_chunks = np.arange(param_slices[2*idb],param_slices[2*idb + 1])",
+            f"\t\t\t\tdense_param_arr[ind_chunks] = inp_params[int(start):int(start + block_n_params[p_ind])]",
+            f"\t\t\t\tparam_col_numbers[ind_chunks] = np.arange(start,start + block_n_params[p_ind])",
         ]
-
-
         mid_amble = [
             f"\t\t\tif use_template:",
             f"\t\t\t\tinp[:3] = t_data[int(datum[2])] ",
@@ -473,19 +505,26 @@ class optimisation_function:
         calcs = [ '\t\t\t' + c for c in total_content] #this really needs to be AST
 
         param_slicing_out = [
-            f"\t\t\tfor idb in range(n_blocks):",
-            f"\t\t\t\ts_num = datum[key_type[idb]] #the index value of the associated parameter",
-            f"\t\t\t\tp_ind = param_inds[idb] # maps the param to it's index in the unique params",
-            f"\t\t\t\tstart = starts[p_ind] + s_num * block_n_params[p_ind]",
-            f"\t\t\t\tfor i_out in range(f_outs):",
-            f"\t\t\t\t\tout_jac[i, ii*f_outs + i_out, int(start):int(start + block_n_params[p_ind])] = jac["
-            f"\t\t\t\t\t\tout_param_start + i_out, param_slices[2*idb]:param_slices[2*idb + 1]"
-            f"\t\t\t\t\t]"
+            "\t\t\tfor i_out in range(f_outs):",
+            "\t\t\t\tper_detection_vals = param_len*f_outs",
+            "\t\t\t\tstart_ind = ii*per_detection_vals + i_out * param_len",
+            "\t\t\t\tend_ind = start_ind + param_len",
+            "\t\t\t\trow_loc = i * n_lines * f_outs + ii * f_outs + i_out",
+            "\t\t\t\tvals = jac[",
+            "\t\t\t\t\tout_param_start + i_out, :param_len",
+            "\t\t\t\t]",
+            "\t\t\t\tdata_rows[i, start_ind:end_ind] = row_loc",
+            "\t\t\t\tdata_cols[i, start_ind:end_ind] = param_col_numbers",
+            "\t\t\t\tdata_val[i, start_ind:end_ind] = vals",
         ]
 
         postamble = [
-            f"\treturn np.resize(out_jac, (2*d_shape[0], p_size))",
-            f"return full_jac"
+            f"\treturn u(data_rows), u(data_cols), u(data_val)",
+            f"def sparse_jac(inp_params, template=None):",
+            f"\tp_size = len(inp_params)",
+            f"\tr, c, v = full_jac(inp_params, template)",
+            f"\treturn scipy.sparse.csr_array((v, (r,c)), shape=(f_outs*d_shape[0], p_size))",
+            f"return sparse_jac",
         ] 
 
         fn = (
@@ -493,25 +532,28 @@ class optimisation_function:
                 + t(preamble) + t(param_slicing) + t(mid_amble) 
                 + t(calcs) + t(param_slicing_out) + t(postamble)
         )
-        str_fn = "\n".join(fn).replace("\t", "    ")
+        un_string = [f.replace("\t", "    ") for f in fn]
+        # str_fn = "\n".join(un_string)
 
-        loc = Path(__file__)
-        with open(loc.parent/"template_functions/loss_jac.py", 'w') as f:
-            f.write(str_fn)
+        with open(write_file, 'w') as f:
+            f.writelines((un + "\n" for un in un_string))
 
-        from .template_functions.loss_jac import make_full_jac
-        jac_fn: Callable = make_full_jac(self, detections, template, threads)
+        file_string = 'pyCamSet.optimisation.template_functions.'  + strings
+        importlib.invalidate_caches()
+        top_module = importlib.import_module(file_string)
+        jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
+
         return jac_fn
 
     
-    def make_full_loss_fn(self, detections, threads, template: np.ndarray = None):
+    def make_full_loss_fn(self, detections, threads):
         self._prep_for_computation()
-        return self.make_full_loss_template(detections, template, threads)
+        return self.make_full_loss_template(detections, threads)
 
     
-    def make_jacobean(self, detections, threads, template: np.ndarray = None):
+    def make_jacobean(self, detections, threads):
         self._prep_for_computation()
-        func =  self.make_full_jac_template(detections, template, threads)
+        func =  self.make_full_jac_template(detections, threads)
         return func
 
     def build_param_list(self, *args: list[np.ndarray])->np.ndarray:

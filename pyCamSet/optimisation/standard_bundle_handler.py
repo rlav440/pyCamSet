@@ -117,8 +117,9 @@ class SelfBundleHandler(TemplateBundleHandler):
         self.op_fun: fb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.rigidTform3d() +  fb.free_point()
 
     def make_loss_fun(self, threads):
-        #flatten the object shape
-        temp_loss = self.op_fun.make_full_loss_fn(self.detection.get_data(), threads)
+        target_shape = self.target.point_data.shape
+        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        temp_loss = self.op_fun.make_full_loss_fn(dd, threads)
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
@@ -126,8 +127,10 @@ class SelfBundleHandler(TemplateBundleHandler):
         return loss_fun
 
     def make_loss_jac(self, threads): 
-        #TODO implement proper culling
-        temp_loss = self.op_fun.make_jacobean(self.detection.get_data(), threads)
+
+        target_shape = self.target.point_data.shape
+        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        temp_loss = self.op_fun.make_jacobean(dd, threads)
         mask = np.concatenate(
             ( 
                 np.repeat(self.intr_unfixed, 9),

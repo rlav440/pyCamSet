@@ -34,11 +34,14 @@ def make_optimisation_function(
     :return fn: the cost function
     """
     #
+    logging.info("getting initial params")
     init_params = param_handler.get_initial_params()
     base_data = param_handler.get_detection_data(flatten=True)
+    logging.info("Compiling the loss function")
     bundle_loss_fun = param_handler.make_loss_fun(threads)
 
     if param_handler.can_make_jac():
+        logging.info("Compiling the jacobian")
         bundle_loss_jac = param_handler.make_loss_jac(threads)
     else: 
         bundle_loss_jac = None
@@ -55,6 +58,7 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     :param param_handler: The parameter handler that represents the optimisation
     :return: The output of the calibration and the argmin defined CameraSet
     """
+    logging.info("Making optimisation problem")
     loss_fn, bundle_jac, init_params = make_optimisation_function(
         param_handler, threads
     )
@@ -85,9 +89,10 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
         loss_fn,
         init_params,
         verbose=param_handler.problem_opts['verbosity'],
+        # method="lm",
         # tr_solver='lsmr',
         jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
-        max_nfev=100,
+        max_nfev=param_handler.problem_opts["max_nfev"],
         # x_scale='jac',
     )
     end = time.time()

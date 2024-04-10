@@ -25,7 +25,8 @@ DEFAULT_OPTIONS = {
     'fixed_pose':0,
     'ref_cam':0,
     'ref_pose':0,
-    'outliers':'ask'
+    'outliers':'ask',
+    'max_nfev':50,
 }
 class TemplateBundlePrimitive:
     """
@@ -155,9 +156,11 @@ class TemplateBundleHandler:
     def make_loss_fun(self, threads):
         
         #flatten the object shape
-        obj_data = self.target.point_data.reshape((-1, 3))
+        obj_data = self.target.point_data.reshape((-1, 3)) #maybe this is wrong. 
 
-        temp_loss = self.op_fun.make_full_loss_fn(self.detection.get_data(), threads) 
+        target_shape = self.target.point_data.shape
+        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        temp_loss = self.op_fun.make_full_loss_fn(dd, threads) 
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
@@ -167,7 +170,10 @@ class TemplateBundleHandler:
     def make_loss_jac(self, threads): 
         #TODO implement proper culling
         obj_data = self.target.point_data.reshape((-1, 3))
-        temp_loss = self.op_fun.make_jacobean(self.detection.get_data(), threads)
+
+        target_shape = self.target.point_data.shape
+        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        temp_loss = self.op_fun.make_jacobean(dd, threads)
         mask = np.concatenate(
             ( 
                 np.repeat(self.intr_unfixed, 9),
@@ -503,7 +509,7 @@ def estimate_camera_relative_poses(
     errors = []
     ps = calibration_target.point_data.reshape((-1, 3)) #could the flattening be failing for things that aren't flat
     target_shape = calibration_target.point_data.shape
-    dd = detection.return_flattened_keys(target_shape[:-1]).get_data()
+    dd =  detection.return_flattened_keys(target_shape[:-1]).get_data()
 
     lookups =  []
     for i in range(detection.max_ims):
@@ -533,7 +539,8 @@ def estimate_camera_relative_poses(
         costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
         im_costs = []
         for l in lookups:
-            im_costs.append(np.sum(costs[l]))
+            total_costs = np.sum(costs[l])
+            im_costs.append(total_costs)
         errors.append(im_costs)
 
     errors = np.array(errors)
@@ -552,26 +559,11 @@ def estimate_camera_relative_poses(
         dists,           
     )
     costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
-    im_costs = []
     for l in lookups:
         im_costs.append(np.sum(costs[l]))
+
+
     init_per_im_reproj_err = np.array(im_costs)
 
     Mat_rt[ref_pose] = np.eye(4)
     return Mrt_ac, Mat_rt, init_per_im_reproj_err
-
-    # ert refcam -> other_cams
-    Mat_arc = Mac_rc[:, None, ...] @ Mat_ac
-    plt.imshow(np.isnan(np.array(Mat_arc)[:,:,0,0]))
-    plt.show()
-    Mat_rc = np.array([gu.average_tforms(Mat_rc) for Mat_rc in Mat_arc.transpose((1,0,2,3))])
-
-    # Mat_rc = Mat_arc[ref_cam, ...] 
-
-    #etp refcam -> cube_loc
-    Mrt_rc = Mat_rc[ref_pose]
-    Mrc_rt = np.linalg.inv(Mrt_rc)  #is reftarget -> refcam
-    Mac_rt = Mrc_rt @ Mac_rc # cam -> refcam -> reftarget
-    Mrt_ac = Mac_rc @ Mrt_rc
-    Mat_rt = Mrc_rt @ Mat_rc  # cube_loc -> refcam -> refcube
-    return Mrt_ac, Mat_rt

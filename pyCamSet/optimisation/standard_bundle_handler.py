@@ -8,6 +8,7 @@ from typing import Callable
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
+import pyvista as pv
 
 from typing import TYPE_CHECKING
 from pyCamSet.optimisation.template_handler import TemplateBundleHandler, DEFAULT_OPTIONS
@@ -228,5 +229,28 @@ class SelfBundleHandler(TemplateBundleHandler):
             ch.n_e4x4_flat_INPLACE(p, pn)
 
         return new_cams, ps
+    
+    def special_plots(self, x):
+        og_data = self.target.point_data.reshape((-1,3))
+        n_points = self.flat_point_data.shape[0]
+        final_data = x[-3*n_points:].reshape((-1,3))
+        ref_data = self.target.point_data.reshape((-1,3))
+        find_tform =  gu.make_4x4h_tform(*ch.n_estimate_rigid_transform(final_data, ref_data))
+        final_data = gu.h_tform(final_data, find_tform)
+
+        scale = np.mean(np.linalg.norm(og_data, axis=-1)/np.linalg.norm(final_data, axis=-1))
+        final_data *= scale
+
+        diff = (og_data - final_data) * 1000
+        print(f"found a mean difference of {np.mean(np.linalg.norm(diff, axis=-1)):.2f} mm")
+        s = pv.Plotter()
+        s.add_arrows(og_data, diff, mag=0.1)
+        s.add_mesh(pv.PolyData(og_data), color='r')
+        s.add_mesh(pv.PolyData(final_data), color='g')
+        s.show()
+
+
+
+
 
 

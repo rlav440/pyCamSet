@@ -129,7 +129,7 @@ def visualise_calibration(
     detection = param_handler.get_detection()
     cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
 
-    cluster_plot([o_results['err']], alphas=[0.1])
+    cluster_plot([o_results['err']], alphas=[0.2])
 
     # the coverage for each camera
     n_cams = cams.get_n_cams()

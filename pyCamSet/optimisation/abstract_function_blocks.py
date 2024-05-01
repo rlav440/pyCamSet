@@ -690,9 +690,6 @@ def make_param_struct(
         key_type.PER_KEY:max_keys,
     }
     #TODO account for the mod function here, modifying the numbers of params
-
-    # find all of the unique instances of link indicators
-    #TODO use memory location of link indicators to compare (is) I think
     unique_link_inds = []
     for fb in function_blocks:
         if not fb.params in unique_link_inds:

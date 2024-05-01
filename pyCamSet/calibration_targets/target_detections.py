@@ -22,12 +22,15 @@ class ImageDetection:
             keys = np.array(keys)
         if not isinstance(image_points, np.ndarray) and image_points is not None:
             image_points = np.array(image_points)
+
         if keys is not None and image_points is not None:
             assert len(keys) == len(image_points), "Detected keys must be the same length as detected points"
             self.keys = keys
             self.image_points = image_points
             self.has_data = True
             self.data_len = len(keys)
+            if keys.shape[0] == 0:
+                self.has_data = False
         elif keys is None and image_points is None:
             self.has_data = False
         else:
@@ -234,9 +237,12 @@ class TargetDetection:
                 keys = detection.keys[..., None]
             else:
                 keys = detection.keys
-            observation = np.concatenate(
-                [np.ones((detection.data_len, 2))*[ind, im_num], keys, detection.image_points]
-                , axis=1)
+            try:
+                observation = np.concatenate(
+                    [np.ones((detection.data_len, 2))*[ind, im_num], keys, detection.image_points]
+                    , axis=1)
+            except:
+                print(detection.image_points)
             self._update_buffer.append(observation)
 
     def _glomp_buffer(self) -> None:

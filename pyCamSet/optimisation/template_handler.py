@@ -26,7 +26,7 @@ DEFAULT_OPTIONS = {
     'ref_cam':0,
     'ref_pose':0,
     'outliers':'ask',
-    'max_nfev':50,
+    'max_nfev':100,
 }
 class TemplateBundlePrimitive:
     """
@@ -271,6 +271,7 @@ class TemplateBundleHandler:
                     print(f"Outliers detected in iteration {num_loops}.")
                     user_in = input("Do you wish to remove these outlier poses: \n y/n: ")
                 if user_in == 'y':
+                    # max_loc = np.argmax(per_im_error[outlier_inds])
                     self.missing_poses[outlier_inds] = True
                 if user_in == 'n':
                     cyclic_outlier_detection = False

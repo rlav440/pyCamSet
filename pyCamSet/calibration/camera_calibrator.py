@@ -1,4 +1,4 @@
-
+from copy import copy
 import cv2
 import matplotlib.pyplot as plt
 from multiprocessing import cpu_count
@@ -244,14 +244,10 @@ def run_stereo_calibration(
         threads = threads,
     )
 
+    param_handler.camset = optimised_cams
     # optimised_cams = param_handler.camset
     # outlier_rejection(optimisation.fun.reshape((-1,2)), param_handler)
 
-    param_handler.camset = optimised_cams
-    # optimised_cams.set_calibration_history(
-    #     optimisation_results=optimisation,
-    #     param_handler=param_handler,
-    # )
 
     if save:
         if floc is not None:

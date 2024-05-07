@@ -9,8 +9,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
 import pyvista as pv
+from itertools import combinations
 
 from typing import TYPE_CHECKING
+
+from scipy.spatial.distance import cdist
 from pyCamSet.optimisation.template_handler import TemplateBundleHandler, DEFAULT_OPTIONS
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
@@ -23,6 +26,20 @@ if TYPE_CHECKING:
     from pyCamSet.cameras import CameraSet, Camera
 
 
+def find_not_colinear_pts(bundle_points):
+    # might as well have the first point be the first point
+    ind0 = 0
+
+    # basically we want to find that the projection of point 3 onto the fist two is nonzero.
+    for ind1, ind2 in combinations(np.arange(1, bundle_points.shape[0]), 2):
+        
+        x_prod = np.cross(bundle_points[ind0], bundle_points[ind1])
+        off_dot = np.sum(x_prod * bundle_points[ind2])
+        if off_dot > 1e-8:
+            return ind0, ind1, ind2
+    else:
+        raise ValueError("No set of values that were not colinear were found in the provided data.")
+
 class StandardBundlePrimitive:
     """
     A class that contains a set of base arrays.
@@ -34,13 +51,18 @@ class StandardBundlePrimitive:
 
     def __init__(self, poses:np.ndarray, bundle_points: np.ndarray, extr: np.ndarray, intr: np.ndarray,
                  poses_unfixed=None, bundle_points_unfixed=None, extr_unfixed=None, intr_unfixed=None, 
+                 always_correct_gauge=False
                  ):
+
         self.extr = extr
         self.extr_unfixed = extr_unfixed if extr_unfixed is not None else np.ones(extr.shape[0], dtype=bool)
         self.intr = intr
         self.intr_unfixed = intr_unfixed if intr_unfixed is not None else np.ones(intr.shape[0], dtype=bool)
         self.bundle_pts = bundle_points
         self.bdpt_unfixed = bundle_points_unfixed if bundle_points_unfixed is not None else np.ones(bundle_points.shape[0], dtype=bool)
+        #we fix the bundle points on a per point basis
+
+        self.correct_gauge = True
         self.poses = poses
         self.pose_unfixed = poses_unfixed if poses_unfixed is not None else np.ones(poses.shape[0], dtype=bool)
         self.calc_type_inds()
@@ -55,7 +77,7 @@ class StandardBundlePrimitive:
         self.intr_end = 9 * self.free_intr
         self.extr_end = 6 * self.free_extr + self.intr_end
         self.pose_end = 6 * self.free_pose + self.extr_end
-        self.bdpt_end = 3 * self.free_bdpt + self.pose_end
+        self.bdpt_end = 1 * self.free_bdpt + self.pose_end
 
     def return_bundle_primitives(self, params):
         """
@@ -68,13 +90,15 @@ class StandardBundlePrimitive:
         intr_data = params[:self.intr_end].reshape((self.free_intr, 9))
         extr_data = params[self.intr_end:self.extr_end].reshape((self.free_extr, 6))
         pose_data = params[self.extr_end:self.pose_end].reshape((self.free_pose, 6))
-        bdpt_data = params[self.pose_end:self.bdpt_end].reshape((self.free_bdpt, 3))
+        bdpt_data = params[self.pose_end:self.bdpt_end]
 
         ch.fill_flat(pose_data, self.poses, self.pose_unfixed)
-        ch.fill_flat(bdpt_data, self.bundle_pts, self.bdpt_unfixed)
         ch.fill_flat(extr_data, self.extr, self.extr_unfixed)
         ch.fill_flat(intr_data, self.intr, self.intr_unfixed)
-        return self.intr, self.extr, self.poses, self.bundle_pts
+
+        ch.fill_flat(bdpt_data, self.bundle_pts, self.bdpt_unfixed)
+
+        return self.intr, self.extr, self.poses, self.bundle_pts.reshape((-1, 3))
 
 class SelfBundleHandler(TemplateBundleHandler):
     """
@@ -104,8 +128,29 @@ class SelfBundleHandler(TemplateBundleHandler):
                  ):
         super().__init__(camset, target, detection, fixed_params, options, missing_poses) 
 
-        self.flat_point_data = np.copy(self.point_data.reshape((-1, 3)))
+        self.flat_point_data = np.copy(self.point_data.reshape((-1)))
+
+
+        # if bundle_points_unfixed is not None:
+        #     logging.warning(
+        #         """
+        #         A list of unfixed bundle points was provided. The calibration fixes arbitrary points to break gauge symmetries. 
+        #         Unless overridden with the always_correct_gauge=True, the optimisation will no longer attempt to return the output geometry to the provided scale. 
+        #         """)
+        #     self.correct_gauge = always_correct_gauge
+        #
+        #     self.bdpt_unfixed = bundle_points_unfixed
+        # else:
+
+        #fix the gauge of the optimisation by fixing 7 params of the target
+
+        self.fixed_inds = find_not_colinear_pts(self.flat_point_data.reshape((-1,3)))
+        i0, i1, i2 = self.fixed_inds
         self.feat_unfixed = np.ones(self.flat_point_data.shape[0], dtype=bool)
+        self.feat_unfixed[3*i0:3*i0+3] = False
+        self.feat_unfixed[3*i1:3*i1+3] = False
+        self.feat_unfixed[3*i2] = False
+
         self.bundlePrimitive = StandardBundlePrimitive(
             self.poses, self.flat_point_data, self.extr, self.intr,
             extr_unfixed=self.extr_unfixed, intr_unfixed=self.intr_unfixed, poses_unfixed=self.pose_unfixed, bundle_points_unfixed=self.feat_unfixed
@@ -114,7 +159,6 @@ class SelfBundleHandler(TemplateBundleHandler):
         self.param_len = None
         self.jac_mask = None
         self.missing_poses: list | None = missing_poses
-
         self.op_fun: fb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.rigidTform3d() +  fb.free_point()
 
     def make_loss_fun(self, threads):
@@ -137,7 +181,7 @@ class SelfBundleHandler(TemplateBundleHandler):
                 np.repeat(self.intr_unfixed, 9),
                 np.repeat(self.extr_unfixed, 6),
                 np.repeat(self.pose_unfixed, 6),
-                np.repeat(self.feat_unfixed, 3),
+                np.repeat(self.feat_unfixed, 1), #I unrolled feature unfixed
             ), axis=0
         )
 
@@ -182,7 +226,7 @@ class SelfBundleHandler(TemplateBundleHandler):
         self.initial_params[:self.bundlePrimitive.pose_end] = prev_cams.calibration_params.copy()
         self.initial_params[ 
             self.bundlePrimitive.pose_end:
-        ] = prev_cams.calibration_handler.target.point_data.copy().flatten() 
+        ] = prev_cams.calibration_handler.target.point_data.copy().flatten()[self.feat_unfixed]
         # print(prev_cams.calibration_handler.target.point_data.flatten()[:20])
 
 
@@ -208,7 +252,9 @@ class SelfBundleHandler(TemplateBundleHandler):
 
 
         new_cams = copy(self.camset)
-        proj, extr, poses, _ = self.bundlePrimitive.return_bundle_primitives(x)
+
+        standard_model = self.bundlePrimitive.return_bundle_primitives(x)
+        proj, extr, poses, ps = self.apply_gauge_transform(*standard_model)
 
         for idc, cam_name in enumerate(self.cam_names):
             blank_intr = np.eye(3)
@@ -229,11 +275,131 @@ class SelfBundleHandler(TemplateBundleHandler):
             ch.n_e4x4_flat_INPLACE(p, pn)
 
         return new_cams, ps
+
+    def apply_gauge_transform(self, proj, extr, poses, point_estimate) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+
+        ref_points = self.target.point_data.reshape((-1,3))
+        # find the scale, translation and rotation of the relative points.
+        valid_map = self.target.valid_map
+        #although the following can be pre calc'd, we probably only one to do this once.
+        #so it should be fine to leave in this function.
+        #it does also make sense to move this to when the valid point map is defined.
+
+        if isinstance(valid_map, bool):
+            #use cdist, take the upper
+            inds = np.triu_indices(point_estimate.shape[0], k=1)
+            new_map = cdist(point_estimate, point_estimate)[inds]
+            ref_map = cdist(ref_points, ref_points)[inds]
+        else:
+            new_map = ch.calc_distance_subset(point_estimate, point_estimate, valid_map[:,:2])
+            ref_map = ch.calc_distance_subset(ref_points, ref_points, valid_map[:,:2])
+        s = np.mean(ref_map/new_map)
+        print(f"found a scale of {s}")
+
+
+        new_points = s * point_estimate
+        
+        update_tform = gu.make_4x4h_tform(*ch.n_estimate_rigid_transform(new_points, ref_points)) #this mapping from used points to a reference space
+        inv_update = np.linalg.inv(update_tform)
+        new_points = gu.h_tform(new_points, update_tform)
+        #proj matricies never change: scale invariance!
+
+        for i in range(len(poses)):
+            ### scale change
+
+            poses[i][3:] = poses[i][3:] * s
+
+            ### rigid change
+            pose = gu.make_4x4h_tform(poses[i][:3], poses[i][3:])
+            new_pose = update_tform @ pose @ inv_update
+            poses[i][:3], poses[i][3:] = gu.ext_4x4_to_rod(new_pose)
+
+        
+
+        for i in range(len(extr)):
+            ### scale change
+            extr[i][3:] = extr[i][3:] * s
+
+            ### rigid change
+            og_tform = gu.make_4x4h_tform(extr[i][:3], extr[i][3:])
+            new_tform = og_tform @ inv_update
+            extr[i][:3], extr[i][3:] = gu.ext_4x4_to_rod(new_tform)
+
+        # all poses are untouched, the target is in the same position, but the points are moved and the target has moved as well.
+        check_math = True
+        if not check_math:
+            return proj, extr, poses, new_points
+
+        # s = pv.Plotter()
+        # s.title = "Target Self-calibration Results."
+        # s.add_mesh(pv.PolyData(ref_points), color='r', label = "Original Model")
+        # s.add_mesh(pv.PolyData(new_points), color='g', label = "Best-scaled Model")
+        # s.add_mesh(pv.PolyData(point_estimate), color='b', label = "As Calibrated Model")
+        #
+        # s.show()
+
+        # new_points = point_estimate
+        target_shape = self.target_point_shape
+        dd =  self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        dists = proj[:, 4:]
+        n_cam = self.camset.get_n_cams()
+        ints = np.zeros((n_cam, 3, 3))
+        for i in range(n_cam):
+            ints[i, 0, 0] = proj[i,0]
+            ints[i, 0, 2] = proj[i,1]
+            ints[i, 1, 1] = proj[i,2]
+            ints[i, 1, 2] = proj[i,3]
+            ints[i, 2, 2] = 1
+
+        proj_mat = np.zeros((n_cam, 3, 4))
+        extr_mat = np.zeros((n_cam, 4, 4))
+        
+        for i in range(n_cam):
+            extr_mat[i] = gu.make_4x4h_tform(extr[i,:3], extr[i,3:])
+            proj_mat[i] = ints[i] @ extr_mat[i][:3, :]
+
+
+        n_images = len(poses)
+        n_points = new_points.shape[0]
+        im_data = np.empty((n_images, n_points, 3))
+        for i in range(n_images):
+            im_data[i] = gu.h_tform(new_points, gu.make_4x4h_tform(poses[i][:3], poses[i][3:]))
+
+        # try:
+        #     costs = ch.bundle_adjustment_costfn(
+        #         dd,
+        #         im_data,
+        #         proj_mat,
+        #         ints,
+        #         dists,           
+        #     )
+        # except ZeroDivisionError:
+        costs = ch.numpy_bundle_adjustment_costfn(
+            dd,
+            im_data,
+            proj_mat,
+            ints,
+            dists,           
+        )
+        mean_err = np.mean(np.linalg.norm(costs.reshape((-1,2)),axis=1))
+        raise ValueError(f"found a gauge transformed error of {mean_err:.2f} pixels")
+        # now we update all of the camera relevant points.
+        # all extrinsics are pre_multiplied by the relative transformation
+        # all focal lengths are multiplied by the scale change
+        # all distortion parameters are left untouched. 
+
+
+        # to check this is correct, we construct a new input to a bundle adjustment function.
+        # we use the updated target points, positions and poses.
+        # this function should solve to produce exactly the same assessed error as was obtained in the previous model.
+
     
     def special_plots(self, x):
         og_data = self.target.point_data.reshape((-1,3))
         n_points = self.flat_point_data.shape[0]
-        final_data = x[-3*n_points:].reshape((-1,3))
+        
+        _, _, _, final_data = self.get_bundle_adjustment_inputs(x)
+        unfixed_points = final_data.copy()
         ref_data = self.target.point_data.reshape((-1,3))
         find_tform =  gu.make_4x4h_tform(*ch.n_estimate_rigid_transform(final_data, ref_data))
         final_data = gu.h_tform(final_data, find_tform)
@@ -241,12 +407,19 @@ class SelfBundleHandler(TemplateBundleHandler):
         scale = np.mean(np.linalg.norm(og_data, axis=-1)/np.linalg.norm(final_data, axis=-1))
         final_data *= scale
 
-        diff = (og_data - final_data) * 1000
+        diff = (final_data - og_data) * 1000
         print(f"found a mean difference of {np.mean(np.linalg.norm(diff, axis=-1)):.2f} mm")
         s = pv.Plotter()
-        s.add_arrows(og_data, diff, mag=0.1)
-        s.add_mesh(pv.PolyData(og_data), color='r')
-        s.add_mesh(pv.PolyData(final_data), color='g')
+        s.title = "Target Self-calibration Results."
+        s.add_arrows(og_data, diff, mag=0.01, label = "Recovered shape change (10x mag)") #10x magnification on the vectors.
+        s.add_mesh(pv.PolyData(og_data), color='r', label = "Original Model")
+        s.add_mesh(pv.PolyData(final_data), color='g', label = "Best-scaled Model")
+        s.add_mesh(pv.PolyData(unfixed_points), color='b', label = "As Calibrated Model")
+        s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[0]]), color='k', label="Points used to fix gauge symmetry")
+        s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[1]]), color='k')
+        s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[2]]), color='k')
+        s.add_legend(bcolor='w', border=True)
+
         s.show()
 
 

@@ -137,6 +137,8 @@ class optimisation_function:
 
         self.ready_to_compute = False
 
+        self.gauge_breaking_costs = None
+
     def _prep_for_computation(self):
         if self.ready_to_compute:
             return

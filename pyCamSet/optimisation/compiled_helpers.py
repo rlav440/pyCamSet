@@ -97,10 +97,16 @@ def fill_flat(src, dst, dst_unfixed):
     """
     k = 0
     n_dst = len(dst)
-    for i in range(n_dst):
-        if dst_unfixed[i]:
-            dst[i, :] = src[k, :]
-            k += 1
+    if src.ndim > 1:
+        for i in range(n_dst):
+            if dst_unfixed[i]:
+                dst[i, :] = src[k, :]
+                k += 1
+    else:
+        for i in range(n_dst):
+            if dst_unfixed[i]:
+                dst[i] = src[k]
+                k += 1
     return
 
 
@@ -648,6 +654,7 @@ def n_dist_prealloc(x, out):
 def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Calculates the rigid transform between two sets of points using an svd
+    Maps the first set of points to the second.
 
     :params v0: The first set of points
     :params v1: The second set of points

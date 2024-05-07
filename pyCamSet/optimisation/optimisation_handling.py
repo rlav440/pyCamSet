@@ -6,7 +6,7 @@ from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.optimize import least_squares, approx_fprime
+from scipy.optimize import least_squares, approx_fprime, OptimizeResult
 
 from typing import TYPE_CHECKING
 
@@ -50,7 +50,7 @@ def make_optimisation_function(
 
 
 def run_bundle_adjustment(param_handler: TemplateBundleHandler,
-                          threads: int = 1) -> tuple[np.ndarray, CameraSet]:
+                          threads: int = 1) -> tuple[OptimizeResult, CameraSet]:
     """
     A function that takes an abstract parameter handler, turns it into a cost function, and returns the
     optimisation results and the camera set that minimises the optimisation problem defined by the parameter handler.

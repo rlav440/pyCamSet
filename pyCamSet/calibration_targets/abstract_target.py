@@ -47,6 +47,7 @@ class AbstractTarget(ABC):
         self.point_local = None #: np.ndarray = self.make_local()
         self.original_points = None # = self.point_data.copy()
         self.input_args = inputs
+        self.valid_map = True
 
     def _process_data(self):
         """

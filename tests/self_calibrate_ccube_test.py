@@ -21,7 +21,7 @@ def test_calib_ccube():
         cams.save(test_cams)
     param_handler = SelfBundleHandler(
         detection=cams.calibration_handler.detection, target=target, camset=cams,
-        options={'max_nfev':2}
+        options={'max_nfev':100}
     )
     param_handler.set_from_templated_camset(cams)
     op, final_cams = run_bundle_adjustment(
@@ -29,7 +29,7 @@ def test_calib_ccube():
         threads = 16,
     )
 
-    final_cams.visualise_calibration()
+    # final_cams.visualise_calibration()
     final_euclid = np.mean(np.linalg.norm(np.reshape(
         final_cams.calibration_result, (-1, 2)
     ), axis=1))

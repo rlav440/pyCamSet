@@ -28,6 +28,7 @@ def test_self_calibration_charuco():
         param_handler=param_handler,
         threads = 16,
     )
+    # final_cams.visualise_calibration()
     final_euclid = np.mean(np.linalg.norm(np.reshape(
         final_cams.calibration_result, (-1, 2)
     ), axis=1)) 

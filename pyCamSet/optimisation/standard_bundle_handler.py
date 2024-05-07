@@ -28,14 +28,17 @@ if TYPE_CHECKING:
 
 def find_not_colinear_pts(bundle_points):
     # might as well have the first point be the first point
+    # I think what I actually want is (AB dot AC)
     ind0 = 0
 
     # basically we want to find that the projection of point 3 onto the fist two is nonzero.
     for ind1, ind2 in combinations(np.arange(1, bundle_points.shape[0]), 2):
-        
-        x_prod = np.cross(bundle_points[ind0], bundle_points[ind1])
-        off_dot = np.sum(x_prod * bundle_points[ind2])
-        if off_dot > 1e-8:
+        AB = bundle_points[ind0] - bundle_points[ind1]
+        AC = bundle_points[ind0] - bundle_points[ind2]
+        score = np.linalg.norm(np.cross(AB, AC))
+        # x_prod = np.cross(bundle_points[ind0], bundle_points[ind1])
+        # off_dot = np.sum(x_prod * bundle_points[ind2])
+        if score > 1e-8:
             return ind0, ind1, ind2
     else:
         raise ValueError("No set of values that were not colinear were found in the provided data.")
@@ -365,47 +368,34 @@ class SelfBundleHandler(TemplateBundleHandler):
         for i in range(n_images):
             im_data[i] = gu.h_tform(new_points, gu.make_4x4h_tform(poses[i][:3], poses[i][3:]))
 
-        # try:
-        #     costs = ch.bundle_adjustment_costfn(
-        #         dd,
-        #         im_data,
-        #         proj_mat,
-        #         ints,
-        #         dists,           
-        #     )
-        # except ZeroDivisionError:
-        costs = ch.numpy_bundle_adjustment_costfn(
-            dd,
-            im_data,
-            proj_mat,
-            ints,
-            dists,           
-        )
+        try:
+            costs = ch.bundle_adjustment_costfn(
+                dd,
+                im_data,
+                proj_mat,
+                ints,
+                dists,           
+            )
+        except ZeroDivisionError:
+            costs = ch.numpy_bundle_adjustment_costfn(
+                dd,
+                im_data,
+                proj_mat,
+                ints,
+                dists,           
+            )
         mean_err = np.mean(np.linalg.norm(costs.reshape((-1,2)),axis=1))
-        raise ValueError(f"found a gauge transformed error of {mean_err:.2f} pixels")
-        # now we update all of the camera relevant points.
-        # all extrinsics are pre_multiplied by the relative transformation
-        # all focal lengths are multiplied by the scale change
-        # all distortion parameters are left untouched. 
+        logging.info(f"found a gauge transformed error of {mean_err:.2f} pixels")
 
-
-        # to check this is correct, we construct a new input to a bundle adjustment function.
-        # we use the updated target points, positions and poses.
-        # this function should solve to produce exactly the same assessed error as was obtained in the previous model.
+        return proj, extr, poses, new_points
 
     
     def special_plots(self, x):
         og_data = self.target.point_data.reshape((-1,3))
-        n_points = self.flat_point_data.shape[0]
         
-        _, _, _, final_data = self.get_bundle_adjustment_inputs(x)
-        unfixed_points = final_data.copy()
-        ref_data = self.target.point_data.reshape((-1,3))
-        find_tform =  gu.make_4x4h_tform(*ch.n_estimate_rigid_transform(final_data, ref_data))
-        final_data = gu.h_tform(final_data, find_tform)
-
-        scale = np.mean(np.linalg.norm(og_data, axis=-1)/np.linalg.norm(final_data, axis=-1))
-        final_data *= scale
+        un_gauged_data = self.get_bundle_adjustment_inputs(x)
+        _,_,_, final_data = self.apply_gauge_transform(*un_gauged_data)
+        unfixed_points = un_gauged_data[-1].copy()
 
         diff = (final_data - og_data) * 1000
         print(f"found a mean difference of {np.mean(np.linalg.norm(diff, axis=-1)):.2f} mm")
@@ -419,7 +409,6 @@ class SelfBundleHandler(TemplateBundleHandler):
         s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[1]]), color='k')
         s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[2]]), color='k')
         s.add_legend(bcolor='w', border=True)
-
         s.show()
 
 

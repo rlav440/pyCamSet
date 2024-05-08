@@ -1,6 +1,7 @@
 from cv2 import aruco
 from pathlib import Path
 import numpy as np
+from multiprocessing import cpu_count
 
 from pyCamSet import calibrate_cameras, Ccube, load_CameraSet
 from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
@@ -26,7 +27,7 @@ def test_calib_ccube():
     param_handler.set_from_templated_camset(cams)
     op, final_cams = run_bundle_adjustment(
         param_handler=param_handler,
-        threads = 16,
+        threads = cpu_count(),
     )
 
     # final_cams.visualise_calibration()

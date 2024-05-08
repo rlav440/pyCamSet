@@ -2,6 +2,7 @@ from pathlib import Path
 from matplotlib import pyplot as plt
 import cv2
 import numpy as np
+from multiprocessing import cpu_count
 
 from pyCamSet import calibrate_cameras, ChArUco, load_CameraSet
 from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
@@ -26,7 +27,7 @@ def test_self_calibration_charuco():
     # final_cams = run_stereo_calibration(
     _, final_cams = run_bundle_adjustment(
         param_handler=param_handler,
-        threads = 16,
+        threads = cpu_count(),
     )
     # final_cams.visualise_calibration()
     final_euclid = np.mean(np.linalg.norm(np.reshape(

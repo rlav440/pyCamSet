@@ -234,11 +234,13 @@ class CameraSet:
             cam_loc = loc/f"{cam_n:08}_cam.txt"
             cam.to_MVSnet_txt(cam_loc, (r.mindist, r.maxdist), r.steps)
 
+
         if ims is not None:
             im_loc = loc.parent/'images'
             im_loc.mkdir(exist_ok=True)
             for idx, im in enumerate(ims):
-                cv2.imwrite(str(im_loc/f"{idx:08}.jpg"), im)
+                im_temp = self[idx].undistort(im)
+                cv2.imwrite(str(im_loc/f"{idx:08}.jpg"), im_temp,  [cv2.IMWRITE_JPEG_QUALITY, 100])
 
         cvwc = np.array(
             [cam.view for cam in self]
@@ -350,6 +352,7 @@ class CameraSet:
         )
         viable_mask = count > 1
         reconstructable_data = data[viable_mask[inv]]
+
         _, im_index, im_counts = np.unique(reconstructable_data[:, 1:-2], axis=0, return_index=True, return_counts=True)
         start_ind = np.append(0, np.cumsum(im_counts[np.argsort(im_index)]))
 
@@ -357,6 +360,7 @@ class CameraSet:
         proj = np.array([cam.proj for cam in self])
         dists = np.array([cam.distortion_coefs for cam in self])
         intr = np.array([cam.intrinsic for cam in self])
+        
         reconstructed = nb_triangulate_full(reconstructable_data, proj, start_ind, intr, dists)
     
         if return_used:
@@ -454,7 +458,7 @@ class CameraSet:
         return scene
 
     def plot(self, 
-             additional_mesh: pv.PolyData|list[pv.PolyData]|None=None,
+             additional_mesh: pv.PolyData|list[pv.PolyData | CameraSet | np.ndarray]|None=None,
              scale_factor=None,
              view_cones=False):
         """
@@ -516,13 +520,17 @@ class CameraSet:
             #create a colourscheme for the additional meshes.
             cls = len(additional_mesh)
             #colours = colourmap_to_colour_list(cls, plt.get_cmap('Set1'))
-            colours = ['r', 'g', 'b'] + ['b'] * 100
+            colours = ['r', 'g', 'b', 'r', 'g', 'b', 'r', 'g', 'b'] + ['b'] * 100
             colours = colours[:cls]
-            for mesh, col in zip(additional_mesh, colours):
+            for idc, (mesh, col) in enumerate(zip(additional_mesh, colours)):
                 if not isinstance(mesh, CameraSet):
                     if isinstance(mesh, np.ndarray):
                         mesh = pv.PolyData(mesh)
                     # if mesh has no colour
+                    if isinstance(mesh, np.ndarray):
+                        if mesh.ndim == 2 | mesh.shape[1] != 3:
+                            raise ValueError(f"The provided array at {idc} was not the right shape. The shpae should be [n,3], but was instead {mesh.shape}")
+                        mesh = pv.PolyData(mesh)
                     if mesh.active_scalars is None:
                         scene.add_mesh(mesh, col, opacity=0.1)
                     else:
@@ -689,9 +697,6 @@ class CameraSet:
 
         detection = self.calibration_handler.get_detection()
         to_reconstruct = detection.sort(['key', 'im_num']).get_data()
-
-
-
         _, poses = self.calibration_handler.get_camset(self.calibration_params, return_pose=True)
 
         ## Triangulation of points in world space
@@ -712,3 +717,4 @@ class CameraSet:
             mask.append(np.linalg.norm(obj_point) < 3 * mean_dist)
         
         return reconstructed[np.array(mask)]
+

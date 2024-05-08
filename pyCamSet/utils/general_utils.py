@@ -4,6 +4,7 @@ import math as m
 import time
 from itertools import zip_longest, chain
 from pathlib import Path
+import os
 
 import cv2
 import numba
@@ -16,6 +17,17 @@ from tqdm import tqdm
 from uniplot import histogram
 
 from scipy.spatial.transform import Rotation as R
+
+def list_dict_to_np_array(d) -> dict:
+    if isinstance(d, dict):
+        for key, val in d.items():
+            if isinstance(val, dict):
+                list_dict_to_np_array(val)
+            elif isinstance(val, list):
+                d[key] = np.array(val)
+            else:
+                pass
+    return d
 
 def approx_average_quaternion(quats:list[np.ndarray]) -> np.ndarray:
     q = np.array([q for q in quats if not np.any(np.isnan(q))])
@@ -62,7 +74,7 @@ def benchmark(func, repeats=100, mode="ms", timer=time.time_ns):
             "ms":1e-6,
             "s":1e-9,
         }
-        starting_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
+        # starting_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
         times = []
         for _ in range(repeats):
             start = timer()
@@ -84,8 +96,8 @@ def benchmark(func, repeats=100, mode="ms", timer=time.time_ns):
                   y_unit=" freq",
                   x_unit=mode,
                   )
-        final_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
-        print(f"Mean numba allocations: {(final_alloc - starting_alloc)/repeats:.0f}")
+        # final_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
+        # print(f"Mean numba allocations: {(final_alloc - starting_alloc)/repeats:.0f}")
     run_benchmark()
 
 
@@ -218,6 +230,7 @@ def get_close_square_tuple(n):
     return (x,y)
 
 def h_tform(points: np.ndarray, transform:np.ndarray, fill=1) -> np.ndarray:
+
     """
     Performms a homogenous transformation on data
     

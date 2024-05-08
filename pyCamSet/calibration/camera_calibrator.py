@@ -1,4 +1,4 @@
-
+from copy import copy
 import cv2
 import matplotlib.pyplot as plt
 from multiprocessing import cpu_count
@@ -12,7 +12,9 @@ import os
 
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
-from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, StandardParamHandler
+# from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, TemplateBundleHandler
+from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment
+from pyCamSet.optimisation.template_handler import TemplateBundleHandler
 from pyCamSet.utils.saving import save_pickle, load_pickle, load_CameraSet
 from pyCamSet.utils.general_utils import average_tforms, get_subfolder_names, glob_ims, mad_outlier_detection
 
@@ -32,6 +34,7 @@ def calibrate_cameras(
     high_distortion=False,
     threads=max(1, cpu_count()-2),
     problem_options: dict|None = None,
+    initial_cams: CameraSet | None= None,
     ) -> CameraSet:
     """
     This function coordinates the calibration process, from detection to outputing a final camset.
@@ -51,7 +54,6 @@ def calibrate_cameras(
     if save_loc is None:
         save_loc = f_loc
 
-
     detections, camera_res = detect_datapoints_in_imfile(
         f_loc=f_loc,
         caching=save,
@@ -63,34 +65,39 @@ def calibrate_cameras(
     validate_detections(detections, calibration_target)
 
     string_tail = '.camset'
-
-    initial_cams = run_initial_calibration(
-        detections,
-        calibration_target,
-        camera_res,
-        save=save,
-        save_loc=save_loc / ('initial_cameras' + string_tail),
-        fixed_params=fixed_params
-    )
-
-    if high_distortion:
-        detections, _ = detect_datapoints_in_imfile(
-            f_loc=f_loc,
-            calibration_target=calibration_target,
-            draw=draw,
-            n_lim=n_lim,
-            camset=initial_cams
-        )
+    if initial_cams is None:
 
         initial_cams = run_initial_calibration(
             detections,
             calibration_target,
             camera_res,
             save=save,
-            save_loc=save_loc / ('initial_cameras_high_distortion' + string_tail),
+            save_loc=save_loc / ('initial_cameras' + string_tail),
+            fixed_params=fixed_params
+        )
+
+
+
+        if high_distortion:
+            detections, _ = detect_datapoints_in_imfile(
+                f_loc=f_loc,
+                calibration_target=calibration_target,
+                draw=draw,
+                n_lim=n_lim,
+                camset=initial_cams
             )
 
-        initial_cams.draw_camera_distortions()
+            initial_cams = run_initial_calibration(
+                detections,
+                calibration_target,
+                camera_res,
+                save=save,
+                save_loc=save_loc / ('initial_cameras_high_distortion' + string_tail),
+                )
+
+            initial_cams.draw_camera_distortions()
+    else:
+        logging.info("Using the provided initial cameras.")
 
     initial_cams.set_resolutions_from_file(floc=f_loc)
     calibrated_cameras = run_stereo_calibration(
@@ -159,7 +166,7 @@ def run_initial_calibration(detection: TargetDetection,
     return cams
 
 
-def outlier_rejection(results, params: StandardParamHandler) -> tuple[TargetDetection | None, bool]:
+def outlier_rejection(results, params) -> tuple[TargetDetection | None, bool]:
     """
     Takes a set of results from the optimisation and performs outlier rejection on them.
     Will identify which images are outliers, raise a warning, and return a detection set without this data.
@@ -224,24 +231,23 @@ def run_stereo_calibration(
         save_loc = Path('optimised_cameras.camset')
 
     if param_handler is None:
-        param_handler = StandardParamHandler(
+        param_handler = TemplateBundleHandler(
             detection=detections, target=target, camset=cams,
             fixed_params=fixed_params,
             options=problem_options,
         )
+
+
 
     optimisation, optimised_cams = run_bundle_adjustment(
         param_handler=param_handler,
         threads = threads,
     )
 
+    param_handler.camset = optimised_cams
+    # optimised_cams = param_handler.camset
     # outlier_rejection(optimisation.fun.reshape((-1,2)), param_handler)
 
-    param_handler.camset = optimised_cams
-    optimised_cams.set_calibration_history(
-        optimisation_results=optimisation,
-        param_handler=param_handler,
-    )
 
     if save:
         if floc is not None:

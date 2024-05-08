@@ -28,15 +28,15 @@ class ImageDetection:
         if not isinstance(image_points, np.ndarray) and image_points is not None:
             image_points = np.array(image_points)
 
-        kp = keys.size != 0 
-        ip = image_points.size != 0
-        if kp and ip:
+        if keys is not None and image_points is not None:
             assert len(keys) == len(image_points), "Detected keys must be the same length as detected points"
             self.keys = keys
             self.image_points = image_points
             self.has_data = True
             self.data_len = len(keys)
-        elif not kp and not ip:
+            if keys.shape[0] == 0:
+                self.has_data = False
+        elif keys is None and image_points is None:
             self.has_data = False
         else:
             raise ValueError("A detection requires both identifying keys and detected image points.")
@@ -248,9 +248,12 @@ class TargetDetection:
                 keys = detection.keys[..., None]
             else:
                 keys = detection.keys
-            observation = np.concatenate(
-                [np.ones((detection.data_len, 2))*[ind, im_num], keys, detection.image_points]
-                , axis=1)
+            try:
+                observation = np.concatenate(
+                    [np.ones((detection.data_len, 2))*[ind, im_num], keys, detection.image_points]
+                    , axis=1)
+            except:
+                print(detection.image_points)
             self._update_buffer.append(observation)
 
 

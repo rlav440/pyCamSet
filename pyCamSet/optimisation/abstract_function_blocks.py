@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from matplotlib import pyplot as plt
+
 import importlib
 from pathlib import Path
 import inspect
@@ -579,6 +581,7 @@ class optimisation_function:
 
 
 class abstract_function_block(ABC):
+
     """
     The abstract function block defines a chain of methods.
     An optimisation function is defined as chains of abstract function blocks.
@@ -641,7 +644,6 @@ class abstract_function_block(ABC):
 
     def test_self(self):
         params = np.ones(self.params.n_params)
-
         outsize = (self.params.n_params + self.num_inp) * self.num_out
         jac_output = np.empty(outsize)
 
@@ -654,16 +656,29 @@ class abstract_function_block(ABC):
                 memory=np.empty(self.array_memory),
             )
             return output
+        mean_errors = []
+        for i in range(100):
+            params = np.random.random(self.params.n_params) + 3
+            inps = np.random.random(self.num_inp) + 3
+            self.compute_jac(
+                params, 
+                inps,
+                jac_output, 
+                np.empty((self.array_memory))
+            )
+            given_jac = jac_output.reshape((self.num_out, -1)) 
+            numeric_jac = approx_fprime(np.concatenate((params, inps), axis=0), fn)
+            error = given_jac - numeric_jac
+            fig, ax = plt.subplots(3,1)
+            ax[0].imshow(given_jac)
+            ax[1].imshow(numeric_jac)
+            ax[2].imshow(np.abs(error)/(given_jac + 1e-8))
+            plt.show()
+            mean_errors.append(np.nanmean(error/(given_jac + 1e-6)))
 
-        self.compute_jac(
-            params, 
-            np.ones(self.num_inp), 
-            jac_output, 
-            np.empty((self.array_memory))
-        )
-        given_jac = jac_output.reshape((self.num_out, -1)) 
-        numeric_jac = approx_fprime(np.ones(self.num_inp + self.params.n_params), fn)
-        error = given_jac - numeric_jac
+        plt.hist(mean_errors, )
+        plt.show()
+
         assert np.all(error < 1e-4)
 
 def make_param_struct(

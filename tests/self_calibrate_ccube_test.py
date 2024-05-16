@@ -30,7 +30,8 @@ def test_calib_ccube():
         threads = cpu_count(),
     )
 
-    # final_cams.visualise_calibration()
+    print(f"found a residual error of {np.mean(np.abs(final_cams.calibration_result))}")
+    final_cams.visualise_calibration()
     final_euclid = np.mean(np.linalg.norm(np.reshape(
         final_cams.calibration_result, (-1, 2)
     ), axis=1))

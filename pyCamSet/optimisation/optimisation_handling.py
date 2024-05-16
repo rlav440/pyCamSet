@@ -94,7 +94,7 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
         jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
         max_nfev=param_handler.problem_opts["max_nfev"],
         # loss = "cauchy"
-        # x_scale='jac',
+        x_scale='jac',
     )
     end = time.time()
 

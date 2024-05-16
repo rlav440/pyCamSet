@@ -170,7 +170,11 @@ class SelfBundleHandler(TemplateBundleHandler):
         target_shape = self.target.point_data.shape
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
         temp_loss = self.op_fun.make_full_loss_fn(dd, threads)
+        current_param = np.array([0,0])
         def loss_fun(params):
+            # if not current_param[0] == params[0]:
+            #     print(f"{params[0]}, {params[9]}, {params[18]}, loss")
+            #     current_param[0] = params[0]
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
             return temp_loss(param_str).flatten()
@@ -197,6 +201,7 @@ class SelfBundleHandler(TemplateBundleHandler):
             return jac_fn
         else:
             def jac_fn(params):
+                # print(f"{params[0]}, {params[9]}, {params[18]}, jac")
                 inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
                 param_str = self.op_fun.build_param_list(*inps)
                 return temp_loss(param_str)[:, mask]

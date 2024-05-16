@@ -16,31 +16,28 @@ x_m_0, y_m_0, x_m_1, y_m_1, r, k_up, x_in, y_in = symbols(
     "x_m_0 y_m_0 x_m_1 y_m_1 r k_up x_in y_in"
 )
 
-x_in = (f_x * xw +  0 * yw + p_x * zw)/zw
-y_in = (0 * xw +  f_y * yw + p_y * zw)/zw
-
+x_in = (f_x * xw +  0 * yw   + p_x * zw)/zw
+y_in = (  0 * xw +  f_y * yw + p_y * zw)/zw
 
 x_m_0, y_m_0 = (x_in - p_x)/f_x, (y_in - p_y)/f_y
 r = x_m_0**2 + y_m_0**2
 
-
 k_up = (1 + k_0 * r + k_1 * (r ** 2) + k_2 * (r ** 3))
 tang_x = 2 * p_0 * x_m_0 * y_m_0 + p_1 * (r + 2 * (x_m_0 ** 2))
 tang_y = p_0 * (r + 2 * (y_m_0 ** 2)) + 2 * p_1 * x_m_0 * y_m_0
-
 x_m_1 = k_up * x_m_0 + tang_x
 y_m_1 = k_up * y_m_0 + tang_y
 
 x_out = x_m_1 * f_x + p_x
 y_out = y_m_1 * f_y + p_y
 
-# for num, sym in enumerate([x_out, y_out]):
-#     n = "x" if num == 0 else "y"
-#     for partial in [p_x, p_y, f_x, f_y, k_0, k_1, k_2, p_0, p_1, xw, yw, zw]:
-#         print(f"#derivative of {n} with respect to {partial}")
-#         print(f"d{n}d{partial} = ", end="")
-#         print(simplify(diff(sym, partial)))
-#         print()
+for num, sym in enumerate([x_out, y_out]):
+    n = "x" if num == 0 else "y"
+    for partial in [p_x, p_y, f_x, f_y, k_0, k_1, k_2, p_0, p_1, xw, yw, zw]:
+        print(f"#derivative of {n} with respect to {partial}")
+        print(f"d{n}d{partial} = ", end="")
+        print(simplify(diff(sym, partial)))
+        print()
 
 
 # matrix = sy.Matrix([x_out, y_out])

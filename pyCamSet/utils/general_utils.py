@@ -88,9 +88,9 @@ def benchmark(func, repeats=100, mode="ms", timer=time.time_ns):
         median = np.median(times) * ranges[mode]
         max_t = min(mean + 3*stdev,np.amax(times) * ranges[mode])
         print(f"Mean: {mean:.2f} {mode}, median: {median:.2f} {mode}, stdev: {stdev:.2f} {mode}")
-        histogram(times*ranges[mode], bins=50,
+        histogram(times*ranges[mode], bins=20,
                   bins_min=max(mean- 3*stdev, 0),
-                  x_max= max_t,
+                  x_max = min(mean + 5*stdev, max_t),
                   height = 3,
                   color = True,
                   y_unit=" freq",

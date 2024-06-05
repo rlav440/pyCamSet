@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from typing import TYPE_CHECKING
+from scipy.sparse import csr_array
 
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
@@ -170,10 +171,8 @@ class TemplateBundleHandler:
     def make_loss_jac(self, threads): 
         #TODO implement proper culling
         obj_data = self.target.point_data.reshape((-1, 3))
-
         target_shape = self.target.point_data.shape
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
-        temp_loss = self.op_fun.make_jacobean(dd, threads)
         mask = np.concatenate(
             ( 
                 np.repeat(self.intr_unfixed, 9),
@@ -181,20 +180,14 @@ class TemplateBundleHandler:
                 np.repeat(self.pose_unfixed, 6),
             ), axis=0
         )
-        if np.all(mask):
-        
-            def jac_fn(params):
-                inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
-                param_str = self.op_fun.build_param_list(*inps)
-                return temp_loss(param_str, obj_data)
-            return jac_fn
-        else:
 
-            def jac_fn(params):
-                inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
-                param_str = self.op_fun.build_param_list(*inps)
-                return temp_loss(param_str, obj_data)[:, mask]
-            return jac_fn
+        temp_loss = self.op_fun.make_jacobean(dd, threads, unfixed_params=mask)
+        def jac_fn(params):
+            inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
+            param_str = self.op_fun.build_param_list(*inps)
+            d, c, rp = temp_loss(param_str, obj_data)
+            return csr_array((d,c,rp), shape=(2*dd.shape[0], params.shape[0]))
+        return jac_fn
 
     def special_plots(self, params):
         """

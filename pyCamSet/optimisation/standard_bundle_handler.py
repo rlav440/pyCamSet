@@ -8,6 +8,7 @@ from typing import Callable
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
+from scipy.sparse import csr_array
 import pyvista as pv
 from itertools import combinations
 
@@ -167,6 +168,13 @@ class SelfBundleHandler(TemplateBundleHandler):
         self.op_fun: fb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.rigidTform3d() +  fb.free_point()
 
     def make_loss_fun(self, threads):
+        """
+        Describes and writes the loss function of the loss function represented by self.
+        Wraps the loss function to account for the fixed parameters of the optimisation.
+
+        :params threads: the number of threads to use.
+
+        """
         target_shape = self.target.point_data.shape
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
         temp_loss = self.op_fun.make_full_loss_fn(dd, threads)
@@ -177,9 +185,15 @@ class SelfBundleHandler(TemplateBundleHandler):
         return loss_fun
 
     def make_loss_jac(self, threads): 
+        """
+        Describes and writes the jacobian of the loss function described in self.
+        Wraps the jacobian of the loss function to deal with the fixed parameters of the optimisation.
+
+        :params threads: the number of threads to use for the optimisation.
+        :returns jac_fn: a callable jacobian function that returns the jacobian of the given paramaters.
+        """
         target_shape = self.target.point_data.shape
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
-        temp_loss = self.op_fun.make_jacobean(dd, threads)
         mask = np.concatenate(
             ( 
                 np.repeat(self.intr_unfixed, 9),
@@ -189,18 +203,13 @@ class SelfBundleHandler(TemplateBundleHandler):
             ), axis=0
         )
 
-        if np.all(mask):
-            def jac_fn(params):
-                inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
-                param_str = self.op_fun.build_param_list(*inps)
-                return temp_loss(param_str, )
-            return jac_fn
-        else:
-            def jac_fn(params):
-                inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
-                param_str = self.op_fun.build_param_list(*inps)
-                return temp_loss(param_str)[:, mask]
-            return jac_fn
+        temp_loss = self.op_fun.make_jacobean(dd, threads, unfixed_params=mask)
+        def jac_fn(params):
+            inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
+            param_str = self.op_fun.build_param_list(*inps)
+            d, c, rp = temp_loss(param_str)
+            return csr_array((d,c,rp), shape=(2*dd.shape[0], params.shape[0]))
+        return jac_fn
 
     def get_bundle_adjustment_inputs(self, x) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """

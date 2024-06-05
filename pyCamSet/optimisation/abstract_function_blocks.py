@@ -9,6 +9,7 @@ from enum import IntEnum
 from copy import copy
 from scipy.optimize import approx_fprime
 from datetime import datetime
+from matplotlib import pyplot as plt
 
 import numpy as np
 from numba import njit, prange
@@ -34,8 +35,6 @@ def get_imports(path):
             continue
         for n in node.names:
             yield Import(module, (n.name,), n.asname)
-
-
 
 class key_type(IntEnum):
     PER_CAM = 0
@@ -137,7 +136,7 @@ class optimisation_function:
 
         self.ready_to_compute = False
 
-        self.gauge_breaking_costs = None
+        self.num_input_params = None
 
     def _prep_for_computation(self):
         if self.ready_to_compute:
@@ -180,7 +179,6 @@ class optimisation_function:
         #input and output are a sliding window along an array 
         #define the shape of the jacobean, as the shape of the param structure + a little more for the 
         
-
         for i in range(len(self.function_blocks) + 1):
             slice.append(inp_buffer[i]  + self.param_line_length) 
             slice.append(inp_buffer[i + 1] + self.param_line_length) 
@@ -188,8 +186,54 @@ class optimisation_function:
         self.param_slices = np.array(slice)
         self.ready_to_compute = True
 
+    def get_block_param_inds(self, detections, threads, unthreaded=False) -> np.ndarray:
+        """
+        takes the detected data, and threads, then produces an array containing the inds of the relevant params.
+        this array is dynamically sized to use the smallest int representation to compress the data as much as possible.
 
-    def _get_loss_fn_strings(self) -> tuple[set[Import],list[str],list[str]]:
+        this array defines the locations of the points given the full param structure.
+        :params detections: the detection data to use for the reconstruction.
+        :params threads: the number of threads that will be used.
+        """
+        
+        n_points = detections.shape[0]
+        param_num = np.sum(self.n_params)
+        # print(param_shape)
+        block_params = np.empty((n_points, param_num))
+
+        param_slices, n_outs, working_memories, n_blocks = self._get_function_constants()
+        starts, block_n_params, param_inds, key_type, num_inputs = make_param_struct(self.function_blocks, detections)
+        param_len = num_inputs
+
+        for idp in range(n_points):
+            datum = detections[idp]
+            for idb in range(n_blocks):
+                s_num = datum[key_type[idb]] #the index value of the associated parameter",
+                p_ind = param_inds[idb] # maps the param to it's index in the unique params",
+                start = starts[p_ind] + s_num * block_n_params[p_ind] #and the associated change in the start location",
+                block_params[idp, param_slices[2*idb]:param_slices[2*idb + 1]] = np.arange(int(start),int(start + block_n_params[p_ind]))
+        
+        d_shape = block_params.shape
+        p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape[1:])
+        # print(f"found parameter length of {param_len}")
+        data_type = 'uint32'
+        if param_len < 2**16:
+            data_type = 'uint16'
+        if param_len < 2**8:
+            data_type = 'uint8'
+
+        if not unthreaded:
+            block_params_thread = np.resize(block_params, p_shape).astype(data_type)
+        else:
+            block_params_thread = block_params.astype(data_type)
+
+        return block_params_thread
+
+    def _get_function_constants(self) -> tuple[np.ndarray,np.ndarray,np.ndarray, int]:
+        return self.param_slices, self.n_outs, np.array(self.working_memories), self.n_blocks
+
+
+    def _get_loss_function_components(self) -> tuple[set[Import],list[str]]:
         self._prep_for_computation()
 
         n_blocks = self.n_blocks
@@ -203,29 +247,47 @@ class optimisation_function:
             for imp in get_imports(base_code):
                 import_set.add(imp)
 
-        
-        needed_preamble = [
-            # "def make_loss_fn(op_fun):"
-            "param_slices = op_fun.param_slices",
-            "n_outs = op_fun.n_outs",
-            "working_memories = np.array(op_fun.working_memories)",
-            "n_blocks = op_fun.n_blocks",
-        ]
 
         fn_content = []
         for i in range(n_blocks-1, -1, -1):
             prep = [ 
-            f"params = dense_param_arr[param_slices[2*{i}]:param_slices[2*{i}+1]]",
+                # f"n_p = param_slices[2*{i} + 1] - param_slices[2*{i}]",
+                # f"for i_param in range(n_p):",
+                # f"\tparams[i_param] = dense_param_arr[param_slices[2*{i}] + i_param]",
+                f"params = dense_param_arr[param_slices[2*{i}]:param_slices[2*{i} + 1]]",
             ]
             base =  inspect.unwrap(self.function_blocks[i].compute_fun)
             base_code = inspect.getsource(base)
             section = clean_fn_data(base_code)
             end = f"inp[:n_outs[{i}]] = output[:n_outs[{i}]]"
             fn_content.append([prep, section, [end]])
-        return import_set, needed_preamble, fn_content
+        return import_set, fn_content
+
+    def get_constants(self, detections, threads):
+        starts, block_n_params, param_inds, key_type, _ = make_param_struct(self.function_blocks, detections)
+        inp_mem = self.inp_mem_req
+        out_mem = self.out_mem_req
+        wrk_mem = self.wrk_mem_req
+        param_len = np.sum(block_n_params)
+        n_lines  = int(np.ceil(detections.shape[0]/threads))
+        return starts, block_n_params, param_inds, key_type, inp_mem, out_mem, wrk_mem, param_len, n_lines
+
+    def _reshape_data_for_parallel(self, detections, threads):
+        """
+        Resizes the detection data to have dimensions that can be evenly shifted between threads.
+        """
+        d_shape = detections.shape
+        p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape[1:])
+        detection_data = np.resize(detections, p_shape)
+        return detection_data
 
     def make_full_loss_template(self, detections, threads, overwrite_function = False) -> Callable:
-
+        """
+        Takes the functions defined by the input combination, then writes the logic to run those functions repeatedly.
+        Handles generating the inputs and input params, and allows the functions to be compiled by numba
+        """
+        
+        #HANDLE INPUT AND OUTPUT, INCLUDING CHECKING IF A CACHED VERSION EXISTS
         strings = "loss_" +  "_".join([str(name.__class__.__name__) for name in self.function_blocks])
         file_name = "template_functions/" + strings + ".py"
         write_file = (Path(__file__).parent)/file_name
@@ -234,14 +296,28 @@ class optimisation_function:
             file_string = 'pyCamSet.optimisation.template_functions.'  + strings
             importlib.invalidate_caches()
             top_module = importlib.import_module(file_string)
-            loss_fn: Callable = top_module.make_full_loss(self, detections, threads)
+            base_loss_fn: Callable = top_module.make_full_loss(self, detections, threads)
+
+            _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
+            param_slices, n_outs, _, _ = self._get_function_constants()
+            parallel_data = self._reshape_data_for_parallel(detections, threads)
+            block_param_inds = self.get_block_param_inds(detections, threads)
+            d_shape = detections.shape[0]
+
+            # full_loss(params, d_data, block_param_inds, n_lines, inp_mem, out_mem, wrk_mem, param_len, n_threads, template = None)
+            loss_fn = lambda param, template=None: base_loss_fn(
+                param, parallel_data, block_param_inds, n_lines,
+                inp_mem, out_mem, wrk_mem, param_len, threads, d_shape,
+                param_slices, n_outs,
+                template=template
+            )
             return loss_fn
 
         def t(l):
             return ["\t" + li for li in l]
 
-        needed_import_set, additional_preamble, content = self._get_loss_fn_strings()
-        
+        #FIND THE INPUTS USED IN THE LOSS FUNCTION, AND COLLATE THEM
+        needed_import_set, content = self._get_loss_function_components() 
         needed_import = []
         for s in needed_import_set:
             # print(s)
@@ -252,35 +328,24 @@ class optimisation_function:
             needed_import.append(st)
         needed_import.append("\n")
 
-
+        #INITIALISE THE FUNCTION
         start = ["from numba import prange",
                  "from datetime import datetime",
                 "from pyCamSet.optimisation.abstract_function_blocks import make_param_struct",
                  " ",
                 "def make_full_loss(op_fun, detections, threads):"
         ]
+
         preamble = [
-            f"n_threads = threads",
             f"op_fun._prep_for_computation()",
-            f"d_shape = detections.shape",
-            f"p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape[1:])",
-            f"detection_data = np.resize(detections, p_shape)",
+            f"#workingtag = {datetime.now().strftime('%H:%M:%S')}",
+        ]
 
-            f"n_lines = detection_data.shape[1]",
-            f"inp_mem = op_fun.inp_mem_req",
-            f"out_mem = op_fun.out_mem_req",
-            f"wrk_mem = op_fun.wrk_mem_req",
-
-            "starts, block_n_params, param_inds, key_type = make_param_struct(op_fun.function_blocks, detections)",
-            "param_len = np.sum(block_n_params)",
-            f"param_slices = op_fun.param_slices",
-            f"use_template = op_fun.templated",
-
-            f"workingtag = datetime.now().strftime('%H:%M:%S')",
+        function_preamble = [
             f"@njit(parallel=True, fastmath=True, cache=True)",
-            f"def full_loss(inp_params, template = None):",
-            # f"\tprint(workingtag)",
-            f"\tt_data: np.ndarray = template if use_template else np.zeros(3)",
+            f"def full_loss(inp_params, d_data, block_param_inds, n_lines, inp_mem, out_mem, wrk_mem, param_len, n_threads, d_shape, param_slices, n_outs, template = None):",
+            f"\tuse_template = template is not None",
+            f"\tt_data: np.ndarray = template if use_template else np.zeros((3,1))",
             f"\tlosses = np.empty((n_threads, n_lines, 2))",
             f"\tfor i in prange(n_threads):",
             f"\t\t#make the memory components required",
@@ -288,20 +353,16 @@ class optimisation_function:
             f"\t\toutput = np.empty(out_mem)",
             f"\t\tmemory = np.empty(wrk_mem)",
             f"\t\tdense_param_arr = np.empty(param_len)",
+            # f"\t\tparams = np.empty(param_len)",
+            f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((n_lines, param_len))",
 
             f"\t\tfor ii in range(n_lines):",
-            f"\t\t\tdatum = detection_data[i, ii]",
+            f"\t\t\tdatum = d_data[i, ii]",
         ]
         # write the script that populates the array here
         param_slicing = [
-            f"\t\t\tfor idb in range(n_blocks):",
-            f"\t\t\t\ts_num = datum[key_type[idb]] #the index value of the associated parameter",
-            f"\t\t\t\tp_ind = param_inds[idb] # maps the param to it's index in the unique params",
-            f"\t\t\t\tstart = starts[p_ind] + s_num * block_n_params[p_ind] #and the associated change in the start location",
-
-            f"\t\t\t\tdense_param_arr[param_slices[2*idb]:param_slices[2*idb + 1]] = inp_params[int(start):int(start + block_n_params[p_ind])]",
+            f"\t\t\tdense_param_arr[:] = local_params[ii]"
         ]
-
 
         mid_amble = [
             f"\t\t\tif use_template:",
@@ -315,21 +376,44 @@ class optimisation_function:
 
         postamble = [
             f"\t\t\tlosses[i, ii] = [output[0] - datum[3], output[1] - datum[4]]",
-            f"\treturn np.resize(losses, (d_shape[0], 2))",
+            f"\treturn np.resize(losses, (d_shape, 2))",
             f"return full_loss"
         ]
 
-        fn = needed_import + start + t(additional_preamble) + t(preamble) + t(param_slicing) + t(mid_amble) + t(loss_calc) + t(postamble)
+        ### PUT ALL THE FILES TOGETHER
+        fn = needed_import + start + t(preamble) + t(function_preamble) \
+            + t(param_slicing) + t(mid_amble) + t(loss_calc) + t(postamble)
         str_fn = "\n".join(fn).replace("\t", "    ")
 
         with open(write_file, 'w') as f:
             f.write(str_fn)
-
         file_string = 'pyCamSet.optimisation.template_functions.'  + strings
+
+
+        self._prep_for_computation()
+
         importlib.invalidate_caches()
         top_module = importlib.import_module(file_string)
-        loss_fn: Callable = top_module.make_full_loss(self, detections, threads)
+        base_loss_fn: Callable = top_module.make_full_loss(self, detections, threads)
+        
+        #now calculate all of the inputs that the loss function needs
+        _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
+        param_slices, n_outs, _, _ = self._get_function_constants()
+        parallel_data = self._reshape_data_for_parallel(detections, threads)
+        block_param_inds = self.get_block_param_inds(detections, threads)
+        d_shape = detections.shape[0]
+
+        # full_loss(params, d_data, block_param_inds, n_lines, inp_mem, out_mem, wrk_mem, param_len, n_threads, template = None)
+        loss_fn = lambda param, template=None: base_loss_fn(
+            param, parallel_data, block_param_inds, n_lines,
+            inp_mem, out_mem, wrk_mem, param_len, threads, d_shape,
+            param_slices, n_outs,
+            template=template
+        )
         return loss_fn
+
+    def _get_jac_constants(self):
+        return self.param_slices, self.n_outs, np
 
     def _get_loss_jac_strings(self):
         self._prep_for_computation()
@@ -344,19 +428,6 @@ class optimisation_function:
             base_code = inspect.getsourcefile(base)
             for imp in get_imports(base_code):
                 import_set.add(imp)
-
-        
-        needed_preamble = [
-            "param_slices = op_fun.param_slices",
-            "n_outs = op_fun.n_outs",
-            "working_memories = np.array(op_fun.working_memories)",
-            "n_blocks = op_fun.n_blocks",
-
-
-            f"n_params  = np.array(op_fun.n_params)",
-            f"n_outs = np.array(op_fun.n_outs)",
-
-        ]
 
         fn_content = []
         for i in range(n_blocks-1, -1, -1):
@@ -393,10 +464,39 @@ class optimisation_function:
             fn_content.append([prep, section, end])
 
 
-        return import_set, needed_preamble, fn_content
+        return import_set, fn_content
 
-    def make_full_jac_template(self, detections, threads, overwrite_function=False) -> Callable:
+    def make_jac_CSR_columns_row_pointers(self, detections, threads, unfixed_params):
+        """
+        Takes the detected data, and then returns the CSR representation of the matrix.
+        If some params are indicated as fixed, the indicies of those params are removed from the output.
 
+        This modifies the locations of the effective columns of the data.
+        """
+        _, _, _, _, _, _, _, param_len, _ = self.get_constants(detections, threads)
+        #now, the question is how to get the column indicies?
+        #need to get these in the same order they will be calculated.
+        c = np.repeat(
+            np.resize(self.get_block_param_inds(detections, threads), (detections.shape[0], param_len)),
+            2, axis=0
+        
+        )
+        #map the values of c to their equiv index in the input params.
+        #values that are blanked will duplicate, then remove.
+        conversion =  np.concatenate([[0], np.cumsum(unfixed_params)], axis=0)
+        param_mask = unfixed_params[c] #this is a boolean mask containing if points should be removed.
+        c = conversion[c]
+        valid_c = c[param_mask] #valid_c has no array structure and is a single line
+
+        proto_compressed_rows = np.cumsum(np.sum(param_mask, axis=1))
+        compressed_rows = np.concatenate([[0], proto_compressed_rows])
+        return valid_c, compressed_rows 
+
+
+    def make_full_jac_template(self, detections, threads, unfixed_params, overwrite_function=False) -> Callable:
+        # overwrite_function = True
+        
+        ###### HANDLE NAMING OF THE FILE
         strings = "jac_" +  "_".join([str(name.__class__.__name__) for name in self.function_blocks])
         file_name = "template_functions/" + strings + ".py"
         write_file = (Path(__file__).parent)/file_name
@@ -405,14 +505,54 @@ class optimisation_function:
             file_string = 'pyCamSet.optimisation.template_functions.'  + strings
             importlib.invalidate_caches()
             top_module = importlib.import_module(file_string)
-            jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
+            base_jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
+
+            _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
+            param_slices, n_outs, _, _ = self._get_function_constants()
+            parallel_data = self._reshape_data_for_parallel(detections, threads)
+            block_param_inds = self.get_block_param_inds(detections, threads)
+            block_param_inds_unthreaded = self.get_block_param_inds(detections, threads, unthreaded=True)
+            c, compressed_row = self.make_jac_CSR_columns_row_pointers(detections, threads, unfixed_params)
+            d_shape = detections.shape[0]
+            n_params = np.array(self.n_params)
+
+            f_outs = 2
+            grad_outputsize = np.max(self.grad_outputsize)
+
+            
+            jac_param_inds = np.repeat(block_param_inds_unthreaded, 2, axis=0)
+            good_mask = unfixed_params[jac_param_inds].flatten()
+            output_shape = jac_param_inds.shape
+            n_elements = np.prod(output_shape)
+
+            if np.all(unfixed_params):
+                def jac_fn(param, template=None):
+                    data = base_jac_fn(
+                        param, parallel_data, block_param_inds, n_lines,
+                        inp_mem, out_mem, wrk_mem, param_len, threads, d_shape,
+                        param_slices, n_outs, f_outs, grad_outputsize, n_params,
+                        template=template
+                    )
+                    return data[:n_elements], c, compressed_row
+                return jac_fn
+
+            def jac_fn(param, template=None):
+                data = base_jac_fn(
+                    param, parallel_data, block_param_inds, n_lines,
+                    inp_mem, out_mem, wrk_mem, param_len, threads, d_shape,
+                    param_slices, n_outs, f_outs, grad_outputsize, n_params,
+                    template=template
+                )
+                return data[:n_elements][good_mask], c, compressed_row
             return jac_fn
+
+        ###### CREATE THE NEEDED DATA
 
         def t(l):
             return ["\t" + li for li in l]
 
-        needed_import_set, additional_preamble, content = self._get_loss_fn_strings()
-        jac_needed_imports_set, jac_additional_preamble, jac_content = self._get_loss_jac_strings()
+        needed_import_set, content = self._get_loss_function_components()
+        jac_needed_imports_set, jac_content = self._get_loss_jac_strings()
         
         needed_import = []
         imports_set = needed_import_set | jac_needed_imports_set
@@ -435,65 +575,40 @@ class optimisation_function:
                 "def make_full_jac(op_fun, detections, threads):"
         ]
         preamble = [
-            f"n_threads = threads",
-            f"op_fun._prep_for_computation()",
-            f"d_shape = detections.shape",
-            f"p_shape = (threads, int(np.ceil(d_shape[0]/threads)), *d_shape[1:])",
-            f"detection_data = np.resize(detections, p_shape)",
-
-            f"n_lines = detection_data.shape[1]",
-            f"inp_mem = op_fun.inp_mem_req",
-            f"out_mem = op_fun.out_mem_req",
-            f"wrk_mem = op_fun.wrk_mem_req",
-
-            f"grad_outputsize = np.max(op_fun.grad_outputsize)",
-
-            "starts, block_n_params, param_inds, key_type = make_param_struct(op_fun.function_blocks, detections)",
-            "param_len = np.sum(block_n_params)",
-            f"param_slices = op_fun.param_slices",
-            f"out_param_start = param_len",
-
-            f"jac_size = param_slices[-1]", 
-            f"f_outs = op_fun.n_outs[0]", 
-            f"use_template = op_fun.templated",
-            f"@njit",
-            f"def u(data):",
-            f"\treturn np.resize(data, f_outs * d_shape[0] * param_len)",
-            f"workingtag = datetime.now().strftime('%H:%M:%S')",
+            f"#workingtag = {datetime.now().strftime('%H:%M:%S')}",
+        ]
+        function_def = [
             f"@njit(parallel=True,fastmath=True,cache=True)",
-            # f"@njit(parallel=False,fastmath=True)",
-            f"def full_jac(inp_params, template = None):",
+            f"def full_jac(inp_params, d_data, block_param_inds, n_lines, inp_mem, out_mem, wrk_mem, param_len, n_threads, d_shape, param_slices, n_outs, f_outs, grad_outputsize, n_params, template = None):",
             # f"\tprint(workingtag)",
-            f"\tt_data: np.ndarray = template if use_template else np.zeros(3)",
-            f"\tp_size = len(inp_params)",
-            f"\tdata_size = param_len * n_lines * f_outs",
-            f"\tdata_rows = np.empty((n_threads, data_size), dtype=int_)",
-            f"\tdata_cols = np.empty((n_threads, data_size), dtype=int_)",
-            f"\tdata_val = np.empty((n_threads, data_size))",
-            f"\tfor i in prange(n_threads):", #below here is parallel scoped
+            f"\tuse_template = template is not None",
+            f"\tt_data: np.ndarray = template if use_template else np.zeros((3,1))",
+
+            f"\tjac_size = param_slices[-1]",
+            f"\tn_blocks = len(n_params)",
+            # the dense output is the array that gets used to calculate all of the data
+            f"\tdense_output = np.empty((n_threads, n_lines * f_outs, param_len))",
+            
+            ######### PARALLEL CODE
+            f"\tfor i in prange(n_threads):",
             f"\t\t#make the memory components required",
             f"\t\tinp = np.empty(inp_mem)",
-            f"\t\toutput = np.empty(grad_outputsize)",
+            f"\t\toutput = np.empty(grad_outputsize)", #this can just be the param len
             f"\t\tmemory = np.empty(wrk_mem)",
             f"\t\tdense_param_arr = np.empty(param_len)",
             f"\t\tbase = np.eye(jac_size)",
             f"\t\tjac = np.eye(jac_size)",
             f"\t\tper_block = np.eye(jac_size)",
-            f"\t\tparam_col_numbers = np.empty(param_len)",
+            f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((n_lines, param_len))",
+
             f"\t\tfor ii in range(n_lines):",
-            f"\t\t\tdatum = detection_data[i, ii]",
+            f"\t\t\tdatum = d_data[i, ii]",
             f"\t\t\tjac[:] = base[:]",
 
         ]
         # write the script that populates the array here
         param_slicing = [
-            f"\t\t\tfor idb in range(n_blocks):",
-            f"\t\t\t\ts_num = datum[key_type[idb]]",
-            f"\t\t\t\tp_ind = param_inds[idb]",
-            f"\t\t\t\tstart = starts[p_ind] + s_num * block_n_params[p_ind]",
-            f"\t\t\t\tind_chunks = np.arange(param_slices[2*idb],param_slices[2*idb + 1])",
-            f"\t\t\t\tdense_param_arr[ind_chunks] = inp_params[int(start):int(start + block_n_params[p_ind])]",
-            f"\t\t\t\tparam_col_numbers[ind_chunks] = np.arange(start,start + block_n_params[p_ind])",
+            f"\t\t\tdense_param_arr[:] = local_params[ii]"
         ]
         mid_amble = [
             f"\t\t\tif use_template:",
@@ -503,39 +618,21 @@ class optimisation_function:
         pre_calcs = [val for pair in zip(jac_content, content) for val in pair]
         total_content = []
         [[total_content.extend(item) for item in c] for c in pre_calcs[:-1]]
-
-        calcs = [ '\t\t\t' + c for c in total_content] #this really needs to be AST
+        calcs = ['\t\t\t' + c for c in total_content] #this really needs to be AST
 
         param_slicing_out = [
-            "\t\t\tfor i_out in range(f_outs):",
-            "\t\t\t\tper_detection_vals = param_len*f_outs",
-            "\t\t\t\tstart_ind = ii*per_detection_vals + i_out * param_len",
-            "\t\t\t\tend_ind = start_ind + param_len",
-            "\t\t\t\trow_loc = i * n_lines * f_outs + ii * f_outs + i_out",
-            "\t\t\t\tvals = jac[",
-            "\t\t\t\t\tout_param_start + i_out, :param_len",
-            "\t\t\t\t]",
-            "\t\t\t\tdata_rows[i, start_ind:end_ind] = row_loc",
-            "\t\t\t\tdata_cols[i, start_ind:end_ind] = param_col_numbers",
-            "\t\t\t\tdata_val[i, start_ind:end_ind] = vals",
+            "\t\t\tdense_output[i, f_outs*ii:f_outs*(ii+1), :] = jac[param_len:param_len + f_outs, :param_len]"
         ]
 
         postamble = [
-            f"\treturn u(data_rows), u(data_cols), u(data_val)",
-            f"def sparse_jac(inp_params, template=None):",
-            f"\tp_size = len(inp_params)",
-            f"\tr, c, v = full_jac(inp_params, template)",
-            f"\treturn scipy.sparse.csr_array((v, (r,c)), shape=(f_outs*d_shape[0], p_size))",
-            f"return sparse_jac",
+            f"\treturn dense_output.flatten()",
+            f"return full_jac",
         ] 
 
-        fn = (
-            needed_import + start + t(jac_additional_preamble) +  t(additional_preamble)
-                + t(preamble) + t(param_slicing) + t(mid_amble) 
-                + t(calcs) + t(param_slicing_out) + t(postamble)
-        )
+        fn =  needed_import + start + t(preamble) + t(function_def) + t(param_slicing) +\
+            t(mid_amble) + t(calcs) + t(param_slicing_out) + t(postamble)
+        
         un_string = [f.replace("\t", "    ") for f in fn]
-        # str_fn = "\n".join(un_string)
 
         with open(write_file, 'w') as f:
             f.writelines((un + "\n" for un in un_string))
@@ -543,9 +640,47 @@ class optimisation_function:
         file_string = 'pyCamSet.optimisation.template_functions.'  + strings
         importlib.invalidate_caches()
         top_module = importlib.import_module(file_string)
-        jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
+        base_jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
 
+        _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
+        param_slices, n_outs, _, _ = self._get_function_constants()
+        parallel_data = self._reshape_data_for_parallel(detections, threads)
+        block_param_inds = self.get_block_param_inds(detections, threads)
+        block_param_inds_unthreaded = self.get_block_param_inds(detections, threads, unthreaded=True)
+        c, compressed_row = self.make_jac_CSR_columns_row_pointers(detections, threads, unfixed_params)
+        d_shape = detections.shape[0]
+        n_params = np.array(self.n_params)
+
+        f_outs = 2
+        grad_outputsize = np.max(self.grad_outputsize)
+
+        
+        jac_param_inds = np.repeat(block_param_inds_unthreaded, 2, axis=0)
+        good_mask = unfixed_params[jac_param_inds].flatten()
+        output_shape = jac_param_inds.shape
+        n_elements = np.prod(output_shape)
+
+        if np.all(unfixed_params):
+            def jac_fn(param, template=None):
+                data = base_jac_fn(
+                    param, parallel_data, block_param_inds, n_lines,
+                    inp_mem, out_mem, wrk_mem, param_len, threads, d_shape,
+                    param_slices, n_outs, f_outs, grad_outputsize, n_params,
+                    template=template
+                )
+                return data[:n_elements], c, compressed_row
+            return jac_fn
+
+        def jac_fn(param, template=None):
+            data = base_jac_fn(
+                param, parallel_data, block_param_inds, n_lines,
+                inp_mem, out_mem, wrk_mem, param_len, threads, d_shape,
+                param_slices, n_outs, f_outs, grad_outputsize, n_params,
+                template=template
+            )
+            return data[:n_elements][good_mask], c, compressed_row
         return jac_fn
+
 
     
     def make_full_loss_fn(self, detections, threads):
@@ -553,9 +688,12 @@ class optimisation_function:
         return self.make_full_loss_template(detections, threads)
 
     
-    def make_jacobean(self, detections, threads):
+    def make_jacobean(self, detections, threads, unfixed_params=None):
+        _, _, _, _, num_inps = make_param_struct(self.function_blocks, detections)
+        if unfixed_params is None:
+            unfixed_params = np.ones(num_inps, dtype=bool)
         self._prep_for_computation()
-        func =  self.make_full_jac_template(detections, threads)
+        func = self.make_full_jac_template(detections, threads, unfixed_params)
         return func
 
     def build_param_list(self, *args: list[np.ndarray])->np.ndarray:
@@ -668,7 +806,7 @@ class abstract_function_block(ABC):
 
 def make_param_struct(
         function_blocks : list[Type[abstract_function_block]], detection_data
-    ) -> tuple[np.ndarray,np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray,np.ndarray, np.ndarray, np.ndarray, int]:
     """
     Takes an input function block definition and detection data, then defines a structure
     for the parameter matrix associated with the input sequence of function blocks.
@@ -680,6 +818,7 @@ def make_param_struct(
     :returns param_offset: the length of each individual parameter string
     :returns param_ids: the id mapping from each function block to the unique params associated.
     :returns param_assoc: the id of the associated parameter in the detection data structure.
+    :returns num_inp params: the number of input parameters.
     """
     max_imgs = np.max(detection_data[:, 1]) + 1
     max_keys = np.max(detection_data[:, 2]) + 1
@@ -707,5 +846,6 @@ def make_param_struct(
         param_offset.append(link_ind.n_params)
         associated.append(int(link_ind.link_type))
         starting_point += link_ind.n_params * param_numbers[link_ind.link_type] 
-    return np.array(param_starts), np.array(param_offset), np.array(block_param_inds), np.array(associated)
+    
+    return np.array(param_starts), np.array(param_offset), np.array(block_param_inds), np.array(associated), int(starting_point)
     

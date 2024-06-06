@@ -435,6 +435,7 @@ class optimisation_function:
                 f"################# BLOCK {i} #################",
                 f"params = dense_param_arr[param_slices[2*{i}]:param_slices[2*{i}+1]]",
                 f"per_block[:] = base[:]",
+                f"#could set the outputs vector here",
             ]
             base =  inspect.unwrap(self.function_blocks[i].compute_jac)
             base_code = inspect.getsource(base)
@@ -754,12 +755,12 @@ class abstract_function_block(ABC):
 
     @staticmethod
     @abstractmethod
-    def compute_fun(param, input, output, memory: int | np.ndarray = 0):
+    def compute_fun(params, inp, output, memory: int | np.ndarray = 0):
         pass
 
     @staticmethod
     @abstractmethod
-    def compute_jac(param, input, output, memory: int | np.ndarray = 0):
+    def compute_jac(params, inp, output, memory: int | np.ndarray = 0):
         pass
 
     def __add__(self, other: Type[abstract_function_block]|optimisation_function) -> optimisation_function:

@@ -248,9 +248,12 @@ class TargetDetection:
                 keys = detection.keys[..., None]
             else:
                 keys = detection.keys
-            observation = np.concatenate(
-                [np.ones((detection.data_len, 2))*[ind, im_num], keys, detection.image_points]
-                , axis=1)
+            try:
+                observation = np.concatenate(
+                    [np.ones((detection.data_len, 2))*[ind, im_num], keys, detection.image_points]
+                    , axis=1)
+            except:
+                print(detection.image_points)
             self._update_buffer.append(observation)
 
 

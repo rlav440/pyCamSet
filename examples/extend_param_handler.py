@@ -4,13 +4,13 @@ import logging
 from pyCamSet import CameraSet  
 from pyCamSet.calibration_targets.abstractTarget import AbstractTarget
 from pyCamSet.calibration_targets.targetDetections import TargetDetection
-from pyCamSet.optimisation.base_optimiser import StandardParamHandler
+from pyCamSet.optimisation.base_optimiser import TemplateBundleHandler
 from pyCamSet.optimisation.compiled_helpers import n_e4x4_flat_INPLACE, n_htform_broadcast_prealloc
 
 from pyCamSet.utils.general_utils import ext_4x4_to_rod
 
 
-class TwoTargetCalibrator(StandardParamHandler):
+class TwoTargetCalibrator(TemplateBundleHandler):
     """
     Defines a new class that can calibrate with two! targets that are rigidly fixed together
     """

@@ -20,6 +20,8 @@ from typing import Callable, Optional, TYPE_CHECKING, Type
 import ast
 from collections import namedtuple
 
+from .matmul_map import create_optimisable_compute_flow, matmul_get_name, write_fun
+
 Import = namedtuple("Import", ["module", "name", "alias"])
 
 def get_imports(path):
@@ -264,6 +266,9 @@ class optimisation_function:
         return import_set, fn_content
 
     def get_constants(self, detections, threads):
+        """
+        Returns constants about the optimisations.
+        """
         starts, block_n_params, param_inds, key_type, _ = make_param_struct(self.function_blocks, detections)
         inp_mem = self.inp_mem_req
         out_mem = self.out_mem_req
@@ -355,7 +360,6 @@ class optimisation_function:
             f"\t\tdense_param_arr = np.empty(param_len)",
             # f"\t\tparams = np.empty(param_len)",
             f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((n_lines, param_len))",
-
             f"\t\tfor ii in range(n_lines):",
             f"\t\t\tdatum = d_data[i, ii]",
         ]
@@ -429,39 +433,27 @@ class optimisation_function:
             for imp in get_imports(base_code):
                 import_set.add(imp)
 
+        #calculate the offsets
+
+        out_sizes = [0]
+        for element in self.function_blocks:
+            elem_outsize = (element.params.n_params + element.num_inp) * element.num_out
+            out_sizes.append(elem_outsize)
+        block_slices = np.cumsum(out_sizes) #this is actually quite a large array, but still kind of small
         fn_content = []
         for i in range(n_blocks-1, -1, -1):
             prep = [ 
                 f"################# BLOCK {i} #################",
                 f"params = dense_param_arr[param_slices[2*{i}]:param_slices[2*{i}+1]]",
-                f"per_block[:] = base[:]",
                 f"#could set the outputs vector here",
+                f"output = output_block[{block_slices[i]}:{block_slices[i+1]}]"
             ]
             base =  inspect.unwrap(self.function_blocks[i].compute_jac)
             base_code = inspect.getsource(base)
             section = clean_fn_data(base_code)
             end = [ #replace this with an inlined function?
-                f"############### POPULATING THE JACOBEAN ###########",
-                f"out_ind_start = param_slices[2*n_blocks + 2*({i})] ",
-                f"out_ind_end = param_slices[2*n_blocks + 2*({i}) + 1]",
-                f"n_outputs = out_ind_end - out_ind_start",
-                f"\n",
-                f"inp_ind_start = param_slices[2*n_blocks + 2*{i} + 2] ",
-                f"inp_ind_end = param_slices[2*n_blocks + 2*{i} + 1 + 2]",
-                f"n_inputs = inp_ind_end - inp_ind_start",
-                f"#write the derivatives of the parameters",
-                f"n_param  = n_params[{i}]",
-                f"param_start = param_slices[2*{i}]",
-                f"param_end = param_slices[2*{i} + 1]",
-                f"ll = n_inputs + n_param",
-                f"for idc, output_var in enumerate(range(out_ind_start, out_ind_end)):",
-                f"\t#write the derivative with respect to the controlling params",
-                f"\tper_block[output_var, param_start:param_end] = output[idc*ll:idc*ll + n_param] #envisions this as a dense array",
-                f"\t#write the derivative with respect to the inputs",
-                f"\tif n_inputs != 0:",
-                f"\t\tper_block[output_var, inp_ind_start:inp_ind_end] = output[idc*ll + n_param:(idc + 1)*ll] #envisions this as a dense array",
-                f"jac = per_block @ jac",
-            ]
+                f"output = fun_output[:n_outs[{i}]]"
+            ] #end now has no elements.
             fn_content.append([prep, section, end])
 
 
@@ -496,7 +488,14 @@ class optimisation_function:
 
     def make_full_jac_template(self, detections, threads, unfixed_params, overwrite_function=False) -> Callable:
         # overwrite_function = True
-        
+
+        #make the matflow
+        mat_scriptname = matmul_get_name(self)
+        matmul_loc = (Path(__file__).parent)/("template_functions/" + mat_scriptname + ".py")
+        if not matmul_loc.exists() or overwrite_function:
+            lines = create_optimisable_compute_flow(self, in_name="output_block", out_name="write_data")
+            write_fun(self, lines, input_name="output_block", output_name="write_data")
+
         ###### HANDLE NAMING OF THE FILE
         strings = "jac_" +  "_".join([str(name.__class__.__name__) for name in self.function_blocks])
         file_name = "template_functions/" + strings + ".py"
@@ -507,141 +506,105 @@ class optimisation_function:
             importlib.invalidate_caches()
             top_module = importlib.import_module(file_string)
             base_jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
+        else:
+            ###### CREATE THE NEEDED DATA
 
-            _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
-            param_slices, n_outs, _, _ = self._get_function_constants()
-            parallel_data = self._reshape_data_for_parallel(detections, threads)
-            block_param_inds = self.get_block_param_inds(detections, threads)
-            block_param_inds_unthreaded = self.get_block_param_inds(detections, threads, unthreaded=True)
-            c, compressed_row = self.make_jac_CSR_columns_row_pointers(detections, threads, unfixed_params)
-            d_shape = detections.shape[0]
-            n_params = np.array(self.n_params)
+            def t(l):
+                return ["\t" + li for li in l]
 
-            f_outs = 2
-            grad_outputsize = np.max(self.grad_outputsize)
-
+            needed_import_set, content = self._get_loss_function_components()
+            jac_needed_imports_set, jac_content = self._get_loss_jac_strings()
             
-            jac_param_inds = np.repeat(block_param_inds_unthreaded, 2, axis=0)
-            good_mask = unfixed_params[jac_param_inds].flatten()
-            output_shape = jac_param_inds.shape
-            n_elements = np.prod(output_shape)
+            needed_import = []
+            imports_set = needed_import_set | jac_needed_imports_set
+            for s in imports_set:
+                # print(s)
+                if len(s.module) == 0:
+                    st = f"import {s.name[0]}" + (f" as {s.alias}" if s.alias is not None else "")
+                else:
+                    st = f"from {s.module[0]} import {s.name[0]}" + (f" as {s.alias}" if s.alias is not None else "")
+                needed_import.append(st)
+            needed_import.append("\n")
 
-            if np.all(unfixed_params):
-                def jac_fn(param, template=None):
-                    data = base_jac_fn(
-                        param, parallel_data, block_param_inds, n_lines,
-                        inp_mem, out_mem, wrk_mem, param_len, threads, d_shape,
-                        param_slices, n_outs, f_outs, grad_outputsize, n_params,
-                        template=template
-                    )
-                    return data[:n_elements], c, compressed_row
-                return jac_fn
+            out_sizes = [0]
+            for element in self.function_blocks:
+                elem_outsize = (element.params.n_params + element.num_inp) * element.num_out
+                out_sizes.append(elem_outsize)
+            block_slices = np.cumsum(out_sizes) #this is actually quite a large array, but still kind of small
 
-            def jac_fn(param, template=None):
-                data = base_jac_fn(
-                    param, parallel_data, block_param_inds, n_lines,
-                    inp_mem, out_mem, wrk_mem, param_len, threads, d_shape,
-                    param_slices, n_outs, f_outs, grad_outputsize, n_params,
-                    template=template
-                )
-                return data[:n_elements][good_mask], c, compressed_row
-            return jac_fn
+            start = ["from numba import prange",
+                     "from numba.types import int_",
+                     "import scipy",
+                     "from datetime import datetime",
+                     "from pyCamSet.optimisation.abstract_function_blocks import make_param_struct",
+                     " ",
+                     f"from .{mat_scriptname} import matflow",
+                     " ",
+                    "def make_full_jac(op_fun, detections, threads):"
+            ]
+            preamble = [
+                f"#workingtag = {datetime.now().strftime('%H:%M:%S')}",
+            ]
+            function_def = [
+                f"@njit(parallel=True,fastmath=True,cache=True)",
+                f"def full_jac(inp_params, d_data, block_param_inds, n_lines, inp_mem, out_mem, wrk_mem, param_len, n_threads, d_shape, param_slices, n_outs, f_outs, grad_outputsize, n_params, template = None):",
+                # f"\tprint(workingtag)",
+                f"\tuse_template = template is not None",
+                f"\tt_data: np.ndarray = template if use_template else np.zeros((3,1))",
+                f"\tjac_size = param_slices[-1]",
+                f"\tn_blocks = len(n_params)",
+                # the dense output is the array that gets used to calculate all of the data
+                f"\tdense_output = np.empty((n_threads, n_lines * f_outs, param_len))",
+                
+                ######### PARALLEL CODE
+                f"\tfor i in prange(n_threads):",
+                f"\t\t#make the memory components required",
+                f"\t\tinp = np.empty(inp_mem)",
+                f"\t\tmemory = np.empty(wrk_mem)",
+                f"\t\tdense_param_arr = np.empty(param_len)",
+                f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((n_lines, param_len))",
+                f"\t\toutput_block = np.empty({block_slices[-1]})",
+                f"\t\tfun_output = np.empty(np.max(n_outs))",
+                f"\t\tfor ii in range(n_lines):",
+                f"\t\t\tdatum = d_data[i, ii]",
 
-        ###### CREATE THE NEEDED DATA
+            ]
+            # write the script that populates the array here
+            param_slicing = [
+                f"\t\t\tdense_param_arr[:] = local_params[ii]"
+            ]
+            mid_amble = [
+                f"\t\t\tif use_template:",
+                f"\t\t\t\tinp[:3] = t_data[int(datum[2])] ",
+            ]
 
-        def t(l):
-            return ["\t" + li for li in l]
+            pre_calcs = [val for pair in zip(jac_content, content) for val in pair]
+            total_content = []
+            [[total_content.extend(item) for item in c] for c in pre_calcs[:-1]]
+            calcs = ['\t\t\t' + c for c in total_content] #this really needs to be AST
 
-        needed_import_set, content = self._get_loss_function_components()
-        jac_needed_imports_set, jac_content = self._get_loss_jac_strings()
-        
-        needed_import = []
-        imports_set = needed_import_set | jac_needed_imports_set
-        for s in imports_set:
-            # print(s)
-            if len(s.module) == 0:
-                st = f"import {s.name[0]}" + (f" as {s.alias}" if s.alias is not None else "")
-            else:
-                st = f"from {s.module[0]} import {s.name[0]}" + (f" as {s.alias}" if s.alias is not None else "")
-            needed_import.append(st)
-        needed_import.append("\n")
+            param_slicing_out = [
+                f"\t\t\twrite_data = dense_output[i, f_outs*ii:f_outs*(ii+1), :]",
+                f"\t\t\tmatflow(output_block, write_data)"
+            ]
 
+            postamble = [
+                f"\treturn dense_output.flatten()",
+                f"return full_jac",
+            ] 
 
-        start = ["from numba import prange",
-                 "from numba.types import int_",
-                 "import scipy",
-                 "from datetime import datetime",
-                "from pyCamSet.optimisation.abstract_function_blocks import make_param_struct",
-                 " ",
-                "def make_full_jac(op_fun, detections, threads):"
-        ]
-        preamble = [
-            f"#workingtag = {datetime.now().strftime('%H:%M:%S')}",
-        ]
-        function_def = [
-            f"@njit(parallel=True,fastmath=True,cache=True)",
-            f"def full_jac(inp_params, d_data, block_param_inds, n_lines, inp_mem, out_mem, wrk_mem, param_len, n_threads, d_shape, param_slices, n_outs, f_outs, grad_outputsize, n_params, template = None):",
-            # f"\tprint(workingtag)",
-            f"\tuse_template = template is not None",
-            f"\tt_data: np.ndarray = template if use_template else np.zeros((3,1))",
-
-            f"\tjac_size = param_slices[-1]",
-            f"\tn_blocks = len(n_params)",
-            # the dense output is the array that gets used to calculate all of the data
-            f"\tdense_output = np.empty((n_threads, n_lines * f_outs, param_len))",
+            fn =  needed_import + start + t(preamble) + t(function_def) + t(param_slicing) +\
+                t(mid_amble) + t(calcs) + t(param_slicing_out) + t(postamble)
             
-            ######### PARALLEL CODE
-            f"\tfor i in prange(n_threads):",
-            f"\t\t#make the memory components required",
-            f"\t\tinp = np.empty(inp_mem)",
-            f"\t\toutput = np.empty(grad_outputsize)", #this can just be the param len
-            f"\t\tmemory = np.empty(wrk_mem)",
-            f"\t\tdense_param_arr = np.empty(param_len)",
-            f"\t\tbase = np.eye(jac_size)",
-            f"\t\tjac = np.eye(jac_size)",
-            f"\t\tper_block = np.eye(jac_size)",
-            f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((n_lines, param_len))",
+            un_string = [f.replace("\t", "    ") for f in fn]
 
-            f"\t\tfor ii in range(n_lines):",
-            f"\t\t\tdatum = d_data[i, ii]",
-            f"\t\t\tjac[:] = base[:]",
+            with open(write_file, 'w') as f:
+                f.writelines((un + "\n" for un in un_string))
 
-        ]
-        # write the script that populates the array here
-        param_slicing = [
-            f"\t\t\tdense_param_arr[:] = local_params[ii]"
-        ]
-        mid_amble = [
-            f"\t\t\tif use_template:",
-            f"\t\t\t\tinp[:3] = t_data[int(datum[2])] ",
-        ]
-
-        pre_calcs = [val for pair in zip(jac_content, content) for val in pair]
-        total_content = []
-        [[total_content.extend(item) for item in c] for c in pre_calcs[:-1]]
-        calcs = ['\t\t\t' + c for c in total_content] #this really needs to be AST
-
-        param_slicing_out = [
-            "\t\t\tdense_output[i, f_outs*ii:f_outs*(ii+1), :] = jac[param_len:param_len + f_outs, :param_len]"
-        ]
-
-        postamble = [
-            f"\treturn dense_output.flatten()",
-            f"return full_jac",
-        ] 
-
-        fn =  needed_import + start + t(preamble) + t(function_def) + t(param_slicing) +\
-            t(mid_amble) + t(calcs) + t(param_slicing_out) + t(postamble)
-        
-        un_string = [f.replace("\t", "    ") for f in fn]
-
-        with open(write_file, 'w') as f:
-            f.writelines((un + "\n" for un in un_string))
-
-        file_string = 'pyCamSet.optimisation.template_functions.'  + strings
-        importlib.invalidate_caches()
-        top_module = importlib.import_module(file_string)
-        base_jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
+            file_string = 'pyCamSet.optimisation.template_functions.'  + strings
+            importlib.invalidate_caches()
+            top_module = importlib.import_module(file_string)
+            base_jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
 
         _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
         param_slices, n_outs, _, _ = self._get_function_constants()
@@ -661,6 +624,7 @@ class optimisation_function:
         output_shape = jac_param_inds.shape
         n_elements = np.prod(output_shape)
 
+        # print("calced param len: ", param_len)
         if np.all(unfixed_params):
             def jac_fn(param, template=None):
                 data = base_jac_fn(

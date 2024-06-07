@@ -4,7 +4,7 @@ from pathlib import Path
 import importlib
 from matplotlib import pyplot as plt
 
-from abstract_function_blocks import optimisation_function
+# from .abstract_function_blocks import optimisation_function
 #
 
 # we take a function and have some parameters of interest.
@@ -116,6 +116,7 @@ def map_outputs_to_jac(output, jac, param_slices, n_blocks, ide, m2i, output_off
     #work out where the points go for the matrix
     out_ind_start = param_slices[2*n_blocks + 2*ide] 
     out_ind_end = param_slices[2*n_blocks + 2*ide + 1] 
+    # print("output inds: ", out_ind_start, out_ind_end)
 
     inp_ind_start = param_slices[2*n_blocks + 2*ide + 2] 
     inp_ind_end = param_slices[2*n_blocks + 2*ide + 1 + 2]
@@ -123,22 +124,26 @@ def map_outputs_to_jac(output, jac, param_slices, n_blocks, ide, m2i, output_off
     
     #write the derivatives of the parameters
     param_start = param_slices[2*ide]
-    param_end = param_slices[2**ide + 1]
+    param_end = param_slices[2*ide + 1]
     n_param = param_end - param_start
+    # print("number of params", n_param)
+
     ll = n_inputs + n_param
     for idc, output_var in enumerate(range(out_ind_start, out_ind_end)):
+        # print("output_vars to grab: ", idc*ll, n_param)
         jac[output_var, param_start:param_end] = output[idc*ll:idc*ll + n_param] 
+
         #also write the mat to ind arr
         for ids, idv in enumerate(range(param_start, param_end)):
             m2i[ide][(output_var, idv)] = idc * ll + ids + output_offsets[ide]
 
         if n_inputs != 0:
-            jac[output_var, inp_ind_start:inp_ind_end] = output[idc*ll + n_param:(idc + 1)*ll] #envisions this as a dense array
+            jac[output_var, inp_ind_start:inp_ind_end] = output[idc*ll + n_param:(idc + 1)*ll]
             for ids, idv in enumerate(range(inp_ind_start, inp_ind_end)):
                 m2i[ide][(output_var, idv)] = idc * ll + + n_param + ids + output_offsets[ide]
 
 
-def create_optimisable_compute_flow(opfun: optimisation_function, out_name:str, in_name:str):
+def create_optimisable_compute_flow(opfun, out_name:str, in_name:str):
     """
     We use multivariate calculus to perpetuate the derivatives of each function block.
     This can be expressed as a product of the jacobians of each individual function block (expanded to operate on each function block).
@@ -236,6 +241,9 @@ def create_optimisable_compute_flow(opfun: optimisation_function, out_name:str, 
         lines_to_write.append(l)
     return lines_to_write
 
+def matmul_get_name(opfun):
+    return "matflow_jac_" +  "_".join([str(name.__class__.__name__) for name in opfun.function_blocks])
+
 def write_fun(opfun, lines, input_name, output_name):
     strings = "matflow_jac_" +  "_".join([str(name.__class__.__name__) for name in opfun.function_blocks])
     file_name = "template_functions/" + strings + ".py"
@@ -261,7 +269,7 @@ def import_fn(opfun):
     return top_module.matflow
 
 
-def test_compute_flow(opfun: optimisation_function, out_name:str, in_name:str):
+def test_compute_flow(opfun, out_name:str, in_name:str):
     """
     We use multivariate calculus to perpetuate the derivatives of each function block.
     This can be expressed as a product of the jacobians of each individual function block (expanded to operate on each function block).
@@ -299,8 +307,8 @@ def test_compute_flow(opfun: optimisation_function, out_name:str, in_name:str):
         jac = np.eye(mat_size)
         outsize = (element.params.n_params + element.num_inp) * element.num_out
         output = np.empty(outsize)
-        inps = np.ones(element.num_inp)
-        params = np.ones(element.params.n_params)
+        inps = np.random.random(element.num_inp)
+        params = np.random.random(element.params.n_params)
         element.compute_jac(
             inp=inps,
             params=params,
@@ -322,11 +330,11 @@ def test_compute_flow(opfun: optimisation_function, out_name:str, in_name:str):
     mapper = import_fn(opfun) 
     mapper(output_arr, data)
    
-    # fig, ax = plt.subplots(3,1)
-    # ax[0].imshow(view_elems)
-    # ax[1].imshow(data)
-    # ax[2].imshow(np.abs(view_elems - data))
-    # plt.show()
+    fig, ax = plt.subplots(3,1)
+    ax[0].imshow(view_elems)
+    ax[1].imshow(data)
+    ax[2].imshow(np.abs(view_elems - data))
+    plt.show()
     assert np.all(np.isclose(data, view_elems))
 
 

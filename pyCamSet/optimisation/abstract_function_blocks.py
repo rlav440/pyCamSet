@@ -10,6 +10,7 @@ from copy import copy
 from scipy.optimize import approx_fprime
 from datetime import datetime
 from matplotlib import pyplot as plt
+import logging
 
 import numpy as np
 from numba import njit, prange
@@ -452,6 +453,7 @@ class optimisation_function:
             base_code = inspect.getsource(base)
             section = clean_fn_data(base_code)
             end = [ #replace this with an inlined function?
+                f"################## normal function eval",
                 f"output = fun_output[:n_outs[{i}]]"
             ] #end now has no elements.
             fn_content.append([prep, section, end])
@@ -493,6 +495,7 @@ class optimisation_function:
         mat_scriptname = matmul_get_name(self)
         matmul_loc = (Path(__file__).parent)/("template_functions/" + mat_scriptname + ".py")
         if not matmul_loc.exists() or overwrite_function:
+            logging.warning("Compiling the matrix flow for this calibration.")
             lines = create_optimisable_compute_flow(self, in_name="output_block", out_name="write_data")
             write_fun(self, lines, input_name="output_block", output_name="write_data")
 
@@ -508,7 +511,7 @@ class optimisation_function:
             base_jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
         else:
             ###### CREATE THE NEEDED DATA
-
+            logging.warning(f"Compiling the jacobian definition for the {strings} calibration")
             def t(l):
                 return ["\t" + li for li in l]
 

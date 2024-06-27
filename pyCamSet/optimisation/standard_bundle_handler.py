@@ -67,7 +67,7 @@ class StandardBundlePrimitive:
 
         self.correct_gauge = True
         self.poses = poses
-        self.pose_unfixed = poses_unfixed if poses_unfixed is not None else np.ones(poses.shape[0], dtype=bool)
+        self.poses_unfixed = poses_unfixed if poses_unfixed is not None else np.ones(poses.shape[0], dtype=bool)
         self.calc_type_inds()
 
     def calc_type_inds(self):
@@ -77,7 +77,7 @@ class StandardBundlePrimitive:
 
         self.free_extr = np.sum(self.extr_unfixed)
         self.free_intr = np.sum(self.intr_unfixed)
-        self.free_pose = np.sum(self.pose_unfixed)
+        self.free_pose = np.sum(self.poses_unfixed)
         self.free_bdpt = np.sum(self.bdpt_unfixed)
 
         self.intr_end = 9 * self.free_intr
@@ -98,7 +98,7 @@ class StandardBundlePrimitive:
         pose_data = params[self.extr_end:self.pose_end].reshape((self.free_pose, 6))
         bdpt_data = params[self.pose_end:self.bdpt_end]
 
-        ch.fill_flat(pose_data, self.poses, self.pose_unfixed)
+        ch.fill_flat(pose_data, self.poses, self.poses_unfixed)
         ch.fill_flat(extr_data, self.extr, self.extr_unfixed)
         ch.fill_flat(intr_data, self.intr, self.intr_unfixed)
 
@@ -247,7 +247,6 @@ class SelfBundleHandler(TemplateBundleHandler):
         ] = prev_cams.calibration_handler.target.point_data.copy().flatten()[self.feat_unfixed]
         # print(prev_cams.calibration_handler.target.point_data.flatten()[:20])
 
-
     def get_initial_params(self) -> np.ndarray:
         """
         Returns initial parameters if they exist, or starts calculating them
@@ -255,9 +254,22 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         :return: the params
         """
-        if self.initial_params is None:
-            raise ValueError("Initial params should be set with this method")
+
+        if self.initial_params is not None:
+            return self.initial_params
+        start_params = self.calc_initial_params()
+
+        self.initial_params = np.empty(self.bundlePrimitive.bdpt_end)
+        self.initial_params[:self.bundlePrimitive.pose_end] = start_params
+        self.initial_params[ 
+            self.bundlePrimitive.pose_end:
+        ] = self.target.point_data.copy().flatten()[self.feat_unfixed]
         return self.initial_params
+
+    def get_updated_target(self, x):
+        standard_model = self.bundlePrimitive.return_bundle_primitives(x)
+        proj, extr, poses, ps = self.apply_gauge_transform(*standard_model)
+        return ps
 
     def get_camset(self, x, return_pose=False) -> CameraSet | tuple[CameraSet, np.ndarray]:
         """

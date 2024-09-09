@@ -243,6 +243,7 @@ class TargetDetection:
         :param detection: The detection data, contained as an image detection.
         """
         ind = self.cam_names.index(cam_name)
+
         if detection.has_data:
             if detection.keys.ndim == 1:
                 keys = detection.keys[..., None]

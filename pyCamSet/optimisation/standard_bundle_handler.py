@@ -157,9 +157,11 @@ class SelfBundleHandler(TemplateBundleHandler):
         self.feat_unfixed[3*i1:3*i1+3] = False
         self.feat_unfixed[3*i2] = False
 
+        superBundlePrimitive = self.bundlePrimitive
+
         self.bundlePrimitive = StandardBundlePrimitive(
-            self.poses, self.flat_point_data, self.extr, self.intr,
-            extr_unfixed=self.extr_unfixed, intr_unfixed=self.intr_unfixed, poses_unfixed=self.pose_unfixed, bundle_points_unfixed=self.feat_unfixed
+            superBundlePrimitive.poses, self.flat_point_data, superBundlePrimitive.extr, superBundlePrimitive.intr,
+            extr_unfixed=superBundlePrimitive.extr_unfixed, intr_unfixed=superBundlePrimitive.intr_unfixed, poses_unfixed=superBundlePrimitive.poses_unfixed, bundle_points_unfixed=self.feat_unfixed
         )
 
         self.param_len = None
@@ -196,10 +198,10 @@ class SelfBundleHandler(TemplateBundleHandler):
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
         mask = np.concatenate(
             ( 
-                np.repeat(self.intr_unfixed, 9),
-                np.repeat(self.extr_unfixed, 6),
-                np.repeat(self.pose_unfixed, 6),
-                np.repeat(self.feat_unfixed, 1), #I unrolled feature unfixed
+                np.repeat(self.bundlePrimitive.intr_unfixed, 9),
+                np.repeat(self.bundlePrimitive.extr_unfixed, 6),
+                np.repeat(self.bundlePrimitive.poses_unfixed, 6),
+                np.repeat(self.bundlePrimitive.bdpt_unfixed, 1), #I unrolled feature unfixed
             ), axis=0
         )
 

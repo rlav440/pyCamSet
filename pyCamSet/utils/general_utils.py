@@ -293,7 +293,7 @@ def distort_points(pts:np.ndarray, intrinsics: np.ndarray, dist_coef:np.ndarray)
     xD = x * (1 + k1*r2 + k2*(r2**2) + k3*(r2**3))
     yD = y * (1 + k1*r2 + k2*(r2**2) + k3*(r2**3))
     #distort tangentially
-    xD += 2*p1*x*y + p2 * (r2 + 2*(x**2))
+    xD += 2*p1*x*y + p2 *(r2 + 2*(x**2))
     yD += p1*(r2 + 2*(y**2)) + 2 * p2 * x * y
     #back to absolute
     xN, yN = [xD, yD] * focal + centre

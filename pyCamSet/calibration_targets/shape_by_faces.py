@@ -96,7 +96,7 @@ class FaceToShape:
             self.ur_pdata[i] = h_tform(transform=tform, points=points/scale_factor) * scale_factor
         return
 
-    def draw_meshes(self, face_corners, face_images: list[np.ndarray]):
+    def draw_meshes(self, face_corners, face_images: list[np.ndarray], return_scene=False):
         """
         Draws a mesh given the current face set up
 
@@ -135,6 +135,8 @@ class FaceToShape:
         # a = self.point_data.reshape((-1, 3))
         # ls = [str(i) for i in range(a.shape[0])]
         # scene.add_point_labels(a, ls)
+        if return_scene:
+            return scene
         scene.add_axes()
         scene.show()
 
@@ -165,7 +167,7 @@ class FaceToShape:
             r_im = None #crop down to the max and min containing the array.
             img = Image.new('L', im.shape, 0) # some shapes might use a sub window of the image
             ImageDraw.Draw(img).polygon(bf, outline=1, fill=1)
-            r_im *= numpy.array(img)
+            r_im *= np.array(img)
             # map the face shape over the image, making a mask and doing a bounds check for all faces
             blank_canvas[0] += r_im
     

@@ -290,7 +290,7 @@ class CameraSet:
 
         return final_mesh
 
-    def project_points_to_all_cams(self, points) -> list[dict[str|int,np.ndarray]]|dict[str|int, np.ndarray]:
+    def project_points_to_all_cams(self, points, distort=True) -> list[dict[str|int,np.ndarray]]|dict[str|int, np.ndarray]:
         """
         Projects a point or list of points to all cameras.
 
@@ -306,7 +306,7 @@ class CameraSet:
             points = points[None, ...]
             single_flag = True
 
-        all_projections = [cam.project_points(points) for cam in self._cam_list]
+        all_projections = [cam.project_points(points, distort=distort) for cam in self._cam_list]
         projection_dictionary_list = [{} for _ in range(points.shape[0])]
 
         for cam_proj, cam_name in zip(all_projections, self._cam_dict.keys()):
@@ -319,7 +319,7 @@ class CameraSet:
         return projection_dictionary_list
 
     def multi_cam_triangulate(self, to_reconstruct: list[dict] or dict or np.ndarray,
-                              return_used = False):
+                              return_used = False, distort=True):
         """
         A lsq minimised triangulation of camera point locations to reconstruct.
          Automatically identifies points with shared visibility
@@ -351,7 +351,7 @@ class CameraSet:
             data[:, 1:-2], axis=0, return_inverse=True, return_counts=True
         )
         viable_mask = count > 1
-        reconstructable_data = data[viable_mask[inv]]
+        reconstructable_data = data[viable_mask[inv].squeeze()]
 
         _, im_index, im_counts = np.unique(reconstructable_data[:, 1:-2], axis=0, return_index=True, return_counts=True)
         start_ind = np.append(0, np.cumsum(im_counts[np.argsort(im_index)]))
@@ -359,6 +359,10 @@ class CameraSet:
         #build the projection matricies
         proj = np.array([cam.proj for cam in self])
         dists = np.array([cam.distortion_coefs for cam in self])
+
+        if not distort:
+            dists = np.zeros_like(dists)
+
         intr = np.array([cam.intrinsic for cam in self])
         
         reconstructed = nb_triangulate_full(reconstructable_data, proj, start_ind, intr, dists)

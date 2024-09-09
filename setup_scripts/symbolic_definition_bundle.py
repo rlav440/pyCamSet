@@ -12,7 +12,7 @@ x_out, y_out, p_x, p_y, f_x, f_y, k_0, k_1, k_2, p_0, p_1, xw, yw, zw = symbols(
     "x_out y_out p_x p_y f_x f_y k_0 k_1 k_2 p_0 p_1 xw yw zw"
 )
 
-x_m_0, y_m_0, x_m_1, y_m_1, r, k_up, x_in, y_in = symbols(
+x_m_0, y_m_0, x_m_1, y_m_1, r2, k_up, x_in, y_in = symbols(
     "x_m_0 y_m_0 x_m_1 y_m_1 r k_up x_in y_in"
 )
 
@@ -21,12 +21,12 @@ y_in = (0 * xw +  f_y * yw + p_y * zw)/zw
 
 
 x_m_0, y_m_0 = (x_in - p_x)/f_x, (y_in - p_y)/f_y
-r = x_m_0**2 + y_m_0**2
+r2 = x_m_0**2 + y_m_0**2
 
 
-k_up = (1 + k_0 * r + k_1 * (r ** 2) + k_2 * (r ** 3))
-tang_x = 2 * p_0 * x_m_0 * y_m_0 + p_1 * (r + 2 * (x_m_0 ** 2))
-tang_y = p_0 * (r + 2 * (y_m_0 ** 2)) + 2 * p_1 * x_m_0 * y_m_0
+k_up = (1 + k_0 * r2 + k_1 * (r2 ** 2) + k_2 * (r2 ** 3))
+tang_x = 2 * p_0 * x_m_0 * y_m_0 + p_1 * (r2 + 2 * (x_m_0 ** 2))
+tang_y = p_0 * (r2 + 2 * (y_m_0 ** 2)) + 2 * p_1 * x_m_0 * y_m_0
 
 x_m_1 = k_up * x_m_0 + tang_x
 y_m_1 = k_up * y_m_0 + tang_y

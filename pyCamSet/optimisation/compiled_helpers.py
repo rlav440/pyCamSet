@@ -6,6 +6,74 @@ import numpy as np
 import cv2
 
 
+@njit(fastmath=True)
+def geometric_median(X):
+    output = np.empty(3)
+    work_point = np.empty(3)
+    w_dist = np.empty(X.shape[0])
+    n_geometric_median_prealloc(X, work_point, output, w_dist)
+    return output
+
+@njit(fastmath=True)
+def n_geometric_median_prealloc(X, wp0, out, w_dist, eps=1e-5, max_iter=20):
+    e2 = eps ** 2
+    run_len = len(X)
+    if len(X) == 1:
+        out[:] = X
+        return
+
+    wp0[:] = 0
+    for i in range(run_len):
+        wp0[0] += X[i, 0]
+        wp0[1] += X[i, 1]
+        wp0[2] += X[i, 2]
+    wp0 /= run_len
+
+    iter = 0
+
+    while iter < max_iter:
+        non_zero = 0
+        for i in range(run_len):
+            dist = math.sqrt((X[i, 0] - wp0[0]) ** 2 + (X[i, 1] - wp0[1]) ** 2 + (X[i, 2] - wp0[2]) ** 2)
+            if dist == 0:
+                w_dist[i] = 0
+            else:
+                w_dist[i] = 1 / dist
+                non_zero += 1
+
+        w_sum = np.sum(w_dist)
+        w_dist /= w_sum
+        out[:] = 0  # the new estimate
+        for i in range(run_len):
+            out[0] += w_dist[i] * X[i, 0]
+            out[1] += w_dist[i] * X[i, 1]
+            out[2] += w_dist[i] * X[i, 2]
+
+        num_zeros = run_len - non_zero
+        if num_zeros == 0:
+            pass  # do nothing to the work point
+        elif num_zeros == len(X):
+            return wp0  # i.e it must be perfect somehow.
+        else:
+            r = w_sum * np.sqrt(
+                (out[0] - wp0[0]) ** 2 + (out[1] - wp0[1]) ** 2 + (out[2] - wp0[2]) ** 2
+            )
+            # print(r)
+            rinv = 0 if r == 0 else num_zeros / r
+            s0 = max(0, 1 - rinv)
+            s1 = min(1, rinv)
+            out *= s0
+            out[0] += s1 * wp0[0]
+            out[1] += s1 * wp0[1]
+            out[2] += s1 * wp0[2]
+
+        d = (wp0[0] - out[0]) ** 2 + (wp0[1] - out[1]) ** 2 + (wp0[2] - out[2]) ** 2
+        if d < e2:
+            return
+        wp0[:] = out
+        iter += 1
+
+
 @njit(cache=True)
 def fill_pose(pose_data, poses, poses_unfixed):
     """
@@ -28,7 +96,6 @@ def fill_pose(pose_data, poses, poses_unfixed):
 def fill_extr(extr_data, extr, extr_unfixed):
     """
     Fills an extrinsics array with data from an input param array.
-
     :param extr_data: The extrinsic parameters, an nx6 array
     :param extr: The extrinsic data with missing blocks to fill
     :param extr_unfixed: A boolean array describing which extrinsics are unfixed

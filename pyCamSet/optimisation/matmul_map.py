@@ -14,14 +14,6 @@ from matplotlib import pyplot as plt
 # matrix is represented by a dictionairy.
 # indx class represents the origin of data
 
-@dataclass
-class indx:
-    def __init__(self,x,y,matnum):
-        self.x = x
-        self.y = y
-        self.matnum = matnum
-    def __repr__(self):
-        return f"idx x={self.x}, y={self.y}, mat={self.matnum}"
 
 def convert_matrix(mat, size, matnum):
     """
@@ -50,6 +42,15 @@ def unconvert_matrix(mat_trace, size, og_mat):
         else:
             output[key[0], key[1]] = value
     return output
+
+@dataclass
+class indx:
+    def __init__(self,x,y,matnum):
+        self.x = x
+        self.y = y
+        self.matnum = matnum
+    def __repr__(self):
+        return f"idx x={self.x}, y={self.y}, mat={self.matnum}"
 
 def encapsulate_multiplication(mat_0, mat_1, size):
     """

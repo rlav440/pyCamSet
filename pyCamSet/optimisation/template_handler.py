@@ -124,25 +124,26 @@ class TemplateBundleHandler:
         n_poses = detection.max_ims
         n_cams = camset.get_n_cams()
 
-        self.intr = np.zeros((n_cams, 9))
-        self.extr = np.zeros((n_cams, 6))
-        self.poses = np.zeros((n_poses, 6))
+        intr = np.zeros((n_cams, 9))
+        extr = np.zeros((n_cams, 6))
+        poses = np.zeros((n_poses, 6))
 
-        self.extr_unfixed = np.array(['ext' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
-        self.intr_unfixed = np.array(['int' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
-
-        self.pose_unfixed = np.ones(n_poses, dtype=bool)
+        extr_unfixed = np.array(['ext' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
+        intr_unfixed = np.array(['int' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
+        pose_unfixed = np.ones(n_poses, dtype=bool)
         if "fixed_pose" in self.problem_opts:
             fixed_pose = self.problem_opts["fixed_pose"]
-            self.pose_unfixed[fixed_pose] = False
-            self.poses[fixed_pose, :] = [0,0,0,0,0,0]
+
+            pose_unfixed[fixed_pose] = False
+            poses[fixed_pose, :] = [0,0,0,0,0,0]
+
+        self.bundlePrimitive = TemplateBundlePrimitive(
+            poses, extr, intr,
+            extr_unfixed=extr_unfixed, intr_unfixed=intr_unfixed, poses_unfixed=pose_unfixed,
+        )
 
         self.populate_self_from_fixed_params()
 
-        self.bundlePrimitive = TemplateBundlePrimitive(
-            self.poses, self.extr, self.intr,
-            extr_unfixed=self.extr_unfixed, intr_unfixed=self.intr_unfixed, poses_unfixed=self.pose_unfixed,
-        )
 
         self.param_len = None
         self.jac_mask = None
@@ -161,6 +162,7 @@ class TemplateBundleHandler:
 
         target_shape = self.target.point_data.shape
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+
         temp_loss = self.op_fun.make_full_loss_fn(dd, threads) 
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
@@ -175,11 +177,13 @@ class TemplateBundleHandler:
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
         mask = np.concatenate(
             ( 
-                np.repeat(self.intr_unfixed, 9),
-                np.repeat(self.extr_unfixed, 6),
-                np.repeat(self.pose_unfixed, 6),
+                np.repeat(self.bundlePrimitive.intr_unfixed, 9),
+                np.repeat(self.bundlePrimitive.extr_unfixed, 6),
+                np.repeat(self.bundlePrimitive.poses_unfixed, 6),
             ), axis=0
         )
+
+        # breakpoint()
 
         temp_loss = self.op_fun.make_jacobean(dd, threads, unfixed_params=mask)
         def jac_fn(params):
@@ -204,9 +208,10 @@ class TemplateBundleHandler:
         """
         for idx, cam_name in enumerate(self.cam_names):
             if 'ext' in self.fixed_params.get(cam_name, {}):
-                self.extr[idx] = self.fixed_params[cam_name]['ext']
+                self.bundlePrimitive.extr[idx] = self.fixed_params[cam_name]['ext']
+
             if 'int' in self.fixed_params.get(cam_name, {}):
-                self.intr[idx] = self.fixed_params[cam_name]['int']
+                self.bundlePrimitive.intr[idx] = self.fixed_params[cam_name]['int']
 
     def get_bundle_adjustment_inputs(self, x, make_points=False) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """

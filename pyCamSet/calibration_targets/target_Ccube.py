@@ -6,19 +6,21 @@ import numpy as np
 from cv2 import aruco
 import cv2
 from PIL import Image
+from matplotlib import pyplot as plt
+from tqdm import tqdm
 
 from pyCamSet.calibration_targets import AbstractTarget, ImageDetection, FaceToShape
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform, downsample_valid
 
-TFORMS = [
-	([-1.209,-1.209, 1.209],[ 0.5,-0.5, 0.5]),
-	([ 1.209,-1.209, 1.209],[ 0.5, 0.5,-0.5]),
-	([0.   ,0.   ,1.571],[ 0.5,-0.5,-0.5]),
-	([2.221,0.   ,2.221],[-0.5, 0.5,-0.5]),
-	([3.142,0.   ,0.   ],[-0.5, 0.5, 0.5]),
-	([-1.571, 0.   , 0.   ],[-0.5,-0.5, 0.5]),
-]
+# TFORMS = [
+# 	([-1.209,-1.209, 1.209],[ 0.5,-0.5, 0.5]),
+# 	([ 1.209,-1.209, 1.209],[ 0.5, 0.5,-0.5]),
+# 	([0.   ,0.   ,1.571],[ 0.5,-0.5,-0.5]),
+# 	([2.221,0.   ,2.221],[-0.5, 0.5,-0.5]),
+# 	([3.142,0.   ,0.   ],[-0.5, 0.5, 0.5]),
+# 	([-1.571, 0.   , 0.   ],[-0.5,-0.5, 0.5]),
+# ]
 
 TFORMS = [
     (([2.22144147, 2.22144147, 0.        ]), ([-0.5, -0.5,  0.5])),
@@ -97,12 +99,17 @@ class Ccube(AbstractTarget):
         blank_face, board_offset = make_blank_square(draw_res, line_fraction, border_fraction)
         sub_res = (draw_res[0] - 2 * board_offset, draw_res[1] - 2*board_offset)
         self.textures = [blank_face.copy() for _ in range(6)]
+        # debug_t = []
         for t, board in zip(self.textures, self.boards):
             t[board_offset:-board_offset, board_offset:-board_offset] = board.draw(sub_res)
+
+            # debug_t.append(board.draw(draw_res)) #DEBUG
+        # self.textures = debug_t
 
         bd = np.array([board.chessboardCorners for board in self.boards])
         coord_bump = self.length*border_fraction/2
         board_coords = bd + [coord_bump, coord_bump, 0]
+        # board_coords = bd #DEBUG
         self.base_face = np.array([
                             [0, self.length,0],
                             [self.length, self.length,0],
@@ -110,6 +117,7 @@ class Ccube(AbstractTarget):
                             [0, 0,0],
                         ])
 
+        # breakpoint()
         self.faceData = FaceToShape(
             face_local_coords=board_coords,
             face_transforms=[make_4x4h_tform(*t) for t in TFORMS],
@@ -118,19 +126,43 @@ class Ccube(AbstractTarget):
         self.point_data = self.faceData.point_data
         self._process_data()
 
-    def plot(self):
+    def plot(self, return_scene = False):
         """
         Draws a 3D model of the calibration target using pyVista
+
         """
-        faces = self.faceData.draw_meshes(self.base_face, self.textures)
+        scene = self.faceData.draw_meshes(self.base_face, self.textures, return_scene=return_scene)
+        if return_scene:
+            return scene
 
     def save_to_pdf(
             self,
             f_out: Path | None = None,
             border_width: float = 10,
-    ):
+            individual_faces = True,
 
+    ):
+        if individual_faces:
+            for idf, face in enumerate(tqdm(self.textures)):
+                blank_f = int(border_width * 0.0393701 * self.dpi)
+                dims = np.array(face.shape) + blank_f * 2
+                full_im = np.ones((dims)) * 255
+                full_im[blank_f:-blank_f, blank_f:-blank_f] = face
+
+                if f_out is None:
+                    f_out = Path(f'Ccube_length_{self.length * 1000:.2f}mm' \
+                            f'_{self.n_points}_points_at' \
+                            f'_{self.square_size * 1000:.2f}mm_face_{idf}.png')
+                full_im = full_im.astype(np.uint8)
+                with Image.fromarray(full_im) as im:
+                    im.save(fp=f_out, resolution=self.dpi)
+                f_out = None
+            return
+
+        raise NotImplementedError
         im_board = self.faceData.draw_net(self.textures, NET_FORMS)
+        plt.imshow(im_board)
+        plt.show()
 
         blank_f = int(border_width * 0.0393701 * self.dpi)
         dims = np.array(im_board.shape) + blank_f * 2
@@ -177,15 +209,18 @@ class Ccube(AbstractTarget):
         seen_data = []
 
         if ids is not None:
+            wait_key = wait_len
             # then split the detections by floor div
             board_marker_id = ids % self.markers_per_face
             board_origin = np.floor(np.array(ids) / self.markers_per_face).astype(int)
+            print(np.max(ids))
             seen_boards = np.unique(board_origin).astype(int)
 
             if np.any(seen_boards >= 6):
                 logging.warning(
                     "A marker was detected with an unfeasibly high board number."
                 )
+                # wait_key = -1
 
             for n_board in seen_boards[seen_boards < 6]:
                 board = self.boards[n_board]
@@ -208,8 +243,9 @@ class Ccube(AbstractTarget):
                 if n > 0:
                     if draw:
                         pass
-                        aruco.drawDetectedCornersCharuco(im_idea,
-                                        np.array(c_corners)/d_f, c_ids)
+                        # aruco.drawDetectedCornersCharuco(im_idea,
+                        #                 np.array(c_corners)/d_f, c_ids)
+                        aruco.drawDetectedMarkers(im_idea, np.array(corners)/d_f, ids)
 
                     for cid, corner in zip(c_ids[:, 0], c_corners[:, 0, :]):
                         seen_keys.append([n_board, cid])
@@ -218,7 +254,7 @@ class Ccube(AbstractTarget):
         if draw:
             if corners:
                 cv2.imshow('detections', im_idea)
-                cv2.waitKey(wait_len)
+                cv2.waitKey(wait_key)
 
         return ImageDetection(keys=seen_keys, image_points=seen_data)
 

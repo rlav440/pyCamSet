@@ -147,7 +147,7 @@ class TargetDetection:
         """
         :return: a list of target detections containing a unique index
         """
-        unique_keys = np.unique(self.get_data(), axis=0)
+        unique_keys = np.unique(self.get_data()[:, 2:-2], axis=0)
         return [self.get(key=k) for k in unique_keys]
 
     def _get_cam(self, cam):
@@ -243,14 +243,18 @@ class TargetDetection:
         :param detection: The detection data, contained as an image detection.
         """
         ind = self.cam_names.index(cam_name)
+
         if detection.has_data:
             if detection.keys.ndim == 1:
                 keys = detection.keys[..., None]
             else:
                 keys = detection.keys
-            observation = np.concatenate(
-                [np.ones((detection.data_len, 2))*[ind, im_num], keys, detection.image_points]
-                , axis=1)
+            try:
+                observation = np.concatenate(
+                    [np.ones((detection.data_len, 2))*[ind, im_num], keys, detection.image_points]
+                    , axis=1)
+            except:
+                print(detection.image_points)
             self._update_buffer.append(observation)
 
 

@@ -1,3 +1,5 @@
 .idea/
 __pycache__/
 docs/build/
+
+tests/test_data/calibration_charuco/optimised_cameras.camset

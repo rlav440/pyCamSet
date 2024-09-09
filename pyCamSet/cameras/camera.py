@@ -199,19 +199,20 @@ class Camera:
                     which returns v,u coordinates
         :return points: points in the uv coordinates
         """
-
         centered = h_tform(points, self.proj)
         if centered.ndim == 1:
             centered = centered[None, ...]
-        if mode == "image":
-            return centered[:, ::-1]
-        if distort and not np.any(np.logical_not(np.isclose(self.distortion_coefs, np.zeros(5)))):
+        dist_zero = np.all(np.isclose(self.distortion_coefs, 0))
+        if distort and not dist_zero:
             distorted = [distort_points(
                 pt,
                 self.intrinsic,
                 self.distortion_coefs
             ) for pt in centered]
             return np.array(distorted)
+
+        if mode == "image":
+            return centered[:, ::-1]
         return centered
 
     def _is_in_image(self, cords) -> bool:

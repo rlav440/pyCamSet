@@ -1,4 +1,5 @@
 from __future__ import annotations
+from math import copysign
 from copy import copy
 import matplotlib.pyplot as plt
 from scipy.stats import multivariate_normal
@@ -128,27 +129,40 @@ def visualise_calibration(
     detection = param_handler.get_detection()
     cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
 
-    cluster_plot([o_results['err']], alphas=[0.1])
+    cluster_plot([o_results['err']], alphas=[0.2])
 
     # the coverage for each camera
     n_cams = cams.get_n_cams()
     windows = get_close_square_tuple(n_cams)
-    fig, axes = plt.subplots(*windows)
+    fig, axes = plt.subplots(*windows[::-1])
     ax = axes.ravel()
     euclidean_err = np.linalg.norm(np.reshape(o_results['err'], (-1,2)), axis=1)
+    e_lim = np.median(euclidean_err) * 3
     err_buff = copy(euclidean_err)
+    full_err = copy(o_results['err'].reshape((-1,2)))
 
     if param_handler.missing_poses is not None:
         icam_n = np.cumsum(~param_handler.missing_poses) - 1
 
-    for cam_detection in detection.get_cam_list():
+
+    for idc_cam, cam_detection in enumerate(detection.get_cam_list()):
         datum = cam_detection.get_data()
         if datum is not None:
             cam_n = int(datum[0,0])
+
+            p_x = cams[cam_n].intrinsic[0,2]
+            p_y = cams[cam_n].intrinsic[1,2]
+
             loc_x, loc_y = datum[:,-2], datum[:, -1]
             error, err_buff = err_buff[:len(datum)], err_buff[len(datum):]
-            im = ax[cam_n].scatter(loc_x, loc_y, c=error, vmin=0, vmax=np.amax(euclidean_err), s=0.1)
-            ax[cam_n].set_title(detection.cam_names[cam_n], fontsize=8)
+            m_error = np.mean(error)
+            err, full_err = full_err[:len(datum)], full_err[len(datum):]
+            #what we can do is calculate if the error is going away or towards the principle axis
+            away_vec = np.copysign(np.ones(datum.shape[0]), (loc_x - p_x) * err[:, 0] + (loc_y - p_y) * err[:, 1])
+
+            
+            im = ax[cam_n].scatter(loc_x, loc_y, c=error*away_vec, vmin=-e_lim, vmax=e_lim, s=2, alpha=0.4, cmap="coolwarm")
+            ax[cam_n].set_title(detection.cam_names[cam_n] + f" mean error {m_error:.2f}", fontsize=8)
             ax[cam_n].set_xlim([0, cams[cam_n].res[0]])
             ax[cam_n].set_ylim([0, cams[cam_n].res[1]])
             ax[cam_n].set_aspect('equal')
@@ -162,7 +176,7 @@ def visualise_calibration(
         fig.delaxes(ax[i])
 
     cbar = fig.colorbar(im, ax=axes.ravel().tolist())
-    cbar.set_label("Reprojection Error (px)")
+    cbar.set_label("Polarised Reprojection Error (px)")
     fig.suptitle("Per Camera Coverage")
     plt.show()
 
@@ -179,17 +193,12 @@ def visualise_calibration(
     plotter.subplot(0)
     plotter.add_text("Reconstructed Points in Scene Coordinates", position='upper_edge', font_size=10, font="times")
     cams.get_scene(scene=plotter)
-    seen_pts = pv.PolyData(reconstructed)
-    seen_pts['Reprojection error (px)'] = error_subset
-    plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=4)
     ## Triangulation of points in target space
     inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True,)[1])
     im_nums = reconstructed_subset[inv, 1]
     keys = reconstructed_subset[inv, 2:-2]
     #point_errors = error_subset[inv]
-
-
-
+    mask = []
     point_locs = {}
     col_locs = {}
     raw_obj_points  = []
@@ -201,7 +210,7 @@ def visualise_calibration(
         n_inv_pose(poses[int(im)], inv_pose)
         obj_point = np.empty(3)
         n_htform_prealloc(point, inv_pose, obj_point)
-
+        mask.append(np.linalg.norm(obj_point) < 3 * mean_dist)
         if np.linalg.norm(obj_point) > 3 * mean_dist:
             bad_points = bad_points + 1
         else:
@@ -211,13 +220,18 @@ def visualise_calibration(
             col_locs.setdefault(tuple(key.astype(int)), []).append(c)
             errors.append(c)
 
+    m = np.array(mask)
+    seen_pts = pv.PolyData(reconstructed[m])
+    seen_pts['Reprojection error (px)'] = error_subset[m]
+    plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=4, clim=[0, e_lim])
+
     plotter.subplot(1)
     plotter.add_text("Reconstructed Points in Target Coordinates", position="upper_edge", font_size=10, font='times')
     plotter.add_text(f"{bad_points} erroneous Points", position='lower_left', font_size=10, font='times')
 
     cube_locs = pv.PolyData(np.array(raw_obj_points))
     cube_locs['Reprojection Error (px)'] = errors
-    plotter.add_mesh(cube_locs, render_points_as_spheres=True, point_size=4)
+    plotter.add_mesh(cube_locs, render_points_as_spheres=True, point_size=4, clim=[0, e_lim])
 
     def reject_outliers(data, m=2.):
         d = np.abs(data - np.median(data))
@@ -245,7 +259,7 @@ def visualise_calibration(
 
     if len(raw_data) > 0:
         norm = plt.Normalize()
-        colours = (plt.cm.viridis(norm(err_buff))[:,:3] * 255).astype(np.uint8)
+        colours = (plt.cm.viridis(norm(np.clip(err_buff, 0, e_lim)))[:,:3] * 255).astype(np.uint8)
 
         chart = pv.Chart2D()
         chart.title = 'Accuracy vs Precision of target feature locations'

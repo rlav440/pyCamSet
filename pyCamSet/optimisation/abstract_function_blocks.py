@@ -335,7 +335,7 @@ class optimisation_function:
         needed_import.append("\n")
 
         #INITIALISE THE FUNCTION
-        start = ["from numba import prange",
+        start = ["from numba import prange, int64",
                  "from datetime import datetime",
                 "from pyCamSet.optimisation.abstract_function_blocks import make_param_struct",
                  " ",
@@ -360,7 +360,7 @@ class optimisation_function:
             f"\t\tmemory = np.empty(wrk_mem)",
             f"\t\tdense_param_arr = np.empty(param_len)",
             # f"\t\tparams = np.empty(param_len)",
-            f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((n_lines, param_len))",
+            f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((int64(n_lines), int64(param_len)))",
             f"\t\tfor ii in range(n_lines):",
             f"\t\t\tdatum = d_data[i, ii]",
         ]
@@ -535,7 +535,7 @@ class optimisation_function:
                 out_sizes.append(elem_outsize)
             block_slices = np.cumsum(out_sizes) #this is actually quite a large array, but still kind of small
 
-            start = ["from numba import prange",
+            start = ["from numba import prange, int64",
                      "from numba.types import int_",
                      "import scipy",
                      "from datetime import datetime",
@@ -565,7 +565,7 @@ class optimisation_function:
                 f"\t\tinp = np.empty(inp_mem)",
                 f"\t\tmemory = np.empty(wrk_mem)",
                 f"\t\tdense_param_arr = np.empty(param_len)",
-                f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((n_lines, param_len))",
+                f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((int64(n_lines), int64(param_len)))",
                 f"\t\toutput_block = np.empty({block_slices[-1]})",
                 f"\t\tfun_output = np.empty(np.max(n_outs))",
                 f"\t\tfor ii in range(n_lines):",

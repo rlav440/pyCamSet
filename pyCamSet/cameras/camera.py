@@ -87,7 +87,7 @@ class Camera:
         self.world_sensor_map = None
         self._update_state()
 
-    def to_MVSnet_txt(self, f_loc: Path, depth_range: tuple[float, float], depth_steps: int) -> None:
+    def to_MVSnet_txt(self, f_loc: Path, depth_range: tuple[float, float], depth_steps: int, crop=None) -> None:
         """
         Writes the camera data to the standard format used by MVSnet and its derivatives.
 
@@ -100,9 +100,20 @@ class Camera:
             for row in self.extrinsic:
                 f.write(f"{row[0]} {row[1]} {row[2]} {row[3]}" + '\n')
             f.write('\n')
-            f.write("intrinsic" + '\n')
-            for row in self.intrinsic:
+            f.write("intrinsic" + '\n') 
+
+            if crop is None:
+                for row in self.intrinsic:
+                    f.write(f"{row[0]} {row[1]} {row[2]}" + '\n')
+            else:
+                row = self.intrinsic[0]
+                f.write(f"{row[0]} {row[1]} {row[2] - crop[1, 0]}" + '\n')
+                row = self.intrinsic[1]
+                f.write(f"{row[0]} {row[1]} {row[2] - crop[0, 0]}" + '\n')
+
+                row = self.intrinsic[2]
                 f.write(f"{row[0]} {row[1]} {row[2]}" + '\n')
+
             f.write('\n')
             f.write(
                 f"{depth_range[0]} {(depth_range[1] - depth_range[0]) / depth_steps} {depth_steps} {depth_range[1]}" + '\n')

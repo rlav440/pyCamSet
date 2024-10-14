@@ -219,7 +219,7 @@ class CameraSet:
             return False
         return True
 
-    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet'):
+    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet', crop=None):
         """
         Writes an entire camera set to some form of defined camera structure.
         Currently only MVSnet is defined.
@@ -230,16 +230,25 @@ class CameraSet:
         if not mode == 'MVSnet':
             raise NotImplementedError
 
+        if crop is None:
+            crop = {}
+
         for cam_n, cam in enumerate(self):
             cam_loc = loc/f"{cam_n:08}_cam.txt"
-            cam.to_MVSnet_txt(cam_loc, (r.mindist, r.maxdist), r.steps)
+            cam.to_MVSnet_txt(cam_loc, (r.mindist, r.maxdist), r.steps, crop.get(cam.name, None))
 
 
         if ims is not None:
             im_loc = loc.parent/'images'
             im_loc.mkdir(exist_ok=True)
             for idx, im in enumerate(ims):
+                local_crop = crop.get(self[idx].name, None)
                 im_temp = self[idx].undistort(im)
+                if local_crop is not None:
+                    im_temp = im_temp[
+                        local_crop[0,0]:local_crop[0,1],
+                        local_crop[1,0]:local_crop[1,1],
+                    ]
                 cv2.imwrite(str(im_loc/f"{idx:08}.jpg"), im_temp,  [cv2.IMWRITE_JPEG_QUALITY, 100])
 
         cvwc = np.array(
@@ -411,7 +420,7 @@ class CameraSet:
 
         return cam_meshes, view_cones
 
-    def get_scene(self, scale_factor=0.3/8, view_cones=None, scene: pv.Scene=None) -> pv.Scene:
+    def get_scene(self, scale_factor=0.3/8, view_cones=None, scene: pv.Scene=None, labels=True) -> pv.Scene:
         """
         Returns a pyvista scene containing the camera meshes.
 
@@ -430,7 +439,8 @@ class CameraSet:
         if view_cones is not None:
             for v_con in v_cones:
                 scene.add_mesh(v_con, opacity=0.05, color='g')
-        scene.add_point_labels(positions, list(self._cam_dict.keys()))
+        if labels:
+            scene.add_point_labels(positions, list(self._cam_dict.keys()))
 
         # also visualise the origin of the coordinate system
         p0 = np.array([0, 0, 0])

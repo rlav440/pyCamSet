@@ -59,7 +59,7 @@ def flatten_pose_list(pose_list):
     return np.concatenate(list(chain(*params)), axis=0)
 
 
-def benchmark(func, repeats=100, mode="ms", timer=time.time_ns):
+def benchmark(func, repeats=100, mode="ms", timer=time.time_ns, max_runtime=100):
     """
     A handy function to benchmark a function. Tracks the execution time, and also the numba allocations.
     :param func: The function to benchmark as a lambda
@@ -68,37 +68,41 @@ def benchmark(func, repeats=100, mode="ms", timer=time.time_ns):
     :param timer: The timer to use. Can be time.time_ns, or time.perf_counter_ns
     """
 
-    def run_benchmark():
-        ranges = {
-            "us":1e-3,
-            "ms":1e-6,
-            "s":1e-9,
-        }
-        # starting_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
-        times = []
-        for _ in range(repeats):
-            start = timer()
-            func()
-            end=timer()
-            times.append(end-start)
+    ranges = {
+        "us":1e-3,
+        "ms":1e-6,
+        "s":1e-9,
+    }
+    # starting_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
+    times = []
+    loop_start = timer()
+    for _ in range(repeats):
+        start = timer()
+        func()
+        end=timer()
+        times.append(end-start)
+        total_time = end - loop_start
+        if (total_time * ranges['s'] )> max_runtime:
+            print(
+            f"Exceeded given max_runtime of {max_runtime} seconds."
+            )
+            break
 
-        times = np.array(times)
-        mean = np.mean(times) * ranges[mode]
-        stdev = np.std(times * ranges[mode])
-        median = np.median(times) * ranges[mode]
-        max_t = min(mean + 3*stdev,np.amax(times) * ranges[mode])
-        print(f"Mean: {mean:.2f} {mode}, median: {median:.2f} {mode}, stdev: {stdev:.2f} {mode}")
-        histogram(times*ranges[mode], bins=20,
-                  bins_min=max(mean- 3*stdev, 0),
-                  x_max = min(mean + 5*stdev, max_t),
-                  height = 3,
-                  color = True,
-                  y_unit=" freq",
-                  x_unit=mode,
-                  )
-        # final_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
-        # print(f"Mean numba allocations: {(final_alloc - starting_alloc)/repeats:.0f}")
-    run_benchmark()
+    times = np.array(times)
+    mean = np.mean(times) * ranges[mode]
+    stdev = np.std(times * ranges[mode])
+    median = np.median(times) * ranges[mode]
+    max_t = min(mean + 3*stdev,np.amax(times) * ranges[mode])
+    print(f"Mean: {mean:.2f} {mode}, median: {median:.2f} {mode}, stdev: {stdev:.2f} {mode}")
+    histogram(times*ranges[mode], bins=20,
+              bins_min=max(mean- 3*stdev, 0),
+              x_max = min(mean + 5*stdev, max_t),
+              height = 3,
+              color = True,
+              y_unit=" freq",
+              x_unit=mode,
+              )
+    # final_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
 
 
 def mad_outlier_detection(data: np.ndarray|list, out_thresh = 3, draw=True) -> np.ndarray or None:

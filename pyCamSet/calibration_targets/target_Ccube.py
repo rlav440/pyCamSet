@@ -33,11 +33,11 @@ TFORMS = [
 
 NET_FORMS=[
 	[[1.0,0.0,0.0], [0.0,1.0,0.0],[0.0,0.0,1.0]],
-	[[0.0,-1.0,-1.0], [1.0,0.0,0.0],[0.0,0.0,1.0]],
-	[[0.0,-1.0,0.0], [1.0,0.0,0.0],[0.0,0.0,1.0]],
-	[[1.0,0.0,1.0], [0.0,1.0,0.0],[0.0,0.0,1.0]],
 	[[0.0,1.0,0.0], [-1.0,0.0,0.0],[0.0,0.0,1.0]],
-	[[1.0,0.0,0.0], [0.0,1.0,1.0],[0.0,0.0,1.0]],
+	[[1.0,0.0,1.0], [0.0,1.0,0.0],[0.0,0.0,1.0]],
+	[[0.0,-1.0,1.0], [1.0,0.0,1.0],[0.0,0.0,1.0]],
+	[[1.0,0.0,2.0], [0.0,1.0,0.0],[0.0,0.0,1.0]],
+	[[1.0,0.0,-1.0], [0.0,1.0,0.0],[0.0,0.0,1.0]],
 ]
 
 def make_blank_square(draw_res, line_fraction, border_fraction):
@@ -100,8 +100,12 @@ class Ccube(AbstractTarget):
         sub_res = (draw_res[0] - 2 * board_offset, draw_res[1] - 2*board_offset)
         self.textures = [blank_face.copy() for _ in range(6)]
         # debug_t = []
-        for t, board in zip(self.textures, self.boards):
+        for idb, (t, board) in enumerate(zip(self.textures, self.boards)):
             t[board_offset:-board_offset, board_offset:-board_offset] = board.draw(sub_res)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1.5
+            thickness = int(t.shape[0]/500)
+            cv2.putText(t, f"{idb}", (t.shape[0]//100, t.shape[0]//100 * 99 ), font, font_scale, 0, thickness)
 
             # debug_t.append(board.draw(draw_res)) #DEBUG
         # self.textures = debug_t
@@ -139,7 +143,7 @@ class Ccube(AbstractTarget):
             self,
             f_out: Path | None = None,
             border_width: float = 10,
-            individual_faces = True,
+            individual_faces = False,
 
     ):
         if individual_faces:
@@ -159,10 +163,8 @@ class Ccube(AbstractTarget):
                 f_out = None
             return
 
-        raise NotImplementedError
+        # raise NotImplementedError
         im_board = self.faceData.draw_net(self.textures, NET_FORMS)
-        plt.imshow(im_board)
-        plt.show()
 
         blank_f = int(border_width * 0.0393701 * self.dpi)
         dims = np.array(im_board.shape) + blank_f * 2

@@ -215,14 +215,7 @@ class Ccube(AbstractTarget):
             # then split the detections by floor div
             board_marker_id = ids % self.markers_per_face
             board_origin = np.floor(np.array(ids) / self.markers_per_face).astype(int)
-            print(np.max(ids))
             seen_boards = np.unique(board_origin).astype(int)
-
-            if np.any(seen_boards >= 6):
-                logging.warning(
-                    "A marker was detected with an unfeasibly high board number."
-                )
-                # wait_key = -1
 
             for n_board in seen_boards[seen_boards < 6]:
                 board = self.boards[n_board]

@@ -2,12 +2,17 @@ from __future__ import annotations
 from math import copysign
 from copy import copy
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 from scipy.stats import multivariate_normal
 import numpy as np
 import pyvista as pv
+from matplotlib.colors import LogNorm, LinearSegmentedColormap
 
 from pyCamSet.utils.general_utils import h_tform, get_close_square_tuple
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc, n_inv_pose
+
+blues_with_white = LinearSegmentedColormap.from_list('Blues_with_white', [(1, 1, 1), *plt.cm.Blues(np.linspace(0, 1, 1024)[:900])])
+
 
 def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
                  s_per=None, save=None):
@@ -43,22 +48,32 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
 
         # split into x,y based on ordering
 
-        x_1, y_1 = datum[::2], datum[1::2]
-        m_1 = np.mean((x_1**2 + y_1**2)**(1/2))
+        x, y = datum[::2], datum[1::2]
+        m_1 = np.mean((x**2 + y**2)**(1/2))
         if alp is None:
-            alp = 0.2
+            pass
+        alp = 0.01
 
-        ds = lambda x: np.random.choice(x, int(s * len(x)))
-        ax.scatter(ds(x_1), ds(y_1), s=0.2, alpha=alp)
+        cov = np.cov(x,y)
+        eigenvalues, _ = np.linalg.eigh(cov)
+        width, height = np.sqrt(eigenvalues)
+        sd = max(width, height)
+
         ranges = list(ax.get_ylim()) + list(ax.get_xlim())
-        sd = fancy_confidence_contours(x_1, y_1, ax=ax, ranges=ranges)
+        # ax.scatter(x, y, s=0.1, alpha=alp)
+        _, _, _, img = ax.hist2d(x=x, y=y, bins=np.linspace(-3*sd, 3*sd, 100), norm=LogNorm(vmin=0.0001, vmax=1), cmap=blues_with_white, density=True)
+        clm = plt.colorbar(img, label="Density")
+        sd = fancy_confidence_contours(x, y, ax=ax, ranges=ranges)
         ax.set_aspect('equal')
+
         if rang is not None:
             ax.set_xlim([-rang, rang])
             ax.set_ylim([-rang, rang])
         else:
-            ax.set_ylim([-4*sd, 4*sd])
-            ax.set_xlim([-4*sd, 4*sd])
+            sf = 3
+            # sd = 2
+            ax.set_ylim([-sf*sd, sf*sd])
+            ax.set_xlim([-sf*sd, sf*sd])
 
         if title is None:
             ax.set_title(f'Mean euclidean error = {m_1:.2f} '
@@ -74,6 +89,9 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
         ax.spines['right'].set_visible(False)
         ax.locator_params(nbins=5)
 
+        # plt.show()
+        # raise ValueError()
+
     if save is not None:
         plt.savefig(save)
 
@@ -87,32 +105,62 @@ def fancy_confidence_contours(x,y, ax, ranges):
     :param ax: the axis object to plot too
     :param ranges: the ranges to use.
     """
-    var = multivariate_normal(cov=np.cov(x,y))
+    cov = np.cov(x,y)
+    # var = multivariate_normal(cov=np.cov(x,y))
     xx, yy = np.meshgrid(
         np.linspace(ranges[0], ranges[1], 100),
         np.linspace(ranges[2], ranges[3], 100)
     )
-    pos = np.dstack((xx,yy))
-    res = var.pdf(pos)
+    # pos = np.dstack((xx,yy))
+    # res = var.pdf(pos)
 
     lbs = [r'$3\sigma$', r'$2\sigma$', r'$1\sigma$']
 
-    dist = np.sqrt(var.cov[1, 1])
-    levels = [var.pdf([0,3*dist]), var.pdf([0,2*dist]), var.pdf([0,dist])]
-    cset = ax.contour(xx,
-                yy,
-                res,
-                levels = levels,
-                colors='firebrick')
+    # dist = np.sqrt(var.cov[1, 1])
 
-    locations = [(0,-1*dist),(0,-2*dist),(0,-3*dist)]
-    fmt = {}
-    for l,s in zip(cset.levels, lbs):
-        fmt[l] = s
-    plt.clabel(cset, inline=True, fmt=fmt, fontsize=12, manual=locations)
-    return dist
+    #so we have the covariance matrix of the data.
+
+    #if we see little covariance, we need to address this in the plot
 
 
+    # levels = [var.pdf([0,3*dist]), var.pdf([0,2*dist]), var.pdf([0,dist])]
+    # cset = ax.contour(xx,
+    #             yy,
+    #             res,
+    #             levels = levels,
+    #             colors='firebrick')
+    # Eigenvalues and eigenvectors
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)
+
+    # Calculate the angle of the ellipse
+    angle = np.degrees(np.arctan2(*eigenvectors[:, 0][::-1]))
+    width, height = 2 * np.sqrt(eigenvalues)
+
+    # Create a figure and axis
+    # Plot the covariance ellipse
+    ellipse = Ellipse((0,0), width, height, angle=angle, edgecolor='firebrick', facecolor='none', lw=1)
+    ax.add_patch(ellipse)
+    ellipse = Ellipse((0,0), 2*width, 2*height, angle=angle, edgecolor='firebrick', facecolor='none', lw=1)
+    ax.add_patch(ellipse)
+    ellipse = Ellipse((0,0), 3*width, 3*height, angle=angle, edgecolor='firebrick', facecolor='none', lw=1)
+    ax.add_patch(ellipse)
+
+    phi = np.radians(angle)
+    x_text = 0 + width/2 * np.cos(0) * np.cos(phi) - height/2 * np.sin(0) * np.sin(phi)
+    y_text = 0 + width/2 * np.cos(0) * np.sin(phi) + height/2 * np.sin(0) * np.cos(phi) 
+
+    ax.text(1.3*x_text, 1.3*y_text, r'$\sigma$', fontsize=12, color='firebrick', rotation=0, ha='center', va = 'center') 
+    ax.text(2.3*x_text, 2.3*y_text, r'$2\sigma$', fontsize=12, color='firebrick', rotation=0, ha='center', va = 'center') 
+    ax.text(3.3*x_text, 3.3*y_text, r'$3\sigma$', fontsize=12, color='firebrick', rotation=0, ha='center', va = 'center') 
+
+    # locations = [(0,-1*height),(0,-2*height),(0,-3*height)]
+    # fmt = {}
+    # for l,s in zip(cset.levels, lbs):
+    #     fmt[l] = s
+    # plt.clabel(cset, inline=True, fmt=fmt, fontsize=12, manual=locations)
+    return max(height, width)/2
+
+ 
 #from pyCamera.optimisers.base_optimiser import AbstractParamHandler
 def visualise_calibration(
         o_results:dict,
@@ -129,7 +177,7 @@ def visualise_calibration(
     detection = param_handler.get_detection()
     cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
 
-    cluster_plot([o_results['err']], alphas=[0.2])
+    cluster_plot([o_results['err']], alphas=[0.1])
 
     # the coverage for each camera
     n_cams = cams.get_n_cams()
@@ -192,7 +240,7 @@ def visualise_calibration(
     plotter.title = "Calibration Evaluation"
     plotter.subplot(0)
     plotter.add_text("Reconstructed Points in Scene Coordinates", position='upper_edge', font_size=10, font="times")
-    cams.get_scene(scene=plotter)
+    cams.get_scene(scene=plotter, labels=False)
     ## Triangulation of points in target space
     inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True,)[1])
     im_nums = reconstructed_subset[inv, 1]
@@ -223,7 +271,7 @@ def visualise_calibration(
     m = np.array(mask)
     seen_pts = pv.PolyData(reconstructed[m])
     seen_pts['Reprojection error (px)'] = error_subset[m]
-    plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=4, clim=[0, e_lim])
+    plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=2, clim=[0, e_lim])
 
     plotter.subplot(1)
     plotter.add_text("Reconstructed Points in Target Coordinates", position="upper_edge", font_size=10, font='times')

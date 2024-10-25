@@ -60,7 +60,7 @@ class ChArUco(AbstractTarget):
 
         if draw:           
             display_im = image.copy()
-            target_size = [1080, 1920]
+            target_size = [480, 640]
             d_f = int(max((min(np.array(display_im.shape[:2]) / target_size)), 1))
             display_im = downsample_valid(display_im, d_f).astype(np.uint8)
             # d_f=1

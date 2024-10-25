@@ -721,7 +721,7 @@ def n_dist_prealloc(x, out):
 def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Calculates the rigid transform between two sets of points using an svd
-    Maps the first set of points to the second.
+    gives the transform from the first set of points to the second.
 
     :params v0: The first set of points
     :params v1: The second set of points
@@ -749,7 +749,7 @@ def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray
     # the process described here is a transformation from 
     t = - matR @ t0 + t1
 
-    # error = np.sum(np.abs((matR @ v0.T).T + t - v1))
-    # print(f"default={np.sum(np.abs(v0 - v1))}, tformed = {error}")
+    # error = np.mean(np.linalg.norm((matR @ v0.T).T + t - v1, axis=-1))
+    # print(f"rms error after fit = {error}")
     
     return matR, t

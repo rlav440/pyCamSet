@@ -243,6 +243,23 @@ class Ccube(AbstractTarget):
                         aruco.drawDetectedMarkers(im_idea, np.array(corners)/d_f, ids)
 
                     for cid, corner in zip(c_ids[:, 0], c_corners[:, 0, :]):
+                        # if n_board == 0:
+                        #     if cid == 0:
+                        #
+                        #         s = 256
+                        #
+                        #         intc = corner.astype(int)
+                        #         sub_window = image[
+                        #             intc[1] - s//2:intc[1] + s//2,
+                        #             intc[0] - s//2:intc[0] + s//2,
+                        #         ]
+                        #
+                        #         loc = corner - intc + s//2
+                        #         if sub_window.shape == (s,s):
+                        #             plt.imshow(sub_window, vmin=0, vmax=255, cmap='grey')
+                        #             plt.plot(loc[1], loc[0], 'r.')
+                        #             plt.show()
+
                         seen_keys.append([n_board, cid])
                         seen_data.append(corner)
 

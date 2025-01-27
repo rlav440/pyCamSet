@@ -41,6 +41,9 @@ class AbstractTarget(ABC):
     def __init__(self, inputs: dict):
         inputs.pop('self', None)
         inputs.pop('__class__', None)
+        for k,v in inputs.items():
+            if isinstance(v, np.ndarray):
+                inputs[k] = v.tolist()
 
         self.point_data: np.ndarray = None # An
 
@@ -300,7 +303,7 @@ class AbstractTarget(ABC):
             mask = b_counts > np.prod(self.point_local.shape[:-2])
             for board in boards[mask]:
                 key_mask = np.squeeze(keys[:, :-1] == board)
-                if np.sum(key_mask) > 8:
+                if np.sum(key_mask) > 12:
                     board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')
                     board_im = data[key_mask, -2:][None, ...].astype('float32')
                     object_points.append(board_obj)
@@ -320,10 +323,6 @@ class AbstractTarget(ABC):
             # ),
             None,
         )
-
-        for k in ic:
-            if hasattr(k, "shape"):
-                print(k.shape)
         end = time.time()
 
         logging.info(f'{cam_name} took {end - start:.1f} seconds'

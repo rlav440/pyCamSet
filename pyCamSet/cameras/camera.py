@@ -13,11 +13,51 @@ from numpy.linalg import norm
 from pyCamSet.utils.general_utils import distort_points, h_tform, vector_cam_points
 from pyCamSet.utils.general_utils import sensor_map
 
+from pyCamSet.optimisation.compiled_helpers import nb_undistort_arr
+
+from numba import njit, prange
+
 DEFAULT_RES = [1000, 1000]
 DEFAULT_CAMERA_MATRIX = np.array(
     [[1000, 0.0, DEFAULT_RES[0] / 2],
      [0.0, 1000, DEFAULT_RES[1] / 2],
      [0.0, 0.0, 1.0]])  # mm
+
+
+
+
+#avoid some cyclic depenecies with some duplication
+
+@njit(cache=True)
+def nb_distort_prealloc(pts: np.ndarray, intrinsics: np.ndarray, k: np.ndarray):
+    """
+    This function distorts points based on the input values, going from the mathematical ideal to detections.
+
+    :params pts: points to distort, which are overwritten
+    :params intrinsics. The intrinsics of the imaging camera
+    :params k: Brown Conway model of the distorting camera
+    """
+    # relative coordinates and distances.
+    centre_0, centre_1 = intrinsics[0, -1], intrinsics[1, -1]
+    focal_0, focal_1 = intrinsics[0, 0], intrinsics[1, 1]
+    x, y = (pts[0] - centre_0) / focal_0, (pts[1] - centre_1) / focal_1
+    r2 = x ** 2 + y ** 2
+    kup = (1 + k[0] * r2 + k[1] * (r2 ** 2) + k[4] * (r2 ** 3))
+    # distort radially
+    xD = x * kup
+    yD = y * kup
+    # distort tangentially
+    xD += 2 * k[2] * x * y + k[3] * (r2 + 2 * (x ** 2))
+    yD += k[2] * (r2 + 2 * (y ** 2)) + 2 * k[3] * x * y
+    # back to absolute
+    pts[0] = xD * focal_0 + centre_0
+    pts[1] = yD * focal_1 + centre_1
+
+@njit(cache=True, parallel=True)
+def pr_distort(pts, intrinsics, k):
+    for i in prange(pts.shape[0]):
+        nb_distort_prealloc(pts[i], intrinsics, k)
+
 
 
 class Camera:
@@ -32,7 +72,7 @@ class Camera:
                  intrinsic=None,
                  res=None,
                  distortion_coefs=np.array([0,0,0,0,0]),
-                 name = None,
+                 name:str = None,
                  minimal = True):
         """
         Initialises a camera
@@ -58,7 +98,7 @@ class Camera:
         self.cam_to_world = None
 
         self.down_scale_factor = 0
-        self.name = name
+        self.name : str = name
         self.minimal = minimal
         self._update_state()
 
@@ -215,12 +255,16 @@ class Camera:
             centered = centered[None, ...]
         dist_zero = np.all(np.isclose(self.distortion_coefs, 0))
         if distort and not dist_zero:
-            distorted = [distort_points(
-                pt,
-                self.intrinsic,
-                self.distortion_coefs
-            ) for pt in centered]
-            return np.array(distorted)
+            # distorted = [distort_points(
+            #     pt,
+            #     self.intrinsic,
+            #     self.distortion_coefs
+            # ) for pt in centered]
+            pr_distort(centered, self.intrinsic, self.distortion_coefs)
+
+            if mode == "image":
+                return centered[:, ::-1]
+            return centered
 
         if mode == "image":
             return centered[:, ::-1]
@@ -413,7 +457,7 @@ class Camera:
         """
         return cv2.undistort(image, self.intrinsic, np.array(self.distortion_coefs))
 
-    def im_to_world_ray(self, cord: np.array or list, depth_im=None, distort=True):
+    def im_to_world_ray(self, cord: np.array or list, depth_im=None, distort=True, use_vector=False):
         """
         Given an image coordinate in opencv cords, nx2, returns a normalised ray.
         If the depth image is given, uses the depth at the coordinate to set the
@@ -428,6 +472,12 @@ class Camera:
             cord = np.array(cord)
         if cord.ndim == 1:
             cord = cord[None, ...]
+
+        if use_vector:
+            if distort:
+                cord = nb_undistort_arr(cord, self.intrinsic, self.distortion_coefs)
+            rays = vector_cam_points('linear', cord, self.intrinsic, self.cam_to_world)
+            return rays/10 + self.position
 
 
         self._make_sensormap(distort=distort)

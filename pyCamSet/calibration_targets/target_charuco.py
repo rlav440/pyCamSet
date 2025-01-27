@@ -26,6 +26,7 @@ class ChArUco(AbstractTarget):
 
         # define checker and marker size
         square_size = square_size
+        self.square_size=square_size
         marker_size = marker_fraction * square_size  # 80% of the square size
         # convert to meters
         squares_length = square_size / 1000

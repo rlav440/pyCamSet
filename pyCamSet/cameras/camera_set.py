@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numbers
+from typing import overload
 import cv2
 import numpy as np
 from numpy.linalg import norm
@@ -85,8 +86,8 @@ class CameraSet:
         self.calibration_handler = None
         self.calibration_jac = None
         self.calibration_params = None 
-        self._cam_list: list|None = None
-        self._cam_dict: dict|None = None
+        self._cam_list: list = None
+        self._cam_dict: dict = None
         self.n_cams = None
 
         all_none = all(
@@ -139,7 +140,12 @@ class CameraSet:
         new_camset = CameraSet()
         if cam_key is None:
 
-            if isinstance(inp, slice):
+            if isinstance(inp, np.ndarray):
+                if not np.issubdtype(inp.dtype, np.integer):
+                    raise ValueError("Camera indexing is only supported with int arrays")
+                cam_list = [self._cam_list[c] for c in inp]
+                cam_names = [list(self._cam_dict.keys())[c] for c in inp]
+            elif isinstance(inp, slice):
                 cam_list = self._cam_list[inp]
                 cam_names = list(self._cam_dict.keys())[inp]
             elif isinstance(inp, list):
@@ -175,9 +181,16 @@ class CameraSet:
             new_camset._cam_dict = cam_dict
             new_camset.__update()
             return new_camset
-
+    
+    def __len__(self):
+        return self.get_n_cams()
+    
+    @overload
+    def __getitem__(self, input: list | slice | np.ndarray) -> CameraSet:...
+    @overload
+    def __getitem__(self, input: numbers.Number | str) -> Camera:...
     def __getitem__(self, input) -> Camera|CameraSet:
-        if isinstance(input, list) or isinstance(input, slice):
+        if isinstance(input, list) or isinstance(input, slice) or isinstance(input, np.ndarray):
             return self.make_subset(input)
         if isinstance(input, numbers.Number):
             if input in self._cam_dict: # preferentially go to dict if given a key number that exists as a key
@@ -362,7 +375,7 @@ class CameraSet:
         viable_mask = count > 1
         reconstructable_data = data[viable_mask[inv].squeeze()]
 
-        _, im_index, im_counts = np.unique(reconstructable_data[:, 1:-2], axis=0, return_index=True, return_counts=True)
+        uniq, im_index, im_counts = np.unique(reconstructable_data[:, 1:-2], axis=0, return_index=True, return_counts=True)
         start_ind = np.append(0, np.cumsum(im_counts[np.argsort(im_index)]))
 
         #build the projection matricies
@@ -385,7 +398,7 @@ class CameraSet:
                 grabbed, where_mask = where_mask[:len_pts], where_mask[len_pts:]
                 working_array.append(grabbed)
 
-            return reconstructed, reconstructable_data, working_array
+            return reconstructed, reconstructable_data, working_array, uniq
         return reconstructed
 
 
@@ -435,7 +448,7 @@ class CameraSet:
         if scene is None:
             scene = pv.Plotter()
         for mesh in cam_meshes:
-            scene.add_mesh(mesh, style='wireframe', reset_camera=True)
+            scene.add_mesh(mesh, style='wireframe', reset_camera=True, color='k')
         if view_cones is not None:
             for v_con in v_cones:
                 scene.add_mesh(v_con, opacity=0.05, color='g')
@@ -714,7 +727,7 @@ class CameraSet:
         _, poses = self.calibration_handler.get_camset(self.calibration_params, return_pose=True)
 
         ## Triangulation of points in world space
-        reconstructed, reconstructed_subset,  where_mask = self.multi_cam_triangulate(to_reconstruct, return_used=True)
+        reconstructed, reconstructed_subset,  where_mask, _ = self.multi_cam_triangulate(to_reconstruct, return_used=True)
 
         ## Triangulation of points in target space to determine outliers
         inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True,)[1])

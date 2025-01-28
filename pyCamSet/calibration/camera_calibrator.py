@@ -32,7 +32,7 @@ def calibrate_cameras(
     n_lim=None,
     fixed_params: dict | None =None,
     high_distortion=False,
-    threads=max(1, cpu_count()-2),
+    threads=None, ,
     problem_options: dict|None = None,
     initial_cams: CameraSet | None= None,
     ) -> CameraSet:
@@ -53,6 +53,9 @@ def calibrate_cameras(
 
     if save_loc is None:
         save_loc = f_loc
+
+    if threads is None:
+        threads = min(max(1, cpu_count()-2), 20) # don't DOS servers
 
     detections, camera_res = detect_datapoints_in_imfile(
         f_loc=f_loc,

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 def make_optimisation_function(
         param_handler: th.TemplateBundleHandler,
-        threads: int = 16,
+        threads: int = 1,
 ) -> tuple[Callable[[np.ndarray], np.ndarray], Callable[[np.ndarray], np.ndarray]|None, np.ndarray]:
     """
     Takes a parameter handler and creates a callable cost function that evaluates the
@@ -81,7 +81,7 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
         logging.critical("Found worryingly high/NaN initial error: check that the initial parametisation is sensible")
         logging.info(
             "This can often indicate failure to place a camera or target correctly, giving nonsensical errors.")
-        # param_handler.check_params(init_params)
+    # param_handler.check_params(init_params)
 
     # bundle_jac = lambda x: approx_fprime(x, loss_fn)
     start = time.time()

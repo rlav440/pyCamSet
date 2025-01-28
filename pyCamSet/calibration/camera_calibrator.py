@@ -32,7 +32,7 @@ def calibrate_cameras(
     n_lim=None,
     fixed_params: dict | None =None,
     high_distortion=False,
-    threads=None, ,
+    threads=None,
     problem_options: dict|None = None,
     initial_cams: CameraSet | None= None,
     ) -> CameraSet:

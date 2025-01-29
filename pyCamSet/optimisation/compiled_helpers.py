@@ -398,6 +398,13 @@ def nb_undistort_prealloc(pt: np.ndarray, intrinsics: np.ndarray, k: np.ndarray,
     blank[1] = y * focal_1 + centre_1
 
 
+@njit(cache=True, parallel=True)
+def nb_undistort_arr(pt_array, intrinsics, dist_coef):
+    out_array = np.empty((pt_array.shape[0], 2))
+    for i in numba.prange(pt_array.shape[0]):
+        nb_undistort_prealloc(pt_array[i], intrinsics, dist_coef, out_array[i])
+    return out_array
+
 @njit(cache=True)
 def nb_undistort(pts: np.ndarray, intrinsics: np.ndarray, dist_coef: np.ndarray) -> np.ndarray:
     """

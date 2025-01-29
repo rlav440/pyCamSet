@@ -48,7 +48,10 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
 
         # split into x,y based on ordering
 
+        # d = datum.reshape((-1, 2))
+
         x, y = datum[::2], datum[1::2]
+        # breakpoint()
         m_1 = np.mean((x**2 + y**2)**(1/2))
         if alp is None:
             pass
@@ -57,11 +60,13 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
         cov = np.cov(x,y)
         eigenvalues, _ = np.linalg.eigh(cov)
         width, height = np.sqrt(eigenvalues)
+        # print(np.sqrt(eigenvalues))
+        # raise ValueError
         sd = max(width, height)
 
         ranges = list(ax.get_ylim()) + list(ax.get_xlim())
         # ax.scatter(x, y, s=0.1, alpha=alp)
-        _, _, _, img = ax.hist2d(x=x, y=y, bins=np.linspace(-3*sd, 3*sd, 100), norm=LogNorm(vmin=0.0001, vmax=1), cmap=blues_with_white, density=True)
+        _, _, _, img = ax.hist2d(x=x, y=y, bins=np.linspace(-3*sd, 3*sd, 100), norm=LogNorm(vmin=0.0001, vmax=1), cmap=blues_with_white, density=True, rasterized=True)
         clm = plt.colorbar(img, label="Density")
         sd = fancy_confidence_contours(x, y, ax=ax, ranges=ranges)
         ax.set_aspect('equal')
@@ -173,10 +178,15 @@ def visualise_calibration(
     :param param_handler: The parameter handler that organised the optimisation.
     :return:
     """
+    euclidean_err = np.linalg.norm(np.reshape(o_results['err'], (-1,2)), axis=1)
+    e_lim = np.median(euclidean_err) * 3
+    print(np.std(euclidean_err))
+    # raise ValueError
 
     detection = param_handler.get_detection()
     cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
 
+    
     cluster_plot([o_results['err']], alphas=[0.1])
 
     # the coverage for each camera
@@ -184,8 +194,6 @@ def visualise_calibration(
     windows = get_close_square_tuple(n_cams)
     fig, axes = plt.subplots(*windows[::-1])
     ax = axes.ravel()
-    euclidean_err = np.linalg.norm(np.reshape(o_results['err'], (-1,2)), axis=1)
-    e_lim = np.median(euclidean_err) * 3
     err_buff = copy(euclidean_err)
     full_err = copy(o_results['err'].reshape((-1,2)))
 
@@ -231,7 +239,7 @@ def visualise_calibration(
     #err_buff = copy.copy(euclidean_err)
     to_reconstruct = detection.sort(['key', 'im_num']).get_data()
     ## Triangulation of points in world space
-    reconstructed, reconstructed_subset,  where_mask = cams.multi_cam_triangulate(to_reconstruct, return_used=True)
+    reconstructed, reconstructed_subset,  where_mask, _ = cams.multi_cam_triangulate(to_reconstruct, return_used=True)
     error_subset = np.array([np.mean(euclidean_err[datum]) for datum in where_mask])
     # at the same time
     pv.set_plot_theme('document')

@@ -232,7 +232,7 @@ class CameraSet:
             return False
         return True
 
-    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet', crop=None, use_closest_cams=False):
+    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet', crop=None, use_closest_cams=True):
         """
         Writes an entire camera set to some form of defined camera structure.
         Currently only MVSnet is defined.
@@ -267,7 +267,7 @@ class CameraSet:
         cvwc = np.array(
             [cam.view for cam in self]
         )
-        pairs = calc_pairs(cvwc, r, use_closest_cams)
+        pairs = calc_pairs(cvwc, r, pick_closest=use_closest_cams)
         with open((loc.parent) / "pair.txt", 'w') as f:
             write_pair_file(f, pairs)
 

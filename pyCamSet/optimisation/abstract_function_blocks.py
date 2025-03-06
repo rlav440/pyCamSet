@@ -361,6 +361,7 @@ class optimisation_function:
             f"\t\tdense_param_arr = np.empty(param_len)",
             # f"\t\tparams = np.empty(param_len)",
             f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((int64(n_lines), int64(param_len)))",
+            # f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((n_lines, param_len))",
             f"\t\tfor ii in range(n_lines):",
             f"\t\t\tdatum = d_data[i, ii]",
         ]
@@ -503,7 +504,6 @@ class optimisation_function:
         strings = "jac_" +  "_".join([str(name.__class__.__name__) for name in self.function_blocks])
         file_name = "template_functions/" + strings + ".py"
         write_file = (Path(__file__).parent)/file_name
-
         if write_file.exists() and not overwrite_function:
             file_string = 'pyCamSet.optimisation.template_functions.'  + strings
             importlib.invalidate_caches()
@@ -548,6 +548,7 @@ class optimisation_function:
             preamble = [
                 f"#workingtag = {datetime.now().strftime('%H:%M:%S')}",
             ]
+            print(block_slices)
             function_def = [
                 f"@njit(parallel=True,fastmath=True,cache=True)",
                 f"def full_jac(inp_params, d_data, block_param_inds, n_lines, inp_mem, out_mem, wrk_mem, param_len, n_threads, d_shape, param_slices, n_outs, f_outs, grad_outputsize, n_params, template = None):",
@@ -565,7 +566,8 @@ class optimisation_function:
                 f"\t\tinp = np.empty(inp_mem)",
                 f"\t\tmemory = np.empty(wrk_mem)",
                 f"\t\tdense_param_arr = np.empty(param_len)",
-                f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((int64(n_lines), int64(param_len)))",
+                # f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((int64(n_lines), int64(param_len)))",
+                f"\t\tlocal_params = inp_params[block_param_inds[i].flatten()].reshape((n_lines, param_len))",
                 f"\t\toutput_block = np.empty({block_slices[-1]})",
                 f"\t\tfun_output = np.empty(np.max(n_outs))",
                 f"\t\tfor ii in range(n_lines):",

@@ -220,7 +220,8 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
         handler = instance_obj(
             handler_config['handler_module'], handler_config['handler_name'], **input_args
         )
-    except:
+    except Exception as e:
+        print(e)
         logging.warning("Failed to intialise the Parameterhandler, returning just the CameraSet")
         return camset
 

@@ -133,7 +133,6 @@ class TemplateBundleHandler:
         pose_unfixed = np.ones(n_poses, dtype=bool)
         if "fixed_pose" in self.problem_opts:
             fixed_pose = self.problem_opts["fixed_pose"]
-
             pose_unfixed[fixed_pose] = False
             poses[fixed_pose, :] = [0,0,0,0,0,0]
 
@@ -467,7 +466,8 @@ def check_feasiblity_and_update_refpose(Mat_ac, ref_pose: int) -> int:
 
 def estimate_camera_relative_poses(
         calibration_target: AbstractTarget, detection: TargetDetection,
-        cams:CameraSet, ref_cam: int = 0, ref_pose: int = 0
+        cams:CameraSet, ref_cam: int = 0, ref_pose: int = 0,
+        max_bad_cams_iter = 10,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Given camera estimates, performs a single camera centric pose estimate.
@@ -490,12 +490,14 @@ def estimate_camera_relative_poses(
     Mat_ac = np.array(Mat_ac)
 
     ref_pose = check_feasiblity_and_update_refpose(Mat_ac, ref_pose) 
-    check_for_target_misalignment(Mat_ac, ref_cam)
+    # check_for_target_misalignment(Mat_ac, ref_cam) #TODO, refactor this to a single summary.
     
     Mrt_rc = Mat_ac[ref_cam, ref_pose]
     Mrt_ac = Mat_ac[:, ref_pose]
     
     Mac_rt = np.array([np.linalg.inv(Mrt_c) for Mrt_c in Mrt_ac])
+
+    
     Mat_rt_ac = Mac_rt[:, None, ...] @ Mat_ac
     
 
@@ -505,18 +507,30 @@ def estimate_camera_relative_poses(
     proj = ints @ Mrt_ac[:, :3, :]
 
     # run a bundle adjustment over the possible target positions.
-    errors = []
     ps = calibration_target.point_data.reshape((-1, 3)) #could the flattening be failing for things that aren't flat
     target_shape = calibration_target.point_data.shape
-    dd =  detection.return_flattened_keys(target_shape[:-1]).get_data()
+    dd = detection.return_flattened_keys(target_shape[:-1]).get_data() #maybe this isn't in order.
 
     lookups =  []
     for i in range(detection.max_ims):
         lookups.append(dd[:,1] == i)
+
     
-    for Mat_rt_c in Mat_rt_ac:
+    # cameras_converged = False
+    # while not cameras_converged:
+    
+    errors = []
+    for Mat_rt_c in Mat_rt_ac: #project the 
         nanform = np.isnan(Mat_rt_c[:, 0,0])
-        Mat_rt_c[nanform] = np.eye(4) #if this wins, it wins.
+        # print(np.sum(nanform), 'nan poses')
+        # Mat_rt_c[nanform] = np.eye(4)#
+        for idn, wasnan in enumerate(nanform):
+            if idn==0 and wasnan:
+                raise ValueError("No pose in first image")
+            if wasnan:
+                Mat_rt_c[idn] = Mat_rt_c[idn - 1]
+
+
         imlocs = np.array([gu.h_tform(ps,Mt_rt_c) for Mt_rt_c in Mat_rt_c]) 
         try:
             costs = ch.bundle_adjustment_costfn(
@@ -537,13 +551,31 @@ def estimate_camera_relative_poses(
 
         costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
         im_costs = []
-        for l in lookups:
+        for l, wasnan in zip(lookups, nanform):
             total_costs = np.sum(costs[l])
+            reasonable_bound = np.prod(costs[l].shape) * 1000 
+            # if total_costs > reasonable_bound: # or wasnan:
+            #     total_costs = np.nan
             im_costs.append(total_costs)
         errors.append(im_costs)
 
     errors = np.array(errors)
+
+    # cam_good = np.sum(np.isnan(errors), axis=1) < 0.9 * errors.shape[1]
+    
+    # what to do if we think a camera is bad?
+
+    # rederive a new estimate for the location of the camera in a different frame.
+    # cam to cam, cam to target 
+
+
+    # do a check to see if a camera is really bad.
+
+
+
+
     estimate_locs = np.argmin(errors, axis=0)
+
 
     Mat_rc = Mat_ac[ref_cam, :]
     Mat_rt = np.array([Mt_rt_ac[e] for e, Mt_rt_ac in zip(estimate_locs, Mat_rt_ac.transpose((1,0,2,3)))])

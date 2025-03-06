@@ -157,6 +157,18 @@ class SelfBundleHandler(TemplateBundleHandler):
         self.feat_unfixed[3*i1:3*i1+3] = False
         self.feat_unfixed[3*i2] = False
 
+        # then look at the detection data - if a feature isn't seen, report it as unseen
+        n_points = np.prod(self.point_data.shape[:2])
+        dd = self.detection.return_flattened_keys(self.target.point_data.shape[:-1]).get_data()[:, 2]
+        # cd = np.arange(n_points)//81
+        # good_face_mask = (cd == 1) | (cd == 4) | (cd == 5)
+        # self.visible_feature_mask = np.isin(np.arange(n_points), dd) & good_face_mask
+        self.visible_feature_mask = np.isin(np.arange(n_points), dd) 
+        for idf, vf in enumerate(self.visible_feature_mask): #fix all unseen features to shrink the optimisation
+            if not vf:
+                self.feat_unfixed[3*idf:3*idf + 3] = False
+        
+
         superBundlePrimitive = self.bundlePrimitive
 
         self.bundlePrimitive = StandardBundlePrimitive(
@@ -213,7 +225,7 @@ class SelfBundleHandler(TemplateBundleHandler):
             return csr_array((d,c,rp), shape=(2*dd.shape[0], params.shape[0]))
         return jac_fn
 
-    def get_bundle_adjustment_inputs(self, x) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def get_bundle_adjustment_inputs(self, x, make_points=False) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         This function uses the state of the parameter handler, and the given params
         to build np arrays that describe:
@@ -226,7 +238,21 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         :param x: The input optimisation parameters.
         """
+
+
+
         proj, extr, poses, bundle_points = self.bundlePrimitive.return_bundle_primitives(x)
+
+        if make_points:
+            im_points = np.empty((len(poses), *self.point_data.shape))
+            for idx, pose in enumerate(poses):
+                blank = np.zeros((12))
+                ch.n_e4x4_flat_INPLACE(pose, blank)
+                ch.n_htform_broadcast_prealloc(bundle_points.reshape(self.point_data.shape), blank, im_points[idx])
+
+            im_points = np.reshape(im_points, (len(poses), -1, 3))
+            return im_points
+
         return proj, extr, poses, bundle_points
 
     def set_initial_params(self,x):
@@ -243,6 +269,8 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         if not isinstance(prev_cams.calibration_handler, TemplateBundleHandler):
             raise ValueError("Previous camera set was not a templated adjustment")
+        self.missing_poses =  prev_cams.calibration_handler.missing_poses
+        print(self.missing_poses)
         self.initial_params[:self.bundlePrimitive.pose_end] = prev_cams.calibration_params.copy()
         self.initial_params[ 
             self.bundlePrimitive.pose_end:
@@ -320,17 +348,27 @@ class SelfBundleHandler(TemplateBundleHandler):
         :param point_estimate: The array containing the estimated locations of the calibration target features.
         :return: A tuple containing updated proj, extr, poses, and point estimate.
         """
+        n_points = np.prod(self.point_data.shape[:2])
+        cd = np.arange(n_points)//(n_points//6)
+        good_face_mask = np.ones(n_points, dtype=bool) #(cd == 1) | (cd == 4) | (cd == 5)
 
         ref_points = self.target.point_data.reshape((-1,3))
         valid_map = self.target.valid_map
-
+        vm = self.visible_feature_mask & good_face_mask
+        
         if isinstance(valid_map, bool):
             if valid_map == False:
                 raise ValueError("Target has given a valid map of False, which indicates no distance comparisons are valid.")
             #use cdist, take the upper
-            inds = np.triu_indices(point_estimate.shape[0], k=1)
-            new_map = cdist(point_estimate, point_estimate)[inds]
-            ref_map = cdist(ref_points, ref_points)[inds]
+            inds = np.triu_indices(point_estimate[vm].shape[0], k=1)
+            new_map = cdist(point_estimate[vm], point_estimate[vm])[inds]
+            ref_map = cdist(ref_points[vm], ref_points[vm])[inds]
+            dt = self.target.square_size 
+            # dt = 0.0045 #hard coded for today
+            mask = np.isclose(ref_map, dt)
+            new_map = new_map[mask]
+            ref_map = ref_map[mask]
+
         elif isinstance(valid_map, np.ndarray):
             new_map = ch.calc_distance_subset(point_estimate, point_estimate, valid_map[:,:2])
             ref_map = ch.calc_distance_subset(ref_points, ref_points, valid_map[:,:2])
@@ -338,8 +376,18 @@ class SelfBundleHandler(TemplateBundleHandler):
             raise ValueError("The target.valid_map property either needs to be true, for all comparisons being valid, or a nx2 list of index pairs.")
         s = np.mean(ref_map/new_map)
         new_points = s * point_estimate
-        
-        update_tform = gu.make_4x4h_tform(*ch.n_estimate_rigid_transform(new_points, ref_points)) #this mapping from used points to a reference space
+
+        try:
+            update_tform = gu.make_4x4h_tform(*ch.n_estimate_rigid_transform(
+                new_points[self.visible_feature_mask & good_face_mask],
+                ref_points[self.visible_feature_mask & good_face_mask])
+            ) #this mapping from used points to a reference space
+        except Exception as e:
+            logging.critical("Failed to find an acceptable gauge transform, returning the identity")
+            logging.critical("Gave error: ")
+            print(e)
+            update_tform = np.eye(4)
+
         inv_update = np.linalg.inv(update_tform)
         new_points = gu.h_tform(new_points, update_tform)
         #proj matricies never change: scale invariance!
@@ -368,29 +416,114 @@ class SelfBundleHandler(TemplateBundleHandler):
         Visualises the error in the calibration target that was recovered.
         """
         og_data = self.target.point_data.reshape((-1,3))
+        n_points = np.prod(self.point_data.shape[:2])
+        cd = np.arange(n_points)//(n_points//6)
+
+        t0, t1, t2 = 1, 4, 5
+        #
+        good_face_mask = (cd == t0) | (cd == t1) | (cd == t2)
+        m1 = cd == t0
+        m4 = cd == t1
+        m5 = cd == t2
+
+        vm = self.visible_feature_mask & good_face_mask
+        # vm = np.ones_like(vm)
+        # m1 = vm.copy()
+        # m4 = vm.copy()
+        # m5 = vm.copy()
+
         
         un_gauged_data = self.get_bundle_adjustment_inputs(x)
         _,_,_, final_data = self.apply_gauge_transform(*un_gauged_data)
         unfixed_points = un_gauged_data[-1].copy()
 
         diff = (final_data - og_data) * 1000
-        print(f"found a mean difference of {np.mean(np.linalg.norm(diff, axis=-1)):.2f} mm")
+
+        #xclude difs over 2 mm
+        mask = np.linalg.norm(diff, axis=1) < 2
+        vm &= mask
+
+        scale = 5
+        descale = 1000//scale
+        print(f"found a mean difference of {np.mean(np.linalg.norm(diff[vm], axis=-1)):.2f} mm")
         s = pv.Plotter()
         s.title = "Target Self-calibration Results."
-        s.add_arrows(og_data*100, diff, label = "Recovered shape change (10x mag)")
+        s.add_arrows((og_data*descale)[vm], diff[vm], label = f"Recovered shape change ({scale}x mag)", 
+                # cmap='Blues',
+                cmap="Greens",
+                # cmap='Oranges',
+        )
         s.remove_scalar_bar()
         s.add_scalar_bar(title="Euclidean displacement from initial model (mm).")
-        s.add_mesh(pv.PolyData(og_data*100), color='r', label = "Original Model")
-        s.add_mesh(pv.PolyData(final_data*100), color='g', label = "Best-scaled Model")
-        s.add_mesh(pv.PolyData(unfixed_points*100), color='b', label = "As Calibrated Model")
-        s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[0]]*100), color='k', label="Points used to fix gauge symmetry")
-        s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[1]]*100), color='k')
-        s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[2]]*100), color='k')
+        s.add_mesh(pv.PolyData(og_data*descale), color='k', label = "Original Model", point_size=0.3)
+        # s.add_mesh(pv.PolyData(final_data*descale), color='g', label = "Best-scaled Model")
+        # s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[0]]*descale), color='k', label="Points used to fix gauge symmetry")
+        # s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[1]]*descale), color='k')
+        # s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[2]]*descale), color='k')
+
+        p1, np1, cp1 = pv.fit_plane_to_points(final_data[vm & m1]*descale, return_meta=True)
+        p4, np4, cp4 = pv.fit_plane_to_points(final_data[vm & m4]*descale, return_meta=True)
+        p5, np5, cp5 = pv.fit_plane_to_points(final_data[vm & m5]*descale, return_meta=True)
+
+        s1 = pv.PolyData(og_data[m1]*descale, lines=make_connectivity(og_data[m1]))
+        s.add_mesh(s1, style='wireframe', line_width=2, color='k', opacity=0.1)
+        s4 = pv.PolyData(og_data[m4]*descale, lines=make_connectivity(og_data[m4]))
+        s.add_mesh(s4, style='wireframe', line_width=2, color='k', opacity=0.1)
+        s5 = pv.PolyData(og_data[m5]*descale, lines=make_connectivity(og_data[m5]))
+        s.add_mesh(s5, style='wireframe', line_width=2, color='k', opacity=0.1)
+        rms1 = rms_plane(np1, cp1, final_data[vm & m1]*descale)
+        rms4 = rms_plane(np4, cp4, final_data[vm & m4]*descale)
+        rms5 = rms_plane(np5, cp5, final_data[vm & m5]*descale)
+        print(rms1, rms4, rms5)
+        # # s.add_mesh(pv.PolyData(final_data[vm & m2]), point_size=6)
+        # s.add_mesh(p1, color='lightblue', opacity=0.7)
+        # s.add_mesh(p4, color='lightblue', opacity=0.7)
+        # s.add_mesh(p5, color='lightblue', opacity=0.7)
         s.add_legend(bcolor='w', border=True)
+        
+    
+        a14 = angle_between_planes(cp1, cp4)
+        a15 = angle_between_planes(cp1, cp5)
+        a45 = angle_between_planes(cp4, cp5)
+
+        print(a14, a15, a45)
+
+        camera = s.camera
+        camera.position = (-60, -60, -36)
+        camera.focal_point = (0,0,0)
+        camera.up = (0,0,-1)
+        camera.angle = 0.02
+
         s.show()
 
 
+def make_connectivity(pts):
+    n_pts = pts.shape[0]
+    n_points_per_line = int(np.sqrt(pts.shape[0]))
+    #take the input points
+    connectivity = []
+    for idp, _ in enumerate(pts):
+        if (idp + n_points_per_line < n_pts):
+            connectivity.extend([2, idp, idp + n_points_per_line])
+        if not ((idp +1) % n_points_per_line == 0):
+            connectivity.extend([2, idp, idp + 1])
+    return connectivity
 
 
 
+def rms_plane(c, n, data):
+    norms = np.sum((data - c) * n, axis=1)
+    return np.mean(np.abs(norms), axis=0)
 
+
+def angle_between_planes(normal1, normal2):
+    # Normalize the vectors
+    normal1_unit = normal1 / np.linalg.norm(normal1)
+    normal2_unit = normal2 / np.linalg.norm(normal2)
+    
+    # Calculate the dot product
+    dot_product = np.dot(normal1_unit, normal2_unit)
+    
+    # Calculate the angle in radians and then convert to degrees
+    angle = np.arccos(dot_product)
+    return np.degrees(angle)

@@ -765,3 +765,27 @@ class CameraSet:
             mask.append(np.linalg.norm(obj_point) < 3 * mean_dist)
         
         return reconstructed[np.array(mask)]
+
+    def get_similar_angles(self, test_cam_num, n):
+        c_vec = np.array([get_v_vec(cam.extrinsic) for cam in self])
+        #get the index of the test cam
+        tcam_ind = test_cam_num
+
+        c_vec /= np.linalg.norm(c_vec, axis=1, keepdims=True)
+        t = c_vec[tcam_ind] * c_vec
+        
+        #will generate an error
+        ang = np.arccos(np.sum(t, axis=-1)) * 180 / np.pi
+        ang[tcam_ind] = np.inf
+
+        dists_sorted = np.argsort(ang)
+        return dists_sorted[:n]
+
+def get_v_vec(ext):
+    """
+    Gets the view vector of a camera given the extrinsic
+
+    :param ext: The extrinsic matrix of a camera.
+    """
+    return ext[:3,:3] @ np.array([0,0,1])
+

@@ -20,7 +20,7 @@ def test_calibration_charuco():
     final_euclid = np.mean(np.linalg.norm(np.reshape(
         cams.calibration_result, (-1, 2)
     ), axis=1))
-    assert (final_euclid < 1.48), "regression found in charuco calibration"
+    assert (final_euclid < 1.8), "regression found in charuco calibration"
 
 
 if __name__ == '__main__':

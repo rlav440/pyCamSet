@@ -86,8 +86,8 @@ class Ccube(AbstractTarget):
                              "markers for this cube")
 
         self.boards = [
-            aruco.CharucoBoard_create(
-                n_points, n_points, self.square_size,
+            aruco.CharucoBoard(
+                (n_points, n_points), self.square_size,
                 markerLength=0.75 * self.square_size,
                 dictionary=a_dict
             )
@@ -101,7 +101,7 @@ class Ccube(AbstractTarget):
         self.textures = [blank_face.copy() for _ in range(6)]
         # debug_t = []
         for idb, (t, board) in enumerate(zip(self.textures, self.boards)):
-            t[board_offset:-board_offset, board_offset:-board_offset] = board.draw(sub_res)
+            t[board_offset:-board_offset, board_offset:-board_offset] = board.generateImage(sub_res)
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 1.5
             thickness = int(t.shape[0]/500)
@@ -110,9 +110,9 @@ class Ccube(AbstractTarget):
             # debug_t.append(board.draw(draw_res)) #DEBUG
         # self.textures = debug_t
 
-        bd = np.array([board.chessboardCorners for board in self.boards])
+        bd = np.array([board.getChessboardCorners() for board in self.boards])
         coord_bump = self.length*border_fraction/2
-        board_coords = bd + [coord_bump, coord_bump, 0]
+        board_coords = bd + np.array([coord_bump, coord_bump, 0])
         # board_coords = bd #DEBUG
         self.base_face = np.array([
                             [0, self.length,0],
@@ -192,7 +192,7 @@ class Ccube(AbstractTarget):
 
         """
 
-        params = aruco.DetectorParameters_create()
+        params = aruco.DetectorParameters()
         params.minMarkerPerimeterRate = 0.01
         #params.adaptiveThreshConstant = 1 # for low light, but lowers accuracy
         a_dict = self.aruco_dict() if callable(self.aruco_dict) else aruco.getPredefinedDictionary(self.aruco_dict)

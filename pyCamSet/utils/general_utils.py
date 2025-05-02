@@ -331,7 +331,7 @@ def split_aruco_dictionary(
     for set in split_markers:
 
         temp = np.array(set)
-        aruco_dict = aruco.custom_dictionary(0, base.markerSize,)
+        aruco_dict = aruco.Dictionary(0, base.markerSize,)
         aruco_dict.bytesList = np.empty(shape=(split_size, markers.shape[1],
                                                markers.shape[2]),
                                         dtype=np.uint8)
@@ -483,13 +483,13 @@ def sensor_map(type, intrinsics, res=(1600, 1200), dist_coefs=None):
     return s_map #.transpose(s_map, (1,0,2))
 
 
-def adaptive_decimated_charuco_detection_stereo(frame_L, BOARD, ARUCO_DICT, rescale_corners_to_original=True):
+def adaptive_decimated_charuco_detection_stereo(frame_L, charuco_board, aruco_dict, rescale_corners_to_original=True):
     '''
     This function runs through a series of decimation numbers on the input images and runs corner detections on the decimated image.
     It will find the optimal decimation factor that would yield the most number of corners detected on either images
         
     :param frame_L: original res image 
-    :param rescale_corners_to_original: if True will corners will multiply with optimal decimation factor (default = False) 
+    :param rescale_corners_to_original: if True will corners will multiply with optimal decimation factor (default = True) 
     :return charuco_corners_L - charuco corners detected from downsampled image
     :return optimal_decimation - optimal downsampled factor
     '''
@@ -501,40 +501,23 @@ def adaptive_decimated_charuco_detection_stereo(frame_L, BOARD, ARUCO_DICT, resc
     charuco_ids = None
     # adaptive down sampling to account for large resolution images
     for decimation_factor in range(1, 12):    
-        # Decimate the image
         decimated_image_L = frame_L[::decimation_factor, ::decimation_factor]
-        # Detect Charuco corners on the decimated image
-        marker_corners_L, ids_L, rejected_L = cv2.aruco.detectMarkers(decimated_image_L, ARUCO_DICT)
+        marker_corners_L, ids_L, rejected_L = cv2.aruco.detectMarkers(decimated_image_L, aruco_dict)
         # if markers found find corner
         if len(marker_corners_L) > 0:
-            ret_L, all_charuco_corners_L, all_charuco_ids_L = cv2.aruco.interpolateCornersCharuco(marker_corners_L, ids_L, decimated_image_L, BOARD)
-            # if corners found
+            ret_L, all_charuco_corners_L, all_charuco_ids_L = cv2.aruco.interpolateCornersCharuco(marker_corners_L, ids_L, decimated_image_L, charuco_board)
             if ret_L:
                 num_corners_detected_L = len(all_charuco_corners_L)
-                # print(f"DEBUG --> Decimation factor {decimation_factor}: Number of Charuco corners detected: Left Image = {num_corners_detected_L} & Right Image = {num_corners_detected_R}")
-                # update the best decimation factor if more corners are detected
-                # print(f"DEBUG --> Old max corners: {max_corners_detected}")
                 if num_corners_detected_L > max_corners_detected:
-                    # if left image had most corners detect make that max corners detected
                     if num_corners_detected_L > max_corners_detected:
                         max_corners_detected = num_corners_detected_L
-                        # set the best decimation factor to be the optimal decimation 
                         optimal_decimation = decimation_factor
-                        # with the optimal decimation save the charuco corners interpolated 
                         charuco_corners_L = all_charuco_corners_L
                         charuco_ids = all_charuco_ids_L
-                    # print(f"New max corners: {max_corners_detected}")
-    # upscale back to original image size if set to true
     if charuco_corners_L is not None: 
         if rescale_corners_to_original == True:
-            # print(f"DEBUG 0.1 ---> Final num of corners: {len(charuco_corners)}")
-            # print(f"DEBUG 0.2 ---> Final optimal decimation factor: {optimal_decimation}")
             charuco_corners_L = charuco_corners_L * optimal_decimation   
-            # print(f"DEBUG 1 ---> Optimal decimation: {optimal_decimation}")
-            # print(f"DEBUG 2 ---> Max corners detected: {max_corners_detected}")
-        # print(f"DEBUG --> Optimal decimation factor: {optimal_decimation} (Max corners detected: {max_corners_detected})")
     else:
         charuco_corners_L = None
         charuco_ids = None
-    # print(f"DEBUG --> Optimal decimation factor: {optimal_decimation} (Max corners detected: {max_corners_detected})")
     return charuco_corners_L, charuco_ids, optimal_decimation

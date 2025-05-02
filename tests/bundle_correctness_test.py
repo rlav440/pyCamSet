@@ -13,7 +13,7 @@ def test_bundle_correctness():
     # for an input file, use opencv to detect a charuco board and calibrate a camera
     data_loc = Path('tests/test_data/calibration_charuco/1')
     adict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
-    board = cv2.aruco.CharucoBoard_create(20, 20, 0.004, 0.0032, adict)
+    board = cv2.aruco.CharucoBoard((20, 20), 0.004, 0.0032, adict)
     all_corners = []
     all_ids = []
     cache_loc = Path('tests/test_data/cam_test_cache.pkl')
@@ -65,7 +65,7 @@ def test_bundle_correctness():
 
     dct = np.array(dct)[:-1]
     dct = dct.reshape((2, -1, 6))
-    points = board.chessboardCorners.squeeze()
+    points = board.getChessboardCorners().squeeze()
     im_points = [h_tform(points, make_4x4h_tform(r, t, mode='opencv')) for r, t in zip(rotation_vectors, translation_vectors)]
     im_points = np.array(im_points).reshape(len(all_corners), -1, 1, 3)
     proj_mat = np.concatenate((camera_matrix, np.zeros((3,1))), axis=1).reshape((1,3,4))
@@ -83,7 +83,7 @@ def test_bundle_correctness():
     for idim, (corners, ids) in enumerate(zip((all_corners), all_ids)):
         for corner, id in zip(corners.squeeze(), ids.squeeze()):
             pro_loc_0 = cv2.projectPoints(
-                board.chessboardCorners[id], rotation_vectors[idim],
+                board.getChessboardCorners()[id], rotation_vectors[idim],
                 translation_vectors[idim], camera_matrix, distortion_coefficients0
             )[0].squeeze()
 

@@ -71,6 +71,7 @@ def make_net_tforms(base_shape, face_connectivity, connections):
             raise ValueError(f"Attempted to add faces to {base_face} without first defining the location of {base_face}.")
         cpoint += 2
         for _ in range(num_connect):
+
             connected_face = connections[cpoint]
             cfp = list(ragged[connected_face])
             print(set(bfp))
@@ -98,21 +99,59 @@ if __name__ == "__main__":
     import pyvista as pv
     from matplotlib import pyplot as plt
     
-    from pyCamSet.utils.general_utils import h_tform
+    from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
-    cube: pv.PolyData = pv.Cube(x_length=1,z_length=1,y_length=1)
+    #use an existing set of transforms for the cube faces to define the connectivity of the net creation
+    TFORMS = [
+        ([2.22144147, 2.22144147, 0.        ], [-0.5, -0.5,  0.5]),
+        ([-1.57079633,  0.        ,  0.        ], [-0.5, -0.5,  0.5]),
+        ([-1.20919958, -1.20919958,  1.20919958], [ 0.5, -0.5,  0.5]),
+        ([ 0.        ,  2.22144147, -2.22144147], [0.5, 0.5, 0.5]),
+        ([0.        , 0.        , 1.57079633], [ 0.5, -0.5, -0.5]),
+        ([1.20919958, 1.20919958, 1.20919958], [-0.5, -0.5, -0.5]),
+    ]
+    converted_tforms = []
+    points_already_existing = []
+    bf = np.array([
+        [0, 1, 0],
+        [1, 1, 0],
+        [1, 0, 0],
+        [0, 0, 0],
+    ]).astype("double")
+
+    known_points = []
+    faces = []
+    for T in TFORMS:
+        #each tform defines a face
+        local_face = [4]
+        tform = make_4x4h_tform(*T)
+        points = h_tform(bf, tform) 
+        for point in points:
+            if len(known_points) == 0:
+                known_points.append(point)
+                local_face.append(0)
+                continue
+            close_mask = np.linalg.norm(np.array(known_points) - point, axis=1) < 1e-5
+            if not np.any(close_mask):
+                local_face.append(len(known_points))
+                known_points.append(point)
+                continue
+            local_face.append(np.where(close_mask)[0][0])
+        faces.extend(local_face)
+
     base_shape = np.array([
-        [0.,0.], [0.,1.],[1.,1.],[1.,0.]
+        [1.,1.],
+        [1.,0.],
+        [0.,0.],
+        [0.,1.],
     ])
 
     connections = [ 
-        4, 0, 2, 3, 4, 5, # define faces 2,3,4 and 5 by relation to face 0
-        1, 2, 1, # define face 1 by it's connection to face 1
+        4, 0, 1, 2, 3, 5, # define faces 2,3,4 and 5 by relation to face 0
+        1, 2, 4, # define face 4 by it's connection to face 2
         ]
     
-    tforms = make_net_tforms(base_shape, cube.faces, connections) 
-    for t in tforms:
-        print(t)
+    tforms = make_net_tforms(base_shape, faces, connections) 
 
     mp  = np.mgrid[2:9,2:9]
     points = np.stack([mp[0].flatten(), mp[1].flatten()]).T/10

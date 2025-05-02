@@ -4,6 +4,7 @@ import math as m
 import time
 from itertools import zip_longest, chain
 from pathlib import Path
+import os
 
 import cv2
 import numba
@@ -16,6 +17,17 @@ from tqdm import tqdm
 from uniplot import histogram
 
 from scipy.spatial.transform import Rotation as R
+
+def list_dict_to_np_array(d) -> dict:
+    if isinstance(d, dict):
+        for key, val in d.items():
+            if isinstance(val, dict):
+                list_dict_to_np_array(val)
+            elif isinstance(val, list):
+                d[key] = np.array(val)
+            else:
+                pass
+    return d
 
 def approx_average_quaternion(quats:list[np.ndarray]) -> np.ndarray:
     q = np.array([q for q in quats if not np.any(np.isnan(q))])
@@ -47,7 +59,7 @@ def flatten_pose_list(pose_list):
     return np.concatenate(list(chain(*params)), axis=0)
 
 
-def benchmark(func, repeats=100, mode="ms", timer=time.time_ns):
+def benchmark(func, repeats=100, mode="ms", timer=time.time_ns, max_runtime=100):
     """
     A handy function to benchmark a function. Tracks the execution time, and also the numba allocations.
     :param func: The function to benchmark as a lambda
@@ -56,37 +68,41 @@ def benchmark(func, repeats=100, mode="ms", timer=time.time_ns):
     :param timer: The timer to use. Can be time.time_ns, or time.perf_counter_ns
     """
 
-    def run_benchmark():
-        ranges = {
-            "us":1e-3,
-            "ms":1e-6,
-            "s":1e-9,
-        }
-        starting_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
-        times = []
-        for _ in range(repeats):
-            start = timer()
-            func()
-            end=timer()
-            times.append(end-start)
+    ranges = {
+        "us":1e-3,
+        "ms":1e-6,
+        "s":1e-9,
+    }
+    # starting_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
+    times = []
+    loop_start = timer()
+    for _ in range(repeats):
+        start = timer()
+        func()
+        end=timer()
+        times.append(end-start)
+        total_time = end - loop_start
+        if (total_time * ranges['s'] )> max_runtime:
+            print(
+            f"Exceeded given max_runtime of {max_runtime} seconds."
+            )
+            break
 
-        times = np.array(times)
-        mean = np.mean(times) * ranges[mode]
-        stdev = np.std(times * ranges[mode])
-        median = np.median(times) * ranges[mode]
-        max_t = min(mean + 3*stdev,np.amax(times) * ranges[mode])
-        print(f"Mean: {mean:.2f} {mode}, median: {median:.2f} {mode}, stdev: {stdev:.2f} {mode}")
-        histogram(times*ranges[mode], bins=50,
-                  bins_min=max(mean- 3*stdev, 0),
-                  x_max= max_t,
-                  height = 3,
-                  color = True,
-                  y_unit=" freq",
-                  x_unit=mode,
-                  )
-        final_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
-        print(f"Mean numba allocations: {(final_alloc - starting_alloc)/repeats:.0f}")
-    run_benchmark()
+    times = np.array(times)
+    mean = np.mean(times) * ranges[mode]
+    stdev = np.std(times * ranges[mode])
+    median = np.median(times) * ranges[mode]
+    max_t = min(mean + 3*stdev,np.amax(times) * ranges[mode])
+    print(f"Mean: {mean:.2f} {mode}, median: {median:.2f} {mode}, stdev: {stdev:.2f} {mode}")
+    histogram(times*ranges[mode], bins=20,
+              bins_min=max(mean- 3*stdev, 0),
+              x_max = min(mean + 5*stdev, max_t),
+              height = 3,
+              color = True,
+              y_unit=" freq",
+              x_unit=mode,
+              )
+    # final_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
 
 
 def mad_outlier_detection(data: np.ndarray|list, out_thresh = 3, draw=True) -> np.ndarray or None:
@@ -218,6 +234,7 @@ def get_close_square_tuple(n):
     return (x,y)
 
 def h_tform(points: np.ndarray, transform:np.ndarray, fill=1) -> np.ndarray:
+
     """
     Performms a homogenous transformation on data
     
@@ -280,7 +297,7 @@ def distort_points(pts:np.ndarray, intrinsics: np.ndarray, dist_coef:np.ndarray)
     xD = x * (1 + k1*r2 + k2*(r2**2) + k3*(r2**3))
     yD = y * (1 + k1*r2 + k2*(r2**2) + k3*(r2**3))
     #distort tangentially
-    xD += 2*p1*x*y + p2 * (r2 + 2*(x**2))
+    xD += 2*p1*x*y + p2 *(r2 + 2*(x**2))
     yD += p1*(r2 + 2*(y**2)) + 2 * p2 * x * y
     #back to absolute
     xN, yN = [xD, yD] * focal + centre
@@ -314,7 +331,7 @@ def split_aruco_dictionary(
     for set in split_markers:
 
         temp = np.array(set)
-        aruco_dict = aruco.custom_dictionary(0, base.markerSize,)
+        aruco_dict = aruco.Dictionary(0, base.markerSize,)
         aruco_dict.bytesList = np.empty(shape=(split_size, markers.shape[1],
                                                markers.shape[2]),
                                         dtype=np.uint8)
@@ -466,13 +483,13 @@ def sensor_map(type, intrinsics, res=(1600, 1200), dist_coefs=None):
     return s_map #.transpose(s_map, (1,0,2))
 
 
-def adaptive_decimated_charuco_detection_stereo(frame_L, BOARD, ARUCO_DICT, rescale_corners_to_original=True):
+def adaptive_decimated_charuco_detection_stereo(frame_L, charuco_board, aruco_dict, rescale_corners_to_original=True):
     '''
     This function runs through a series of decimation numbers on the input images and runs corner detections on the decimated image.
     It will find the optimal decimation factor that would yield the most number of corners detected on either images
         
     :param frame_L: original res image 
-    :param rescale_corners_to_original: if True will corners will multiply with optimal decimation factor (default = False) 
+    :param rescale_corners_to_original: if True will corners will multiply with optimal decimation factor (default = True) 
     :return charuco_corners_L - charuco corners detected from downsampled image
     :return optimal_decimation - optimal downsampled factor
     '''
@@ -484,40 +501,23 @@ def adaptive_decimated_charuco_detection_stereo(frame_L, BOARD, ARUCO_DICT, resc
     charuco_ids = None
     # adaptive down sampling to account for large resolution images
     for decimation_factor in range(1, 12):    
-        # Decimate the image
         decimated_image_L = frame_L[::decimation_factor, ::decimation_factor]
-        # Detect Charuco corners on the decimated image
-        marker_corners_L, ids_L, rejected_L = cv2.aruco.detectMarkers(decimated_image_L, ARUCO_DICT)
+        marker_corners_L, ids_L, rejected_L = cv2.aruco.detectMarkers(decimated_image_L, aruco_dict)
         # if markers found find corner
         if len(marker_corners_L) > 0:
-            ret_L, all_charuco_corners_L, all_charuco_ids_L = cv2.aruco.interpolateCornersCharuco(marker_corners_L, ids_L, decimated_image_L, BOARD)
-            # if corners found
+            ret_L, all_charuco_corners_L, all_charuco_ids_L = cv2.aruco.interpolateCornersCharuco(marker_corners_L, ids_L, decimated_image_L, charuco_board)
             if ret_L:
                 num_corners_detected_L = len(all_charuco_corners_L)
-                # print(f"DEBUG --> Decimation factor {decimation_factor}: Number of Charuco corners detected: Left Image = {num_corners_detected_L} & Right Image = {num_corners_detected_R}")
-                # update the best decimation factor if more corners are detected
-                # print(f"DEBUG --> Old max corners: {max_corners_detected}")
                 if num_corners_detected_L > max_corners_detected:
-                    # if left image had most corners detect make that max corners detected
                     if num_corners_detected_L > max_corners_detected:
                         max_corners_detected = num_corners_detected_L
-                        # set the best decimation factor to be the optimal decimation 
                         optimal_decimation = decimation_factor
-                        # with the optimal decimation save the charuco corners interpolated 
                         charuco_corners_L = all_charuco_corners_L
                         charuco_ids = all_charuco_ids_L
-                    # print(f"New max corners: {max_corners_detected}")
-    # upscale back to original image size if set to true
     if charuco_corners_L is not None: 
         if rescale_corners_to_original == True:
-            # print(f"DEBUG 0.1 ---> Final num of corners: {len(charuco_corners)}")
-            # print(f"DEBUG 0.2 ---> Final optimal decimation factor: {optimal_decimation}")
             charuco_corners_L = charuco_corners_L * optimal_decimation   
-            # print(f"DEBUG 1 ---> Optimal decimation: {optimal_decimation}")
-            # print(f"DEBUG 2 ---> Max corners detected: {max_corners_detected}")
-        # print(f"DEBUG --> Optimal decimation factor: {optimal_decimation} (Max corners detected: {max_corners_detected})")
     else:
         charuco_corners_L = None
         charuco_ids = None
-    # print(f"DEBUG --> Optimal decimation factor: {optimal_decimation} (Max corners detected: {max_corners_detected})")
     return charuco_corners_L, charuco_ids, optimal_decimation

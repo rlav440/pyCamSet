@@ -72,7 +72,7 @@ def calc_pairs(c_vec, r_param: ReconParams, rng=None, pick_closest=False):
         else:
             if not pick_closest:
                 returned_pairs.append(
-                    rng.choice(valid_points, r_param.max_n_view)
+                    rng.choice(valid_points, r_param.max_n_view, replace=False)
                 )
             else:
                 # pick the closest

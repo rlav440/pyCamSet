@@ -41,12 +41,16 @@ class AbstractTarget(ABC):
     def __init__(self, inputs: dict):
         inputs.pop('self', None)
         inputs.pop('__class__', None)
+        for k,v in inputs.items():
+            if isinstance(v, np.ndarray):
+                inputs[k] = v.tolist()
 
         self.point_data: np.ndarray = None # An
 
         self.point_local = None #: np.ndarray = self.make_local()
         self.original_points = None # = self.point_data.copy()
         self.input_args = inputs
+        self.valid_map = True
 
     def _process_data(self):
         """
@@ -299,7 +303,7 @@ class AbstractTarget(ABC):
             mask = b_counts > np.prod(self.point_local.shape[:-2])
             for board in boards[mask]:
                 key_mask = np.squeeze(keys[:, :-1] == board)
-                if np.sum(key_mask) > 8:
+                if np.sum(key_mask) > 12:
                     board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')
                     board_im = data[key_mask, -2:][None, ...].astype('float32')
                     object_points.append(board_obj)
@@ -312,7 +316,11 @@ class AbstractTarget(ABC):
             tuple(res[::-1]),
             None,
             None,
-            None,
+            # flags=(
+            #     cv2.CALIB_RATIONAL_MODEL + \
+            #     cv2.CALIB_THIN_PRISM_MODEL +\
+            #     cv2.CALIB_TILTED_MODEL
+            # ),
             None,
         )
         end = time.time()

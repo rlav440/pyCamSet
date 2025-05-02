@@ -5,6 +5,8 @@ from pyCamSet.utils.general_utils import h_tform
 import pyvista as pv
 from pyCamSet.optimisation.compiled_helpers import n_htform_broadcast_prealloc, n_estimate_rigid_transform
 
+from matplotlib import pyplot as plt
+
 make_shape = {
     "cube":lambda size: pv.Cube(x_length=size, y_length=size, z_length=size),
     "Icosahedron":pv.Icosahedron, 
@@ -96,7 +98,7 @@ class FaceToShape:
             self.ur_pdata[i] = h_tform(transform=tform, points=points/scale_factor) * scale_factor
         return
 
-    def draw_meshes(self, face_corners, face_images: list[np.ndarray]):
+    def draw_meshes(self, face_corners, face_images: list[np.ndarray], return_scene=False):
         """
         Draws a mesh given the current face set up
 
@@ -135,6 +137,8 @@ class FaceToShape:
         # a = self.point_data.reshape((-1, 3))
         # ls = [str(i) for i in range(a.shape[0])]
         # scene.add_point_labels(a, ls)
+        if return_scene:
+            return scene
         scene.add_axes()
         scene.show()
 
@@ -143,30 +147,39 @@ class FaceToShape:
         Draws a net to a numpy array based o the input images and the input textures.
         """
         
-        # take the image
-        locs = []
-        nbf_list = [] #normalised bounded faces
-        for face, im, tform in zip(self.face_local_coords, net_images, net_transforms):
-            bf = bound_pts(face, im.shape) #normalise by height by default
-            n_bf = bf/im.shape[1]
-            nbf_list.append(n_bf)
-            locs.append(h_tform(n_bf, tform)*im.shape[1])
+        #convert the transforms and calculate the canvas offsets.
+        net_tforms = []
+        canvas_locs = []
+        for im, base_form in zip(net_images, net_transforms):
+            #scale to 1/1, then map back
+            new_tform = np.diag([im.shape[0], im.shape[1], 1])  @ base_form  @ np.diag([1/im.shape[0], 1/im.shape[1], 1])
+            net_tforms.append(new_tform)
+            canvas_locs.append(h_tform(points=np.zeros(2), transform=new_tform))
+            canvas_locs.append(h_tform(points=np.array(im.shape), transform=new_tform))
+            # canvas_locs.append(h_tform(points=np.array([im.shape[0], 0]), transform=new_tform))
+            # canvas_locs.append(h_tform(points=np.array([0, im.shape[1]]), transform=new_tform))
 
-        shift_to_align = 0 - np.min(locs)
-        max_shape = np.max(locs)
+        canvas_locs = np.array(canvas_locs)
+        offset = -np.amin(canvas_locs, axis=0).astype(int)
+        canvas_shape = (np.amax(canvas_locs, axis=0) + offset).astype(int)
         
-        blank_canvas = np.zeros(max_shape)
-        for n_bf, im, tform in zip(nbf_list, net_images, net_tforms):
-            # rotate the points.
-            r_bf = h_tform(n_bf, tform, fill=0) * im.shape[1] 
-            bounds = np.max(r_bf), np.min(r_bf)
-            p_im = im #padd the image here
-            r_im = cv2.warpAffine(im, tform[:2,:2]) 
-            r_im = None #crop down to the max and min containing the array.
-            img = Image.new('L', im.shape, 0) # some shapes might use a sub window of the image
-            ImageDraw.Draw(img).polygon(bf, outline=1, fill=1)
-            r_im *= numpy.array(img)
-            # map the face shape over the image, making a mask and doing a bounds check for all faces
-            blank_canvas[0] += r_im
-    
-        return blank_canvas
+        blank_canvas = np.ones(canvas_shape) * 255
+        fo_tform = np.eye(3)
+        fo_tform[:2, -1] = offset.T
+        permute = np.array([
+                           [0, 1, 0],
+                           [1, 0, 0],
+                           [0, 0, 1],
+                           ])
+
+        for im, tform in zip(net_images, net_tforms):
+            applied_tform = permute @ fo_tform @ tform @ permute
+
+            unwarped = np.zeros(canvas_shape)
+            unwarped[
+                :im.shape[0],
+                :im.shape[1]
+            ] = 255 - im #we make this subtractive
+            warped = cv2.warpAffine(unwarped, applied_tform[:2], dsize=canvas_shape[::-1])
+            blank_canvas -= warped
+        return (blank_canvas.clip(0,255))

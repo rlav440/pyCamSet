@@ -13,13 +13,14 @@ def test_calibration_charuco():
 
     cams = calibrate_cameras(f_loc=data_loc, calibration_target=target, 
                              # draw=True,
-                             save=False,
+                             # save=False,
                              )
     # cams.visualise_calibration()
     
     final_euclid = np.mean(np.linalg.norm(np.reshape(
         cams.calibration_result, (-1, 2)
     ), axis=1))
+    assert (final_euclid < 1.8), "regression found in charuco calibration"
 
 
 if __name__ == '__main__':

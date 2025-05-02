@@ -6,6 +6,74 @@ import numpy as np
 import cv2
 
 
+@njit(fastmath=True)
+def geometric_median(X):
+    output = np.empty(3)
+    work_point = np.empty(3)
+    w_dist = np.empty(X.shape[0])
+    n_geometric_median_prealloc(X, work_point, output, w_dist)
+    return output
+
+@njit(fastmath=True)
+def n_geometric_median_prealloc(X, wp0, out, w_dist, eps=1e-5, max_iter=20):
+    e2 = eps ** 2
+    run_len = len(X)
+    if len(X) == 1:
+        out[:] = X
+        return
+
+    wp0[:] = 0
+    for i in range(run_len):
+        wp0[0] += X[i, 0]
+        wp0[1] += X[i, 1]
+        wp0[2] += X[i, 2]
+    wp0 /= run_len
+
+    iter = 0
+
+    while iter < max_iter:
+        non_zero = 0
+        for i in range(run_len):
+            dist = math.sqrt((X[i, 0] - wp0[0]) ** 2 + (X[i, 1] - wp0[1]) ** 2 + (X[i, 2] - wp0[2]) ** 2)
+            if dist == 0:
+                w_dist[i] = 0
+            else:
+                w_dist[i] = 1 / dist
+                non_zero += 1
+
+        w_sum = np.sum(w_dist)
+        w_dist /= w_sum
+        out[:] = 0  # the new estimate
+        for i in range(run_len):
+            out[0] += w_dist[i] * X[i, 0]
+            out[1] += w_dist[i] * X[i, 1]
+            out[2] += w_dist[i] * X[i, 2]
+
+        num_zeros = run_len - non_zero
+        if num_zeros == 0:
+            pass  # do nothing to the work point
+        elif num_zeros == len(X):
+            return wp0  # i.e it must be perfect somehow.
+        else:
+            r = w_sum * np.sqrt(
+                (out[0] - wp0[0]) ** 2 + (out[1] - wp0[1]) ** 2 + (out[2] - wp0[2]) ** 2
+            )
+            # print(r)
+            rinv = 0 if r == 0 else num_zeros / r
+            s0 = max(0, 1 - rinv)
+            s1 = min(1, rinv)
+            out *= s0
+            out[0] += s1 * wp0[0]
+            out[1] += s1 * wp0[1]
+            out[2] += s1 * wp0[2]
+
+        d = (wp0[0] - out[0]) ** 2 + (wp0[1] - out[1]) ** 2 + (wp0[2] - out[2]) ** 2
+        if d < e2:
+            return
+        wp0[:] = out
+        iter += 1
+
+
 @njit(cache=True)
 def fill_pose(pose_data, poses, poses_unfixed):
     """
@@ -28,7 +96,6 @@ def fill_pose(pose_data, poses, poses_unfixed):
 def fill_extr(extr_data, extr, extr_unfixed):
     """
     Fills an extrinsics array with data from an input param array.
-
     :param extr_data: The extrinsic parameters, an nx6 array
     :param extr: The extrinsic data with missing blocks to fill
     :param extr_unfixed: A boolean array describing which extrinsics are unfixed
@@ -86,6 +153,31 @@ def fill_dst(dst_data, dst, dst_unfixed):
 
 
 @njit(cache=True)
+def fill_flat(src, dst, dst_unfixed):
+    """
+    Fills a distortion array with data from an input param array.
+    
+    :param dst_data: The distortion parameters, an nx5 array
+    :param dst: The distortion data with missing blocks to fill
+    :param dst_unfixed: A boolean array describing which distortions are unfixed
+    :return:
+    """
+    k = 0
+    n_dst = len(dst)
+    if src.ndim > 1:
+        for i in range(n_dst):
+            if dst_unfixed[i]:
+                dst[i, :] = src[k, :]
+                k += 1
+    else:
+        for i in range(n_dst):
+            if dst_unfixed[i]:
+                dst[i] = src[k]
+                k += 1
+    return
+
+
+@njit(cache=True)
 def n_e4x4(rog_vec: np.ndarray, output: np.ndarray):
     """
     Converts a 6dof pose vector into a 4x4 homogenous transform
@@ -93,11 +185,11 @@ def n_e4x4(rog_vec: np.ndarray, output: np.ndarray):
     :param rog_vec: A 3 axis_angle opencv representation of rotation, followed by a translation
     :param output: the 4x4 output to write the data too
     """
-    angles = rog_vec[:3].reshape((3, 1))
-    blank_rot = np.empty((3, 3))
+    angles = rog_vec[:3]
+    blank_rot = np.empty(3*3)
     numba_flat_rodrigues_INPLACE(angles, blank_rot)
     output[:-1, :] = 0
-    output[:-1, :-1] = blank_rot
+    output[:-1, :-1] = blank_rot.reshape((3,3))
     output[-1, -1] = 1
     output[:-1, -1] = rog_vec[3:]
 
@@ -108,33 +200,90 @@ def numba_flat_rodrigues_INPLACE(r, blank_rot):
     Converts a 3dof axis angle representation of rotation into a 3x3 rotation matrix
 
     :param r: The rotation vector
-    :param blank_rot: the output location
+    :param blank_rot: the output location, this is a flat memory array
     """
-    theta = math.sqrt(r[0, 0] ** 2 + r[1, 0] ** 2 + r[2, 0] ** 2)
-    if theta == 0.0:
+    theta = math.sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2)
+    if theta < 1e-10:
         blank_rot[:] = 0
-        blank_rot[0, 0] = 1
-        blank_rot[1, 1] = 1
-        blank_rot[2, 2] = 1
+        blank_rot[0*3 + 0] = 1
+        blank_rot[1*3 + 1] = 1
+        blank_rot[2*3 + 2] = 1
         return
+
     scalar = 1 / theta
     s2 = scalar ** 2
     ct = math.cos(theta)
     st = math.sin(theta) * scalar
 
-    np.dot(r, r.T, blank_rot)
+    #dot product 
+    for i in range(3):
+        for j in range(i,3):
+            blank_rot[3*i + j] = r[i] * r[j]
+            blank_rot[3*j + i] = r[i] * r[j]
+
+
     blank_rot *= (1 - ct) * s2
-    blank_rot[0, 0] += ct
-    blank_rot[1, 1] += ct
-    blank_rot[2, 2] += ct
-    blank_rot[0, 1] -= r[2, 0] * st
-    blank_rot[1, 0] += r[2, 0] * st
-    blank_rot[0, 2] += r[1, 0] * st
-    blank_rot[2, 0] -= r[1, 0] * st
-    blank_rot[1, 2] -= r[0, 0] * st
-    blank_rot[2, 1] += r[0, 0] * st
+    blank_rot[0*3 +0] += ct
+    blank_rot[1*3 +1] += ct
+    blank_rot[2*3 +2] += ct
+    blank_rot[0*3 +1] -= r[2] * st
+    blank_rot[1*3 +0] += r[2] * st
+    blank_rot[0*3 +2] += r[1] * st
+    blank_rot[2*3 +0] -= r[1] * st
+    blank_rot[1*3 +2] -= r[0] * st
+    blank_rot[2*3 +1] += r[0] * st
     return
 
+@njit(fastmath = True, cache=True)
+def numba_rodrigues_jac(r, out):
+    """
+    A numba remplementation of the opencv method of defining the jacobean of the rodrigues tform, from:
+    https://github.com/opencv/opencv/blob/be1373f01a6bcdc40e4a397cfb266338050cc195/modules/calib3d/src/calibration.cpp#L251
+    """
+
+    theta = math.sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2)
+
+    if theta < 1e-10:
+        out[:] = 0 
+        out[5] = -1
+        out[15] = -1
+        out[19] = -1
+        out[7] = 1
+        out[11] = 1
+        out[21] = 1
+        return
+
+    i_theta = 0 if theta == 0 else 1/theta
+
+    ct = math.cos(theta)
+    ct_1 = 1 - ct
+    st = math.sin(theta) 
+
+    x,y,z = r[0]*i_theta, r[1]*i_theta, r[2]* i_theta
+
+    rrt = [x*x, x*y, x*z, x*y, y*y, y*z, x*z, y*z, z*z]
+    r_x = [  0, -z,  y, # 
+             z,  0, -x, #
+            -y,  x,  0] #
+
+    eye = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+    drrt = [x+x, y, z, y, 0, 0, z, 0, 0,
+          0,   x, 0, x, y+y, z, 0, z, 0,
+          0,   0, x, 0, 0, y, x, y, z+z]
+
+    d_r_x_ = [0, 0, 0, 0, 0, -1, 0, 1, 0,
+              0, 0, 1, 0, 0, 0, -1, 0, 0,
+              0, -1, 0, 1, 0, 0, 0, 0, 0]
+
+    for i, ri in enumerate([x,y,z]):
+        a0 = -st*ri
+        a1 = (st - 2*ct_1*i_theta)*ri
+        a2 = ct_1*i_theta
+        a3 = (ct - st*i_theta)*ri 
+        a4 = st*i_theta
+        for k in range(9):
+            out[i*9+k] = a0*eye[k]  +  a1*rrt[k] + a2*drrt[i*9+k] + a3*r_x[k] + a4*d_r_x_[i*9+k];
 
 @njit(cache=True)
 def n_e4x4_flat_INPLACE(rog_vec: np.ndarray, blank_tform: np.ndarray) -> None:
@@ -146,8 +295,8 @@ def n_e4x4_flat_INPLACE(rog_vec: np.ndarray, blank_tform: np.ndarray) -> None:
     """
     # returns a flattened memory contigous version
     numba_flat_rodrigues_INPLACE(
-        rog_vec[:3].reshape((3, 1)),
-        blank_tform[:9].reshape((3, 3))
+        rog_vec[:3],
+        blank_tform[:9],
     )
     blank_tform[9:] = rog_vec[3:]
 
@@ -248,6 +397,13 @@ def nb_undistort_prealloc(pt: np.ndarray, intrinsics: np.ndarray, k: np.ndarray,
     blank[0] = x * focal_0 + centre_0
     blank[1] = y * focal_1 + centre_1
 
+
+@njit(cache=True, parallel=True)
+def nb_undistort_arr(pt_array, intrinsics, dist_coef):
+    out_array = np.empty((pt_array.shape[0], 2))
+    for i in numba.prange(pt_array.shape[0]):
+        nb_undistort_prealloc(pt_array[i], intrinsics, dist_coef, out_array[i])
+    return out_array
 
 @njit(cache=True)
 def nb_undistort(pts: np.ndarray, intrinsics: np.ndarray, dist_coef: np.ndarray) -> np.ndarray:
@@ -424,6 +580,33 @@ def make_polar(vec):
 
 
 @njit(cache=True)
+def nb_triangulate_st(data, proj, intr, dist):
+    """
+    Triangulates a single set of points from a set of images, using numba acceleration.
+
+    :param data: The data to reconstruct
+    :param proj: The camera projection matrices
+    :param intr: The intrinsics of each camera
+    :param dist: The distortion parameters of each camera
+    :return:
+    """
+    diff = data.shape[0]
+
+    input_uv = np.empty((diff, 3))
+    input_proj = np.empty((diff, 3, 4))
+    M = np.empty((3 * diff, 4 + diff))
+    M[:] = 0
+
+    for idt in range(diff):
+        datum = data[idt]
+        cam = int(datum[0])
+        ud_uv = nb_undistort(datum[-2:], intr[cam], dist[cam])
+        input_uv[idt] = [ud_uv[0], ud_uv[1], 1]
+        input_proj[idt] = proj[cam]
+
+    return nb_triangulate_nviews(input_proj, input_uv, M)
+
+@njit(cache=True)
 def nb_triangulate_full(data, proj, start_inds, intr, dist):
     """
     Triangulates a set of points from a set of images, using numba acceleration.
@@ -448,9 +631,10 @@ def nb_triangulate_full(data, proj, start_inds, intr, dist):
         M[:] = 0
 
         for idt in range(diff):
-            datum = data[start_pt + idt]
+            datum = data[start_pt + idt, :]
             cam = int(datum[0])
-            ud_uv = nb_undistort(datum[-2:], intr[cam], dist[cam])
+            loc = datum[-2:]
+            ud_uv = nb_undistort(loc, intr[cam], dist[cam])
             input_uv[idt] = [ud_uv[0], ud_uv[1], 1]
             input_proj[idt] = proj[cam]
 
@@ -540,10 +724,11 @@ def n_dist_prealloc(x, out):
             out[i, j] = abs(out[i, j]) ** 0.5
 
 
-# @njit(cache=True)
+@njit(cache=True)
 def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Calculates the rigid transform between two sets of points using an svd
+    gives the transform from the first set of points to the second.
 
     :params v0: The first set of points
     :params v1: The second set of points
@@ -571,7 +756,7 @@ def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray
     # the process described here is a transformation from 
     t = - matR @ t0 + t1
 
-    # error = np.sum(np.abs((matR @ v0.T).T + t - v1))
-    # print(f"default={np.sum(np.abs(v0 - v1))}, tformed = {error}")
+    # error = np.mean(np.linalg.norm((matR @ v0.T).T + t - v1, axis=-1))
+    # print(f"rms error after fit = {error}")
     
     return matR, t

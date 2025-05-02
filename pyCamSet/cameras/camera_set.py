@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numbers
+from typing import overload
 import cv2
 import numpy as np
 from numpy.linalg import norm
@@ -17,6 +18,7 @@ from pyCamSet.utils.general_utils import get_close_square_tuple, glob_ims_local
 
 
 from pyCamSet.optimisation.compiled_helpers import nb_triangulate_full
+import pyCamSet.optimisation.compiled_helpers as ch
 from pyCamSet.utils.saving import save_camset
 from pyCamSet.reconstruction.acmmp_utils import ReconParams, write_pair_file, calc_pairs
 
@@ -84,8 +86,8 @@ class CameraSet:
         self.calibration_handler = None
         self.calibration_jac = None
         self.calibration_params = None 
-        self._cam_list: list|None = None
-        self._cam_dict: dict|None = None
+        self._cam_list: list = None
+        self._cam_dict: dict = None
         self.n_cams = None
 
         all_none = all(
@@ -138,7 +140,12 @@ class CameraSet:
         new_camset = CameraSet()
         if cam_key is None:
 
-            if isinstance(inp, slice):
+            if isinstance(inp, np.ndarray):
+                if not np.issubdtype(inp.dtype, np.integer):
+                    raise ValueError("Camera indexing is only supported with int arrays")
+                cam_list = [self._cam_list[c] for c in inp]
+                cam_names = [list(self._cam_dict.keys())[c] for c in inp]
+            elif isinstance(inp, slice):
                 cam_list = self._cam_list[inp]
                 cam_names = list(self._cam_dict.keys())[inp]
             elif isinstance(inp, list):
@@ -174,9 +181,16 @@ class CameraSet:
             new_camset._cam_dict = cam_dict
             new_camset.__update()
             return new_camset
-
+    
+    def __len__(self):
+        return self.get_n_cams()
+    
+    @overload
+    def __getitem__(self, input: list | slice | np.ndarray) -> CameraSet:...
+    @overload
+    def __getitem__(self, input: numbers.Number | str) -> Camera:...
     def __getitem__(self, input) -> Camera|CameraSet:
-        if isinstance(input, list) or isinstance(input, slice):
+        if isinstance(input, list) or isinstance(input, slice) or isinstance(input, np.ndarray):
             return self.make_subset(input)
         if isinstance(input, numbers.Number):
             if input in self._cam_dict: # preferentially go to dict if given a key number that exists as a key
@@ -218,7 +232,7 @@ class CameraSet:
             return False
         return True
 
-    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet'):
+    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet', crop=None, use_closest_cams=True):
         """
         Writes an entire camera set to some form of defined camera structure.
         Currently only MVSnet is defined.
@@ -229,20 +243,31 @@ class CameraSet:
         if not mode == 'MVSnet':
             raise NotImplementedError
 
+        if crop is None:
+            crop = {}
+
         for cam_n, cam in enumerate(self):
             cam_loc = loc/f"{cam_n:08}_cam.txt"
-            cam.to_MVSnet_txt(cam_loc, (r.mindist, r.maxdist), r.steps)
+            cam.to_MVSnet_txt(cam_loc, (r.mindist, r.maxdist), r.steps, crop.get(cam.name, None))
+
 
         if ims is not None:
             im_loc = loc.parent/'images'
             im_loc.mkdir(exist_ok=True)
             for idx, im in enumerate(ims):
-                cv2.imwrite(str(im_loc/f"{idx:08}.jpg"), im)
+                local_crop = crop.get(self[idx].name, None)
+                im_temp = self[idx].undistort(im)
+                if local_crop is not None:
+                    im_temp = im_temp[
+                        local_crop[0,0]:local_crop[0,1],
+                        local_crop[1,0]:local_crop[1,1],
+                    ]
+                cv2.imwrite(str(im_loc/f"{idx:08}.jpg"), im_temp,  [cv2.IMWRITE_JPEG_QUALITY, 100])
 
         cvwc = np.array(
             [cam.view for cam in self]
         )
-        pairs = calc_pairs(cvwc, r)
+        pairs = calc_pairs(cvwc, r, pick_closest=use_closest_cams)
         with open((loc.parent) / "pair.txt", 'w') as f:
             write_pair_file(f, pairs)
 
@@ -287,7 +312,7 @@ class CameraSet:
 
         return final_mesh
 
-    def project_points_to_all_cams(self, points) -> list[dict[str|int,np.ndarray]]|dict[str|int, np.ndarray]:
+    def project_points_to_all_cams(self, points, distort=True) -> list[dict[str|int,np.ndarray]]|dict[str|int, np.ndarray]:
         """
         Projects a point or list of points to all cameras.
 
@@ -303,7 +328,7 @@ class CameraSet:
             points = points[None, ...]
             single_flag = True
 
-        all_projections = [cam.project_points(points) for cam in self._cam_list]
+        all_projections = [cam.project_points(points, distort=distort) for cam in self._cam_list]
         projection_dictionary_list = [{} for _ in range(points.shape[0])]
 
         for cam_proj, cam_name in zip(all_projections, self._cam_dict.keys()):
@@ -316,7 +341,7 @@ class CameraSet:
         return projection_dictionary_list
 
     def multi_cam_triangulate(self, to_reconstruct: list[dict] or dict or np.ndarray,
-                              return_used = False):
+                              return_used = False, distort=True):
         """
         A lsq minimised triangulation of camera point locations to reconstruct.
          Automatically identifies points with shared visibility
@@ -348,14 +373,20 @@ class CameraSet:
             data[:, 1:-2], axis=0, return_inverse=True, return_counts=True
         )
         viable_mask = count > 1
-        reconstructable_data = data[viable_mask[inv]]
-        _, im_index, im_counts = np.unique(reconstructable_data[:, 1:-2], axis=0, return_index=True, return_counts=True)
+        reconstructable_data = data[viable_mask[inv].squeeze()]
+
+        uniq, im_index, im_counts = np.unique(reconstructable_data[:, 1:-2], axis=0, return_index=True, return_counts=True)
         start_ind = np.append(0, np.cumsum(im_counts[np.argsort(im_index)]))
 
         #build the projection matricies
         proj = np.array([cam.proj for cam in self])
         dists = np.array([cam.distortion_coefs for cam in self])
+
+        if not distort:
+            dists = np.zeros_like(dists)
+
         intr = np.array([cam.intrinsic for cam in self])
+        
         reconstructed = nb_triangulate_full(reconstructable_data, proj, start_ind, intr, dists)
     
         if return_used:
@@ -367,7 +398,7 @@ class CameraSet:
                 grabbed, where_mask = where_mask[:len_pts], where_mask[len_pts:]
                 working_array.append(grabbed)
 
-            return reconstructed, reconstructable_data, working_array
+            return reconstructed, reconstructable_data, working_array, uniq
         return reconstructed
 
 
@@ -402,7 +433,7 @@ class CameraSet:
 
         return cam_meshes, view_cones
 
-    def get_scene(self, scale_factor=0.3/8, view_cones=None, scene: pv.Scene=None) -> pv.Scene:
+    def get_scene(self, scale_factor=0.3/8, view_cones=None, scene: pv.Scene=None, labels=True) -> pv.Scene:
         """
         Returns a pyvista scene containing the camera meshes.
 
@@ -417,11 +448,12 @@ class CameraSet:
         if scene is None:
             scene = pv.Plotter()
         for mesh in cam_meshes:
-            scene.add_mesh(mesh, style='wireframe', reset_camera=True)
+            scene.add_mesh(mesh, style='wireframe', reset_camera=True, color='k')
         if view_cones is not None:
             for v_con in v_cones:
                 scene.add_mesh(v_con, opacity=0.05, color='g')
-        scene.add_point_labels(positions, list(self._cam_dict.keys()))
+        if labels:
+            scene.add_point_labels(positions, list(self._cam_dict.keys()))
 
         # also visualise the origin of the coordinate system
         p0 = np.array([0, 0, 0])
@@ -452,8 +484,9 @@ class CameraSet:
 
         return scene
 
-    def plot(self, scale_factor=None,
+    def plot(self, 
              additional_mesh: pv.PolyData|list[pv.PolyData]|None=None,
+             scale_factor=None,
              view_cones=False):
         """
         Draws a 3D plot of the cameras and any additional meshes
@@ -514,11 +547,17 @@ class CameraSet:
             #create a colourscheme for the additional meshes.
             cls = len(additional_mesh)
             #colours = colourmap_to_colour_list(cls, plt.get_cmap('Set1'))
-            colours = ['r', 'g', 'b'] + ['b'] * 100
+            colours = ['r', 'g', 'b', 'r', 'g', 'b', 'r', 'g', 'b'] + ['b'] * 100
             colours = colours[:cls]
-            for mesh, col in zip(additional_mesh, colours):
+            for idc, (mesh, col) in enumerate(zip(additional_mesh, colours)):
                 if not isinstance(mesh, CameraSet):
+                    if isinstance(mesh, np.ndarray):
+                        mesh = pv.PolyData(mesh)
                     # if mesh has no colour
+                    if isinstance(mesh, np.ndarray):
+                        if mesh.ndim == 2 | mesh.shape[1] != 3:
+                            raise ValueError(f"The provided array at {idc} was not the right shape. The shpae should be [n,3], but was instead {mesh.shape}")
+                        mesh = pv.PolyData(mesh)
                     if mesh.active_scalars is None:
                         scene.add_mesh(mesh, col, opacity=0.1)
                     else:
@@ -679,5 +718,74 @@ class CameraSet:
             self.calibration_handler,
         )
 
+    def get_calibration_points(self):
+        if self.calibration_handler is None:
+            raise ValueError("No calibration history was found")
 
+        detection = self.calibration_handler.get_detection()
+        to_reconstruct = detection.sort(['key', 'im_num']).get_data()
+        _, poses = self.calibration_handler.get_camset(self.calibration_params, return_pose=True)
+
+        ## Triangulation of points in world space
+        reconstructed, reconstructed_subset,  where_mask, _ = self.multi_cam_triangulate(to_reconstruct, return_used=True)
+
+        ## Triangulation of points in target space to determine outliers
+        inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True,)[1])
+        im_nums = reconstructed_subset[inv, 1]
+        keys = reconstructed_subset[inv, 2:-2]
+        #point_errors = error_subset[inv]
+        mean_dist = np.mean(np.linalg.norm(self.calibration_handler.target.point_data, axis=-1))
+        mask = []
+        for point, im in zip(reconstructed, im_nums):
+            inv_pose = np.empty(12)
+            ch.n_inv_pose(poses[int(im)], inv_pose)
+            obj_point = np.empty(3)
+            ch.n_htform_prealloc(point, inv_pose, obj_point)
+            mask.append(np.linalg.norm(obj_point) < 3 * mean_dist)
+        
+        return reconstructed[np.array(mask)]
+
+        _, poses = self.calibration_handler.get_camset(self.calibration_params, return_pose=True)
+
+        ## Triangulation of points in world space
+        reconstructed, reconstructed_subset,  where_mask = self.multi_cam_triangulate(to_reconstruct, return_used=True)
+
+        ## Triangulation of points in target space to determine outliers
+        inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True,)[1])
+        im_nums = reconstructed_subset[inv, 1]
+        keys = reconstructed_subset[inv, 2:-2]
+        #point_errors = error_subset[inv]
+        mean_dist = np.mean(np.linalg.norm(self.calibration_handler.target.point_data, axis=-1))
+        mask = []
+        for point, im in zip(reconstructed, im_nums):
+            inv_pose = np.empty(12)
+            ch.n_inv_pose(poses[int(im)], inv_pose)
+            obj_point = np.empty(3)
+            ch.n_htform_prealloc(point, inv_pose, obj_point)
+            mask.append(np.linalg.norm(obj_point) < 3 * mean_dist)
+        
+        return reconstructed[np.array(mask)]
+
+    def get_similar_angles(self, test_cam_num, n):
+        c_vec = np.array([get_v_vec(cam.extrinsic) for cam in self])
+        #get the index of the test cam
+        tcam_ind = test_cam_num
+
+        c_vec /= np.linalg.norm(c_vec, axis=1, keepdims=True)
+        t = c_vec[tcam_ind] * c_vec
+        
+        #will generate an error
+        ang = np.arccos(np.sum(t, axis=-1)) * 180 / np.pi
+        ang[tcam_ind] = np.inf
+
+        dists_sorted = np.argsort(ang)
+        return dists_sorted[:n]
+
+def get_v_vec(ext):
+    """
+    Gets the view vector of a camera given the extrinsic
+
+    :param ext: The extrinsic matrix of a camera.
+    """
+    return ext[:3,:3] @ np.array([0,0,1])
 

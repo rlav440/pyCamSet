@@ -522,9 +522,9 @@ class CameraSet:
         connect = np.hstack(([2, 0, 1],
                              [2, 1, 2]))
 
-        lx = np.hstack((p0, px))
-        ly = np.hstack((p0, py))
-        lz = np.hstack((p0, pz))
+        lx = np.vstack((p0, px))
+        ly = np.vstack((p0, py))
+        lz = np.vstack((p0, pz))
 
         polyx = pv.PolyData(lx)
         polyx.lines = connect

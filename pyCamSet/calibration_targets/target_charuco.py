@@ -36,6 +36,7 @@ class ChArUco(AbstractTarget):
         self.a_dict = cv2.aruco.getPredefinedDictionary(a_dict)
         # Create the Charuco board
         self.board = cv2.aruco.CharucoBoard((num_squares_x, num_squares_y), squares_length, marker_length, self.a_dict)
+        self.board.setLegacyPattern(True)
         self.point_data = self.board.getChessboardCorners().squeeze().astype(np.float64)
 
         self._process_data()

@@ -92,6 +92,7 @@ class Ccube(AbstractTarget):
                 dictionary=a_dict
             )
             for a_dict in self.a_dicts][:6] #only need 6 of them!
+        [b.setLegacyPattern(True) for b in self.boards]
 
         self.n_points = n_points
         self.draw_res = draw_res
@@ -129,6 +130,8 @@ class Ccube(AbstractTarget):
         )
         self.point_data = self.faceData.point_data
         self._process_data()
+
+        self.board_detectors = None
 
     def plot(self, return_scene = False):
         """
@@ -192,81 +195,39 @@ class Ccube(AbstractTarget):
 
         """
 
-        params = aruco.DetectorParameters()
-        params.minMarkerPerimeterRate = 0.01
+        # params = aruco.DetectorParameters()
+        params = aruco.CharucoParameters()
+        params.tryRefineMarkers = True
+        # params.minMarkerPerimeterRate = 0.01
         #params.adaptiveThreshConstant = 1 # for low light, but lowers accuracy
-        a_dict = self.aruco_dict() if callable(self.aruco_dict) else aruco.getPredefinedDictionary(self.aruco_dict)
-        corners, ids, rejected = aruco.detectMarkers(image, a_dict, parameters=params)
+
+        if self.board_detectors is None:
+            self.board_detectors = [aruco.CharucoDetector(b, params) for b in self.boards]
+
 
         if draw:
-            if corners:
-                im_idea = image.copy()
-                target_size = [640, 480]
-                d_f = int(min(np.array(im_idea.shape[:2])/target_size))
-                im_idea = downsample_valid(im_idea, d_f).astype(np.uint8)
-                if im_idea.ndim == 2:
-                    im_idea = np.tile(im_idea[..., None], (1, 1, 3))
+            im_idea = image.copy()
+            target_size = [640, 480]
+            d_f = int(min(np.array(im_idea.shape[:2])/target_size))
+            im_idea = downsample_valid(im_idea, d_f).astype(np.uint8)
+            if im_idea.ndim == 2:
+                im_idea = np.tile(im_idea[..., None], (1, 1, 3))
+
 
         seen_keys = []
         seen_data = []
-
-        if ids is not None:
-            wait_key = wait_len
-            # then split the detections by floor div
-            board_marker_id = ids % self.markers_per_face
-            board_origin = np.floor(np.array(ids) / self.markers_per_face).astype(int)
-            seen_boards = np.unique(board_origin).astype(int)
-
-            for n_board in seen_boards[seen_boards < 6]:
-                board = self.boards[n_board]
-                input_index, _ = np.where(board_origin == n_board)
-
-                board_corners = np.array([corners[ind] for ind in input_index])
-                board_ids = np.array([board_marker_id[ind] for ind in input_index])
-                use_cam = camera is not None
-
-                scale = np.eye(3)
-                n, c_corners, c_ids = aruco.interpolateCornersCharuco(
-                    board_corners,
-                    board_ids,
-                    image,
-                    board,
-                    scale @ camera.intrinsic if use_cam else None,
-                    camera.distortion_coefs if use_cam else None,
-                )
-
-                if n > 0:
-                    if draw:
-                        pass
-                        # aruco.drawDetectedCornersCharuco(im_idea,
-                        #                 np.array(c_corners)/d_f, c_ids)
-                        aruco.drawDetectedMarkers(im_idea, np.array(corners)/d_f, ids)
-
-                    for cid, corner in zip(c_ids[:, 0], c_corners[:, 0, :]):
-                        # if n_board == 0:
-                        #     if cid == 0:
-                        #
-                        #         s = 256
-                        #
-                        #         intc = corner.astype(int)
-                        #         sub_window = image[
-                        #             intc[1] - s//2:intc[1] + s//2,
-                        #             intc[0] - s//2:intc[0] + s//2,
-                        #         ]
-                        #
-                        #         loc = corner - intc + s//2
-                        #         if sub_window.shape == (s,s):
-                        #             plt.imshow(sub_window, vmin=0, vmax=255, cmap='grey')
-                        #             plt.plot(loc[1], loc[0], 'r.')
-                        #             plt.show()
-
-                        seen_keys.append([n_board, cid])
-                        seen_data.append(corner)
+        for idb, bd in enumerate(self.board_detectors):
+            c_corners, c_ids, _, _ =  bd.detectBoard(image)
+            if c_ids is not None:
+                for cid, corner in zip(c_ids[:, 0], c_corners[:, 0, :]):
+                    seen_keys.append([idb, cid])
+                    seen_data.append(corner)
+                if draw:
+                    aruco.drawDetectedCornersCharuco(im_idea, c_corners/d_f, c_ids/d_f)
 
         if draw:
-            if corners:
-                cv2.imshow('detections', im_idea)
-                cv2.waitKey(wait_key)
+            cv2.imshow('detections', im_idea)
+            cv2.waitKey(wait_len)
 
         return ImageDetection(keys=seen_keys, image_points=seen_data)
 

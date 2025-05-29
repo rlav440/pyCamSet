@@ -89,10 +89,11 @@ class Ccube(AbstractTarget):
             aruco.CharucoBoard(
                 (n_points, n_points), self.square_size,
                 markerLength=0.75 * self.square_size,
-                dictionary=a_dict
+                dictionary=a_dict,
+                # legacy=True,
             )
             for a_dict in self.a_dicts][:6] #only need 6 of them!
-        [b.setLegacyPattern(True) for b in self.boards]
+        # [b.setLegacyPattern(True) for b in self.boards]
 
         self.n_points = n_points
         self.draw_res = draw_res
@@ -200,7 +201,6 @@ class Ccube(AbstractTarget):
         params.tryRefineMarkers = True
         # params.minMarkerPerimeterRate = 0.01
         #params.adaptiveThreshConstant = 1 # for low light, but lowers accuracy
-
         if self.board_detectors is None:
             self.board_detectors = [aruco.CharucoDetector(b, params) for b in self.boards]
 
@@ -223,7 +223,7 @@ class Ccube(AbstractTarget):
                     seen_keys.append([idb, cid])
                     seen_data.append(corner)
                 if draw:
-                    aruco.drawDetectedCornersCharuco(im_idea, c_corners/d_f, c_ids/d_f)
+                    aruco.drawDetectedCornersCharuco(im_idea, c_corners/d_f, c_ids)
 
         if draw:
             cv2.imshow('detections', im_idea)

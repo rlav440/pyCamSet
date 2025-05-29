@@ -17,7 +17,7 @@ def test_calib_ccube():
     else:
         cams = calibrate_cameras(loc, target, 
                           # draw=True,
-                          # save=False,
+                          save=False,
                           )
         cams.save(test_cams)
     param_handler = SelfBundleHandler(

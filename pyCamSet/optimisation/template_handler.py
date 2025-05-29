@@ -251,6 +251,7 @@ class TemplateBundleHandler:
         cyclic_outlier_detection = True
         num_loops = 0
         logging.info("Begining outlier detection")
+        user_in = self.problem_opts['outliers']
         while cyclic_outlier_detection and num_loops < 10:
             not_missing = np.where(~np.array(self.missing_poses))[0]
             # mloc = np.mean(poses[not_missing, :3, -1], axis=0)
@@ -259,11 +260,11 @@ class TemplateBundleHandler:
                 # [np.linalg.norm(p[:3,3] - mloc) for p in poses[not_missing]],
                 mloc[not_missing],
                 out_thresh=20,
+                draw= not user_in == 'n'
             )
             outlier_inds = not_missing[condensed_outlier_inds]
             
             if condensed_outlier_inds is not None:
-                user_in = self.problem_opts['outliers']
                 while not (user_in == 'y' or user_in == 'n'):
                     print(f"Outliers detected in iteration {num_loops}.")
                     user_in = input("Do you wish to remove these outlier poses: \n y/n: ")

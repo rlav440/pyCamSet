@@ -39,6 +39,11 @@ class ChArUco(AbstractTarget):
         self.board.setLegacyPattern(True)
         self.point_data = self.board.getChessboardCorners().squeeze().astype(np.float64)
 
+        self.detection_params = aruco.CharucoParameters()
+        self.detection_params.tryRefineMarkers = True
+        # params.minMarkerPerimeterRate = 0.01
+        #params.adaptiveThreshConstant = 1 # for low light, but lowers accuracy
+        self.board_detectors = aruco.CharucoDetector(self.board, self.detection_params)
         self._process_data()
 
     def find_in_image(self, image, draw=False, camera: Camera|None = None, wait_len=1) -> ImageDetection:
@@ -52,7 +57,9 @@ class ChArUco(AbstractTarget):
         
         :return ImageDetection: a data class wrapping the data detected in the image.
         """
-        c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
+        # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
+        c_corners, c_ids = self.board_detectors.detectBoard(image)
+        od = 1
 
         if c_corners is None:
             return ImageDetection() # return an empty detection

@@ -36,7 +36,7 @@ class ChArUco(AbstractTarget):
         self.a_dict = cv2.aruco.getPredefinedDictionary(a_dict)
         # Create the Charuco board
         self.board = cv2.aruco.CharucoBoard((num_squares_x, num_squares_y), squares_length, marker_length, self.a_dict)
-        self.board.setLegacyPattern(True)
+        # self.board.setLegacyPattern(True)
         self.point_data = self.board.getChessboardCorners().squeeze().astype(np.float64)
 
         self.detection_params = aruco.CharucoParameters()
@@ -58,8 +58,12 @@ class ChArUco(AbstractTarget):
         :return ImageDetection: a data class wrapping the data detected in the image.
         """
         # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
-        c_corners, c_ids = self.board_detectors.detectBoard(image)
+        _, _, mloc, mid = self.board_detectors.detectBoard(image)
+        c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image, markerCorners=mloc, markerIds=mid)
         od = 1
+        c_corners
+
+        # breakpoint()
 
         if c_corners is None:
             return ImageDetection() # return an empty detection
@@ -82,6 +86,7 @@ class ChArUco(AbstractTarget):
 
             cv2.imshow('detections', display_im)
             cv2.waitKey(wait_len)
+
 
         return ImageDetection(c_ids[:, 0], c_corners[:, 0])
         

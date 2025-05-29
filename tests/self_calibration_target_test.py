@@ -17,7 +17,7 @@ def test_self_calibration_charuco():
 
     cams = calibrate_cameras(f_loc=data_loc, calibration_target=target, 
                              # draw=True,
-                             # save=False,
+                             save=False,
                              )
     param_handler = SelfBundleHandler(
         detection=cams.calibration_handler.detection, target=target, camset=cams,

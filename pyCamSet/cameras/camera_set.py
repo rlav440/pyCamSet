@@ -312,7 +312,7 @@ class CameraSet:
 
         return final_mesh
 
-    def project_points_to_all_cams(self, points, distort=True) -> list[dict[str|int,np.ndarray]]|dict[str|int, np.ndarray]:
+    def project_points_to_all_cams(self, points, distort=True, list_struct=True) -> list[dict[str|int,np.ndarray]]|dict[str|int, np.ndarray]:
         """
         Projects a point or list of points to all cameras.
 

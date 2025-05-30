@@ -9,7 +9,8 @@ from pyCamSet import calibrate_cameras, ChArUco
 
 def test_calibration_charuco():
     data_loc = Path("./tests/test_data/calibration_charuco")
-    target = ChArUco(20, 20, 4)
+    target = ChArUco(20, 20, 4, legacy=True)
+    # target.plot()
 
     opts = {"outliers":"n"}
     cams = calibrate_cameras(f_loc=data_loc, calibration_target=target, 

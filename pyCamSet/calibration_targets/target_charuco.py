@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 from cv2 import aruco
 from matplotlib import pyplot as plt
+import logging
 
 from pyCamSet.calibration_targets.abstract_target import AbstractTarget
 from pyCamSet.calibration_targets.target_detections import ImageDetection
@@ -12,7 +13,7 @@ from pyCamSet.utils.general_utils import downsample_valid, adaptive_decimated_ch
 
 
 class ChArUco(AbstractTarget):
-    def __init__(self, num_squares_x, num_squares_y, square_size, marker_fraction = 0.8, a_dict=cv2.aruco.DICT_4X4_1000):
+    def __init__(self, num_squares_x, num_squares_y, square_size, marker_fraction = 0.8, a_dict=cv2.aruco.DICT_4X4_1000, legacy=False):
         """
         Initialises a ChArUco board in mm.
 
@@ -36,7 +37,8 @@ class ChArUco(AbstractTarget):
         self.a_dict = cv2.aruco.getPredefinedDictionary(a_dict)
         # Create the Charuco board
         self.board = cv2.aruco.CharucoBoard((num_squares_x, num_squares_y), squares_length, marker_length, self.a_dict)
-        # self.board.setLegacyPattern(True)
+        if legacy:
+            self.board.setLegacyPattern(True)
         self.point_data = self.board.getChessboardCorners().squeeze().astype(np.float64)
 
         self.detection_params = aruco.CharucoParameters()
@@ -44,7 +46,10 @@ class ChArUco(AbstractTarget):
         # params.minMarkerPerimeterRate = 0.01
         #params.adaptiveThreshConstant = 1 # for low light, but lowers accuracy
         self.board_detectors = aruco.CharucoDetector(self.board, self.detection_params)
+        self.given_legacy_warning = False
+
         self._process_data()
+
 
     def find_in_image(self, image, draw=False, camera: Camera|None = None, wait_len=1) -> ImageDetection:
         """
@@ -58,11 +63,18 @@ class ChArUco(AbstractTarget):
         :return ImageDetection: a data class wrapping the data detected in the image.
         """
         # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
-        _, _, mloc, mid = self.board_detectors.detectBoard(image)
-        c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image, markerCorners=mloc, markerIds=mid)
+        # _, _, mloc, mid = self.board_detectors.detectBoard(image)
+        c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image) #, markerCorners=mloc, markerIds=mid)
+        if c_corners is None and mloc is not None:
+            if not self.given_legacy_warning:
+                logging.warning("Found markers, but no corners, trying using alternative board detection")
+                self.given_legacy_warning = True
+            am_legacy = self.board.getLegacyPattern()
+            self.board.setLegacyPattern(not am_legacy)
+            c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image, markerCorners=mloc, markerIds=mid)
+
         od = 1
         c_corners
-
         # breakpoint()
 
         if c_corners is None:
@@ -94,5 +106,5 @@ class ChArUco(AbstractTarget):
         """
         Draws the target as a matplotlib plot.
         """
-        plt.imshow(self.board.draw(imres), cmap='gray')
+        plt.imshow(self.board.generateImage(imres), cmap='gray')
         plt.show()  

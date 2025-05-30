@@ -67,6 +67,7 @@ class Ccube(AbstractTarget):
                  draw_res=(1000, 1000),
                  border_fraction=0.1,
                  line_fraction=0.003,
+                 legacy = False,
                  ):
         super().__init__(inputs=locals())
         self.input_border_fraction = border_fraction
@@ -93,7 +94,8 @@ class Ccube(AbstractTarget):
                 # legacy=True,
             )
             for a_dict in self.a_dicts][:6] #only need 6 of them!
-        # [b.setLegacyPattern(True) for b in self.boards]
+        if legacy:
+            [b.setLegacyPattern(True) for b in self.boards]
 
         self.n_points = n_points
         self.draw_res = draw_res
@@ -133,6 +135,7 @@ class Ccube(AbstractTarget):
         self._process_data()
 
         self.board_detectors = None
+        self.given_legacy_warning = False
 
     def plot(self, return_scene = False):
         """
@@ -217,7 +220,15 @@ class Ccube(AbstractTarget):
         seen_keys = []
         seen_data = []
         for idb, bd in enumerate(self.board_detectors):
-            c_corners, c_ids, _, _ =  bd.detectBoard(image)
+            c_corners, c_ids, mloc, mid =  bd.detectBoard(image)
+            if c_corners is None and mloc is not None:
+                if not self.given_legacy_warning:
+                    logging.warning("Found markers, but no corners, trying using alternative board detection")
+                    self.given_legacy_warning = True
+                am_legacy = self.boards[idb].getLegacyPattern()
+                self.boards[idb].setLegacyPattern(not am_legacy)
+                c_corners, c_ids, mloc, mid = bd.detectBoard(image, markerCorners=mloc, markerIds=mid)
+
             if c_ids is not None:
                 for cid, corner in zip(c_ids[:, 0], c_corners[:, 0, :]):
                     seen_keys.append([idb, cid])

@@ -1,6 +1,9 @@
 from __future__ import annotations
+from tqdm import tqdm
+from scipy.sparse import csgraph
 import logging
 from copy import copy, deepcopy
+from uniplot import plot as uplot
 
 import matplotlib.pyplot as plt
 
@@ -77,6 +80,7 @@ class TemplateBundlePrimitive:
         ch.fill_flat(intr_data, self.intr, self.intr_unfixed)
         return self.intr, self.extr, self.poses
 
+
 class TemplateBundleHandler:
     """
     The standard bundle handler is a class that handles the optimisation of camera parameters.
@@ -143,13 +147,15 @@ class TemplateBundleHandler:
 
         self.populate_self_from_fixed_params()
 
-
         self.param_len = None
         self.jac_mask = None
         self.missing_poses: list | None = missing_poses
 
         # we define an abstract function block to handle the calibration
         self.op_fun: afb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.template_points()
+        self.problem_maximums = {"max_cams": self.camset.get_n_cams() , "max_imgs": self.detection.max_ims, "max_keys": None}
+
+
 
     def can_make_jac(self):
         return self.op_fun.can_make_jac() 
@@ -162,7 +168,7 @@ class TemplateBundleHandler:
         target_shape = self.target.point_data.shape
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
 
-        temp_loss = self.op_fun.make_full_loss_fn(dd, threads) 
+        temp_loss = self.op_fun.make_full_loss_fn(dd, threads, self.problem_maximums) 
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
@@ -184,7 +190,8 @@ class TemplateBundleHandler:
 
         # breakpoint()
 
-        temp_loss = self.op_fun.make_jacobean(dd, threads, unfixed_params=mask)
+        temp_loss = self.op_fun.make_jacobean(dd, threads, unfixed_params=mask, problem_maximums=self.problem_maximums)
+
         def jac_fn(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
@@ -307,6 +314,8 @@ class TemplateBundleHandler:
 
         :return params: the initial estimate of the parameters.
         """
+
+        
         cams = self.camset
         self.jac_mask = []
         param_array = []
@@ -366,6 +375,7 @@ class TemplateBundleHandler:
             blank_intr[1, 2] = proj[idc][3]
             temp_cam: Camera = new_cams[cam_name]
             temp_cam.extrinsic = gu.make_4x4h_tform(extr[idc][:3], extr[idc][3:])
+            # print('hi')
             temp_cam.intrinsic = blank_intr
             temp_cam.distortion_coefs = proj[idc][4:]
             temp_cam._update_state()
@@ -451,7 +461,7 @@ def check_for_target_misalignment(tforms:  np.ndarray, ref_cam:int = 0):
             logging.critical(f"Found inconsistent relative angle magnitudes (stdev = {std_ang/np.pi*180:.2f} degrees) for camera index {ic}")
             logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
 
-def check_feasiblity_and_update_refpose(Mat_ac, ref_pose: int) -> int:
+def check_feasiblity_and_update_refpose(Mat_ac, ref_pose: int) -> tuple[int, bool]:
     """
     This function examines a set of input transformations, and attemps to find out if there is a possible reference.
     """
@@ -460,10 +470,12 @@ def check_feasiblity_and_update_refpose(Mat_ac, ref_pose: int) -> int:
     vrf_pose = visible_pose[ref_pose]
     if not vrf_pose:
         f_index = np.argmax(visible_pose)
-        if f_index == 0 and not visibility[0]:
-            raise ValueError("Couldn't find an initial pose for all cameras.")
+        if f_index == 0 and not np.all(visibility[0]):
+            logging.warning("Couldn't find an initial pose for all cameras, trying a graph based method")
+            return -1, True
+
         ref_pose = f_index
-    return ref_pose
+    return ref_pose, False
 
 def estimate_camera_relative_poses(
         calibration_target: AbstractTarget, detection: TargetDetection,
@@ -490,12 +502,17 @@ def estimate_camera_relative_poses(
         Mat_ac.append(pose_per_img)
     Mat_ac = np.array(Mat_ac)
 
-    ref_pose = check_feasiblity_and_update_refpose(Mat_ac, ref_pose) 
+    # ------------- Graph based solver to find the best reference pose -------------
+    
+     
+     
+    ref_pose, try_graph = check_feasiblity_and_update_refpose(Mat_ac, ref_pose) 
+    if try_graph:
+        return graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection)
+
     # check_for_target_misalignment(Mat_ac, ref_cam) #TODO, refactor this to a single summary.
     
-    Mrt_rc = Mat_ac[ref_cam, ref_pose]
     Mrt_ac = Mat_ac[:, ref_pose]
-    
     Mac_rt = np.array([np.linalg.inv(Mrt_c) for Mrt_c in Mrt_ac])
 
     
@@ -516,7 +533,6 @@ def estimate_camera_relative_poses(
     for i in range(detection.max_ims):
         lookups.append(dd[:,1] == i)
 
-    
     # cameras_converged = False
     # while not cameras_converged:
     
@@ -562,25 +578,8 @@ def estimate_camera_relative_poses(
 
     errors = np.array(errors)
 
-    # cam_good = np.sum(np.isnan(errors), axis=1) < 0.9 * errors.shape[1]
-    
-    # what to do if we think a camera is bad?
-
-    # rederive a new estimate for the location of the camera in a different frame.
-    # cam to cam, cam to target 
-
-
-    # do a check to see if a camera is really bad.
-
-
-
-
     estimate_locs = np.argmin(errors, axis=0)
-
-
-    Mat_rc = Mat_ac[ref_cam, :]
     Mat_rt = np.array([Mt_rt_ac[e] for e, Mt_rt_ac in zip(estimate_locs, Mat_rt_ac.transpose((1,0,2,3)))])
-    
 
     imlocs = np.array([gu.h_tform(ps,Mt_rt) for Mt_rt in Mat_rt]) 
     costs = ch.bundle_adjustment_costfn(
@@ -594,8 +593,94 @@ def estimate_camera_relative_poses(
     for l in lookups:
         im_costs.append(np.sum(costs[l]))
 
-
     init_per_im_reproj_err = np.array(im_costs)
 
     Mat_rt[ref_pose] = np.eye(4)
+    return Mrt_ac, Mat_rt, init_per_im_reproj_err
+
+def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection):
+    valid_pose = ~np.isnan(Mat_ac[:,:,0,0]) 
+
+    true_locs_cam, true_locs_pose_original = np.where(valid_pose) # true_locs_pose_orig is 0-indexed for poses
+    true_locs_pose_shifted = true_locs_pose_original + len(cams) 
+    num_nodes = len(cams) + len(img_detections)
+    dist_mat = np.zeros([num_nodes, num_nodes])
+
+    dist_mat[(true_locs_cam, true_locs_pose_shifted)] = 1 
+    dist_mat *= 1 + (np.random.random(dist_mat.shape) - 0.5)/100 #random sauce to help dodge bad points
+    # plt.imshow(dist_mat)
+    # plt.show()
+    dist_vec, predecessors_mat = csgraph.shortest_path(dist_mat, 
+                                                       return_predecessors=True,
+                                                       # unweighted=True,
+                                                       directed=False, # Connectivity is undirected
+                                                       #indices= len(cams)
+                                                    )
+    dist_vec[np.isinf(dist_vec)] = -0.0001
+    dist_sums = np.sum(dist_vec[:, len(cams):], axis=1)
+    dist_sums[dist_sums < 0] = np.nan
+
+    starting_seed = int(np.nanargmin(dist_sums) + len(cams))
+
+    dist_vec = np.round(dist_vec[:, starting_seed], 0)
+    dist_vec[np.isinf(dist_vec)] = -1
+    
+    max_iters = np.max(dist_vec)
+    destination = np.arange(num_nodes).astype(int)
+    current_loc = (np.ones(num_nodes) * starting_seed).astype(int)
+    accumulated_tforms = np.array([np.eye(4) for _ in range(num_nodes)])
+
+    for _ in tqdm(range(np.ceil(max_iters/2).astype(int)), desc="Pathfinding graph"):
+        # cam step
+        do_step = dist_vec > 0
+        
+        cam_to_step_too = predecessors_mat[(destination[do_step], current_loc[do_step])]
+        tforms = Mat_ac[(cam_to_step_too, current_loc[do_step] - len(cams))]
+        accumulated_tforms[do_step] = tforms @ accumulated_tforms[do_step]
+        
+        current_loc[do_step] = cam_to_step_too
+        dist_vec -= 1
+
+        # transform step
+        do_step = dist_vec > 0
+         
+        pose_to_step_too = predecessors_mat[(destination[do_step], current_loc[do_step])]
+        tforms = np.linalg.inv(Mat_ac[(current_loc[do_step], pose_to_step_too - len(cams))])
+        accumulated_tforms[do_step] = tforms @ accumulated_tforms[do_step]
+
+        current_loc[do_step] = pose_to_step_too
+        dist_vec -= 1
+    
+    ref_form_make = np.linalg.inv((accumulated_tforms[len(cams)]))
+
+    accumulated_tforms = accumulated_tforms @ ref_form_make
+
+    Mrt_ac = accumulated_tforms[:len(cams)]
+    Mat_rt = np.linalg.inv(accumulated_tforms[len(cams):])
+    
+    #################################################################### a quick code snippet to run a bundle adjustment cost function to check for outliers.
+    # build the projection matrix as an input to the target.
+    dists = np.array([cam.distortion_coefs for cam in cams]).squeeze()
+    ints = np.array([cam.intrinsic for cam in cams])
+    proj = ints @ Mrt_ac[:, :3, :]
+    
+    # run a bundle adjustment over the possible target positions.
+    ps = calibration_target.point_data.reshape((-1, 3)) #could the flattening be failing for things that aren't flat
+    target_shape = calibration_target.point_data.shape
+    dd = detection.return_flattened_keys(target_shape[:-1]).get_data() #maybe this isn't in order.
+    imlocs = np.array([gu.h_tform(ps,Mt_rt) for Mt_rt in Mat_rt]) 
+    costs = ch.numpy_bundle_adjustment_costfn(
+        dd,
+        imlocs,
+        proj,
+        ints,
+        dists,           
+    )
+    lookups =  [(dd[:,1] == i) for i in range(detection.max_ims)]
+    costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
+    im_costs = [np.sum(costs[l]) for l in lookups]
+
+    init_per_im_reproj_err = np.array(im_costs)
+    uplot(init_per_im_reproj_err, height=10, title="Per image initial reproj error", color=['blue'])
+
     return Mrt_ac, Mat_rt, init_per_im_reproj_err

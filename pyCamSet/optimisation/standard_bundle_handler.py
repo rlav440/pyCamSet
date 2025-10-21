@@ -270,7 +270,6 @@ class SelfBundleHandler(TemplateBundleHandler):
         if not isinstance(prev_cams.calibration_handler, TemplateBundleHandler):
             raise ValueError("Previous camera set was not a templated adjustment")
         self.missing_poses =  prev_cams.calibration_handler.missing_poses
-        print(self.missing_poses)
         self.initial_params[:self.bundlePrimitive.pose_end] = prev_cams.calibration_params.copy()
         self.initial_params[ 
             self.bundlePrimitive.pose_end:

@@ -189,7 +189,7 @@ class optimisation_function:
         self.param_slices = np.array(slice)
         self.ready_to_compute = True
 
-    def get_block_param_inds(self, detections, threads, unthreaded=False) -> np.ndarray:
+    def get_block_param_inds(self, detections, threads, max_keys, max_imgs, max_cams, unthreaded=False) -> np.ndarray:
         """
         takes the detected data, and threads, then produces an array containing the inds of the relevant params.
         this array is dynamically sized to use the smallest int representation to compress the data as much as possible.
@@ -205,7 +205,10 @@ class optimisation_function:
         block_params = np.empty((n_points, param_num))
 
         param_slices, n_outs, working_memories, n_blocks = self._get_function_constants()
-        starts, block_n_params, param_inds, key_type, num_inputs = make_param_struct(self.function_blocks, detections)
+        starts, block_n_params, param_inds, key_type, num_inputs = make_param_struct(self.function_blocks, detections, 
+            max_imgs=max_imgs, max_keys=max_keys, max_cams=max_cams
+        )
+
         param_len = num_inputs
 
         for idp in range(n_points):
@@ -287,7 +290,7 @@ class optimisation_function:
         detection_data = np.resize(detections, p_shape)
         return detection_data
 
-    def make_full_loss_template(self, detections, threads, overwrite_function = False) -> Callable:
+    def make_full_loss_template(self, detections, threads, problem_max_vals, overwrite_function = False) -> Callable:
         """
         Takes the functions defined by the input combination, then writes the logic to run those functions repeatedly.
         Handles generating the inputs and input params, and allows the functions to be compiled by numba
@@ -307,7 +310,7 @@ class optimisation_function:
             _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
             param_slices, n_outs, _, _ = self._get_function_constants()
             parallel_data = self._reshape_data_for_parallel(detections, threads)
-            block_param_inds = self.get_block_param_inds(detections, threads)
+            block_param_inds = self.get_block_param_inds(detections, threads, **problem_max_vals)
             d_shape = detections.shape[0]
 
             # full_loss(params, d_data, block_param_inds, n_lines, inp_mem, out_mem, wrk_mem, param_len, n_threads, template = None)
@@ -406,7 +409,7 @@ class optimisation_function:
         _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
         param_slices, n_outs, _, _ = self._get_function_constants()
         parallel_data = self._reshape_data_for_parallel(detections, threads)
-        block_param_inds = self.get_block_param_inds(detections, threads)
+        block_param_inds = self.get_block_param_inds(detections, threads **problem_max_vals)
         d_shape = detections.shape[0]
 
         # full_loss(params, d_data, block_param_inds, n_lines, inp_mem, out_mem, wrk_mem, param_len, n_threads, template = None)
@@ -462,7 +465,7 @@ class optimisation_function:
 
         return import_set, fn_content
 
-    def make_jac_CSR_columns_row_pointers(self, detections, threads, unfixed_params):
+    def make_jac_CSR_columns_row_pointers(self, detections, threads, unfixed_params, problem_maximums):
         """
         Takes the detected data, and then returns the CSR representation of the matrix.
         If some params are indicated as fixed, the indicies of those params are removed from the output.
@@ -473,7 +476,7 @@ class optimisation_function:
         #now, the question is how to get the column indicies?
         #need to get these in the same order they will be calculated.
         c = np.repeat(
-            np.resize(self.get_block_param_inds(detections, threads), (detections.shape[0], param_len)),
+            np.resize(self.get_block_param_inds(detections, threads, **problem_maximums), (detections.shape[0], param_len)),
             2, axis=0
         
         )
@@ -489,7 +492,7 @@ class optimisation_function:
         return valid_c, compressed_rows 
 
 
-    def make_full_jac_template(self, detections, threads, unfixed_params, overwrite_function=False) -> Callable:
+    def make_full_jac_template(self, detections, threads, unfixed_params, problem_max_vals, overwrite_function=False) -> Callable:
         # overwrite_function = True
 
         #make the matflow
@@ -614,9 +617,9 @@ class optimisation_function:
         _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
         param_slices, n_outs, _, _ = self._get_function_constants()
         parallel_data = self._reshape_data_for_parallel(detections, threads)
-        block_param_inds = self.get_block_param_inds(detections, threads)
-        block_param_inds_unthreaded = self.get_block_param_inds(detections, threads, unthreaded=True)
-        c, compressed_row = self.make_jac_CSR_columns_row_pointers(detections, threads, unfixed_params)
+        block_param_inds = self.get_block_param_inds(detections, threads, **problem_max_vals)
+        block_param_inds_unthreaded = self.get_block_param_inds(detections, threads, unthreaded=True, **problem_max_vals)
+        c, compressed_row = self.make_jac_CSR_columns_row_pointers(detections, threads, unfixed_params, problem_maximums=problem_max_vals)
         d_shape = detections.shape[0]
         n_params = np.array(self.n_params)
 
@@ -651,19 +654,21 @@ class optimisation_function:
             return data[:n_elements][good_mask], c, compressed_row
         return jac_fn
 
-
     
-    def make_full_loss_fn(self, detections, threads):
+    def make_full_loss_fn(self, detections, threads, problem_maximums=None):
+        if problem_maximums is None:
+            problem_maximums = {"max_cams": None , "max_imgs": None, "max_keys": None}
         self._prep_for_computation()
-        return self.make_full_loss_template(detections, threads)
+        return self.make_full_loss_template(detections, threads, problem_max_vals=problem_maximums)
 
-    
-    def make_jacobean(self, detections, threads, unfixed_params=None):
-        _, _, _, _, num_inps = make_param_struct(self.function_blocks, detections)
+    def make_jacobean(self, detections, threads, unfixed_params=None, problem_maximums=None):
+        if problem_maximums is None:
+            problem_maximums = {"max_cams": None , "max_imgs": None, "max_keys": None}
+        _, _, _, _, num_inps = make_param_struct(self.function_blocks, detections, **problem_maximums)
         if unfixed_params is None:
             unfixed_params = np.ones(num_inps, dtype=bool)
         self._prep_for_computation()
-        func = self.make_full_jac_template(detections, threads, unfixed_params)
+        func = self.make_full_jac_template(detections, threads, unfixed_params, problem_max_vals=problem_maximums)
         return func
 
     def build_param_list(self, *args: list[np.ndarray])->np.ndarray:
@@ -750,7 +755,7 @@ class abstract_function_block(ABC):
     def test_self(self):
         params = np.ones(self.params.n_params)
 
-        outsize = (self.params.n_params + self.num_inp) * self.num_out
+        outsize = (self.params.n_params + self.num_inp) * selfNon.num_out
         jac_output = np.empty(outsize)
 
         def fn(params):
@@ -775,7 +780,7 @@ class abstract_function_block(ABC):
         assert np.all(error < 1e-4)
 
 def make_param_struct(
-        function_blocks : list[Type[abstract_function_block]], detection_data
+        function_blocks : list[Type[abstract_function_block]], detection_data, max_cams = None, max_imgs = None, max_keys = None,
     ) -> tuple[np.ndarray,np.ndarray, np.ndarray, np.ndarray, int]:
     """
     Takes an input function block definition and detection data, then defines a structure
@@ -790,9 +795,9 @@ def make_param_struct(
     :returns param_assoc: the id of the associated parameter in the detection data structure.
     :returns num_inp params: the number of input parameters.
     """
-    max_imgs = np.max(detection_data[:, 1]) + 1
-    max_keys = np.max(detection_data[:, 2]) + 1
-    max_cams = np.max(detection_data[:, 0]) + 1
+    max_imgs = np.max(detection_data[:, 1]) + 1 if max_imgs is None else max_imgs
+    max_keys = np.max(detection_data[:, 2]) + 1 if max_keys is None else max_keys
+    max_cams = np.max(detection_data[:, 0]) + 1 if max_cams is None else max_cams
        
  
     param_numbers = {

@@ -278,10 +278,9 @@ class Camera:
         :return view: BOOL indicating if point is on image array
         """
         truths = []
-        for cord, res in zip(cords.squeeze(), self.res):
-            truths.append(0 < cord < res)
-            truths.append(0 < cord < res)
-        return np.all(truths)
+        for cord, res in zip(cords.squeeze().T, self.res):
+            truths.append((0 <= cord) & (cord < res))
+        return np.all(truths, axis=0)
 
     def can_image(self, pt) -> bool:
         """

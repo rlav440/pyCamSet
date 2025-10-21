@@ -391,6 +391,12 @@ class AbstractTarget(ABC):
         min_err = np.argmin(err_list)
         if (err := err_list[min_err].squeeze()) > 5:
             logging.warning(f"Initial error of {err: .2f} found for a pose detection.")
+
+        if (err := err_list[min_err].squeeze()) > 50:
+            logging.warning(f"Past 50 pixel error for failed detection.")
+            if mode == "nan":
+                return np.ones((4,4)) * np.nan
+            raise ValueError("Failed a detection")
         ext = make_4x4h_tform(
             rvec[min_err],
             tvec[min_err],

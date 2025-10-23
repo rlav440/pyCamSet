@@ -507,6 +507,7 @@ def estimate_camera_relative_poses(
      
      
     ref_pose, try_graph = check_feasiblity_and_update_refpose(Mat_ac, ref_pose) 
+    try_graph = True
     if try_graph:
         return graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection)
 

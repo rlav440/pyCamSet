@@ -409,7 +409,7 @@ class optimisation_function:
         _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
         param_slices, n_outs, _, _ = self._get_function_constants()
         parallel_data = self._reshape_data_for_parallel(detections, threads)
-        block_param_inds = self.get_block_param_inds(detections, threads **problem_max_vals)
+        block_param_inds = self.get_block_param_inds(detections, threads, **problem_max_vals)
         d_shape = detections.shape[0]
 
         # full_loss(params, d_data, block_param_inds, n_lines, inp_mem, out_mem, wrk_mem, param_len, n_threads, template = None)

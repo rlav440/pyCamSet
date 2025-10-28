@@ -11,6 +11,7 @@ from copy import copy
 import cv2
 from natsort import natsorted
 import multiprocessing
+import dill
 
 from pyCamSet.utils.general_utils import glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
@@ -30,14 +31,14 @@ def get_keys(data):
 # A global variable for the worker process. Each worker will have its own instance.
 worker_detector: Optional['AbstractTarget'] = None
 
-def init_worker(detector: Optional['AbstractTarget']):
+def init_worker(detector_class, input_args): #: Optional['AbstractTarget']):
     """
     Initializer for each worker process.
     This function receives the detector object and stores it in a global variable
     for the lifetime of the worker process.
     """
     global worker_detector
-    worker_detector = detector
+    worker_detector = detector_class(**input_args)
 
 def _process_image(im_file:Path, cam_name:str, idx:int, draw:bool, camera:Camera):
     """
@@ -148,9 +149,6 @@ class AbstractTarget(ABC):
             detections = TargetDetection(cam_names=cam_names)
             for idx, im_file in enumerate(im_locs):
                 im = cv2.imread(im_file)
-                if im.ndim == 3:
-                    # im = np.mean(im, axis=-1).astype(np.uint8)
-                    im = im[:, :, 0]
                 detection = self.find_in_image(im, draw=draw, camera=camera)
                 detections.add_detection(cam_name, idx, detection)
             return detections
@@ -158,7 +156,7 @@ class AbstractTarget(ABC):
         # prepare arguments for the worker processes
         tasks = [(im_file, cam_name, idx, draw, camera) for idx, im_file in enumerate(im_locs)]
         # use a Pool of worker processes.
-        with multiprocessing.Pool(processes=threads, initializer=init_worker, initargs=(self,)) as pool:
+        with multiprocessing.Pool(processes=threads, initializer=init_worker, initargs=(self.__class__, self.input_args)) as pool:
             results = pool.starmap(_process_image, tasks)
         # add the detections from the results in the main process
         for cam, idx, detection in results:

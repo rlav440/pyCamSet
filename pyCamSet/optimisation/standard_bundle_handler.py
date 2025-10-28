@@ -238,9 +238,6 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         :param x: The input optimisation parameters.
         """
-
-
-
         proj, extr, poses, bundle_points = self.bundlePrimitive.return_bundle_primitives(x)
 
         if make_points:
@@ -367,6 +364,9 @@ class SelfBundleHandler(TemplateBundleHandler):
             mask = np.isclose(ref_map, dt)
             new_map = new_map[mask]
             ref_map = ref_map[mask]
+            
+            if len(ref_map) == 0:
+                raise ValueError("The mask of valid distance pairs was empty, indicating an issue with the square size of the target.")
 
         elif isinstance(valid_map, np.ndarray):
             new_map = ch.calc_distance_subset(point_estimate, point_estimate, valid_map[:,:2])
@@ -375,7 +375,8 @@ class SelfBundleHandler(TemplateBundleHandler):
             raise ValueError("The target.valid_map property either needs to be true, for all comparisons being valid, or a nx2 list of index pairs.")
         s = np.mean(ref_map/new_map)
         new_points = s * point_estimate
-
+        if np.isnan(s):
+            raise ValueError("Found S as nan, indicating that the requisite mappings did not exist")
         try:
             update_tform = gu.make_4x4h_tform(*ch.n_estimate_rigid_transform(
                 new_points[self.visible_feature_mask & good_face_mask],
@@ -383,9 +384,9 @@ class SelfBundleHandler(TemplateBundleHandler):
             ) #this mapping from used points to a reference space
         except Exception as e:
             logging.critical("Failed to find an acceptable gauge transform, returning the identity")
-            logging.critical("Gave error: ")
-            print(e)
+            logging.critical(f"Gave error: {e}")
             update_tform = np.eye(4)
+            breakpoint()
 
         inv_update = np.linalg.inv(update_tform)
         new_points = gu.h_tform(new_points, update_tform)

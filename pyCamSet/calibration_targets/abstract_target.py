@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Optional
 
 import logging
 import numpy as np
@@ -9,7 +10,7 @@ from pathlib import Path
 from copy import copy
 import cv2
 from natsort import natsorted
-
+import multiprocessing
 
 from pyCamSet.utils.general_utils import glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
@@ -17,10 +18,36 @@ from pyCamSet.calibration_targets.target_detections import TargetDetection, Imag
 
 
 def get_keys(data):
+    """
+    Returns keys, of the data, padding with zeros if necessary to maintain a 2nd order descriptor.
+    """
+
     keys = data[:, 2:-2]  # this slicing is always 2d.
     if keys.shape[1] == 1:
         keys = np.concatenate((np.zeros_like(keys), keys), axis=1)
     return keys
+
+# A global variable for the worker process. Each worker will have its own instance.
+worker_detector: Optional['AbstractTarget'] = None
+
+def init_worker(detector: Optional['AbstractTarget']):
+    """
+    Initializer for each worker process.
+    This function receives the detector object and stores it in a global variable
+    for the lifetime of the worker process.
+    """
+    global worker_detector
+    worker_detector = detector
+
+def _process_image(im_file:Path, cam_name:str, idx:int, draw:bool, camera:Camera):
+    """
+    Helper function to process a single image.
+    """
+    im = cv2.imread(im_file)
+    # Use the globally available detector in this worker process
+    detection = worker_detector.find_in_image(im, draw=draw, camera=camera)
+    return cam_name, idx, detection
+
 
 class AbstractTarget(ABC):
     """
@@ -86,7 +113,7 @@ class AbstractTarget(ABC):
         """
         raise NotImplementedError
 
-    def find_in_imfolder(self, file:Path, cam_names, draw=False, n_lim=None, camera: Camera=None) -> TargetDetection:
+    def find_in_imfolder(self, file:Path, cam_names, draw=False, n_lim=None, camera: Camera=None, threads=12) -> TargetDetection:
         """
         Notes: A function to detect the camera results in the image folder.
         generally a process wrapper around the previous function
@@ -101,7 +128,6 @@ class AbstractTarget(ABC):
                 This function is responsible for giving image numbers and camera type to the detector.
 
         """
-
         cam_name = file.parts[-1]
         im_locs = [str(x) for x in glob_ims(file)]
 
@@ -117,15 +143,30 @@ class AbstractTarget(ABC):
             cam_names = [cam_name]
 
         detections = TargetDetection(cam_names=cam_names)
-        for idx, im_file in enumerate(im_locs):
-            im = cv2.imread(im_file)
-            if im.ndim == 3:
-                # im = np.mean(im, axis=-1).astype(np.uint8)
-                im = im[:, :, 0]
-            detection = self.find_in_image(im, draw=draw, camera=camera)
-            detections.add_detection(cam_name, idx, detection)
+        
+        if threads == 1:
+            detections = TargetDetection(cam_names=cam_names)
+            for idx, im_file in enumerate(im_locs):
+                im = cv2.imread(im_file)
+                if im.ndim == 3:
+                    # im = np.mean(im, axis=-1).astype(np.uint8)
+                    im = im[:, :, 0]
+                detection = self.find_in_image(im, draw=draw, camera=camera)
+                detections.add_detection(cam_name, idx, detection)
+            return detections
 
+        # prepare arguments for the worker processes
+        tasks = [(im_file, cam_name, idx, draw, camera) for idx, im_file in enumerate(im_locs)]
+        # use a Pool of worker processes.
+        with multiprocessing.Pool(processes=threads, initializer=init_worker, initargs=(self,)) as pool:
+            results = pool.starmap(_process_image, tasks)
+        # add the detections from the results in the main process
+        for cam, idx, detection in results:
+            detections.add_detection(cam, idx, detection)
         return detections
+
+    
+
 
 
     def additional_params(self, x: np.ndarray) -> np.ndarray:

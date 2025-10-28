@@ -63,6 +63,7 @@ def calibrate_cameras(
         calibration_target=calibration_target,
         draw=draw,
         n_lim=n_lim,
+        threads=threads,
     )
 
     validate_detections(detections, calibration_target)
@@ -268,6 +269,7 @@ def detect_datapoints_in_imfile(
     n_lim=None,
     camset:CameraSet|None = None,
     subfolder_string: str|None = None,
+    threads=1,
 ) -> tuple[TargetDetection, list[tuple]]:
     """
     This function organises the detection of the image datapoints in a folder of images.
@@ -308,6 +310,7 @@ def detect_datapoints_in_imfile(
                 draw=draw,
                 n_lim=n_lim,
                 camera=cam,
+                threads=threads,
             )
         if use_cams:
             cam_zip = [camset[f.parts[-1]] for f in detected_sub_folders]

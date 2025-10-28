@@ -19,24 +19,22 @@ class ChArUco(AbstractTarget):
 
         :param num_squares_x: number of squares in the x direction
         :param num_squares_y: number of squares in the y direction
-        :param square_size: the size of a square in mm
+        :param square_size: the size of a square in mm! mm!
         :param marker_fraction: the percentage of a chessboard square occupied by a marker
         :param a_dict: the aruco dictionairy to use.
         """
         super().__init__(inputs=locals())
 
         # define checker and marker size
-        square_size = square_size
-        self.square_size=square_size
-        marker_size = marker_fraction * square_size  # 80% of the square size
+      
+        self.square_size = square_size / 1000
+        marker_size = marker_fraction * self.square_size  # 80% of the square size
         # convert to meters
-        squares_length = square_size / 1000
-        marker_length = marker_size / 1000
 
         # Create the dictionary for the Charuco board
         self.a_dict = cv2.aruco.getPredefinedDictionary(a_dict)
         # Create the Charuco board
-        self.board = cv2.aruco.CharucoBoard((num_squares_x, num_squares_y), squares_length, marker_length, self.a_dict)
+        self.board = cv2.aruco.CharucoBoard((num_squares_x, num_squares_y),self.square_size, marker_size, self.a_dict)
         if legacy:
             self.board.setLegacyPattern(True)
         self.point_data = self.board.getChessboardCorners().squeeze().astype(np.float64)
@@ -86,7 +84,7 @@ class ChArUco(AbstractTarget):
             display_im = image.copy()
             target_size = [480, 640]
             d_f = int(max((min(np.array(display_im.shape[:2]) / target_size)), 1))
-            display_im = downsample_valid(display_im, d_f).astype(np.uint8)
+            display_im = downsample_valid(display_im[:,:,0] if display_im.ndim > 2 else display_im, d_f).astype(np.uint8)
             # d_f=1
             if display_im.ndim == 2:
                 display_im = np.tile(display_im[..., None], (1, 1, 3))

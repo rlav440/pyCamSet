@@ -144,7 +144,8 @@ class AbstractTarget(ABC):
             cam_names = [cam_name]
 
         detections = TargetDetection(cam_names=cam_names)
-        
+       
+        threads=1
         if threads == 1:
             detections = TargetDetection(cam_names=cam_names)
             for idx, im_file in enumerate(im_locs):
@@ -431,8 +432,8 @@ class AbstractTarget(ABC):
         if (err := err_list[min_err].squeeze()) > 5:
             logging.warning(f"Initial error of {err: .2f} found for a pose detection.")
 
-        if (err := err_list[min_err].squeeze()) > 50:
-            logging.warning(f"Past 50 pixel error for failed detection.")
+        if (err := err_list[min_err].squeeze()) > 10:
+            logging.warning(f"Past 10 pixel error for failed detection - counting detection as a failure ")
             if mode == "nan":
                 return np.ones((4,4)) * np.nan
             raise ValueError("Failed a detection")

@@ -602,6 +602,8 @@ def estimate_camera_relative_poses(
 def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection):
     valid_pose = ~np.isnan(Mat_ac[:,:,0,0]) 
 
+    plt.imshow(valid_pose); plt.show()
+
     true_locs_cam, true_locs_pose_original = np.where(valid_pose) # true_locs_pose_orig is 0-indexed for poses
     true_locs_pose_shifted = true_locs_pose_original + len(cams) 
     num_nodes = len(cams) + len(img_detections)
@@ -617,14 +619,22 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
                                                        directed=False, # Connectivity is undirected
                                                        #indices= len(cams)
                                                     )
-    dist_vec[np.isinf(dist_vec)] = -0.0001
-    dist_sums = np.sum(dist_vec[:, len(cams):], axis=1)
-    dist_sums[dist_sums < 0] = np.nan
 
-    starting_seed = int(np.nanargmin(dist_sums) + len(cams))
+    #Use the distance vector to pick the starting point that reaches the maximum set of nodes with the minimum number of steps
+    unreachable = np.isinf(dist_vec)
+    plt.imshow(dist_vec);plt.show()
+    dist_vec[unreachable] = 1000_000 #penalise poses that can't reach other cameras.
+    temp_d = dist_vec.copy()
+    # dist_sums = np.sum(dist_vec[:, len(cams):], axis=1) #could this be around the wrong way.
+    dist_sums = np.sum(dist_vec[len(cams):, :], axis=1) # distance matrix is symmetric
+    # pick pose as the pose with the lowest total distance to all neighbours.
+    starting_seed = int(np.nanargmin(dist_sums) + len(cams)) #the pose with the lowest distance score
 
+    #use this to index the starting point
     dist_vec = np.round(dist_vec[:, starting_seed], 0)
-    dist_vec[np.isinf(dist_vec)] = -1
+    viable_nodes = ~unreachable[:, starting_seed]
+    # breakpoint()
+    dist_vec[unreachable[:, starting_seed]] = -1
     
     max_iters = np.max(dist_vec)
     destination = np.arange(num_nodes).astype(int)
@@ -679,9 +689,10 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
     )
     lookups =  [(dd[:,1] == i) for i in range(detection.max_ims)]
     costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
-    im_costs = [np.sum(costs[l]) for l in lookups]
+    im_costs = [np.sum(costs[l]) if v else np.nan for l,v in zip(lookups, viable_nodes[len(cams):])]
 
     init_per_im_reproj_err = np.array(im_costs)
+
     uplot(init_per_im_reproj_err, height=10, title="Per image initial reproj error", color=['blue'])
 
     return Mrt_ac, Mat_rt, init_per_im_reproj_err

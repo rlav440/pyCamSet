@@ -180,13 +180,12 @@ def visualise_calibration(
     """
     euclidean_err = np.linalg.norm(np.reshape(o_results['err'], (-1,2)), axis=1)
     e_lim = np.median(euclidean_err) * 3
-    print(np.std(euclidean_err))
+    # print("Calibration Standard Deviation of euclidean Error:", np.std(euclidean_err))
     # raise ValueError
 
     detection = param_handler.get_detection()
     cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
 
-    
     cluster_plot([o_results['err']], alphas=[0.1])
 
     # the coverage for each camera
@@ -324,7 +323,7 @@ def visualise_calibration(
         for r0, r1, c in zip(raw_data[:,0], raw_data[:,1], colours):
             _ = chart.scatter([r0 * 1000], [r1 * 1000], color=c, size=4)
         line = np.linspace(0, np.amax(raw_data[:,0]) * 1000, 100)
-        _ = chart.line(line, line, 'r')
+        _ = chart.line(line, line, color='r')
         plotter.add_chart(chart)
 
     else:

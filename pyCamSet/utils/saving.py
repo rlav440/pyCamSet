@@ -192,8 +192,8 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
         detection = instance_obj(
             dtct['dtct_module'], dtct['dtct_name'], **input_args
         )
-    except:
-        logging.warning("Failed to load detections, returning just the CameraSet")
+    except Exception as e:
+        logging.warning(f"Failed to load detections with reason {e} \n returning just the CameraSet")
         return camset
 
     try:
@@ -202,8 +202,8 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
             target_config['target_module'], target_config['target_name'],
             **target_config['input']
         )
-    except:
-        logging.warning("Failed to load calibration target, returning just the CameraSet")
+    except Exception as e:
+        logging.warning(f"Failed to load calibration target with reason {e}, returning just the CameraSet")
         return camset
 
     try:
@@ -221,8 +221,7 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
             handler_config['handler_module'], handler_config['handler_name'], **input_args
         )
     except Exception as e:
-        print(e)
-        logging.warning("Failed to intialise the Parameterhandler, returning just the CameraSet")
+        logging.warning(f"Failed to intialise the Parameterhandler with reason {e}, returning just the CameraSet")
         return camset
 
     try:

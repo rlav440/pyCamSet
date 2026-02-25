@@ -157,13 +157,17 @@ class SelfBundleHandler(TemplateBundleHandler):
         self.feat_unfixed[3*i1:3*i1+3] = False
         self.feat_unfixed[3*i2] = False
 
-        # then look at the detection data - if a feature isn't seen, report it as unseen
+        # then look wt the detection data - if a feature isn't seen, report it as unseen
         n_points = np.prod(self.point_data.shape[:2])
         dd = self.detection.return_flattened_keys(self.target.point_data.shape[:-1]).get_data()[:, 2]
         # cd = np.arange(n_points)//81
         # good_face_mask = (cd == 1) | (cd == 4) | (cd == 5)
         # self.visible_feature_mask = np.isin(np.arange(n_points), dd) & good_face_mask
         self.visible_feature_mask = np.isin(np.arange(n_points), dd) 
+
+
+
+
         for idf, vf in enumerate(self.visible_feature_mask): #fix all unseen features to shrink the optimisation
             if not vf:
                 self.feat_unfixed[3*idf:3*idf + 3] = False
@@ -351,6 +355,15 @@ class SelfBundleHandler(TemplateBundleHandler):
         ref_points = self.target.point_data.reshape((-1,3))
         valid_map = self.target.valid_map
         vm = self.visible_feature_mask & good_face_mask
+
+
+
+        # labels = np.arange(len(ref_points))
+        # s = pv.Plotter()
+        # s.add_point_labels(ref_points[vm], labels[vm])
+        # s.show()
+        # raise ValueError()
+
         
         if isinstance(valid_map, bool):
             if valid_map == False:
@@ -374,6 +387,8 @@ class SelfBundleHandler(TemplateBundleHandler):
         else:
             raise ValueError("The target.valid_map property either needs to be true, for all comparisons being valid, or a nx2 list of index pairs.")
         s = np.mean(ref_map/new_map)
+        print(f"Scale factor found {s}")
+
         new_points = s * point_estimate
         if np.isnan(s):
             raise ValueError("Found S as nan, indicating that the requisite mappings did not exist")
@@ -389,6 +404,7 @@ class SelfBundleHandler(TemplateBundleHandler):
             breakpoint()
 
         inv_update = np.linalg.inv(update_tform)
+        # inv_update = np.eye(4)
         new_points = gu.h_tform(new_points, update_tform)
         #proj matricies never change: scale invariance!
 
@@ -426,7 +442,7 @@ class SelfBundleHandler(TemplateBundleHandler):
         m4 = cd == t1
         m5 = cd == t2
 
-        vm = self.visible_feature_mask & good_face_mask
+        vm = self.visible_feature_mask # & good_face_mask
         # vm = np.ones_like(vm)
         # m1 = vm.copy()
         # m4 = vm.copy()
@@ -435,20 +451,23 @@ class SelfBundleHandler(TemplateBundleHandler):
         
         un_gauged_data = self.get_bundle_adjustment_inputs(x)
         _,_,_, final_data = self.apply_gauge_transform(*un_gauged_data)
+        _, _, _, final_data = un_gauged_data
         unfixed_points = un_gauged_data[-1].copy()
 
         diff = (final_data - og_data) * 1000
 
         #xclude difs over 2 mm
         mask = np.linalg.norm(diff, axis=1) < 2
-        vm &= mask
+        # vm &= mask
 
         scale = 5
         descale = 1000//scale
         print(f"found a mean difference of {np.mean(np.linalg.norm(diff[vm], axis=-1)):.2f} mm")
         s = pv.Plotter()
         s.title = "Target Self-calibration Results."
-        s.add_arrows((og_data*descale)[vm], diff[vm], label = f"Recovered shape change ({scale}x mag)", 
+        s.add_arrows(
+            (og_data*descale)[vm], diff[vm], label = f"Recovered shape change ({scale}x mag)", 
+            # (og_data*descale), diff, label = f"Recovered shape change ({scale}x mag)", 
                 # cmap='Blues',
                 cmap="Greens",
                 # cmap='Oranges',
@@ -471,10 +490,15 @@ class SelfBundleHandler(TemplateBundleHandler):
         s.add_mesh(s4, style='wireframe', line_width=2, color='k', opacity=0.1)
         s5 = pv.PolyData(og_data[m5]*descale, lines=make_connectivity(og_data[m5]))
         s.add_mesh(s5, style='wireframe', line_width=2, color='k', opacity=0.1)
-        rms1 = rms_plane(np1, cp1, final_data[vm & m1]*descale)
-        rms4 = rms_plane(np4, cp4, final_data[vm & m4]*descale)
-        rms5 = rms_plane(np5, cp5, final_data[vm & m5]*descale)
-        print(rms1, rms4, rms5)
+
+        labels = np.arange(len(og_data))
+        s.add_point_labels(descale * og_data[vm], labels[vm])
+        s.show()
+        raise ValueError()
+        # rms1 = rms_plane(np1, cp1, final_data[vm & m1]*descale)
+        # rms4 = rms_plane(np4, cp4, final_data[vm & m4]*descale)
+        # rms5 = rms_plane(np5, cp5, final_data[vm & m5]*descale)
+        # print(rms1, rms4, rms5)
         # # s.add_mesh(pv.PolyData(final_data[vm & m2]), point_size=6)
         # s.add_mesh(p1, color='lightblue', opacity=0.7)
         # s.add_mesh(p4, color='lightblue', opacity=0.7)
@@ -492,7 +516,7 @@ class SelfBundleHandler(TemplateBundleHandler):
         camera.position = (-60, -60, -36)
         camera.focal_point = (0,0,0)
         camera.up = (0,0,-1)
-        camera.angle = 0.02
+        # camera.angle = 0.02
 
         s.show()
 

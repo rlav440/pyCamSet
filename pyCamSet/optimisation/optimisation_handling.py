@@ -77,11 +77,11 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     # test = lambda : bundle_jac(init_params)
     # gu.benchmark(test, repeats=100)
 
-    if (init_euclid > 150) or (init_euclid == np.nan):
+    if (init_euclid > 100) or (init_euclid == np.nan):
         logging.critical("Found worryingly high/NaN initial error: check that the initial parametisation is sensible")
         logging.info(
             "This can often indicate failure to place a camera or target correctly, giving nonsensical errors.")
-    # param_handler.check_params(init_params)
+        # param_handler.check_params(init_params)
 
     # bundle_jac = lambda x: approx_fprime(x, loss_fn)
     start = time.time()
@@ -95,6 +95,7 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
         max_nfev=param_handler.problem_opts["max_nfev"],
         # loss = "cauchy"
         x_scale='jac',
+        xtol=1e-4,
     )
     end = time.time()
 

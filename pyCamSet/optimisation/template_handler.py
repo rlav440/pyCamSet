@@ -3,21 +3,23 @@ from tqdm import tqdm
 from scipy.sparse import csgraph
 import logging
 from copy import copy, deepcopy
-from uniplot import plot as uplot
+from uniplot import plot as uplot, uniplot
 
 import matplotlib.pyplot as plt
 
 import numpy as np
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 from scipy.sparse import csr_array
 
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.function_block_implementations as fb
 import pyCamSet.optimisation.abstract_function_blocks as afb
+from pyCamSet import CameraSet, Camera
 
 from pyCamSet.calibration_targets import TargetDetection
+import pyvista as pv
     
 if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
@@ -454,7 +456,8 @@ def check_for_target_misalignment(tforms:  np.ndarray, ref_cam:int = 0):
         mags = [np.linalg.norm(t[:3,-1]) for t in Marc_c]
         std_ang = np.nanstd(angs)
         std_mag = np.nanstd(mags)
-        if std_mag > 0.050:
+        logging.info(f"found a variation in location of cam {ic} of {std_mag}")
+        if std_mag > 0.010:
             logging.critical(f"Found inconsistent relative translation positions (stdev = {std_mag:.2f} m) for camera index {ic}")
             logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
         if std_ang > 5 / 180 * np.pi:
@@ -481,6 +484,7 @@ def estimate_camera_relative_poses(
         calibration_target: AbstractTarget, detection: TargetDetection,
         cams:CameraSet, ref_cam: int = 0, ref_pose: int = 0,
         max_bad_cams_iter = 10,
+        prior_poses_and_costs: Optional[tuple[np.ndarray, np.ndarray]] = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Given camera estimates, performs a single camera centric pose estimate.
@@ -495,23 +499,25 @@ def estimate_camera_relative_poses(
 
     img_detections = detection.get_image_list()
     Mat_ac = []
+    Mat_ac_cost = []
     for cam in cams:
         pose_per_img=[]
+        cost_per_img=[]
         for id in img_detections:
-            pose_per_img.append(calibration_target.target_pose_in_cam_image(id, cam, mode="nan"))
+            res = calibration_target.target_pose_in_cam_image(id, cam, mode="nan", give_error=True)
+            pose_per_img.append(res[0])
+            cost_per_img.append(res[1])
         Mat_ac.append(pose_per_img)
+        Mat_ac_cost.append(cost_per_img)
     Mat_ac = np.array(Mat_ac)
+    Mat_ac_cost = np.array(Mat_ac_cost)
 
-    # ------------- Graph based solver to find the best reference pose -------------
-    
-     
-     
+    check_for_target_misalignment(Mat_ac, ref_cam) #TODO, refactor this to a single summary.
     ref_pose, try_graph = check_feasiblity_and_update_refpose(Mat_ac, ref_pose) 
     try_graph = True
     if try_graph:
-        return graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection)
+        return graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection, cost_mat=Mat_ac_cost)
 
-    # check_for_target_misalignment(Mat_ac, ref_cam) #TODO, refactor this to a single summary.
     
     Mrt_ac = Mat_ac[:, ref_pose]
     Mac_rt = np.array([np.linalg.inv(Mrt_c) for Mrt_c in Mrt_ac])
@@ -599,20 +605,59 @@ def estimate_camera_relative_poses(
     Mat_rt[ref_pose] = np.eye(4)
     return Mrt_ac, Mat_rt, init_per_im_reproj_err
 
-def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection):
+def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection, cost_mat=None):
+
     valid_pose = ~np.isnan(Mat_ac[:,:,0,0]) 
 
-    plt.imshow(valid_pose); plt.show()
 
+    dist_test = Mat_ac[0, :, :-1, -1]  - Mat_ac[1, :, :-1, -1]
+    # relative_tform =  np.linalg.inv(Mat_ac[0]) @ (Mat_ac[1])
+
+    ####### A series of debug plots.
+    # base_cam_dict = {}
+    # base_cams = CameraSet(camera_dict={'cam0':cams[0]})
+    # s = pv.Plotter()
+    # cmap = plt.get_cmap('tab20')
+    # cols = [cmap(i) for i in np.linspace(0,1, cams.get_n_cams())]
+    #
+    # for i in range(cams.get_n_cams()):
+    #     relative_tform =  (Mat_ac[0]) @ np.linalg.inv(Mat_ac[i])
+    #     alt_dict = {f'cam{i}_{e}':Camera(
+    #         intrinsic=cams[i].intrinsic.copy(), 
+    #         extrinsic=f, res=cams[i].res.copy(), name=f"cam{i}_{e}",
+    #         distortion_coefs=cams[i].distortion_coefs) for e, f in enumerate(relative_tform)}
+    #     base_cam_dict.update(alt_dict)
+    #     data = np.array([c.position for c in alt_dict.values()])
+    #     data_dif = np.linalg.norm(np.diff(data, axis=0), axis=-1)
+    #     uniplot.plot(data_dif)
+    #     s.add_mesh(data, color=cols[i], render_points_as_spheres=True, point_size=15)
+    #
+    # s.show()
+    # alt_ests = CameraSet(camera_dict=base_cam_dict)
+    # alt_ests.plot(scale_factor=0.01, cam_labels=False)
+    dists = np.linalg.norm(dist_test, axis=-1)
+    # plt.hist(dists, bins=20)
+    # plt.xlabel("Estimated distance between cameras (m)")
+    # plt.ylabel("Frequency")
+    # plt.show()
+    # raise ValueError
+    # breakpoint()
+    # plt.imshow(valid_pose); plt.show()
+    # if cost_mat is not None:
+    #     plt.imshow(cost_mat); plt.show()
     true_locs_cam, true_locs_pose_original = np.where(valid_pose) # true_locs_pose_orig is 0-indexed for poses
     true_locs_pose_shifted = true_locs_pose_original + len(cams) 
     num_nodes = len(cams) + len(img_detections)
-    dist_mat = np.zeros([num_nodes, num_nodes])
+    dist_mat = np.ones([num_nodes, num_nodes]) * np.inf
 
-    dist_mat[(true_locs_cam, true_locs_pose_shifted)] = 1 
-    dist_mat *= 1 + (np.random.random(dist_mat.shape) - 0.5)/100 #random sauce to help dodge bad points
-    # plt.imshow(dist_mat)
-    # plt.show()
+    if cost_mat is None:
+        dist_mat[(true_locs_cam, true_locs_pose_shifted)] = 1 
+        dist_mat *= 1 + (np.random.random(dist_mat.shape) - 0.5)/100 #random sauce to help dodge bad points
+    else:
+        dist_mat[(true_locs_cam, true_locs_pose_shifted)] = cost_mat[valid_pose]
+        iter_mat = np.zeros([num_nodes, num_nodes])
+        iter_mat[(true_locs_cam, true_locs_pose_shifted)] = 1 
+
     dist_vec, predecessors_mat = csgraph.shortest_path(dist_mat, 
                                                        return_predecessors=True,
                                                        # unweighted=True,
@@ -622,16 +667,17 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
 
     #Use the distance vector to pick the starting point that reaches the maximum set of nodes with the minimum number of steps
     unreachable = np.isinf(dist_vec)
-    plt.imshow(dist_vec);plt.show()
+    # plt.imshow(unreachable);plt.show()
     dist_vec[unreachable] = 1000_000 #penalise poses that can't reach other cameras.
     temp_d = dist_vec.copy()
     # dist_sums = np.sum(dist_vec[:, len(cams):], axis=1) #could this be around the wrong way.
     dist_sums = np.sum(dist_vec[len(cams):, :], axis=1) # distance matrix is symmetric
     # pick pose as the pose with the lowest total distance to all neighbours.
     starting_seed = int(np.nanargmin(dist_sums) + len(cams)) #the pose with the lowest distance score
-
+    print(starting_seed)
+    # starting_seed=50
     #use this to index the starting point
-    dist_vec = np.round(dist_vec[:, starting_seed], 0)
+    # dist_vec = np.round(dist_vec[:, starting_seed], 0)
     viable_nodes = ~unreachable[:, starting_seed]
     # breakpoint()
     dist_vec[unreachable[:, starting_seed]] = -1
@@ -639,28 +685,37 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
     max_iters = np.max(dist_vec)
     destination = np.arange(num_nodes).astype(int)
     current_loc = (np.ones(num_nodes) * starting_seed).astype(int)
+    goal_loc = np.arange(num_nodes)
     accumulated_tforms = np.array([np.eye(4) for _ in range(num_nodes)])
 
-    for _ in tqdm(range(np.ceil(max_iters/2).astype(int)), desc="Pathfinding graph"):
+    # for _ in tqdm(range(np.ceil(max_iters/2).astype(int)), desc="Pathfinding graph"):
+    logging.info("Pathfinding Graph")
+    while True:
         # cam step
-        do_step = dist_vec > 0
-        
+        do_step = (current_loc != goal_loc) & viable_nodes
+        if not np.any(do_step):
+            break
+
+        # plt.plot(do_step);plt.show()
         cam_to_step_too = predecessors_mat[(destination[do_step], current_loc[do_step])]
+        # print(cam_to_step_too)
         tforms = Mat_ac[(cam_to_step_too, current_loc[do_step] - len(cams))]
         accumulated_tforms[do_step] = tforms @ accumulated_tforms[do_step]
         
         current_loc[do_step] = cam_to_step_too
-        dist_vec -= 1
-
         # transform step
-        do_step = dist_vec > 0
+        do_step = (current_loc != goal_loc) & viable_nodes
+        if not np.any(do_step):
+            break
          
+        # plt.plot(do_step);plt.show()
+        
         pose_to_step_too = predecessors_mat[(destination[do_step], current_loc[do_step])]
+
         tforms = np.linalg.inv(Mat_ac[(current_loc[do_step], pose_to_step_too - len(cams))])
         accumulated_tforms[do_step] = tforms @ accumulated_tforms[do_step]
 
         current_loc[do_step] = pose_to_step_too
-        dist_vec -= 1
     
     ref_form_make = np.linalg.inv((accumulated_tforms[len(cams)]))
 
@@ -687,12 +742,35 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
         ints,
         dists,           
     )
-    lookups =  [(dd[:,1] == i) for i in range(detection.max_ims)]
-    costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
+
+    if cams.get_n_cams() < 3:
+        costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
+
+        mo = dd[:, 0] == 0
+        lookups =  [(dd[:,1] == i) & mo  for i in range(detection.max_ims)]
+        # n_evals = [np.sum(l) for l in lookups]
+        im_costs_0 = [np.mean(costs[l]) if v else np.nan for l,v in zip(lookups, viable_nodes[len(cams):])]
+        init_per_im_reproj_err_0 = np.array(im_costs_0)
+
+        m1 = dd[:, 0] == 1 
+        lookups_1 = [(dd[:,1] == i) & m1 for i in range(detection.max_ims)]
+        im_costs_1 = [np.mean(costs[l]) if v else np.nan for l,v in zip(lookups_1, viable_nodes[len(cams):])]
+        init_per_im_reproj_err_1 = np.array(im_costs_1)
+
+        logging.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
+        uplot([init_per_im_reproj_err_0, init_per_im_reproj_err_1], height=10, title="Per image initial reproj error", color=['blue', 'red'])
+
+    else:
+        lookups =  [(dd[:,1] == i) for i in range(detection.max_ims)]
+        costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
+        im_costs = [np.sum(costs[l]) if v else np.nan for l,v in zip(lookups, viable_nodes[len(cams):])]
+
+        init_per_im_reproj_err = np.array(im_costs)
+
+        logging.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
+        uplot(init_per_im_reproj_err, height=10, title="Per image initial reproj error", color=['blue', 'red'])
+    lookups = [(dd[:,1] == i) for i in range(detection.max_ims)]
     im_costs = [np.sum(costs[l]) if v else np.nan for l,v in zip(lookups, viable_nodes[len(cams):])]
-
     init_per_im_reproj_err = np.array(im_costs)
-
-    uplot(init_per_im_reproj_err, height=10, title="Per image initial reproj error", color=['blue'])
-
+    # raise ValueError
     return Mrt_ac, Mat_rt, init_per_im_reproj_err

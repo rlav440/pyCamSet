@@ -211,7 +211,7 @@ class Ccube(AbstractTarget):
         if draw:
             im_idea = image.copy()
             target_size = [640, 480]
-            d_f = int(min(np.array(im_idea.shape[:2])/target_size))
+            d_f = max(int(min(np.array(im_idea.shape[:2])/target_size)), 1)
             im_idea = downsample_valid(im_idea, d_f).astype(np.uint8)
             if im_idea.ndim == 2:
                 im_idea = np.tile(im_idea[..., None], (1, 1, 3))

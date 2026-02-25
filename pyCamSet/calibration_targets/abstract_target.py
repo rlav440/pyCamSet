@@ -12,6 +12,8 @@ import cv2
 from natsort import natsorted
 import multiprocessing
 import dill
+import os
+import signal
 
 from pyCamSet.utils.general_utils import glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
@@ -37,6 +39,7 @@ def init_worker(detector_class, input_args): #: Optional['AbstractTarget']):
     This function receives the detector object and stores it in a global variable
     for the lifetime of the worker process.
     """
+    multiprocessing.freeze_support()
     global worker_detector
     worker_detector = detector_class(**input_args)
 
@@ -143,9 +146,11 @@ class AbstractTarget(ABC):
         if cam_names is None:
             cam_names = [cam_name]
 
+        # breakpoint()
+
         detections = TargetDetection(cam_names=cam_names)
        
-        threads=1
+        # threads=1
         if threads == 1:
             detections = TargetDetection(cam_names=cam_names)
             for idx, im_file in enumerate(im_locs):
@@ -154,9 +159,22 @@ class AbstractTarget(ABC):
                 detections.add_detection(cam_name, idx, detection)
             return detections
 
+        if not multiprocessing.current_process().name == "MainProcess":
+            logging.error("Multiprocessing Image Detections requires use of the __name__ = '__main__': idiom in your script")
+            os.kill(int(os.environ['Detection_PID']), signal.SIGTERM)
+            raise RuntimeError
+
+        os.environ['Detection_PID'] = str(os.getpid())
+
         # prepare arguments for the worker processes
         tasks = [(im_file, cam_name, idx, draw, camera) for idx, im_file in enumerate(im_locs)]
         # use a Pool of worker processes.
+        if not (processname := multiprocessing.current_process().name) == "MainProcess":
+            # print(processname)
+            logging.critical("Python multiprocessing attempted to start an infinite loop. Use the if __name__ == '__main__' idiom in your calling script to prevent this")
+            # multiprocessing.parent_process().terminate()
+            raise RuntimeError()
+
         with multiprocessing.Pool(processes=threads, initializer=init_worker, initargs=(self.__class__, self.input_args)) as pool:
             results = pool.starmap(_process_image, tasks)
         # add the detections from the results in the main process
@@ -302,7 +320,7 @@ class AbstractTarget(ABC):
 
     def initial_calibration(self, cam_name, detection: TargetDetection,
                             res: list, pose_im: int=0,
-                            fixed_params: dict|None =None) -> Camera:
+                            fixed_params: dict|None =None, return_poses=False) -> Camera | tuple[Camera, np.ndarray, np.ndarray]:
         """
         Takes a single camera's detections, and performs an initial
         calibration on them.
@@ -335,22 +353,26 @@ class AbstractTarget(ABC):
 
 
         for im_detect in detections_in_image:
+
             data = im_detect.get_data()
             if data is None:
                 continue  # no data here, so don't add it to the optimisation
             keys = get_keys(data) # this slicing is always 2d.
             boards, board_id, b_counts = np.unique(keys[:, :-1], return_inverse=True,   return_counts=True)
-            mask = b_counts > np.prod(self.point_local.shape[:-2])
+            mask = boards < np.prod(self.point_local.shape[:-2])
+
             for board in boards[mask]:
                 key_mask = np.squeeze(keys[:, :-1] == board)
-                if np.sum(key_mask) > 12:
+                if np.sum(key_mask) > 12: 
+                    if np.sum(key_mask) < 12:
+                        logging.warning("Trying to calibrate with a small number of detections on a board.")
                     board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')
                     board_im = data[key_mask, -2:][None, ...].astype('float32')
                     object_points.append(board_obj)
                     image_points.append(board_im)
 
         start = time.time()
-        ic = cv2.calibrateCamera(
+        ic = cv2.calibrateCameraExtended(
             object_points,
             image_points,
             tuple(res[::-1]),
@@ -370,6 +392,8 @@ class AbstractTarget(ABC):
 
         # perform an initial pose estimate on the first images
 
+        
+
         init_cam = Camera(intrinsic=ic[1], distortion_coefs=np.array(ic[2]), res=res, name=cam_name)
         if fixed_params is not None:
             if "int" in fixed_param:
@@ -379,12 +403,16 @@ class AbstractTarget(ABC):
             if "ext" in fixed_param:
                 init_cam.set_extrinsic(fixed_param['ext'])
                 return init_cam
+        if not return_poses:
+            return init_cam
 
-        return init_cam
+        poses = [make_4x4h_tform(rot, tran) for rot, tran in zip(ic[3], ic[4])]
+        per_im_reproj = ic[-1]
+        return init_cam, poses, per_im_reproj
 
     def target_pose_in_cam_image(
             self, detection: TargetDetection, cam: Camera, 
-            refine:bool = False, mode="throw") -> np.ndarray:
+            refine:bool = False, mode="throw", give_error=False) -> np.ndarray | tuple[np.ndarray, float]:
         """
         This function gives a pose estimate of the cube in an image as seen by a camera.
 
@@ -398,6 +426,8 @@ class AbstractTarget(ABC):
         
         if not detection.has_data():
             if mode == "nan":
+                if give_error:
+                    return np.ones((4,4)) * np.nan, np.nan
                 return np.ones((4,4)) * np.nan
             raise ValueError(f"The detection had no data  at all, including for camera {cam.name}")
 
@@ -405,12 +435,16 @@ class AbstractTarget(ABC):
         datum = detection.get(cam=cam.name).get_data()
         if datum is None:
             if mode == "nan":
+                if give_error:
+                    return np.ones((4,4)) * np.nan, np.nan
                 return np.ones((4,4)) * np.nan
             raise ValueError(f"The detection had no data for camera {cam.name}")
 
         n_im = np.unique(datum[:, 0])  # check that only one camera and one image is here.
         if len(n_im) > 1:
             if mode == "nan":
+                if give_error:
+                    return np.ones((4,4)) * np.nan, np.nan
                 return np.ones((4,4)) * np.nan
             raise ValueError(f"passed detection contained info from {n_im} ims. \n"
                 "Pose estimation only works with 1 image")
@@ -418,37 +452,69 @@ class AbstractTarget(ABC):
         keys = get_keys(datum)
         object_points = self.point_data[tuple(keys.astype(int).T)]
         image_points = datum[:, -2:]
-        if len(object_points) < 6:
+        if len(object_points) < 8:
             if mode == "nan":
+                if give_error:
+                    return np.ones((4,4)) * np.nan, np.nan
                 return np.ones((4,4)) * np.nan
             raise ValueError("Inadequate number of corners for pose estimation")
 
-        _, rvec, tvec, err_list = cv2.solvePnPGeneric(object_points.astype("float32"),
-                                                      image_points.astype("float32"),
-                                                      cam.intrinsic,
-                                                      cam.distortion_coefs
-                                                      )
-        min_err = np.argmin(err_list)
-        if (err := err_list[min_err].squeeze()) > 5:
+        if len(object_points) < 12:
+            logging.warning("Low number of points used for pose estimation")
+
+
+        try:
+            _, rvec, tvec, err_list = cv2.solvePnPGeneric(object_points.astype("float32"),
+                                                          image_points.astype("float32"),
+                                                          cam.intrinsic,
+                                                          cam.distortion_coefs
+                                                          )
+
+            passing_t = []
+            passing_r = []
+            for e, t in enumerate(tvec):
+                if t[-1] < 0:
+                    continue
+                passing_t.append(tvec[e])
+                passing_r.append(rvec[e])
+            tvec, rvec = passing_t, passing_r
+            if not passing_t:
+                if mode == "nan":
+                    if give_error:
+                        return np.ones((4,4)) * np.nan, np.nan
+                    return np.ones((4,4)) * np.nan
+                raise ValueError("Opencv failed to find a non-negative pose")
+
+
+        except cv2.error as e:
+            if mode == "nan":
+                if give_error:
+                    return np.ones((4,4)) * np.nan, np.nan
+                return np.ones((4,4)) * np.nan
+            raise ValueError("Opencv failed to find a pose")
+
+        
+        max_err = np.argmax(err_list)
+        min_err = np.argmax(err_list)
+        if (err := err_list[max_err].squeeze()) > 5:
             logging.warning(f"Initial error of {err: .2f} found for a pose detection.")
 
-        if (err := err_list[min_err].squeeze()) > 10:
+        if (err := err_list[max_err].squeeze()) > 20:
             logging.warning(f"Past 10 pixel error for failed detection - counting detection as a failure ")
             if mode == "nan":
+                if give_error:
+                    return np.ones((4,4)) * np.nan, np.nan
                 return np.ones((4,4)) * np.nan
             raise ValueError("Failed a detection")
+
         ext = make_4x4h_tform(
             rvec[min_err],
             tvec[min_err],
         )
         
-        # temp_points = np.array([h_tform(face, ext) for face in self.point_data])
-        # new_obj_points = temp_points[tuple(keys.astype(int).T)]
-        # proj_uv = cam.project_points(new_obj_points)
-        # errors = proj_uv - image_points
-        # print(f"manual error check gave {np.mean(np.abs(errors))}")
-
         if not refine:
+            if give_error:
+                return ext, np.mean(err_list)
             return ext # from target -> cam coordinates
         else: 
             raise NotImplementedError

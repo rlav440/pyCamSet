@@ -140,7 +140,7 @@ def glob_ims(loc: Path):
     :param loc:
     :return:
     """
-    imlocs = [p.resolve() for p in loc.glob("**/*") if p.suffix in {".png", '.bmp', '.tiff', '.jpg'}]
+    imlocs = [p.resolve() for p in loc.glob("**/*") if p.suffix in {".png", '.bmp', '.tiff', '.jpeg', '.jpg'}]
     return imlocs
 
 
@@ -150,7 +150,7 @@ def glob_ims_local(loc: Path):
     :param loc:
     :return:
     """
-    imlocs = [p.resolve() for p in loc.glob("*") if p.suffix in {".png", '.bmp', '.tiff', '.jpg'}]
+    imlocs = [p.resolve() for p in loc.glob("*") if p.suffix in {".png", '.bmp', '.tiff', '.jpeg', '.jpg'}]
     return imlocs
 
 def plane_fit(points):

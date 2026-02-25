@@ -48,6 +48,12 @@ def remap_im(im, cam: Camera, new_rot, new_proj, new_size) -> np.ndarray:
     :param new_size: The new image size.
     :return: A remappeed image.
     """
+
+    plt.imshow(im)
+    plt.show()
+
+    # print(new_size)
+
     map = cv2.initUndistortRectifyMap(
         cam.intrinsic, cam.distortion_coefs,
         new_rot, new_proj,
@@ -55,6 +61,11 @@ def remap_im(im, cam: Camera, new_rot, new_proj, new_size) -> np.ndarray:
         cv2.CV_32FC1,
     )
     new_im0 = cv2.remap(im, *map, cv2.INTER_CUBIC)
+
+    plt.imshow(new_im0)
+    plt.show()
+    # raise ValueError()
+
     return new_im0
 
 
@@ -74,10 +85,10 @@ def rectify_camera_images(
     zero_flag = True
     p0, p1, q, r0, r1, s0 = rectify_camera_pair(cam_0, cam_1, zero_flag=zero_flag)
     new_im0 = remap_im(
-        undistort_im(im_0, cam_0) if zero_flag else im_0, cam_0, r0, p0, cam_0.res
+        undistort_im(im_0, cam_0) if zero_flag else im_0, cam_0, r0, p0, np.array(cam_0.res) * 10
     )
     new_im1 = remap_im(
-        undistort_im(im_1, cam_1) if zero_flag else im_1, cam_1, r1, p1, cam_1.res
+        undistort_im(im_1, cam_1) if zero_flag else im_1, cam_1, r1, p1, np.array(cam_1.res) * 10
     )
     return new_im0, new_im1, q
 
@@ -94,16 +105,18 @@ def rectify_camera_pair(cam_0: Camera, cam_1:Camera, zero_flag = False):
     rot, trans = ext_4x4_to_rod(cam_1.extrinsic @ cam_0.cam_to_world)
     # it's looking for world -> cam in reference space
     #
-
     r0, r1, p0, p1, q, s0, s1 = cv2.stereoRectify(
         cam_0.intrinsic, np.zeros(5) if zero_flag else cam_0.distortion_coefs,
         cam_1.intrinsic, np.zeros(5) if zero_flag else cam_1.distortion_coefs,
         cam_0.res,
         rot, trans,
-        cv2.CALIB_ZERO_DISPARITY,
-        alpha=1,
-        newImageSize=cam_0.res
+        # cv2.CALIB_ZERO_DISPARITY,
+        # alpha=1,
+        newImageSize=np.array(cam_0.res) *10
     )
+
+    print(p0)
+    print(p1)
     return p0, p1, q, r0, r1, s0
 
 
@@ -183,9 +196,9 @@ def stereo_reconstruct( cam_0:Camera, cam_1:Camera, im_0, im_1, num_disp=256, bl
     """
 
     r0, r1, q = rectify_camera_images(cam_0, cam_1, im_0, im_1)
-    # stacked_im = np.stack([r0, np.zeros_like(r0), r1]).transpose([1,2,0])
-    # plt.imshow(stacked_im)
-    # plt.show()
+    stacked_im = np.stack([r0, np.zeros_like(r0), r1]).transpose([1,2,0])
+    plt.imshow(stacked_im)
+    plt.show()
     if matlab:
         disp = matlab_stereo(r0, r1, disp_range=(num_disp-128, num_disp), plot=plot)
     else:

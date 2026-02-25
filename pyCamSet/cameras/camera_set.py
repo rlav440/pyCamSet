@@ -113,9 +113,9 @@ class CameraSet:
             self._cam_dict = camera_dict
 
         self.ind = 0
-        self.__update()
+        self._update()
 
-    def __update(self):
+    def _update(self):
         """
         updates the camera set parameters after a change in the added Cameras
         """
@@ -232,7 +232,7 @@ class CameraSet:
             return False
         return True
 
-    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet', crop=None, use_closest_cams=True):
+    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet', crop=None, use_closest_cams=True, only_crop_cams=False):
         """
         Writes an entire camera set to some form of defined camera structure.
         Currently only MVSnet is defined.
@@ -257,7 +257,7 @@ class CameraSet:
             for idx, im in enumerate(ims):
                 local_crop = crop.get(self[idx].name, None)
                 im_temp = self[idx].undistort(im)
-                if local_crop is not None:
+                if local_crop is not None and not only_crop_cams:
                     im_temp = im_temp[
                         local_crop[0,0]:local_crop[0,1],
                         local_crop[1,0]:local_crop[1,1],
@@ -487,7 +487,8 @@ class CameraSet:
     def plot(self, 
              additional_mesh: pv.PolyData|list[pv.PolyData]|None=None,
              scale_factor=None,
-             view_cones=False):
+             view_cones=False,
+             cam_labels=True):
         """
         Draws a 3D plot of the cameras and any additional meshes
 
@@ -509,8 +510,9 @@ class CameraSet:
         if view_cones:
             for v_con in v_cones:
                 scene.add_mesh(v_con, opacity=0.05, color='g')
-
-        scene.add_point_labels(positions, list(self._cam_dict.keys()))
+        
+        if cam_labels:
+            scene.add_point_labels(positions, list(self._cam_dict.keys()))
         # scene.add_arrows(cent=positions, direction=view_pos)
 
         # also visualise the origin of the coordinate system

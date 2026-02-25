@@ -1,4 +1,5 @@
 from copy import copy
+import multiprocessing
 import cv2
 import matplotlib.pyplot as plt
 from multiprocessing import cpu_count
@@ -8,6 +9,7 @@ from pathlib import Path
 from functools import reduce
 import re
 import os
+from typing import Optional
 
 
 from pyCamSet.cameras import CameraSet, Camera
@@ -48,6 +50,7 @@ def calibrate_cameras(
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
     :param high_distortion: Implements an iterative scheme for high distortion cameras.
     """
+
     if isinstance(f_loc, str):
         f_loc = Path(f_loc)
 
@@ -104,11 +107,17 @@ def calibrate_cameras(
         logging.info("Using the provided initial cameras.")
 
     initial_cams.set_resolutions_from_file(floc=f_loc)
+    if len(initial_cams) == 1:
+        logging.warning("Only found and calibrated one camera - returning single camera calibration")
+        return initial_cams
+
+
+
     calibrated_cameras = run_stereo_calibration(
         initial_cams,
         detections,
         calibration_target,
-        save=save,
+        save=False, #TODO REMOVE
         save_loc=save_loc/('optimised_cameras' + string_tail),
         fixed_params=fixed_params,
         threads = threads,
@@ -123,7 +132,8 @@ def run_initial_calibration(detection: TargetDetection,
                             cam_res: list[tuple],
                             save=True, save_loc: Path = Path('initial_estimate.camset'),
                             ref_cam: int|str = 0,
-                            fixed_params: dict|None = None) -> CameraSet:
+                            fixed_params: dict|None = None,
+                            return_poses_and_costs=False) -> CameraSet | tuple[CameraSet, np.ndarray, np.ndarray]:
     """
     For all of the cameras, runs the calibration method provided by an abstract target.
     The default is an opencv calibration but may be overwritten.
@@ -139,9 +149,12 @@ def run_initial_calibration(detection: TargetDetection,
     if save_loc.exists() and save:
         logging.info(f"Loading a previously saved initial calib from {save_loc}")
         cams = load_CameraSet(save_loc)
-        return cams
+        if return_poses_and_costs is False:
+            return cams
+        poses = np.load(save_loc.parent/'calib_pose_data.npy')
+        per_im = np.load(save_loc.parent/'calib_im_data.npy')
+        return cams, poses, per_im
 
-    
     # define the input structure to the
     # inp = data, target, intial_estimate, camera_res
     c_m = detection.features_per_im_per_cam()
@@ -157,17 +170,23 @@ def run_initial_calibration(detection: TargetDetection,
             res=datum[2],
             pose_im=pose_im,
             fixed_params=fixed_params,
+            return_poses=True,
         )
     cam_names = detection.cam_names
     cam_detections = detection.get_cam_list()
     work_data = zip(cam_names, cam_detections, cam_res)
-    raw_calibration = [work_fn(datum) for datum in work_data]
+    raw_calibration, poses, per_im = map(list, zip(*[work_fn(datum) for datum in work_data]))
     cam_dict = {cam_name: cam for cam_name, cam in zip(cam_names, raw_calibration)}
     cams = CameraSet(camera_dict=cam_dict)
 
     if save:
         cams.save(save_loc)
-    return cams
+        # np.save(save_loc.parent/'calib_pose_data.npy', poses)
+        # np.save(save_loc.parent/'calib_im_data.npy', per_im)
+
+    if not return_poses_and_costs:
+        return cams
+    return cams, poses, per_im
 
 
 def outlier_rejection(results, params) -> tuple[TargetDetection | None, bool]:
@@ -218,6 +237,8 @@ def run_stereo_calibration(
     floc: Path|None=None,
     threads: int = 1, 
     problem_options: dict|None = None,
+    est_poses: Optional[np.ndarray] = None,
+    pose_errors: Optional[np.ndarray] = None,
 ) -> CameraSet:
     """
     This code runs a multi camera stereo calibration.
@@ -239,9 +260,8 @@ def run_stereo_calibration(
             detection=detections, target=target, camset=cams,
             fixed_params=fixed_params,
             options=problem_options,
+            # TODO - USE THE EXISTING CALIBRATION RESULTS TO SOLVE THIS.
         )
-
-
 
     optimisation, optimised_cams = run_bundle_adjustment(
         param_handler=param_handler,
@@ -294,6 +314,8 @@ def detect_datapoints_in_imfile(
         logging.info('Not caching, starting detection')
         detected_sub_folders = get_subfolder_names(f_loc, return_full_path=True)
 
+        print(multiprocessing.current_process().name)
+
         if not detected_sub_folders:
             raise ValueError(f'no subfolders were found in {f_loc}')
 
@@ -312,6 +334,7 @@ def detect_datapoints_in_imfile(
                 camera=cam,
                 threads=threads,
             )
+
         if use_cams:
             cam_zip = [camset[f.parts[-1]] for f in detected_sub_folders]
             detections = [work_fn(file, cam) for file, cam in zip(tqdm(detected_sub_folders), cam_zip)]
@@ -321,7 +344,6 @@ def detect_datapoints_in_imfile(
 
         cam_res = [cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2] for cname in cam_names]
 
-        # name the detection
         if caching:
             save_pickle((detected, cam_res), f_loc / cache_name)
     else:

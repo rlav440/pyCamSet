@@ -265,22 +265,28 @@ The save/load cycle correctly reconstructs `calibration_handler`:
 
 ## 4. Proposed New File Layout
 
-All pipeline logic moves to a new `pyCamSet/pipeline/` sub-package.
+All pipeline logic moves to a new `pyCamSet/pipeline/` sub-package.  Plot helpers
+live in the existing `pyCamSet/utils/visualisation.py` so that they are available
+to all pyCamSet users, not only pipeline callers.
 
 ```
 pyCamSet/
+├── utils/
+│   └── visualisation.py    — Interactive tools (unchanged) + headless pipeline plot helpers
 └── pipeline/
-    ├── __init__.py           — Public API re-exports
-    ├── phased_pipeline.py    — Phases 1–6 + run_pipeline() orchestrator
-    ├── pipeline_cache.py     — JSON / CSV / pickle / camset caching helpers
-    └── pipeline_plots.py     — Error histogram, cluster plot, coverage scatter
+    ├── __init__.py          — Public API re-exports (phases, cache helpers, plot helpers)
+    ├── phased_pipeline.py   — Phases 1–6 + run_pipeline() orchestrator
+    └── pipeline_cache.py    — JSON / CSV / pickle / camset caching helpers
 ```
 
-### Why a new sub-package rather than extending existing modules?
+### Why put the plot helpers in `visualisation.py` rather than a separate file?
 
-- `pyCamSet/calibration/camera_calibrator.py` already has a monolithic `calibrate_cameras()`.  Adding phased logic there would make it unnavigable.
-- `pyCamSet/utils/visualisation.py` is pyvista-heavy and interactive.  The headless plot helpers have different dependencies and a different API contract.
-- A dedicated `pipeline/` package makes the boundary explicit: phased, cached, headless vs. core calibration primitives.
+The new headless helpers (`save_figure`, `plot_error_histogram`, `plot_per_camera_errors`,
+`plot_residual_clusters`, `plot_coverage_scatter`, `plot_camera_arrangement`) are general
+enough to be useful outside the pipeline context — for example, in notebooks or custom
+scripts that call `run_stereo_calibration` directly.  Keeping them in `visualisation.py`
+makes them discoverable alongside the existing `cluster_plot` and `visualise_calibration`
+functions.  `pipeline/__init__.py` re-exports them for convenience.
 
 ### Should `calibrate_cameras()` become a thin wrapper?
 
@@ -295,7 +301,7 @@ Ordered steps to execute the merge safely.
 - [x] **Step 0 — Read this document** and the calibria source in full.
 - [x] **Step 1 — Create `pyCamSet/pipeline/`** sub-package with skeleton files (done in this PR).
 - [ ] **Step 2 — Implement `pipeline_cache.py`** — copy `io_helpers.py` content, replace `calibria.*` imports with pure-stdlib / pyCamSet imports.  Run existing `calibration_test.py` to confirm nothing broke.
-- [ ] **Step 3 — Implement `pipeline_plots.py`** — copy `plot_helpers.py` content, replace `calibria.pcss.io_helpers` imports with `pyCamSet.pipeline.pipeline_cache`.  Add `from pyCamSet.utils.visualisation import fancy_confidence_contours` where appropriate.  Run tests.
+- [x] **Step 3 — Implement plot helpers in `pyCamSet/utils/visualisation.py`** — headless versions of `cluster_plot` / `visualise_calibration` and new helpers (`plot_error_histogram`, `plot_per_camera_errors`, `plot_coverage_scatter`, `save_figure`).  Done in this PR.
 - [x] **Step 4 — Apply `run_stereo_calibration` fix** (3a above): decouple resolution-setting from `save` flag.  Done in this PR.
 - [ ] **Step 5 — Implement `phased_pipeline.py`** phases 1–3 — translate from pcss, replace `calibria.*` image-loading helpers with pyCamSet equivalents (`detect_datapoints_in_imfile`, `glob_ims`).
 - [ ] **Step 6 — Implement phases 4–6** — translate error analysis and self-calibration phases; use `pyCamSet.utils.general_utils.mad_outlier_detection` directly.

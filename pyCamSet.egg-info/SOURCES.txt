@@ -34,7 +34,6 @@ pyCamSet/optimisation/template_functions/__init__.py
 pyCamSet/pipeline/__init__.py
 pyCamSet/pipeline/phased_pipeline.py
 pyCamSet/pipeline/pipeline_cache.py
-pyCamSet/pipeline/pipeline_plots.py
 pyCamSet/reconstruction/__init__.py
 pyCamSet/reconstruction/acmmp_utils.py
 pyCamSet/reconstruction/reconstruction_utils.py

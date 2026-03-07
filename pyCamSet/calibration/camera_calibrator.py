@@ -248,7 +248,10 @@ def run_stereo_calibration(
     :param save: should the result be saved
     :param save_loc: where should the result be saved
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
-    :param floc: the location of the images, used to update the camera resolutions
+    :param floc: the location of the images, used to update the camera resolutions.
+                 When supplied, set_resolutions_from_file() is always called regardless
+                 of the save flag, so that the returned CameraSet has correct resolution
+                 data even when save=False.
     """
     logging.info("Running the full multiview calibration")
 
@@ -273,9 +276,9 @@ def run_stereo_calibration(
     # outlier_rejection(optimisation.fun.reshape((-1,2)), param_handler)
 
 
+    if floc is not None:
+        optimised_cams.set_resolutions_from_file(floc)
     if save:
-        if floc is not None:
-            optimised_cams.set_resolutions_from_file(floc)
         optimised_cams.save(save_loc)
     return optimised_cams
 

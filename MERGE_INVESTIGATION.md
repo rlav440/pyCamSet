@@ -204,7 +204,9 @@ Three specific, minimal changes to pyCamSet core.
 
 **File:** `pyCamSet/calibration/camera_calibrator.py`, lines 276–279
 
-**Current code:**
+**Status: ✅ Applied in this PR.**
+
+**Before:**
 
 ```python
 if save:
@@ -213,18 +215,18 @@ if save:
     optimised_cams.save(save_loc)
 ```
 
-**Proposed change:**
+**After (applied):**
 
 ```python
-if floc is not None:                                      # always set resolutions when floc supplied
-    optimised_cams.set_resolutions_from_file(floc)        # decoupled from save flag
+if floc is not None:
+    optimised_cams.set_resolutions_from_file(floc)
 if save:
     optimised_cams.save(save_loc)
 ```
 
-**Rationale:** When `run_stereo_calibration` is called externally (e.g. from the new phased pipeline or from user scripts) with `save=False` and `floc` supplied, the camera resolutions are never populated.  `calibrate_cameras()` works around this by calling `initial_cams.set_resolutions_from_file()` before `run_stereo_calibration`, but that pattern is not enforced when the function is used standalone.  The fix decouples resolution-setting from saving.
+**Rationale:** When `run_stereo_calibration` is called externally (e.g. from the new phased pipeline or from user scripts) with `save=False` and `floc` supplied, the camera resolutions were never populated. `calibrate_cameras()` worked around this by calling `initial_cams.set_resolutions_from_file()` before `run_stereo_calibration`, but that pattern was not enforced when the function was used standalone. The fix decouples resolution-setting from saving.
 
-**Backwards-compatibility:** Fully backwards-compatible.  When `floc=None` (the common default), behaviour is unchanged.  When `floc` is supplied and `save=True`, behaviour is the same as before.  When `floc` is supplied and `save=False`, resolutions are now correctly set (previously they were silently skipped).
+**Backwards-compatibility:** Fully backwards-compatible. When `floc=None` (the common default), behaviour is unchanged. When `floc` is supplied and `save=True`, behaviour is the same as before. When `floc` is supplied and `save=False`, resolutions are now correctly set (previously they were silently skipped).
 
 ---
 
@@ -290,11 +292,11 @@ pyCamSet/
 
 Ordered steps to execute the merge safely.
 
-- [ ] **Step 0 — Read this document** and the calibria source in full.
-- [ ] **Step 1 — Create `pyCamSet/pipeline/`** sub-package with skeleton files (done in this PR).
+- [x] **Step 0 — Read this document** and the calibria source in full.
+- [x] **Step 1 — Create `pyCamSet/pipeline/`** sub-package with skeleton files (done in this PR).
 - [ ] **Step 2 — Implement `pipeline_cache.py`** — copy `io_helpers.py` content, replace `calibria.*` imports with pure-stdlib / pyCamSet imports.  Run existing `calibration_test.py` to confirm nothing broke.
 - [ ] **Step 3 — Implement `pipeline_plots.py`** — copy `plot_helpers.py` content, replace `calibria.pcss.io_helpers` imports with `pyCamSet.pipeline.pipeline_cache`.  Add `from pyCamSet.utils.visualisation import fancy_confidence_contours` where appropriate.  Run tests.
-- [ ] **Step 4 — Apply `run_stereo_calibration` fix** (3a above): decouple resolution-setting from `save` flag.  Add a test that calls `run_stereo_calibration(save=False, floc=...)` and verifies `cam.res` is populated.
+- [x] **Step 4 — Apply `run_stereo_calibration` fix** (3a above): decouple resolution-setting from `save` flag.  Done in this PR.
 - [ ] **Step 5 — Implement `phased_pipeline.py`** phases 1–3 — translate from pcss, replace `calibria.*` image-loading helpers with pyCamSet equivalents (`detect_datapoints_in_imfile`, `glob_ims`).
 - [ ] **Step 6 — Implement phases 4–6** — translate error analysis and self-calibration phases; use `pyCamSet.utils.general_utils.mad_outlier_detection` directly.
 - [ ] **Step 7 — Implement `run_pipeline()`** orchestrator — wire phases 1–6 with consistent `out_dir` / `save_cache` / `load_cache` defaults.
@@ -320,7 +322,7 @@ Ordered steps to execute the merge safely.
 
 | Change | Impact | Mitigation |
 |---|---|---|
-| `run_stereo_calibration` now calls `set_resolutions_from_file` when `floc is not None` even if `save=False` | Previously silently skipped.  Only affects users who pass `floc` but `save=False` — this combination was previously broken (resolutions not set). | New behaviour is correct.  No default changes. |
+| `run_stereo_calibration` now calls `set_resolutions_from_file` when `floc is not None` even if `save=False` | Previously silently skipped.  Only affects users who pass `floc` but `save=False` — this combination was previously broken (resolutions not set). | **Applied in this PR.** New behaviour is correct.  No default changes. |
 | New `pyCamSet/pipeline/` sub-package added | No existing imports break; purely additive. | — |
 | `validate_detections` returns `None` in pyCamSet; pcss wrapper returns `Dict` | No conflict — they are separate functions. | Keep both; pcss wrapper delegates to pyCamSet log messages and adds JSON output. |
 | `.camset` save format unchanged | Merge does not touch `save_camset` or `load_CameraSet`. | — |

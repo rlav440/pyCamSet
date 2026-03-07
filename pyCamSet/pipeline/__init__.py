@@ -3,10 +3,9 @@ Purpose: Public API for the pyCamSet phased calibration pipeline.
          Re-exports the six phase functions, the run_pipeline() orchestrator,
          file-caching helpers, and plot helpers so that callers can do:
              from pyCamSet.pipeline import run_pipeline
-         Plot helpers live in pyCamSet.utils.visualisation and are re-exported
-         here for convenience; they can also be imported directly from there.
-Status:  Plot helpers implemented (pyCamSet/utils/visualisation.py).
-         Phase functions and cache helpers are skeleton stubs — bodies pending.
+         Plot helpers live in pyCamSet.pipeline.pipeline_plots and are
+         re-exported here for convenience.
+Status:  Working
 Future:  Add CLI entry-point and progress-callback support.
 """
 
@@ -35,8 +34,8 @@ from pyCamSet.pipeline.pipeline_cache import (    # file I/O helpers
     cache_exists,                                  # check whether a cache file is non-empty
 )
 
-# Plot helpers live in pyCamSet.utils.visualisation — re-exported here for convenience.
-from pyCamSet.utils.visualisation import (        # headless plot helpers
+# Plot helpers live in pyCamSet.pipeline.pipeline_plots — re-exported here for convenience.
+from pyCamSet.pipeline.pipeline_plots import (    # headless plot helpers
     save_figure,                                   # save a matplotlib Figure to .png
     save_numeric_summary,                          # save a numeric dict to .csv
     plot_error_histogram,                          # histogram of reprojection errors
@@ -67,7 +66,7 @@ __all__ = [                                        # explicit public API surface
     "load_camset",
     "phase_cache_path",
     "cache_exists",
-    # Plot helpers (canonical home: pyCamSet.utils.visualisation)
+    # Plot helpers
     "save_figure",
     "save_numeric_summary",
     "plot_error_histogram",

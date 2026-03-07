@@ -4,7 +4,7 @@ Purpose: File-naming and save/load helpers for the pyCamSet phased calibration p
          phases.  Wraps pyCamSet's own save/load utilities where they already exist
          (save_camset, load_CameraSet) and provides lightweight stdlib-only helpers
          for the remaining formats.
-Status:  Skeleton — signatures and docstrings only; bodies raise NotImplementedError.
+Status:  Working
 Future:  Add atomic write (write-then-rename) for crash-safe caching.
          Add a compress= option to save_pickle for large detection arrays.
 """
@@ -69,7 +69,7 @@ def cache_exists(path: Path) -> bool:
     :param path: Path to the candidate cache file.
     :return:     True if the file exists and has at least one byte of content.
     """
-    raise NotImplementedError                                  # to be implemented in Step 2
+    return path.is_file() and path.stat().st_size > 0        # file must exist and have content
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -87,7 +87,10 @@ def save_json(data: Any, path: Path, indent: int = 2) -> None:
                    not enforced.
     :param indent: Number of spaces for indentation (default 2).
     """
-    raise NotImplementedError                                  # to be implemented in Step 2
+    path = Path(path)                                         # ensure Path object
+    path.parent.mkdir(parents=True, exist_ok=True)            # create parent dirs if needed
+    with path.open('w', encoding='utf-8') as fh:              # open for writing
+        json.dump(data, fh, indent=indent)                    # serialise with indentation
 
 
 def load_json(path: Path) -> Any:
@@ -99,7 +102,9 @@ def load_json(path: Path) -> Any:
     :raises FileNotFoundError: If *path* does not exist.
     :raises json.JSONDecodeError: If the file is not valid JSON.
     """
-    raise NotImplementedError                                  # to be implemented in Step 2
+    path = Path(path)                                         # ensure Path object
+    with path.open('r', encoding='utf-8') as fh:              # open for reading
+        return json.load(fh)                                  # deserialise and return
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -122,7 +127,12 @@ def save_csv(
     :param headers: Column header names; written as the first row.
     :param path:    Destination file path.
     """
-    raise NotImplementedError                                  # to be implemented in Step 2
+    path = Path(path)                                         # ensure Path object
+    path.parent.mkdir(parents=True, exist_ok=True)            # create parent dirs if needed
+    with path.open('w', newline='', encoding='utf-8') as fh:  # open for writing (no extra newline)
+        writer = csv.writer(fh)                               # create CSV writer
+        writer.writerow(headers)                              # write column header row
+        writer.writerows(rows)                                # write all data rows
 
 
 def load_csv(path: Path) -> Tuple[List[str], List[List[str]]]:
@@ -135,7 +145,12 @@ def load_csv(path: Path) -> Tuple[List[str], List[List[str]]]:
                    Returns ``([], [])`` if the file is empty.
     :raises FileNotFoundError: If *path* does not exist.
     """
-    raise NotImplementedError                                  # to be implemented in Step 2
+    path = Path(path)                                         # ensure Path object
+    with path.open('r', newline='', encoding='utf-8') as fh:  # open for reading
+        reader = csv.reader(fh)                               # create CSV reader
+        headers = next(reader, [])                            # read header row (empty if file blank)
+        rows = list(reader)                                   # read all remaining rows
+    return headers, rows                                      # return unpacked result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -151,7 +166,10 @@ def save_txt(lines: Sequence[str], path: Path) -> None:
     :param lines: Sequence of strings to write; newlines are added between elements.
     :param path:  Destination file path.
     """
-    raise NotImplementedError                                  # to be implemented in Step 2
+    path = Path(path)                                         # ensure Path object
+    path.parent.mkdir(parents=True, exist_ok=True)            # create parent dirs if needed
+    with path.open('w', encoding='utf-8') as fh:              # open for writing
+        fh.write('\n'.join(lines))                            # join and write all lines
 
 
 def load_txt(path: Path) -> List[str]:
@@ -162,7 +180,9 @@ def load_txt(path: Path) -> List[str]:
     :return:     List of line strings; blank lines are omitted; trailing newlines stripped.
     :raises FileNotFoundError: If *path* does not exist.
     """
-    raise NotImplementedError                                  # to be implemented in Step 2
+    path = Path(path)                                         # ensure Path object
+    with path.open('r', encoding='utf-8') as fh:              # open for reading
+        return [ln.rstrip('\n') for ln in fh if ln.strip()]   # strip newlines, skip blanks
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -184,7 +204,10 @@ def save_pickle(obj: Any, path: Path) -> None:
     :param obj:  Any picklable Python object.
     :param path: Destination file path.
     """
-    raise NotImplementedError                                  # to be implemented in Step 2
+    path = Path(path)                                         # ensure Path object
+    path.parent.mkdir(parents=True, exist_ok=True)            # create parent dirs if needed
+    with path.open('wb') as fh:                               # open in binary write mode
+        pickle.dump(obj, fh, protocol=pickle.HIGHEST_PROTOCOL)  # use highest pickle protocol
 
 
 def load_pickle(path: Path) -> Any:
@@ -197,7 +220,9 @@ def load_pickle(path: Path) -> Any:
     :return:     The deserialised Python object.
     :raises FileNotFoundError: If *path* does not exist.
     """
-    raise NotImplementedError                                  # to be implemented in Step 2
+    path = Path(path)                                         # ensure Path object
+    with path.open('rb') as fh:                               # open in binary read mode
+        return pickle.load(fh)                                # deserialise and return
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -220,7 +245,9 @@ def save_camset(cam_set: Any, path: Path) -> None:
     :param path:    Destination file path.  The .camset extension is expected but
                     not enforced.
     """
-    raise NotImplementedError                                  # to be implemented in Step 2
+    path = Path(path)                                         # ensure Path object
+    path.parent.mkdir(parents=True, exist_ok=True)            # create parent dirs if needed
+    cam_set.save(str(path))                                   # delegate to pyCamSet's save method
 
 
 def load_camset(path: Path) -> Any:
@@ -236,4 +263,6 @@ def load_camset(path: Path) -> Any:
     :return:     A pyCamSet CameraSet instance.
     :raises FileNotFoundError: If *path* does not exist.
     """
-    raise NotImplementedError                                  # to be implemented in Step 2
+    from pyCamSet.utils.saving import load_CameraSet          # import here to avoid circular dep
+    path = Path(path)                                         # ensure Path object
+    return load_CameraSet(path)                               # delegate to pyCamSet's load helper

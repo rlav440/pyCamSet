@@ -331,8 +331,8 @@ def run_phase1_detection(
         detected_by_cam[cam_name] = int(n_detected)
 
     for cam in cam_names_list:                               # preserve requested camera logging order
-        n_total = (min(len(image_lists.get(cam, [])), n_lim)
-                   if n_lim else len(image_lists.get(cam, [])))
+        cam_im_list = image_lists.get(cam, [])               # sorted image paths for this camera
+        n_total = min(len(cam_im_list), n_lim) if n_lim else len(cam_im_list)
         print(f"  Camera '{cam}': {detected_by_cam.get(cam, 0)}/{n_total} images with detections.")
 
     result = {                                               # bundle Phase 1 outputs
@@ -908,7 +908,7 @@ def run_phase5_visualisation(
               if np.isfinite(e.get('dy_mean', float('nan')))]
     if dx_all and dy_all:
         title_cluster_global = 'Residual Cluster Global'     # global cluster plot title
-        xy_global = np.array([val for pair in zip(dx_all, dy_all) for val in pair])  # interleaved
+        xy_global = np.column_stack((dx_all, dy_all)).ravel()  # interleave x/y efficiently
         fig_cg = plot_residual_clusters(                     # global cluster plot
             [xy_global], titles=['Global'], out_dir=plot_dir,
             title=title_cluster_global)
@@ -924,7 +924,7 @@ def run_phase5_visualisation(
             if not dx_cam:                                   # no data for this camera
                 continue
             title_cc = f'Residual Cluster {cam}'             # per-camera cluster title
-            xy_cam = np.array([v for pair in zip(dx_cam, dy_cam) for v in pair])
+            xy_cam = np.column_stack((dx_cam, dy_cam)).ravel()  # interleave x/y efficiently
             fig_cc = plot_residual_clusters(                 # per-camera cluster plot
                 [xy_cam], titles=[cam], out_dir=plot_dir, title=title_cc)
             if fig_cc is not None:
@@ -1128,7 +1128,8 @@ def run_phase6_self_calibration(
                     fig.savefig(str(disp_png_path), dpi=150, bbox_inches='tight')  # save to .png
                     displacement_png = disp_png_path          # record PNG path
             else:
-                print("[Phase 6d] Skipping displacement diagnostics: point counts differ.")
+                print(f"[Phase 6d] Skipping displacement diagnostics: point counts differ "
+                      f"(old: {old_pts.shape[0]}, new: {new_pts.shape[0]}).")
         except Exception as exc:
             print(f"[Phase 6d] Skipping displacement diagnostics: {exc}")
 

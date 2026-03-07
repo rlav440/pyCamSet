@@ -3,3 +3,4 @@ __pycache__/
 docs/build/
 pyCamSet/optimisation/template_functions/*
 tests/test_data/*.camset
+pyCamSet.egg-info/

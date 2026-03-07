@@ -1,11 +1,3 @@
-"""
-Purpose: Public API for the pyCamSet phased calibration pipeline.
-         Re-exports the six phase functions and the run_pipeline() orchestrator
-         so that callers can do: from pyCamSet.pipeline import run_pipeline
-Status:  Skeleton — function signatures and docstrings only; no implementation bodies.
-Future:  Add CLI entry-point and progress-callback support.
-"""
-
 # Re-export the six phase functions and the top-level orchestrator.
 from pyCamSet.pipeline.phased_pipeline import (   # all six phases plus orchestrator
     run_phase1_detection,                          # Phase 1 — target construction and detection

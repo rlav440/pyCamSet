@@ -1,12 +1,16 @@
 from __future__ import annotations
+import csv
 from math import copysign
 from copy import copy
+import re
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 from scipy.stats import multivariate_normal
 import numpy as np
 import pyvista as pv
 from matplotlib.colors import LogNorm, LinearSegmentedColormap
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from pyCamSet.utils.general_utils import h_tform, get_close_square_tuple
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc, n_inv_pose
@@ -88,8 +92,8 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
             ax.set_title(title + f'\nMean euclidean error = {m_1:.2f} '
                             f'px',
                             )
-        ax.set_ylabel('$\it{y}$ error (px)')
-        ax.set_xlabel('$\it{x}$ error (px)')
+        ax.set_ylabel(r'$\it{y}$ error (px)')
+        ax.set_xlabel(r'$\it{x}$ error (px)')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.locator_params(nbins=5)
@@ -333,4 +337,307 @@ def visualise_calibration(
     param_handler.special_plots(o_results['x'])
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Headless plot helpers — pipeline-compatible, no plt.show()
+#
+#  These complement the interactive tools above.  They are designed for
+#  the pyCamSet phased pipeline (pyCamSet.pipeline) and for any caller
+#  that needs to save figures to disk without blocking on a display.
+#
+#  Key differences from the interactive functions in this file:
+#    - plt.show() is never called; callers control display.
+#    - An optional out_dir parameter saves each figure as a .png.
+#    - Inputs are pre-computed arrays / sequences rather than live
+#      param_handler objects, so they work from cached pipeline output.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _title_to_filename(title: str) -> str:
+    """
+    Convert a human-readable title to a lower-case, underscore-separated
+    filename stem (e.g. ``'Mean Error'`` → ``'mean_error'``).
+
+    :param title: Any human-readable string.
+    :return:      A safe snake_case stem with no leading/trailing underscores.
+    """
+    cleaned = re.sub(r'[^a-z0-9]+', '_', title.lower())       # collapse non-alphanumeric runs
+    return cleaned.strip('_')                                   # strip leading/trailing underscores
+
+
+def save_figure(
+    fig: Any,
+    title: str,
+    out_dir: Optional[Path],
+    dpi: int = 150,
+) -> Optional[Path]:
+    """
+    Optionally save a matplotlib Figure to a .png file in *out_dir*.
+
+    The filename is derived from *title* via _title_to_filename() so that
+    arbitrary plot titles map to safe, predictable filenames.
+
+    :param fig:     matplotlib Figure object to save.
+    :param title:   Human-readable plot title; used to derive the filename stem.
+    :param out_dir: Directory to save into, or None to skip saving entirely.
+    :param dpi:     Output resolution in dots per inch (default 150).
+    :return:        The saved file Path, or None if *out_dir* is None.
+    """
+    if out_dir is None:                                         # caller opted out of saving
+        return None
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)                  # create directory if needed
+    dest = out_dir / f"{_title_to_filename(title)}.png"        # derive filename from title
+    fig.savefig(dest, dpi=dpi, bbox_inches='tight')             # save without showing
+    return dest                                                 # return path for logging
+
+
+def save_numeric_summary(
+    data: Dict[str, Sequence[float]],
+    title: str,
+    out_dir: Optional[Path],
+) -> Optional[Path]:
+    """
+    Optionally save a dict of named numeric arrays to a .csv file in *out_dir*.
+
+    All sequences in *data* must have the same length (they become the columns
+    of the CSV).  The filename is derived from *title* via _title_to_filename().
+
+    :param data:    Dict mapping column names to sequences of numeric values.
+    :param title:   Human-readable summary title; used to derive the filename stem.
+    :param out_dir: Directory to save into, or None to skip saving entirely.
+    :return:        The saved file Path, or None if *out_dir* is None or *data* is empty.
+    """
+    if out_dir is None or not data:                             # nothing to save
+        return None
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / f"{_title_to_filename(title)}.csv"
+    headers = list(data.keys())
+    rows = zip(*data.values())                                  # transpose dict-of-lists to rows
+    with dest.open('w', newline='', encoding='utf-8') as fh:
+        writer = csv.writer(fh)
+        writer.writerow(headers)
+        writer.writerows(rows)
+    return dest
+
+
+def plot_error_histogram(
+    errors: Sequence[float],
+    title: str,
+    xlabel: str = 'Reprojection Error (px)',
+    out_dir: Optional[Path] = None,
+    bins: int = 40,
+) -> Any:
+    """
+    Create and optionally save a histogram of reprojection errors.
+
+    Infinite and NaN values are silently filtered before plotting.
+    A vertical red dashed line marks the mean error.
+
+    :param errors:  Sequence of scalar error values (one per image or per corner).
+    :param title:   Plot title; also used as the saved filename stem.
+    :param xlabel:  X-axis label (default ``'Reprojection Error (px)'``).
+    :param out_dir: Directory to save the .png into, or None to skip saving.
+    :param bins:    Number of histogram bins (default 40).
+    :return:        The matplotlib Figure for further customisation or display.
+    """
+    errs = np.asarray(errors, dtype=float)
+    errs = errs[np.isfinite(errs)]                             # drop inf/NaN silently
+    fig, ax = plt.subplots()
+    ax.hist(errs, bins=bins)
+    ax.axvline(float(np.mean(errs)), color='red', linestyle='--', label='Mean')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel('Count')
+    ax.set_title(title)
+    ax.legend()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    save_figure(fig, title, out_dir)                           # save if out_dir provided
+    return fig                                                  # return for caller display
+
+
+def plot_per_camera_errors(
+    camera_names: Sequence[str],
+    mean_errors: Sequence[float],
+    title: str = 'Per Camera Mean Reprojection Error',
+    ylabel: str = 'Mean Error (px)',
+    out_dir: Optional[Path] = None,
+) -> Any:
+    """
+    Create and optionally save a bar chart of per-camera mean reprojection errors.
+
+    The figure width scales with the number of cameras so that labels remain
+    legible for large rigs.
+
+    :param camera_names: Sequence of camera name strings (x-axis labels).
+    :param mean_errors:  Sequence of mean reprojection errors, same length as
+                         *camera_names*.
+    :param title:        Plot title; also used as the saved filename stem.
+    :param ylabel:       Y-axis label (default ``'Mean Error (px)'``).
+    :param out_dir:      Directory to save the .png into, or None to skip saving.
+    :return:             The matplotlib Figure.
+    """
+    n = len(camera_names)
+    fig_width = max(6, n * 0.6)                                # scale width for readability
+    fig, ax = plt.subplots(figsize=(fig_width, 4))
+    ax.bar(camera_names, mean_errors)
+    ax.set_xlabel('Camera')
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.xticks(rotation=45, ha='right')
+    fig.tight_layout()
+    save_figure(fig, title, out_dir)                           # save if out_dir provided
+    return fig
+
+
+def plot_residual_clusters(
+    data_list: List[Any],
+    titles: Optional[List[str]] = None,
+    out_dir: Optional[Path] = None,
+    title: str = 'Residual Cluster',
+) -> Optional[Any]:
+    """
+    Create and optionally save a 2-D histogram of (x, y) reprojection residuals
+    with 1σ / 2σ / 3σ covariance ellipses.  One sub-plot is created per entry
+    in *data_list*.
+
+    This is a headless variant of cluster_plot() in this module.  Changes:
+
+    - ``plt.show()`` is not called — headless operation.
+    - ``save`` parameter is replaced by ``out_dir`` + save_figure().
+    - Accepts flat interleaved ``[x0, y0, x1, y1, ...]`` numpy arrays as
+      cluster_plot() does (no API change for existing data).
+    - Added *title* parameter for save filename derivation.
+
+    :param data_list: List of flat numpy arrays with interleaved residuals
+                      ``[x0, y0, x1, y1, ...]``.  One entry = one sub-plot.
+    :param titles:    Optional per-subplot title strings.
+    :param out_dir:   Directory to save the .png into, or None to skip saving.
+    :param title:     Overall figure title used to derive the saved filename.
+    :return:          The matplotlib Figure, or None if *data_list* is empty.
+    """
+    if not data_list:                                          # nothing to plot
+        return None
+    n = len(data_list)
+    if titles is None:
+        titles = [None] * n                                    # uniform None list
+    fig, axs = plt.subplots(1, n)
+    axes_list = axs.ravel() if n > 1 else [axs]
+    for datum, ax, per_title in zip(data_list, axes_list, titles):
+        x, y = datum[::2], datum[1::2]                        # deinterleave residuals
+        m_1 = np.mean((x ** 2 + y ** 2) ** 0.5)              # mean euclidean error
+        cov = np.cov(x, y)
+        eigenvalues, _ = np.linalg.eigh(cov)
+        width, height = np.sqrt(eigenvalues)
+        sd = max(width, height)
+        ax_ranges = list(ax.get_ylim()) + list(ax.get_xlim())
+        _, _, _, img = ax.hist2d(
+            x=x, y=y,
+            bins=np.linspace(-3 * sd, 3 * sd, 100),
+            norm=LogNorm(vmin=0.0001, vmax=1),
+            cmap=blues_with_white,
+            density=True,
+            rasterized=True,
+        )
+        plt.colorbar(img, ax=ax, label='Density')
+        sd = fancy_confidence_contours(x, y, ax=ax, ranges=ax_ranges)  # reuse existing helper
+        ax.set_aspect('equal')
+        sf = 3
+        ax.set_ylim([-sf * sd, sf * sd])
+        ax.set_xlim([-sf * sd, sf * sd])
+        label = f'Mean euclidean error = {m_1:.2f} px'
+        ax.set_title(label if per_title is None else f'{per_title}\n{label}')
+        ax.set_ylabel(r'$\it{y}$ error (px)')
+        ax.set_xlabel(r'$\it{x}$ error (px)')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.locator_params(nbins=5)
+    save_figure(fig, title, out_dir)                           # save if out_dir provided
+    return fig
+
+
+def plot_coverage_scatter(
+    points: List[Tuple[float, float, float]],
+    cam_name: str,
+    principal_point: Optional[Tuple[float, float]] = None,
+    title: str = 'Coverage',
+    out_dir: Optional[Path] = None,
+) -> Optional[Any]:
+    """
+    Create and optionally save an image-plane coverage scatter for one camera.
+
+    Points are coloured by per-point reprojection error magnitude using the
+    ``'plasma'`` colour map.  The principal point (if known) is marked with a
+    red cross.  The y-axis is inverted to match image coordinate conventions.
+
+    This is a headless, single-camera variant of the coverage section of
+    visualise_calibration() in this module.  The change is that it accepts
+    pre-computed ``(u, v, error)`` tuples from cached output rather than
+    recomputing from a live param_handler object, making it usable from
+    cache-based GUIs and CLI tools.
+
+    :param points:          List of ``(u, v, error)`` tuples.
+    :param cam_name:        Camera name for the plot subtitle.
+    :param principal_point: ``(cx, cy)`` from the calibrated intrinsic matrix,
+                            or None to omit the marker.
+    :param title:           Plot title used to derive the saved filename.
+    :param out_dir:         Directory to save the .png into, or None to skip saving.
+    :return:                The matplotlib Figure, or None if *points* is empty.
+    """
+    if not points:                                             # nothing to plot
+        return None
+    pts = np.asarray(points, dtype=float)                     # shape (N, 3)
+    u, v, errors = pts[:, 0], pts[:, 1], pts[:, 2]
+    fig, ax = plt.subplots()
+    sc = ax.scatter(u, v, c=errors, cmap='plasma', s=4, alpha=0.6)
+    plt.colorbar(sc, ax=ax, label='Reprojection Error (px)')
+    if principal_point is not None:
+        ax.plot(*principal_point, 'r+', markersize=10, markeredgewidth=2)  # mark cx, cy
+    ax.invert_yaxis()                                          # image convention: y down
+    ax.set_aspect('equal')
+    ax.set_title(f'{title} — {cam_name}')
+    ax.set_xlabel('u (px)')
+    ax.set_ylabel('v (px)')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    save_figure(fig, f'{title}_{cam_name}', out_dir)          # per-camera filename
+    return fig
+
+
+def plot_camera_arrangement(
+    cam_set: Any,
+    title: str = 'Camera Arrangement',
+    out_dir: Optional[Path] = None,
+    dpi: int = 150,
+) -> Optional[Any]:
+    """
+    Capture a pyvista screenshot of the calibrated camera 3-D arrangement and
+    optionally save it as a .png.
+
+    Calls CameraSet.get_scene() directly on the pyCamSet object produced in
+    Phase 3.  pyvista is an optional dependency; if it is not installed or
+    rendering fails, this function returns None without raising an exception.
+
+    :param cam_set: Calibrated pyCamSet CameraSet object.
+    :param title:   Plot title used to derive the saved filename.
+    :param out_dir: Directory to save the .png into, or None to skip saving.
+    :param dpi:     Unused (kept for signature consistency with other helpers).
+    :return:        A matplotlib Figure wrapping the pyvista screenshot, or None
+                    if pyvista is unavailable or get_scene() raises an exception.
+    """
+    try:
+        plotter = pv.Plotter(off_screen=True)                  # headless pyvista plotter
+        cam_set.get_scene(scene=plotter, labels=True)
+        screenshot = plotter.screenshot(return_img=True)       # RGBA numpy array
+        plotter.close()
+    except Exception:                                          # pyvista unavailable or error
+        return None
+    fig, ax = plt.subplots()
+    ax.imshow(screenshot)                                      # wrap screenshot in matplotlib
+    ax.axis('off')
+    ax.set_title(title)
+    fig.tight_layout()
+    save_figure(fig, title, out_dir)                           # save if out_dir provided
+    return fig
 

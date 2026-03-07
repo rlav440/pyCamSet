@@ -1,0 +1,13 @@
+blosc
+coloredlogs
+dill
+matplotlib
+natsort
+numba
+numpy
+opencv-python
+pyvista
+scikit-learn
+scipy
+tqdm
+uniplot

@@ -6,6 +6,11 @@ Purpose: Phased calibration pipeline for pyCamSet.
          plus a single run_pipeline() orchestrator.
          Each phase accepts and returns a plain dict so results can be persisted,
          inspected, and resumed at any boundary.
+         Camera subfolders are auto-discovered when camera_names is omitted;
+         the reserved 'metadata' output folder is always excluded from discovery.
+         A run-manifest is written to the output directory so that subsequent
+         runs can detect configuration changes and invalidate stale caches from
+         the earliest affected phase onward.
 Status:  Working
 Future:  Add CLI support via run_pipeline() once all phases are implemented.
 """
@@ -204,6 +209,138 @@ def _outlier_rejection_auto(
     if result is None:                                       # no outliers found
         return None                                          # signal clean dataset
     return [int(i) for i in result[0]]                       # flatten tuple of arrays → plain list
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  Reserved folder names — never treated as camera subfolders
+# ──────────────────────────────────────────────────────────────────────────────
+
+_RESERVED_FOLDERS: Set[str] = {'metadata'}      # folders always excluded from auto-discovery
+
+
+def _discover_camera_names(parent_folder: Path) -> List[str]:
+    """
+    Auto-discover camera subfolder names directly under *parent_folder*.
+
+    Discovery rules:
+    - Only immediate subdirectories are considered (non-recursive).
+    - Folders in *_RESERVED_FOLDERS* (e.g. 'metadata') are always excluded.
+    - A folder is accepted only if it contains at least one supported image
+      (as determined by pyCamSet's glob_ims_local), providing a practical safety
+      filter against non-camera directories such as logs or auxiliary data.
+    - Returned names are sorted for deterministic ordering across runs.
+
+    :param parent_folder: Root directory to search for camera subfolders.
+    :return:              Sorted list of discovered camera subfolder names.
+    :raises ValueError:   If no suitable camera folders are found.
+    """
+    candidates = sorted(                                         # sort for deterministic ordering
+        d.name for d in parent_folder.iterdir()                  # iterate immediate children
+        if d.is_dir()                                            # directories only
+        and d.name not in _RESERVED_FOLDERS                      # exclude reserved names
+        and bool(_images_in_folder(d))                           # must contain ≥1 image
+    )
+    if not candidates:                                           # nothing found — likely wrong path
+        raise ValueError(
+            f"No camera folders with images found under '{parent_folder}'. "
+            "Ensure each camera has a dedicated subfolder containing images, "
+            f"or pass camera_names explicitly. Reserved folders {_RESERVED_FOLDERS} "
+            "are always excluded."
+        )
+    return candidates                                            # sorted list of camera names
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  Run-manifest helpers — capture and compare effective pipeline configuration
+# ──────────────────────────────────────────────────────────────────────────────
+
+_MANIFEST_FILENAME = 'run_manifest.json'                         # filename for the run manifest
+
+
+def _build_run_manifest(
+    camera_names: List[str],
+    target_type: str,
+    ccube_length_mm: float,
+    ccube_n_points: int,
+    aruco_dict_name: str,
+    border_fraction: float,
+    n_lim: Optional[int],
+    min_corners: int,
+    high_distortion: bool,
+    fixed_params: Optional[Dict],
+    problem_options: Optional[Dict],
+) -> Dict[str, Any]:
+    """
+    Build a JSON-serialisable dict that describes the effective pipeline
+    configuration for the current run.  This manifest is saved alongside the
+    phase caches so that subsequent runs can compare configurations and detect
+    incompatible checkpoints.
+
+    :param camera_names:     Effective (post-discovery) sorted camera name list.
+    :param target_type:      Class name of the calibration target (e.g. 'Ccube').
+    :param ccube_length_mm:  Physical side length of one Ccube face in mm.
+    :param ccube_n_points:   Number of ChArUco corners per side.
+    :param aruco_dict_name:  OpenCV ArUco dictionary name string.
+    :param border_fraction:  Relative Ccube border width.
+    :param n_lim:            Maximum images per camera (None = all).
+    :param min_corners:      Minimum detection count for culling.
+    :param high_distortion:  Whether high-distortion iterative path was used.
+    :param fixed_params:     Parameter locks (may be None).
+    :param problem_options:  Solver options (may be None).
+    :return:                 Dict suitable for JSON serialisation.
+    """
+    return {
+        'camera_names': sorted(camera_names),                    # sorted for stable comparison
+        'target_type': target_type,                              # discriminates target class
+        'ccube_length_mm': ccube_length_mm,                      # physical target dimension
+        'ccube_n_points': ccube_n_points,                        # grid density
+        'aruco_dict_name': aruco_dict_name,                      # ArUco dictionary identifier
+        'border_fraction': border_fraction,                      # relative border width
+        'n_lim': n_lim,                                          # image cap (None = all)
+        'min_corners': min_corners,                              # culling threshold
+        'high_distortion': high_distortion,                      # iterative re-detection flag
+        'fixed_params': fixed_params,                            # parameter locks (may be None)
+        'problem_options': problem_options,                      # solver options (may be None)
+    }
+
+
+def _manifest_first_invalid_phase(current: Dict, saved: Dict) -> int:
+    """
+    Compare the *current* run manifest against a *saved* one and return the
+    index of the first pipeline phase whose cached results are no longer valid.
+
+    Phase numbering:
+    - 1 = Detection      (Phase 1 cache)
+    - 2 = Culling        (Phase 2 cache)
+    - 3 = Calibration    (Phase 3 cache; also invalidates Phase 4 and 6)
+    - 7 = All compatible (no invalidation needed)
+
+    Keys that invalidate each phase:
+    - Phase 1: camera_names, target_type, ccube_length_mm, ccube_n_points,
+               aruco_dict_name, border_fraction, n_lim
+    - Phase 2: min_corners
+    - Phase 3: high_distortion, fixed_params, problem_options
+
+    :param current: Manifest dict for the current run.
+    :param saved:   Manifest dict loaded from the previous run.
+    :return:        Index of the first invalid phase (1–3), or 7 if all valid.
+    """
+    p1_keys = [                                                  # keys that affect detection
+        'camera_names', 'target_type', 'ccube_length_mm',
+        'ccube_n_points', 'aruco_dict_name', 'border_fraction', 'n_lim',
+    ]
+    if any(current.get(k) != saved.get(k) for k in p1_keys):    # any Phase 1 key changed
+        return 1                                                 # invalidate from Phase 1
+
+    p2_keys = ['min_corners']                                    # keys that affect culling
+    if any(current.get(k) != saved.get(k) for k in p2_keys):    # any Phase 2 key changed
+        return 2                                                 # invalidate from Phase 2
+
+    p3_keys = ['high_distortion', 'fixed_params', 'problem_options']  # keys for calibration
+    if any(current.get(k) != saved.get(k) for k in p3_keys):    # any Phase 3 key changed
+        return 3                                                 # invalidate from Phase 3
+
+    return 7                                                     # all phases compatible
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1148,8 +1285,8 @@ def run_phase6_self_calibration(
 
 def run_pipeline(
     parent_folder: Path,
-    camera_names: Sequence[str],
-    out_dir: Path,
+    camera_names: Optional[Sequence[str]] = None,
+    out_dir: Optional[Path] = None,
     ccube_length_mm: float = 0.0,
     ccube_n_points: int = 0,
     target: Any = None,
@@ -1185,11 +1322,36 @@ def run_pipeline(
     Each phase can independently load from cache or save its results to disk,
     allowing the pipeline to resume from any phase without re-running earlier phases.
 
+    Auto-discovery and default paths
+    ---------------------------------
+    When *camera_names* is ``None`` (the default), camera subfolders are
+    auto-discovered directly under *parent_folder*.  Discovery excludes the
+    reserved ``'metadata'`` folder and any subfolder that contains no supported
+    images.  Discovered names are sorted for deterministic ordering.
+
+    When *out_dir* is ``None`` (the default), all cache and plot files are
+    written to ``parent_folder / 'metadata'``.  This folder is always excluded
+    from camera auto-discovery so subsequent reruns never confuse it for a
+    camera folder.
+
+    Checkpoint compatibility and auto-resume
+    ----------------------------------------
+    A run-manifest (``run_manifest.json``) is saved in *out_dir* after each
+    successful run.  On the next run the manifest is loaded and compared against
+    the current effective configuration.  If the configs are compatible the
+    pipeline resumes from cached checkpoints transparently.  If any parameter
+    that affects a cached phase has changed, the cache for that phase (and all
+    subsequent phases) is bypassed and recomputed from scratch.  A warning is
+    logged for each phase whose cache is invalidated so the behaviour is always
+    transparent.
+
     Parameters
     ----------
     parent_folder   : Root directory with one subfolder per camera.
-    camera_names    : Ordered list of camera subfolder names.
-    out_dir         : Output directory; all cache and plot files go here.
+    camera_names    : Ordered list of camera subfolder names, or ``None`` to
+                      auto-discover from *parent_folder* (default ``None``).
+    out_dir         : Output directory for all cache and plot files.  Defaults
+                      to ``parent_folder / 'metadata'`` when ``None``.
     ccube_length_mm : Physical side length of one Ccube face in mm (Ccube only).
     ccube_n_points  : Number of ChArUco corners per side (Ccube only).
     target          : Pre-built AbstractTarget; if None a Ccube is constructed.
@@ -1220,10 +1382,80 @@ def run_pipeline(
     -------
     dict with results from all six phases keyed by 'phase1' … 'phase6'.
     """
-    out_dir = Path(out_dir)                                  # ensure Path object
-    out_dir.mkdir(parents=True, exist_ok=True)               # create output dir if needed
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # human-readable run timestamp
-    print(f"=== pyCamSet pipeline start: {timestamp} ===")   # log run start
+    parent_folder = Path(parent_folder)                          # ensure Path object
+
+    # ── Resolve output directory ───────────────────────────────────────────────
+    if out_dir is None:                                          # default to metadata subfolder
+        out_dir = parent_folder / 'metadata'                     # reserved output folder
+        print(f"[Pipeline] out_dir not provided; defaulting to '{out_dir}'.")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)                   # create output dir if needed
+
+    # ── Resolve camera names ───────────────────────────────────────────────────
+    if camera_names is None:                                     # auto-discover from parent_folder
+        print("[Pipeline] camera_names not provided; auto-discovering camera folders...")
+        camera_names = _discover_camera_names(parent_folder)     # excludes _RESERVED_FOLDERS
+        print(f"[Pipeline] Discovered cameras: {camera_names}")
+    else:
+        camera_names = list(camera_names)                        # normalise to plain list
+
+    # ── Build current effective configuration manifest ─────────────────────────
+    target_type = type(target).__name__ if target is not None else 'Ccube'  # target class name
+    current_manifest = _build_run_manifest(                      # capture current config
+        camera_names=camera_names,
+        target_type=target_type,
+        ccube_length_mm=ccube_length_mm,
+        ccube_n_points=ccube_n_points,
+        aruco_dict_name=aruco_dict_name,
+        border_fraction=border_fraction,
+        n_lim=n_lim,
+        min_corners=min_corners,
+        high_distortion=high_distortion,
+        fixed_params=fixed_params,
+        problem_options=problem_options,
+    )
+
+    # ── Compare against saved manifest to determine cache validity ─────────────
+    manifest_path = out_dir / _MANIFEST_FILENAME                 # standard manifest filename
+    first_invalid = 7                                            # 7 = all phases compatible
+    if manifest_path.is_file():                                  # saved manifest found on disk
+        try:
+            saved_manifest = load_json(manifest_path)            # load previous run config
+            first_invalid = _manifest_first_invalid_phase(       # compare configurations
+                current_manifest, saved_manifest)
+            if first_invalid <= 6:                               # some phase(s) invalidated
+                logging.warning(
+                    "[Pipeline] Manifest mismatch detected: cached phases %s–6 are "
+                    "incompatible with current configuration and will be recomputed.",
+                    first_invalid,
+                )
+            else:
+                print("[Pipeline] Manifest matches saved config; "
+                      "compatible checkpoints will be reused.")
+        except Exception as exc:                                 # corrupted / unreadable manifest
+            logging.warning(
+                "[Pipeline] Could not read saved manifest (%s); "
+                "all phase caches will be treated as incompatible.", exc)
+            first_invalid = 1                                    # force full recomputation
+    else:
+        print("[Pipeline] No saved manifest found; starting fresh run.")
+
+    # ── Override cache-load flags for invalidated phases ──────────────────────
+    # For each phase whose index >= first_invalid, disable cache loading so
+    # stale checkpoints are not silently reused.
+    if first_invalid <= 1:
+        load_phase1 = False                                      # Phase 1 cache invalid
+    if first_invalid <= 2:
+        load_phase2 = False                                      # Phase 2 cache invalid
+    if first_invalid <= 3:
+        load_phase3 = False                                      # Phase 3 cache invalid
+    if first_invalid <= 4:
+        load_phase4 = False                                      # Phase 4 cache invalid
+    if first_invalid <= 6:
+        load_phase6 = False                                      # Phase 6 cache invalid
+
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')     # human-readable run timestamp
+    print(f"=== pyCamSet pipeline start: {timestamp} ===")       # log run start
 
     # ── Phase 1: Detection ────────────────────────────────────────────────────
     p1 = run_phase1_detection(                               # detect corners in all images
@@ -1301,6 +1533,16 @@ def run_pipeline(
     )
 
     print("=== pyCamSet pipeline complete ===")              # log run end
+
+    # ── Save updated run manifest ─────────────────────────────────────────────
+    # Overwrite (or create) the manifest so the next run has an accurate
+    # record of what configuration produced the current cached results.
+    try:
+        save_json(current_manifest, manifest_path)               # persist effective config
+        print(f"[Pipeline] Run manifest saved to '{manifest_path}'.")
+    except Exception as exc:                                     # non-fatal; warn and continue
+        logging.warning("[Pipeline] Could not save run manifest: %s", exc)
+
     return {                                                 # return all phase results
         'phase1': p1,
         'phase2': p2,

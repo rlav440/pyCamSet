@@ -338,17 +338,17 @@ def visualise_calibration(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Headless plot helpers — pipeline-compatible, no plt.show()
+#  Headless plot helpers — bad_pipeline-compatible, no plt.show()
 #
 #  These complement the interactive tools above.  They are designed for
-#  the pyCamSet phased pipeline (pyCamSet.pipeline) and for any caller
+#  the pyCamSet phased bad_pipeline (pyCamSet.bad_pipeline) and for any caller
 #  that needs to save figures to disk without blocking on a display.
 #
 #  Key differences from the interactive functions in this file:
 #    - plt.show() is never called; callers control display.
 #    - An optional out_dir parameter saves each figure as a .png.
 #    - Inputs are pre-computed arrays / sequences rather than live
-#      param_handler objects, so they work from cached pipeline output.
+#      param_handler objects, so they work from cached bad_pipeline output.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _title_to_filename(title: str) -> str:

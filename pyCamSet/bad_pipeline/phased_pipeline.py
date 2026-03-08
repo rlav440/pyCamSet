@@ -1,5 +1,5 @@
 """
-Purpose: Phased calibration pipeline for pyCamSet.
+Purpose: Phased calibration bad_pipeline for pyCamSet.
          Wraps the existing calibration primitives (detect_datapoints_in_imfile,
          run_initial_calibration, run_stereo_calibration, SelfBundleHandler,
          run_bundle_adjustment) into six discrete, independently-cacheable phases
@@ -20,6 +20,8 @@ import pickle                                                # for detection cac
 from pathlib import Path                                     # for filesystem path handling
 from datetime import datetime                                # for run-timestamp logging
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple  # type annotations
+import shutil  # import shutil to remove temporary directories after detection completes
+import tempfile  # import tempfile to create isolated temporary roots for camera-only detection inputs
 
 import cv2 as cv                                             # for image I/O and resize
 import numpy as np                                           # for numerical operations
@@ -28,9 +30,11 @@ import numpy as np                                           # for numerical ope
 from pyCamSet.calibration_targets import TargetDetection, ImageDetection  # detection containers
 from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler  # self-calibration handler
 from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment  # bundle adjustment entry point
+from pyCamSet.calibration_targets.target_Ccube import Ccube  # import Ccube class used below to construct the Ccube target
+from pyCamSet.calibration_targets.target_charuco import ChArUco  # import ChArUco class used below to construct the ChArUco target
 
-# Pipeline helpers (file I/O and plots) from the pyCamSet pipeline package
-from pyCamSet.pipeline.pipeline_cache import (               # file I/O utilities
+# Pipeline helpers (file I/O and plots) from the pyCamSet bad_pipeline package
+from pyCamSet.bad_pipeline.pipeline_cache import (               # file I/O utilities
     phase_cache_path, cache_exists,                          # path building and existence check
     save_pickle, load_pickle,                                # pickle helpers for detection cache
     save_json, load_json,                                    # JSON helpers for skip indices / stats
@@ -38,7 +42,7 @@ from pyCamSet.pipeline.pipeline_cache import (               # file I/O utilitie
     save_camset, load_camset,                                # CamSet helpers for calibration results
     title_to_filename,                                       # title → filename stem conversion
 )
-from pyCamSet.pipeline.pipeline_plots import (               # plot / summary utilities
+from pyCamSet.bad_pipeline.pipeline_plots import (               # plot / summary utilities
     plot_error_histogram,                                    # histogram of reprojection errors
     plot_per_camera_errors,                                  # bar chart of per-camera means
     save_numeric_summary,                                    # numeric dict → .csv
@@ -49,7 +53,7 @@ from pyCamSet.pipeline.pipeline_plots import (               # plot / summary ut
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Private image helpers — replace calibria.detection equivalents
+#  Private image helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _images_in_folder(folder: Path) -> List[Path]:
@@ -251,7 +255,7 @@ def _discover_camera_names(parent_folder: Path) -> List[str]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Run-manifest helpers — capture and compare effective pipeline configuration
+#  Run-manifest helpers — capture and compare effective bad_pipeline configuration
 # ──────────────────────────────────────────────────────────────────────────────
 
 _MANIFEST_FILENAME = 'run_manifest.json'                         # filename for the run manifest
@@ -271,7 +275,7 @@ def _build_run_manifest(
     problem_options: Optional[Dict],
 ) -> Dict[str, Any]:
     """
-    Build a JSON-serialisable dict that describes the effective pipeline
+    Build a JSON-serialisable dict that describes the effective bad_pipeline
     configuration for the current run.  This manifest is saved alongside the
     phase caches so that subsequent runs can compare configurations and detect
     incompatible checkpoints.
@@ -307,7 +311,7 @@ def _build_run_manifest(
 def _manifest_first_invalid_phase(current: Dict, saved: Dict) -> int:
     """
     Compare the *current* run manifest against a *saved* one and return the
-    index of the first pipeline phase whose cached results are no longer valid.
+    index of the first bad_pipeline phase whose cached results are no longer valid.
 
     Phase numbering:
     - 1 = Detection      (Phase 1 cache)
@@ -341,6 +345,28 @@ def _manifest_first_invalid_phase(current: Dict, saved: Dict) -> int:
         return 3                                                 # invalidate from Phase 3
 
     return 7                                                     # all phases compatible
+
+
+def _build_camera_only_root(parent_folder: Path, camera_names: Sequence[str]) -> Path:
+    """
+    Create a temporary root containing only the selected camera subfolders.
+
+    This prevents downstream detection internals from re-discovering reserved
+    folders such as 'metadata' under the original parent_folder.
+
+    :param parent_folder: Original dataset root containing cameras and metadata.
+    :param camera_names:  Explicit camera folder names selected by the bad_pipeline.
+    :return:              Temporary directory path exposing only camera folders.
+    """
+    tmp_root = Path(tempfile.mkdtemp(prefix="pycamset_camroot_"))  # create unique temporary directory and wrap as Path
+    for cam in camera_names:  # iterate each selected camera folder name to populate temporary root
+        src = parent_folder / cam  # resolve source camera folder path under original dataset root
+        dst = tmp_root / cam  # resolve destination folder path under temporary root
+        try:  # attempt symlink first to avoid expensive directory copies
+            dst.symlink_to(src, target_is_directory=True)  # create directory symlink so detector sees camera folder without duplication
+        except Exception:  # fall back when symlinks are disallowed (common on Windows without developer mode/admin)
+            shutil.copytree(src, dst)  # copy folder recursively so bad_pipeline remains functional without symlink support
+    return tmp_root  # return temporary root path containing only selected camera folders
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -409,10 +435,28 @@ def run_phase1_detection(
     _sanitise_input_images(cam_folders)                      # raises if counts differ
 
     # ── 1b. Cache check ───────────────────────────────────────────────────────
-    if load_cache and cache_path and cache_exists(cache_path):  # cache file found on disk
-        print(f"[Phase 1b] Loading detection cache: {cache_path}")
-        cached = load_pickle(cache_path)                     # deserialise cached result
-        return cached                                        # return immediately, skip re-detection
+    if load_cache and cache_path and cache_exists(
+            cache_path):  # only try loading when cache use is enabled and file exists
+        print(f"[Phase 1b] Loading detection cache: {cache_path}")  # log cache read for traceability
+        cached = load_pickle(cache_path)  # load previously cached phase-1 dictionary from disk
+        if cached.get(
+                'target') is None:  # handle cache-safe format where non-pickle-safe target was intentionally omitted
+            if target is None:  # only rebuild target when caller did not provide one explicitly
+                aruco_enum = getattr(cv.aruco,
+                                     aruco_dict_name)  # resolve dictionary enum from configured dictionary name
+                target = Ccube(  # reconstruct Ccube target from run configuration values
+                    length=ccube_length_mm,  # restore configured physical cube side length
+                    n_points=ccube_n_points,  # restore configured points-per-side
+                    aruco_dict=aruco_enum,  # restore configured aruco dictionary enum
+                    border_fraction=border_fraction,  # restore configured border fraction
+                )
+                det_params = cv.aruco.DetectorParameters()  # create detector parameters required by CharucoDetector
+                charuco_params = cv.aruco.CharucoParameters()  # create charuco-specific detector parameters
+                charuco_params.tryRefineMarkers = True  # enable marker refinement as in normal target construction path
+                target.board_detectors = [cv.aruco.CharucoDetector(board, charuco_params, det_params) for board in
+                                          target.boards]  # rebuild face detectors
+            cached['target'] = target  # inject reconstructed/provided target back into loaded phase-1 result
+        return cached  # return repaired cache payload so downstream phases receive required target object
 
     # ── 1c. Build target ──────────────────────────────────────────────────────
     if target is None:                                       # no target provided — build Ccube
@@ -444,13 +488,19 @@ def run_phase1_detection(
     image_lists: Dict[str, List[Path]] = {                   # {cam: sorted image paths}
         cam: _images_in_folder(parent_folder / cam) for cam in cam_names_list
     }
-    all_detections, cam_res = detect_datapoints_in_imfile(   # robust full-dataset detection
-        f_loc=parent_folder,
-        calibration_target=target,
-        caching=False,                                       # Phase 1 cache is handled by this wrapper
-        draw=False,                                          # keep headless behaviour
-        n_lim=n_lim,
-    )
+    detect_root = _build_camera_only_root(parent_folder,
+                                          cam_names_list)  # build temporary root that contains only camera folders
+    try:  # ensure temporary root is always removed after detection, even if detection raises
+        all_detections, cam_res = detect_datapoints_in_imfile(
+            # run detection on camera-only root to exclude metadata from internal folder discovery
+            f_loc=detect_root,  # pass isolated temporary root instead of original parent folder
+            calibration_target=target,  # pass selected calibration target unchanged
+            caching=False,  # keep wrapper-level caching behaviour unchanged
+            draw=False,  # preserve headless detection mode
+            n_lim=n_lim,  # preserve caller-specified image limit
+        )
+    finally:  # always execute cleanup for temporary root resources
+        shutil.rmtree(detect_root, ignore_errors=True)  # remove temporary directory tree and ignore cleanup errors
     if all_detections is None:                               # defensive guard for unexpected None
         raise RuntimeError(
             "Phase 1 detection failed: detect_datapoints_in_imfile returned None "
@@ -472,22 +522,24 @@ def run_phase1_detection(
         n_total = min(len(cam_im_list), n_lim) if n_lim else len(cam_im_list)
         print(f"  Camera '{cam}': {detected_by_cam.get(cam, 0)}/{n_total} images with detections.")
 
-    result = {                                               # bundle Phase 1 outputs
-        'target': target,                                    # AbstractTarget instance
-        'detections': all_detections,                        # TargetDetection (all cameras)
-        'image_lists': image_lists,                          # {cam: [Path, ...]}
-        'cam_res': cam_res,                                  # [(h, w), ...] per camera
-        'parent_folder': parent_folder,                      # root folder (for high_distortion)
-        'n_lim': n_lim,                                      # image cap (for high_distortion)
-        'cache_path': cache_path,                            # path where cache was/will be saved
+    result = {  # build full in-memory phase output dictionary
+        'target': target,  # keep live target object for downstream phases in this run
+        'detections': all_detections,  # keep full detection container for calibration
+        'image_lists': image_lists,  # keep per-camera sorted image lists for reporting/analysis
+        'cam_res': cam_res,  # keep camera resolution tuples for initial calibration
+        'parent_folder': parent_folder,  # keep dataset root for optional high-distortion re-detection
+        'n_lim': n_lim,  # keep image cap setting for reproducibility
+        'cache_path': cache_path,  # keep resolved cache path for transparency/logging
     }
 
-    # ── 1e. Persist cache ─────────────────────────────────────────────────────
-    if save_cache and cache_path:                            # caller requested cache save
-        print(f"[Phase 1e] Saving detection cache: {cache_path}")
-        save_pickle(result, cache_path)                      # serialise full result dict
+    if save_cache and cache_path:  # save cache only when explicitly enabled and path exists
+        print(f"[Phase 1e] Saving detection cache: {cache_path}")  # log where phase-1 cache is being written
+        cacheable_result = dict(result)  # copy full result so we can remove non-pickle-safe fields for disk cache
+        cacheable_result[
+            'target'] = None  # remove OpenCV-backed target object (contains non-pickle-safe aruco dictionary)
+        save_pickle(cacheable_result, cache_path)  # serialise cache-safe subset of phase-1 results to disk
 
-    return result                                            # return Phase 1 outputs
+    return result  # return full in-memory result (with live target) to subsequent phases
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -687,14 +739,22 @@ def run_phase3_calibration(
         print("[Phase 3a-hd] High-distortion: re-detecting with initial cameras...")
         parent_folder = phase1_result['parent_folder']       # root folder from Phase 1
         n_lim = phase1_result['n_lim']                       # image cap from Phase 1
-        all_hd, _ = detect_datapoints_in_imfile(             # mirror old working script path
-            f_loc=parent_folder,                             # dataset root with camera subfolders
-            calibration_target=target,                       # calibration target from Phase 1
-            caching=False,                                   # avoid stale detection cache reuse
-            draw=False,                                      # keep headless behaviour for GUI worker
-            n_lim=n_lim,                                     # preserve caller's image cap
-            camset=initial_cams,                             # camera-aware corner refinement input
-        )
+        hd_camera_names = list(phase1_result[
+                                   'image_lists'].keys())  # recover effective camera names used in phase 1 for consistent re-detection
+        hd_root = _build_camera_only_root(parent_folder,
+                                          hd_camera_names)  # build camera-only temporary root for high-distortion re-detection
+        try:  # ensure temporary root cleanup even when high-distortion detection fails
+            all_hd, _ = detect_datapoints_in_imfile(  # run high-distortion re-detection on camera-only root
+                f_loc=hd_root,  # pass isolated temporary root so metadata is excluded from internal discovery
+                calibration_target=target,  # pass same target as phase 1
+                caching=False,  # disable detector-level caching to avoid stale results
+                draw=False,  # keep headless behaviour
+                n_lim=n_lim,  # preserve image limit
+                camset=initial_cams,  # provide initial cameras for camera-aware refinement
+            )
+        finally:  # always clean up temporary root
+            shutil.rmtree(hd_root,
+                          ignore_errors=True)  # remove temporary directory tree created for high-distortion re-detection
         print("[Phase 3a-hd] Re-running initial calibration with refined detections...")
         initial_cams = run_initial_calibration(              # re-calibrate with refined data
             all_hd,
@@ -708,7 +768,20 @@ def run_phase3_calibration(
 
     # ── 3b-res. Set camera resolutions from actual image files ────────────────
     parent_folder = phase1_result['parent_folder']           # root folder with camera subfolders
-    initial_cams.set_resolutions_from_file(floc=parent_folder)  # populate Camera.res from image dims
+    # Set resolutions using explicit camera image lists from Phase 1 to avoid folder-name mismatch caused by reserved folders.
+    image_lists = phase1_result['image_lists']  # get per-camera image paths already aligned to discovered camera names
+    for cam in initial_cams:  # iterate cameras currently in the CameraSet
+        cam_name = cam.name  # read current camera name to index phase1 image lists deterministically
+        cam_imgs = image_lists.get(cam_name, [])  # fetch this camera's image path list from phase-1 outputs
+        if not cam_imgs:  # fail fast if no images are available for this camera
+            raise ValueError(f"No images available for camera '{cam_name}' when setting resolution.")
+        im0 = cv.imread(str(cam_imgs[0]),
+                        cv.IMREAD_UNCHANGED)  # read first image at native depth to get reliable dimensions
+        if im0 is None:  # fail fast on unreadable image path
+            raise ValueError(f"Could not read image '{cam_imgs[0]}' for camera '{cam_name}' resolution assignment.")
+        h, w = im0.shape[:2]  # extract image height and width from loaded array
+        cam.res = np.array([w, h],
+                           dtype=int)  # assign [width, height] as expected by pyCamSet camera resolution convention
 
     # ── 3c. Stereo bundle adjustment ─────────────────────────────────────────
     print("[Phase 3c] Running stereo bundle adjustment...")
@@ -737,12 +810,12 @@ def run_phase3_calibration(
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_phase4_analysis(
-    phase1_result: Dict[str, Any],
-    phase2_result: Dict[str, Any],
-    phase3_result: Dict[str, Any],
-    out_dir: Optional[Path] = None,
-    save_cache: bool = True,
-    load_cache: bool = True,
+    phase1_result: Dict[str, Any],  # accept phase-1 outputs containing target and image filename mappings
+    phase2_result: Dict[str, Any],  # accept phase-2 outputs containing pruned detections after culling
+    phase3_result: Dict[str, Any],  # accept phase-3 outputs containing calibrated camera parameters
+    out_dir: Optional[Path] = None,  # optional directory for phase-4 cache files
+    save_cache: bool = True,  # if True, write computed analysis artefacts to disk
+    load_cache: bool = True,  # if True, reuse existing cached analysis artefacts when available
 ) -> Dict[str, Any]:
     """
     Phase 4: Compute per-image and per-camera reprojection errors.  Stores
@@ -771,163 +844,191 @@ def run_phase4_analysis(
         per_point_path    : Path to per-point .csv file, or None.
         outlier_path      : Path to outlier indices .json file, or None.
     """
-    out_dir = Path(out_dir) if out_dir else None             # normalise optional out_dir
+    out_dir = Path(out_dir) if out_dir else None  # normalise optional output directory to Path if provided
     csv_path = (phase_cache_path(out_dir, 'phase4_reprojection_errors', '.csv')
-                if out_dir else None)                        # per-image error table cache path
+                if out_dir else None)  # resolve cache path for per-image error table
     pp_path = (phase_cache_path(out_dir, 'phase4_per_point_errors', '.csv')
-               if out_dir else None)                         # per-point error table cache path
+               if out_dir else None)  # resolve cache path for per-point error table
     outlier_path = (phase_cache_path(out_dir, 'phase4_outlier_indices', '.json')
-                    if out_dir else None)                     # outlier indices cache path
+                    if out_dir else None)  # resolve cache path for outlier index list
 
-    # ── 4a. Cache check ───────────────────────────────────────────────────────
-    if load_cache and csv_path and cache_exists(csv_path):
-        print(f"[Phase 4a] Loading error cache: {csv_path}")
-        headers, rows = load_csv(csv_path)                   # load from CSV
-        per_image_errors = []                                # reconstruct from rows
-        has_residuals = 'dx_mean' in headers                 # check if new columns present
-        for row in rows:                                     # one row per image
-            entry = {                                        # rebuild dict
-                'camera': row[0],
-                'image': row[1],
-                'index': int(row[2]),
-                'mean_error': float(row[3]),
-                'dx_mean': float(row[4]) if has_residuals else float('nan'),
-                'dy_mean': float(row[5]) if has_residuals else float('nan'),
+    if load_cache and csv_path and cache_exists(csv_path):  # use cached phase-4 output when enabled and available
+        print(f"[Phase 4a] Loading error cache: {csv_path}")  # log cache load location for traceability
+        headers, rows = load_csv(csv_path)  # load cached per-image CSV headers and data rows
+        per_image_errors = []  # allocate list to reconstruct per-image dictionaries from CSV rows
+        has_residuals = 'dx_mean' in headers  # detect whether cache includes signed residual columns
+        for row in rows:  # iterate each cached row representing one image observation summary
+            entry = {  # reconstruct in-memory per-image entry in current expected schema
+                'camera': row[0],  # restore camera name string
+                'image': row[1],  # restore image filename string
+                'index': int(row[2]),  # restore image index as integer
+                'mean_error': float(row[3]),  # restore mean reprojection error in pixels
+                'dx_mean': float(row[4]) if has_residuals else float('nan'),  # restore mean signed x residual if present
+                'dy_mean': float(row[5]) if has_residuals else float('nan'),  # restore mean signed y residual if present
             }
-            per_image_errors.append(entry)
-        per_camera_errors, global_mean = _aggregate_errors(per_image_errors)
-        outlier_indices = (load_json(outlier_path)           # load outlier indices if cached
-                           if outlier_path and cache_exists(outlier_path) else [])
-        return {
-            'per_image_errors': per_image_errors,
-            'per_camera_errors': per_camera_errors,
-            'global_mean_error': global_mean,
-            'outlier_indices': outlier_indices,
-            'csv_path': csv_path,
-            'per_point_path': pp_path,
-            'outlier_path': outlier_path,
+            per_image_errors.append(entry)  # append reconstructed row dict to list
+        per_camera_errors, global_mean = _aggregate_errors(per_image_errors)  # recompute aggregate statistics from cached per-image rows
+        outlier_indices = (load_json(outlier_path)
+                           if outlier_path and cache_exists(outlier_path) else [])  # load cached outlier list if available
+        return {  # return cache-derived phase-4 result payload in standard structure
+            'per_image_errors': per_image_errors,  # provide per-image table reconstructed from cache
+            'per_camera_errors': per_camera_errors,  # provide per-camera means recomputed from per-image rows
+            'global_mean_error': global_mean,  # provide global mean reprojection error
+            'outlier_indices': outlier_indices,  # provide cached outlier indices if present
+            'csv_path': csv_path,  # provide path to per-image cache file
+            'per_point_path': pp_path,  # provide path to per-point cache file
+            'outlier_path': outlier_path,  # provide path to outlier-index cache file
         }
 
-    # ── 4b. Compute per-image reprojection errors with signed residuals ───────
-    print("[Phase 4b] Computing per-image reprojection errors...")
-    cam_set = phase3_result['cam_set']                       # optimised CameraSet
-    target = phase1_result['target']                         # AbstractTarget (for point_data)
+    print("[Phase 4b] Computing per-image reprojection errors...")  # log start of fresh phase-4 computation
+    cam_set = phase3_result['cam_set']  # read calibrated CameraSet generated by phase 3
+    target = phase1_result['target']  # read calibration target used to resolve object-space points
     pruned_td: TargetDetection = (phase3_result.get('detections')
-                                  or phase2_result['pruned_detections'])  # prefer Phase 3 detections
+                                  or phase2_result['pruned_detections'])  # prefer phase-3 detections; fallback to phase-2 detections
 
-    per_image_errors: List[Dict] = []                        # accumulate one entry per image
-    per_point_rows: List[Tuple] = []                         # accumulate (cam, im, u, v, err) rows
+    per_image_errors: List[Dict] = []  # allocate list for per-image summary records
+    per_point_rows: List[Tuple] = []  # allocate list for per-point rows used by coverage scatter plots
+    skipped_too_few_points = 0  # count images skipped because correspondence count was insufficient for stable PnP
+    skipped_pnp_failure = 0  # count images skipped because solvePnP failed or raised an OpenCV error
 
-    for cam_td in pruned_td.get_cam_list():                  # iterate per-camera sub-detections
-        cam_data = cam_td.get_data()                         # raw data for this camera
-        if cam_data is None:                                 # no detections for this camera
-            continue                                         # skip to next camera
-        cam_idx = int(cam_data[0, 0])                        # camera index
-        cam_name = pruned_td.cam_names[cam_idx]              # resolve camera name
-        camera_obj = cam_set[cam_name]                       # get Camera object from CameraSet
-        intrinsics = camera_obj.intrinsic                    # 3x3 camera matrix
-        dist = camera_obj.distortion_coefs                   # distortion coefficients
+    for cam_td in pruned_td.get_cam_list():  # iterate per-camera detection containers
+        cam_data = cam_td.get_data()  # get raw detection array for this camera view
+        if cam_data is None:  # skip cameras with no detections
+            continue  # continue to next camera because there is nothing to analyse
+        cam_idx = int(cam_data[0, 0])  # read camera index from detection payload
+        cam_name = pruned_td.cam_names[cam_idx]  # map camera index to camera name string
+        camera_obj = cam_set[cam_name]  # fetch calibrated camera object by name
+        intrinsics = camera_obj.intrinsic  # read camera intrinsic matrix for reprojection
+        dist = camera_obj.distortion_coefs  # read camera distortion coefficients for reprojection
 
-        for im_td in cam_td.get_image_list():                # iterate per-image sub-detections
-            im_data = im_td.get_data()                       # data for this image
-            if im_data is None:                              # no corners in this image
-                continue                                     # skip to next image
-            im_num = int(im_data[0, 1])                      # image index
-            img_pts = im_data[:, -2:]                        # detected (x, y) pixel coords
-            keys = im_data[:, 2:-2].astype(int)              # [board_id, corner_id] keys
+        for im_td in cam_td.get_image_list():  # iterate all image detections for this camera
+            im_data = im_td.get_data()  # get per-image detection data array
+            if im_data is None:  # skip image entries with no detected points
+                continue  # move to next image because no correspondences exist
+            im_num = int(im_data[0, 1])  # read image index for logging and keying
+            img_pts = im_data[:, -2:]  # extract detected image points as Nx2 pixel coordinates
+            keys = im_data[:, 2:-2].astype(int)  # extract object-point lookup keys from detection table
 
-            if len(img_pts) < 4:                             # too few points for PnP
-                continue                                     # skip image
+            if len(img_pts) < 4:  # retain original conservative pre-check for clearly underdetermined cases
+                skipped_too_few_points += 1  # increment sparse-point skip counter for diagnostics
+                continue  # skip this image because PnP is not meaningful with very few points
 
-            # resolve 3-D object points from target's point_data table
-            if keys.shape[1] == 2:                           # 2D keys: [board_id, corner_id]
-                obj_pts = target.point_data[                 # index into (n_boards, n_corners, 3)
-                    keys[:, 0], keys[:, 1]                   # board index, corner index
-                ].astype(np.float64)
-            else:                                            # 1D key (flat board, single key col)
-                obj_pts = target.point_data.reshape(         # reshape to (N, 3) for flat board
-                    -1, 3)[keys[:, 0]].astype(np.float64)   # keys[:, 0] = the only key column
+            if keys.shape[1] == 2:  # branch for targets keyed by [board_id, corner_id]
+                obj_pts = target.point_data[
+                    keys[:, 0], keys[:, 1]
+                ].astype(np.float64)  # resolve 3-D object points for each detected key pair
+            else:  # branch for flat-board style targets with one key column
+                obj_pts = target.point_data.reshape(
+                    -1, 3)[keys[:, 0]].astype(np.float64)  # flatten point table then index by key column
 
-            img_pts_f = img_pts.astype(np.float64).reshape(-1, 1, 2)  # OpenCV: Nx1x2
+            img_pts_f = img_pts.astype(np.float64).reshape(-1, 1, 2)  # convert image points to OpenCV-required Nx1x2 float format
+            n_corr = int(obj_pts.shape[0])  # compute number of 3D-2D correspondences for this image
 
-            ok, rvec, tvec = cv.solvePnP(                    # estimate camera pose
-                obj_pts, img_pts_f, intrinsics, dist,
-                flags=cv.SOLVEPNP_ITERATIVE)
-            if not ok:                                       # solver failed
-                continue                                     # skip this image
+            if n_corr < 6:  # guard for OpenCV iterative solvePnP path that can fail below six correspondences in this workflow
+                skipped_too_few_points += 1  # increment sparse-point skip counter
+                continue  # skip this image rather than raising and aborting full analysis
 
-            proj, _ = cv.projectPoints(                      # reproject 3-D → 2-D
-                obj_pts, rvec, tvec, intrinsics, dist)
-            proj = proj.reshape(-1, 2)                       # flatten to Nx2
-            residuals = img_pts.astype(np.float64) - proj    # signed (dx, dy) per corner
-            errors = np.linalg.norm(residuals, axis=1)       # Euclidean error per corner
-            mean_err = float(np.mean(errors))                # mean error for this image
-            dx_mean = float(np.mean(residuals[:, 0]))        # mean signed x-residual
-            dy_mean = float(np.mean(residuals[:, 1]))        # mean signed y-residual
+            try:  # isolate OpenCV failures so one problematic image does not terminate phase 4
+                ok, rvec, tvec = cv.solvePnP(  # estimate per-image camera pose from 3D-2D correspondences
+                    obj_pts,  # pass object-space points resolved from target model
+                    img_pts_f,  # pass measured image-space points
+                    intrinsics,  # pass camera matrix from calibrated camera
+                    dist,  # pass distortion coefficients from calibrated camera
+                    flags=cv.SOLVEPNP_ITERATIVE)  # use iterative PnP method consistent with existing implementation
+            except cv.error as exc:  # catch OpenCV exceptions (e.g. degeneracy or solver precondition failure)
+                skipped_pnp_failure += 1  # increment PnP-failure counter for summary diagnostics
+                logging.warning(  # emit warning with camera and image identifiers for later debugging
+                    "[Phase 4b] solvePnP failed for camera '%s', image index %d, correspondences=%d: %s",
+                    cam_name, im_num, n_corr, exc)  # include critical context in log message
+                continue  # skip this frame and continue analysing remaining frames
 
-            image_lists = phase1_result.get('image_lists', {})  # {cam: [Path, ...]}
-            cam_imgs = image_lists.get(cam_name, [])         # sorted image paths for this cam
-            img_name = (cam_imgs[im_num].name                # filename for this image index
-                        if im_num < len(cam_imgs) else str(im_num))
+            if not ok:  # handle explicit solvePnP failure return without exception
+                skipped_pnp_failure += 1  # increment PnP-failure counter for summary diagnostics
+                continue  # skip frame if solver reports failure
 
-            per_image_errors.append({                        # record per-image result
-                'camera': cam_name,
-                'image': img_name,
-                'index': im_num,
-                'mean_error': mean_err,
-                'dx_mean': dx_mean,                          # mean signed x residual
-                'dy_mean': dy_mean,                          # mean signed y residual
+            proj, _ = cv.projectPoints(
+                obj_pts, rvec, tvec, intrinsics, dist)  # project object points with estimated pose for residual calculation
+            proj = proj.reshape(-1, 2)  # reshape projected points to Nx2 for vectorised arithmetic
+            residuals = img_pts.astype(np.float64) - proj  # compute signed 2-D residual vectors per point
+            errors = np.linalg.norm(residuals, axis=1)  # compute Euclidean reprojection error magnitude per point
+            mean_err = float(np.mean(errors))  # compute mean reprojection error for this camera/image pair
+            dx_mean = float(np.mean(residuals[:, 0]))  # compute mean signed x residual for bias diagnostics
+            dy_mean = float(np.mean(residuals[:, 1]))  # compute mean signed y residual for bias diagnostics
+
+            image_lists = phase1_result.get('image_lists', {})  # read camera->image-list mapping saved in phase 1
+            cam_imgs = image_lists.get(cam_name, [])  # get ordered image path list for current camera
+            img_name = (cam_imgs[im_num].name
+                        if im_num < len(cam_imgs) else str(im_num))  # resolve human-readable image label safely
+
+            per_image_errors.append({  # append one per-image summary record for this camera/image pair
+                'camera': cam_name,  # store camera name for grouping and plotting
+                'image': img_name,  # store image filename for traceability
+                'index': im_num,  # store image index for deterministic referencing
+                'mean_error': mean_err,  # store mean Euclidean reprojection error
+                'dx_mean': dx_mean,  # store mean signed x residual
+                'dy_mean': dy_mean,  # store mean signed y residual
             })
 
-            for (u, v), err in zip(img_pts, errors):        # accumulate per-point rows
-                per_point_rows.append(                       # (cam, image, u, v, error)
-                    (cam_name, img_name, float(u), float(v), float(err)))
+            for (u, v), err in zip(img_pts, errors):  # iterate point-level observations to build coverage/error table
+                per_point_rows.append(
+                    (cam_name, img_name, float(u), float(v), float(err)))  # store point record tuple for CSV export
 
-    # ── 4c. Aggregate per-camera and global means ────────────────────────────
-    per_camera_errors, global_mean = _aggregate_errors(per_image_errors)
-    print(f"[Phase 4c] Global mean reprojection error: {global_mean:.4f} px")
-    for cam, err in per_camera_errors.items():               # log per-camera summary
-        print(f"  Camera '{cam}': mean error = {err:.4f} px")
+    per_camera_errors, global_mean = _aggregate_errors(per_image_errors)  # compute per-camera and global mean errors
+    print(f"[Phase 4c] Global mean reprojection error: {global_mean:.4f} px")  # report global aggregate error
+    for cam, err in per_camera_errors.items():  # iterate camera aggregates for logging
+        print(f"  Camera '{cam}': mean error = {err:.4f} px")  # report per-camera mean reprojection error
 
-    # ── 4d. MAD outlier detection on per-image means ──────────────────────────
-    print("[Phase 4d] Running MAD outlier detection on per-image errors...")
-    im_means = [e['mean_error'] for e in per_image_errors]   # flat list of per-image means
-    raw_outliers = _outlier_rejection_auto(im_means)         # returns indices or None
-    outlier_indices: List[int] = raw_outliers if raw_outliers is not None else []
-    if outlier_indices:
-        print(f"[Phase 4d] Flagged {len(outlier_indices)} outlier image(s): {outlier_indices}")
-    else:
-        print("[Phase 4d] No outlier images detected.")
+    print(f"[Phase 4c] Skipped images: too_few_points={skipped_too_few_points}, "
+          f"pnp_failures={skipped_pnp_failure}")  # report skip counters so sparse/unstable images are visible to user
 
-    result = {                                               # bundle Phase 4 outputs
-        'per_image_errors': per_image_errors,
-        'per_camera_errors': per_camera_errors,
-        'global_mean_error': global_mean,
-        'outlier_indices': outlier_indices,                  # MAD-flagged indices
-        'csv_path': csv_path,
-        'per_point_path': pp_path,
-        'outlier_path': outlier_path,
+    print("[Phase 4d] Running MAD outlier detection on per-image errors...")  # log start of outlier analysis
+    # Build one robust error value per dataset frame index so outlier indices map to real image indices.
+    errs_by_frame: Dict[int, List[float]] = {}  # map frame index -> list of camera-specific mean errors for that frame
+    for e in per_image_errors:  # iterate all per-camera per-image entries collected above
+        idx = int(e['index'])  # read dataset frame index from entry
+        val = float(e['mean_error'])  # read scalar mean reprojection error for this camera/frame pair
+        if np.isfinite(val):  # ignore non-finite values so MAD is computed on valid numbers only
+            errs_by_frame.setdefault(idx, []).append(val)  # accumulate valid error into frame bucket
+
+    frame_indices = sorted(errs_by_frame.keys())  # deterministic ordering of real frame indices present in analysis
+    frame_scores = [float(np.median(errs_by_frame[i])) for i in frame_indices]  # robust per-frame score across cameras
+    raw_outliers = _outlier_rejection_auto(
+        frame_scores)  # run MAD on per-frame scores (not flattened camera-image list)
+    outlier_indices = [frame_indices[i] for i in
+                       raw_outliers] if raw_outliers is not None else []  # map MAD result back to true frame indices
+    if outlier_indices:  # branch for detected outlier image indices
+        print(f"[Phase 4d] Flagged {len(outlier_indices)} outlier image(s): {outlier_indices}")  # report detected outliers
+    else:  # branch when no outliers are detected
+        print("[Phase 4d] No outlier images detected.")  # report clean outlier result
+
+    result = {  # assemble phase-4 return payload in standard schema
+        'per_image_errors': per_image_errors,  # include per-image summary records
+        'per_camera_errors': per_camera_errors,  # include per-camera aggregate means
+        'global_mean_error': global_mean,  # include global mean error across all analysed images
+        'outlier_indices': outlier_indices,  # include MAD outlier indices list
+        'csv_path': csv_path,  # include path to per-image CSV cache
+        'per_point_path': pp_path,  # include path to per-point CSV cache
+        'outlier_path': outlier_path,  # include path to outlier JSON cache
     }
 
-    # ── 4e. Persist caches ────────────────────────────────────────────────────
-    if save_cache and csv_path:                              # caller requested per-image save
-        print(f"[Phase 4e] Saving error table: {csv_path}")
-        headers = ['camera', 'image', 'index', 'mean_error', 'dx_mean', 'dy_mean']
+    if save_cache and csv_path:  # save per-image cache only when requested and path is available
+        print(f"[Phase 4e] Saving error table: {csv_path}")  # log per-image CSV output path
+        headers = ['camera', 'image', 'index', 'mean_error', 'dx_mean', 'dy_mean']  # define per-image CSV headers
         rows = [(e['camera'], e['image'], e['index'],
                  e['mean_error'], e['dx_mean'], e['dy_mean'])
-                for e in per_image_errors]
-        save_csv(rows, headers, csv_path)                    # write per-image error table
+                for e in per_image_errors]  # convert per-image dicts to tuple rows for CSV writer
+        save_csv(rows, headers, csv_path)  # write per-image error table to disk
 
-    if save_cache and pp_path and per_point_rows:            # save per-point error table
-        print(f"[Phase 4e] Saving per-point error table: {pp_path}")
-        pp_headers = ['camera', 'image', 'u', 'v', 'error']
-        save_csv(per_point_rows, pp_headers, pp_path)        # write per-point CSV
+    if save_cache and pp_path and per_point_rows:  # save per-point cache only when requested and non-empty
+        print(f"[Phase 4e] Saving per-point error table: {pp_path}")  # log per-point CSV output path
+        pp_headers = ['camera', 'image', 'u', 'v', 'error']  # define per-point CSV headers
+        save_csv(per_point_rows, pp_headers, pp_path)  # write per-point error table to disk
 
-    if save_cache and outlier_path:                          # save outlier indices
-        print(f"[Phase 4e] Saving outlier indices: {outlier_path}")
-        save_json(outlier_indices, outlier_path)             # persist as .json
+    if save_cache and outlier_path:  # save outlier index cache when requested
+        print(f"[Phase 4e] Saving outlier indices: {outlier_path}")  # log outlier JSON output path
+        save_json(outlier_indices, outlier_path)  # write outlier index list to JSON file
 
-    return result                                            # return Phase 4 outputs
+    return result  # return phase-4 results for downstream plotting and bad_pipeline summary
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -935,12 +1036,12 @@ def run_phase4_analysis(
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_phase5_visualisation(
-    phase4_result: Dict[str, Any],
-    phase3_result: Optional[Dict[str, Any]] = None,
-    out_dir: Optional[Path] = None,
-    save_plots: bool = True,
-    save_summaries: bool = True,
-    show_plots: bool = False,
+    phase4_result: Dict[str, Any],  # receive phase-4 outputs containing per-image/per-camera error summaries and cache paths
+    phase3_result: Optional[Dict[str, Any]] = None,  # optionally receive phase-3 outputs so camera arrangement and principal points can be plotted
+    out_dir: Optional[Path] = None,  # optionally receive output directory where plots/CSVs should be written
+    save_plots: bool = True,  # toggle writing plot PNG files to disk
+    save_summaries: bool = True,  # toggle writing numeric CSV summaries to disk
+    show_plots: bool = False,  # toggle interactive display of generated matplotlib figures
 ) -> Dict[str, Any]:
     """
     Phase 5: Generate reprojection error visualisations and optionally save them
@@ -972,155 +1073,158 @@ def run_phase5_visualisation(
         saved_png_paths: list of Path objects for saved .png files.
         saved_csv_paths: list of Path objects for saved .csv files.
     """
-    import matplotlib.pyplot as plt                          # deferred import — optional dep
+    import matplotlib.pyplot as plt  # import plotting backend locally so non-plot phases do not require matplotlib at import time
 
-    out_dir = Path(out_dir) if out_dir else None             # normalise optional out_dir
-    plot_dir = out_dir if save_plots else None               # pass dir only if saving
-    csv_dir = out_dir if save_summaries else None            # pass dir only if saving
+    out_dir = Path(out_dir) if out_dir else None  # normalise optional output directory into a Path object when provided
+    plot_dir = out_dir if save_plots else None  # choose plot output directory only when plot saving is enabled
+    csv_dir = out_dir if save_summaries else None  # choose CSV output directory only when summary saving is enabled
 
-    per_image_errors = phase4_result['per_image_errors']     # list of per-image error dicts
-    per_camera_errors = phase4_result['per_camera_errors']   # {cam: mean_error}
-    global_mean = phase4_result['global_mean_error']         # scalar global mean
+    per_image_errors = phase4_result['per_image_errors']  # unpack per-image error table produced by phase 4
+    per_camera_errors = phase4_result['per_camera_errors']  # unpack per-camera mean errors produced by phase 4
+    global_mean = phase4_result['global_mean_error']  # unpack global mean reprojection error for logging at end of phase
 
-    figures = []                                             # accumulate Figure objects
-    saved_pngs: List[Path] = []                              # accumulate saved .png paths
-    saved_csvs: List[Path] = []                              # accumulate saved .csv paths
+    figures = []  # accumulate matplotlib figure objects for return and optional interactive display
+    saved_pngs: List[Path] = []  # accumulate paths of plot images written to disk
+    saved_csvs: List[Path] = []  # accumulate paths of numeric summary CSVs written to disk
 
-    def _track(fig, title, is_plot=True):                    # helper: track saved paths
+    def _track(fig, title, is_plot=True):  # define helper that mirrors file naming logic so saved paths are easy to inspect
         """Append plot or CSV path if saving is enabled."""
-        if is_plot and save_plots and plot_dir:
-            saved_pngs.append(plot_dir / f"{title_to_filename(title)}.png")
-        elif not is_plot and save_summaries and csv_dir:
-            saved_csvs.append(csv_dir / f"{title_to_filename(title)}.csv")
+        if is_plot and save_plots and plot_dir:  # branch when this artefact is a plot and plot saving is enabled
+            saved_pngs.append(plot_dir / f"{title_to_filename(title)}.png")  # store expected PNG path generated by helper plotting functions
+        elif not is_plot and save_summaries and csv_dir:  # branch when this artefact is a numeric summary and CSV saving is enabled
+            saved_csvs.append(csv_dir / f"{title_to_filename(title)}.csv")  # store expected CSV path generated by summary helper
 
     # ── 5a. Global error histogram ────────────────────────────────────────────
-    all_errors = [e['mean_error'] for e in per_image_errors]  # flat list of per-image means
-    title1 = 'Mean Euclidean Error'                          # plot title (sets filename)
-    fig1 = plot_error_histogram(                             # create histogram figure
-        all_errors, title=title1,
-        xlabel='Mean Reprojection Error per Image (px)',
-        out_dir=plot_dir)
-    figures.append(fig1)                                     # track figure
-    _track(fig1, title1, is_plot=True)
-    if save_summaries:                                       # save numeric data as CSV
-        csv_path = save_numeric_summary({'mean_error_px': all_errors}, title=title1, out_dir=csv_dir)
-        if csv_path:
-            saved_csvs.append(csv_path)
+    all_errors = [e['mean_error'] for e in per_image_errors if np.isfinite(e.get('mean_error', float('nan')))]  # collect only finite global per-image errors to avoid plot failures
+    title1 = 'Mean Euclidean Error'  # define canonical title used both for plot label and deterministic output filename
+    if all_errors:  # plot only when at least one finite error exists
+        fig1 = plot_error_histogram(  # create global histogram of per-image mean reprojection errors
+            all_errors, title=title1,
+            xlabel='Mean Reprojection Error per Image (px)',
+            out_dir=plot_dir)
+        figures.append(fig1)  # store created figure for return/show
+        _track(fig1, title1, is_plot=True)  # track expected saved PNG path when saving is enabled
+        if save_summaries:  # optionally save numeric values behind this histogram
+            csv_path = save_numeric_summary({'mean_error_px': all_errors}, title=title1, out_dir=csv_dir)  # write raw global error list as CSV
+            if csv_path:  # guard against helper returning None
+                saved_csvs.append(csv_path)  # record saved CSV path for return/logging
 
     # ── 5b. Per-camera bar chart ──────────────────────────────────────────────
-    cam_names = list(per_camera_errors.keys())               # ordered camera names
-    cam_means = [per_camera_errors[c] for c in cam_names]    # matching mean errors
-    title2 = 'Per Camera Mean Reprojection Error'            # plot title (sets filename)
-    fig2 = plot_per_camera_errors(cam_names, cam_means, title=title2, out_dir=plot_dir)
-    figures.append(fig2)                                     # track figure
-    _track(fig2, title2, is_plot=True)
-    if save_summaries:
-        csv_path = save_numeric_summary(
-            {'camera': cam_names, 'mean_error_px': cam_means}, title=title2, out_dir=csv_dir)
-        if csv_path:
-            saved_csvs.append(csv_path)
+    cam_names = list(per_camera_errors.keys())  # get deterministic camera ordering from per-camera error dictionary keys
+    cam_means = [per_camera_errors[c] for c in cam_names if np.isfinite(per_camera_errors[c])]  # keep finite per-camera means only for stable plotting
+    cam_names_finite = [c for c in cam_names if np.isfinite(per_camera_errors[c])]  # keep matching finite camera names aligned to filtered means
+    title2 = 'Per Camera Mean Reprojection Error'  # define title and output filename stem for per-camera bar chart
+    if cam_names_finite:  # plot only when at least one finite per-camera value exists
+        fig2 = plot_per_camera_errors(cam_names_finite, cam_means, title=title2, out_dir=plot_dir)  # draw per-camera mean reprojection bar chart
+        figures.append(fig2)  # store created figure
+        _track(fig2, title2, is_plot=True)  # track expected saved PNG path when saving is enabled
+        if save_summaries:  # optionally save bar-chart source values to CSV
+            csv_path = save_numeric_summary(
+                {'camera': cam_names_finite, 'mean_error_px': cam_means}, title=title2, out_dir=csv_dir)  # write finite per-camera means only
+            if csv_path:  # guard against helper returning None
+                saved_csvs.append(csv_path)  # record saved CSV path
 
     # ── 5c. Per-camera individual histograms ─────────────────────────────────
-    for cam in cam_names:                                    # iterate each camera
+    for cam in cam_names:  # iterate all camera names to make one histogram per camera where possible
         cam_errors = [e['mean_error']
-                      for e in per_image_errors if e['camera'] == cam]
-        if not cam_errors:                                   # no data for this camera
-            continue
-        title3 = f'Reprojection Error {cam}'                 # title encodes camera name
-        fig3 = plot_error_histogram(cam_errors, title=title3,
+                      for e in per_image_errors
+                      if e['camera'] == cam and np.isfinite(e.get('mean_error', float('nan')))]  # collect finite per-image errors for this camera only
+        if not cam_errors:  # skip camera when no finite per-image values are available
+            continue  # move to next camera
+        title3 = f'Reprojection Error {cam}'  # define camera-specific title and filename stem
+        fig3 = plot_error_histogram(cam_errors, title=title3,  # draw histogram of per-image mean error for current camera
                                     xlabel='Mean Reprojection Error per Image (px)',
                                     out_dir=plot_dir)
-        figures.append(fig3)
-        _track(fig3, title3, is_plot=True)
-        if save_summaries:
+        figures.append(fig3)  # store figure for return/show
+        _track(fig3, title3, is_plot=True)  # track expected PNG output path
+        if save_summaries:  # optionally save numeric values behind this camera histogram
             csv_path = save_numeric_summary(
-                {'mean_error_px': cam_errors}, title=title3, out_dir=csv_dir)
-            if csv_path:
-                saved_csvs.append(csv_path)
+                {'mean_error_px': cam_errors}, title=title3, out_dir=csv_dir)  # write finite camera-specific errors as CSV
+            if csv_path:  # guard against helper returning None
+                saved_csvs.append(csv_path)  # record saved CSV path
 
     # ── 5d. 2-D residual cluster plots ────────────────────────────────────────
-    dx_all = [e['dx_mean'] for e in per_image_errors        # global signed x residuals
-              if np.isfinite(e.get('dx_mean', float('nan')))]
-    dy_all = [e['dy_mean'] for e in per_image_errors        # global signed y residuals
-              if np.isfinite(e.get('dy_mean', float('nan')))]
-    if dx_all and dy_all:
-        title_cluster_global = 'Residual Cluster Global'     # global cluster plot title
-        xy_global = np.column_stack((dx_all, dy_all)).ravel()  # interleave x/y efficiently
-        fig_cg = plot_residual_clusters(                     # global cluster plot
+    dx_all_raw = [e.get('dx_mean', float('nan')) for e in per_image_errors]  # collect raw global dx means from per-image entries
+    dy_all_raw = [e.get('dy_mean', float('nan')) for e in per_image_errors]  # collect raw global dy means from per-image entries
+    global_pairs = [(float(x), float(y)) for x, y in zip(dx_all_raw, dy_all_raw) if np.isfinite(x) and np.isfinite(y)]  # keep only finite (dx,dy) pairs for robust plotting
+    if len(global_pairs) >= 2:  # require at least two finite points before attempting cluster histogram
+        title_cluster_global = 'Residual Cluster Global'  # define title and filename stem for global residual cluster
+        xy_global = np.array(global_pairs, dtype=float).ravel()  # convert finite residual pairs to flattened vector expected by plotting helper
+        fig_cg = plot_residual_clusters(  # generate global residual cluster plot from finite residual pairs
             [xy_global], titles=['Global'], out_dir=plot_dir,
             title=title_cluster_global)
-        if fig_cg is not None:                               # plot_residual_clusters may return None
-            figures.append(fig_cg)
-            _track(fig_cg, title_cluster_global, is_plot=True)
+        if fig_cg is not None:  # guard in case helper returns None when plotting backend has issues
+            figures.append(fig_cg)  # store returned figure
+            _track(fig_cg, title_cluster_global, is_plot=True)  # track expected global cluster PNG path
 
-        for cam in cam_names:                                # per-camera cluster plots
-            dx_cam = [e['dx_mean'] for e in per_image_errors
-                      if e['camera'] == cam and np.isfinite(e.get('dx_mean', float('nan')))]
-            dy_cam = [e['dy_mean'] for e in per_image_errors
-                      if e['camera'] == cam and np.isfinite(e.get('dy_mean', float('nan')))]
-            if not dx_cam:                                   # no data for this camera
-                continue
-            title_cc = f'Residual Cluster {cam}'             # per-camera cluster title
-            xy_cam = np.column_stack((dx_cam, dy_cam)).ravel()  # interleave x/y efficiently
-            fig_cc = plot_residual_clusters(                 # per-camera cluster plot
-                [xy_cam], titles=[cam], out_dir=plot_dir, title=title_cc)
-            if fig_cc is not None:
-                figures.append(fig_cc)
-                _track(fig_cc, title_cc, is_plot=True)
+    for cam in cam_names:  # generate per-camera residual clusters with strict finite filtering
+        dx_cam_raw = [e.get('dx_mean', float('nan')) for e in per_image_errors if e['camera'] == cam]  # collect raw dx means for current camera
+        dy_cam_raw = [e.get('dy_mean', float('nan')) for e in per_image_errors if e['camera'] == cam]  # collect raw dy means for current camera
+        cam_pairs = [(float(x), float(y)) for x, y in zip(dx_cam_raw, dy_cam_raw) if np.isfinite(x) and np.isfinite(y)]  # retain only finite residual pairs to avoid pcolormesh non-finite crash
+        if len(cam_pairs) < 2:  # skip plotting if insufficient finite points remain
+            continue  # move to next camera to keep bad_pipeline running
+        title_cc = f'Residual Cluster {cam}'  # define title and filename stem for this camera cluster plot
+        xy_cam = np.array(cam_pairs, dtype=float).ravel()  # flatten finite residual pairs into helper input format
+        fig_cc = plot_residual_clusters(  # generate per-camera residual cluster on cleaned finite values
+            [xy_cam], titles=[cam], out_dir=plot_dir, title=title_cc)
+        if fig_cc is not None:  # guard helper return value
+            figures.append(fig_cc)  # store figure for return/show
+            _track(fig_cc, title_cc, is_plot=True)  # track expected per-camera cluster PNG path
 
     # ── 5e. Per-camera coverage scatter ───────────────────────────────────────
-    pp_path = phase4_result.get('per_point_path')            # per-point CSV from Phase 4
-    cam_set = phase3_result.get('cam_set') if phase3_result else None  # calibrated cameras
-    if pp_path and cache_exists(Path(pp_path)):              # per-point data available
-        pp_headers, pp_rows = load_csv(Path(pp_path))       # load per-point CSV
-        for cam in cam_names:                                # one scatter per camera
-            cam_pts = [(float(r[2]), float(r[3]), float(r[4]))  # (u, v, error)
-                       for r in pp_rows if r[0] == cam]
-            if not cam_pts:                                  # no points for this camera
-                continue
-            principal_pt = None                              # default: no principal point
-            if cam_set is not None:
-                try:
-                    mtx = cam_set[cam].intrinsic             # 3x3 camera matrix
-                    principal_pt = (float(mtx[0, 2]), float(mtx[1, 2]))  # (cx, cy)
-                except Exception:
-                    pass                                     # ignore if camera not in set
-            title_cov = f'Coverage {cam}'                    # coverage plot title
-            fig_cov = plot_coverage_scatter(                 # generate scatter plot
+    pp_path = phase4_result.get('per_point_path')  # resolve per-point CSV path produced by phase 4
+    cam_set = phase3_result.get('cam_set') if phase3_result else None  # extract calibrated camera set when available for principal-point overlays
+    if pp_path and cache_exists(Path(pp_path)):  # proceed only when per-point CSV exists on disk
+        pp_headers, pp_rows = load_csv(Path(pp_path))  # load per-point CSV rows for scatter plotting
+        for cam in cam_names:  # generate one coverage scatter per camera
+            cam_pts = [(float(r[2]), float(r[3]), float(r[4]))  # parse per-point row fields as (u,v,error)
+                       for r in pp_rows
+                       if r[0] == cam and np.isfinite(float(r[2])) and np.isfinite(float(r[3])) and np.isfinite(float(r[4]))]  # keep only finite triplets to avoid downstream plotting issues
+            if not cam_pts:  # skip camera if no finite per-point rows are available
+                continue  # move to next camera
+            principal_pt = None  # default principal-point marker is disabled unless camera matrix is available
+            if cam_set is not None:  # only try principal-point extraction when calibrated camera set is provided
+                try:  # guard against missing camera names or malformed intrinsics
+                    mtx = cam_set[cam].intrinsic  # read camera intrinsic matrix for current camera
+                    principal_pt = (float(mtx[0, 2]), float(mtx[1, 2]))  # extract principal point (cx,cy) for optional overlay marker
+                except Exception:  # ignore errors silently to keep plotting robust
+                    pass  # leave principal point as None when extraction fails
+            title_cov = f'Coverage {cam}'  # define title and filename stem for coverage scatter
+            fig_cov = plot_coverage_scatter(  # generate scatter showing image-plane sampling coverage and error magnitude
                 cam_pts, cam_name=cam, principal_point=principal_pt,
                 title=title_cov, out_dir=plot_dir)
-            if fig_cov is not None:
-                figures.append(fig_cov)
-                _track(fig_cov, title_cov, is_plot=True)
+            if fig_cov is not None:  # guard helper return value
+                figures.append(fig_cov)  # store figure for return/show
+                _track(fig_cov, title_cov, is_plot=True)  # track expected coverage PNG path
 
     # ── 5f. 3-D camera arrangement ────────────────────────────────────────────
-    if cam_set is not None:                                  # calibrated cameras available
-        title_arr = 'Camera Arrangement'                     # arrangement plot title
-        fig_arr = plot_camera_arrangement(                   # pyvista screenshot (optional)
+    if cam_set is not None:  # proceed only when calibrated cameras are available
+        title_arr = 'Camera Arrangement'  # define title and filename stem for arrangement visualisation
+        fig_arr = plot_camera_arrangement(  # request pyvista-based 3-D camera arrangement screenshot
             cam_set, title=title_arr, out_dir=plot_dir)
-        if fig_arr is not None:                              # None when pyvista unavailable
-            figures.append(fig_arr)
-            _track(fig_arr, title_arr, is_plot=True)
+        if fig_arr is not None:  # helper may return None if pyvista is unavailable
+            figures.append(fig_arr)  # store arrangement figure for return/show
+            _track(fig_arr, title_arr, is_plot=True)  # track expected arrangement PNG path
 
     # ── 5g. Log results and display ───────────────────────────────────────────
     print(f"[Phase 5g] Generated {len(figures)} plots; "
-          f"global mean error = {global_mean:.4f} px.")
-    if saved_pngs:
-        print(f"[Phase 5g] Saved {len(saved_pngs)} plot(s):")
-        for p in saved_pngs:
-            print(f"  {p}")
-    if saved_csvs:
-        print(f"[Phase 5g] Saved {len(saved_csvs)} summary CSV(s):")
-        for p in saved_csvs:
-            print(f"  {p}")
+          f"global mean error = {global_mean:.4f} px.")  # print concise phase summary with global error context
+    if saved_pngs:  # print saved plot list only when one or more PNG paths were recorded
+        print(f"[Phase 5g] Saved {len(saved_pngs)} plot(s):")  # report number of saved PNG files
+        for p in saved_pngs:  # iterate tracked plot paths for transparency
+            print(f"  {p}")  # print each saved plot path
+    if saved_csvs:  # print saved CSV list only when one or more summary files were recorded
+        print(f"[Phase 5g] Saved {len(saved_csvs)} summary CSV(s):")  # report number of saved summary CSV files
+        for p in saved_csvs:  # iterate tracked summary paths for transparency
+            print(f"  {p}")  # print each saved summary CSV path
 
-    if show_plots:                                           # display interactively if requested
-        plt.show()                                           # block until user closes windows
+    if show_plots:  # display figures interactively only when caller enabled this option
+        plt.show()  # block and render all generated figures in interactive windows
 
-    return {                                                 # bundle Phase 5 outputs
-        'figures': figures,
-        'saved_png_paths': saved_pngs,
-        'saved_csv_paths': saved_csvs,
+    return {  # return structured phase-5 outputs for downstream bad_pipeline reporting
+        'figures': figures,  # return list of generated figure objects
+        'saved_png_paths': saved_pngs,  # return list of PNG paths tracked during this phase
+        'saved_csv_paths': saved_csvs,  # return list of CSV paths tracked during this phase
     }
 
 
@@ -1209,7 +1313,7 @@ def run_phase6_self_calibration(
     current_cams = phase3_result['cam_set']                  # calibrated CameraSet from Phase 3
 
     # Prefer the detection stored inside the calibration handler (matches calibrate_ccube.py
-    # and pyCamSet's own test), falling back to pipeline detections if unavailable.
+    # and pyCamSet's own test), falling back to bad_pipeline detections if unavailable.
     _handler = getattr(current_cams, 'calibration_handler', None)  # may be None if loaded
     pruned_td = (getattr(_handler, 'detection', None)        # detection as seen by stereo BA
                  or phase3_result.get('detections')           # Phase 3 detections (high_distortion)
@@ -1318,9 +1422,9 @@ def run_pipeline(
     save_phase6_plots: bool = True,
 ) -> Dict[str, Any]:
     """
-    Run the full six-phase calibration pipeline.
+    Run the full six-phase calibration bad_pipeline.
     Each phase can independently load from cache or save its results to disk,
-    allowing the pipeline to resume from any phase without re-running earlier phases.
+    allowing the bad_pipeline to resume from any phase without re-running earlier phases.
 
     Auto-discovery and default paths
     ---------------------------------
@@ -1339,7 +1443,7 @@ def run_pipeline(
     A run-manifest (``run_manifest.json``) is saved in *out_dir* after each
     successful run.  On the next run the manifest is loaded and compared against
     the current effective configuration.  If the configs are compatible the
-    pipeline resumes from cached checkpoints transparently.  If any parameter
+    bad_pipeline resumes from cached checkpoints transparently.  If any parameter
     that affects a cached phase has changed, the cache for that phase (and all
     subsequent phases) is bypassed and recomputed from scratch.  A warning is
     logged for each phase whose cache is invalidated so the behaviour is always
@@ -1455,7 +1559,7 @@ def run_pipeline(
         load_phase6 = False                                      # Phase 6 cache invalid
 
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')     # human-readable run timestamp
-    print(f"=== pyCamSet pipeline start: {timestamp} ===")       # log run start
+    print(f"=== pyCamSet bad_pipeline start: {timestamp} ===")       # log run start
 
     # ── Phase 1: Detection ────────────────────────────────────────────────────
     p1 = run_phase1_detection(                               # detect corners in all images
@@ -1532,7 +1636,7 @@ def run_pipeline(
         save_plots=save_phase6_plots,                        # save PNG
     )
 
-    print("=== pyCamSet pipeline complete ===")              # log run end
+    print("=== pyCamSet bad_pipeline complete ===")              # log run end
 
     # ── Save updated run manifest ─────────────────────────────────────────────
     # Overwrite (or create) the manifest so the next run has an accurate
@@ -1551,3 +1655,71 @@ def run_pipeline(
         'phase5': p5,
         'phase6': p6,
     }
+
+if __name__ == "__main__":  # only execute this block when running this file directly in an IDE or terminal
+    from pathlib import Path  # import Path locally so the run block is self-contained for user editing
+
+    # ── User-editable run configuration (PyCharm-friendly) ───────────────────────
+    parent_folder = Path(r"E:\R_pan\Calibration\12h-33m-07s\filtered-per-image_cut_tiffs_12h-33m-07s")  # set root directory containing one subfolder per camera
+    camera_names = None  # leave as None to auto-discover camera folders; or set e.g. ["cam0", "cam1", "cam2"]
+    out_dir = None  # leave as None to default to parent_folder / "metadata"; or set Path("custom/output/path")
+    threads = 6  # set optimisation thread count; 6 is a reasonable starting point on an 8-core CPU
+    n_lim = None  # set integer to limit images per camera during detection; keep None to use all images
+    min_corners = 4  # set minimum corners required per image in phase-2 culling
+    high_distortion = False  # enable iterative high-distortion refinement path when True
+    enable_phase6_self_calibration = True  # enable optional phase-6 self-calibration when True
+    show_plots = True  # set True to display plots interactively at end of run
+
+    # ── Target selection flags (single-source-of-truth) ──────────────────────────
+    use_ccube = True  # default selection: Ccube enabled
+    use_charuco = False  # default selection: ChArUco disabled
+
+    # Enforce exactly one active target selection to avoid ambiguous configuration.
+    if use_ccube == use_charuco:  # True/True or False/False are both invalid states
+        raise ValueError(  # raise explicit configuration error for the user
+            "Invalid target selection: set exactly one of "
+            "'use_ccube' or 'use_charuco' to True."
+        )
+
+    # ── Target-specific parameters ────────────────────────────────────────────────
+    ccube_n_points = 6  # Ccube: number of ChArUco corners per side of each face
+    ccube_length_mm = 30.0  # Ccube: physical face side length in millimetres
+    ccube_aruco_dict_name = "DICT_4X4_1000"  # Ccube: OpenCV ArUco dictionary enum name
+    ccube_border_fraction = 0.2  # Ccube: marker border fraction used by the target model
+
+    charuco_squares_x = 20  # ChArUco: number of squares along x-axis
+    charuco_squares_y = 20  # ChArUco: number of squares along y-axis
+    charuco_square_size = 4  # ChArUco: class-specific sizing argument (units per your target convention)
+
+    # Build exactly one target object from the validated boolean selection.
+    if use_ccube:  # create a Ccube target when Ccube flag is active
+        aruco_enum = getattr(cv.aruco, ccube_aruco_dict_name)  # map dictionary name string to OpenCV enum value
+        target = Ccube(  # instantiate Ccube target object consumed by bad_pipeline detection/calibration
+            n_points=ccube_n_points,  # pass Ccube corners-per-side parameter
+            length=ccube_length_mm,  # pass physical face length parameter
+            aruco_dict=aruco_enum,  # pass OpenCV ArUco enum used by this target
+            border_fraction=ccube_border_fraction,  # pass border fraction for marker layout
+        )
+    else:  # create a ChArUco target when ChArUco flag is active
+        target = ChArUco(  # instantiate ChArUco target object consumed by bad_pipeline
+            charuco_squares_x,  # pass board width in squares
+            charuco_squares_y,  # pass board height in squares
+            charuco_square_size,  # pass target sizing argument expected by ChArUco class
+        )
+
+    # ── Execute bad_pipeline ───────────────────────────────────────────────────────────
+    results = run_pipeline(  # run the full phased bad_pipeline with explicit keyword arguments
+        parent_folder=parent_folder,  # provide dataset root path
+        camera_names=camera_names,  # provide explicit camera names or None for auto-discovery
+        out_dir=out_dir,  # provide explicit output directory or None for metadata default
+        target=target,  # provide the user-selected target object constructed above
+        threads=threads,  # provide optimisation thread count used by BA phases
+        n_lim=n_lim,  # provide optional image-limit parameter for detection
+        min_corners=min_corners,  # provide culling threshold for phase 2
+        high_distortion=high_distortion,  # provide optional high-distortion refinement toggle
+        enable_phase6_self_calibration=enable_phase6_self_calibration,  # provide optional phase-6 toggle
+        show_plots=show_plots,  # provide optional interactive plotting flag
+    )
+
+    print("Pipeline completed.")  # print completion message for quick IDE feedback
+    print(f"Completed phases: {list(results.keys())}")  # print top-level result keys for quick verification

@@ -1,6 +1,6 @@
 """
-Purpose: File-naming and save/load helpers for the pyCamSet phased calibration pipeline.
-         Handles .json, .csv, .txt, .pickle, and .camset formats used by the pipeline
+Purpose: File-naming and save/load helpers for the pyCamSet phased calibration bad_pipeline.
+         Handles .json, .csv, .txt, .pickle, and .camset formats used by the bad_pipeline
          phases.  Wraps pyCamSet's own save/load utilities where they already exist
          (save_camset, load_CameraSet) and provides lightweight stdlib-only helpers
          for the remaining formats.
@@ -40,7 +40,7 @@ def title_to_filename(title: str) -> str:
 
 def phase_cache_path(out_dir: Path, phase_name: str, ext: str) -> Path:
     """
-    Return a standardised cache file path for a pipeline phase.
+    Return a standardised cache file path for a bad_pipeline phase.
 
     The stem is derived from *phase_name* via title_to_filename() so that
     arbitrary phase names are safely converted to valid filenames.

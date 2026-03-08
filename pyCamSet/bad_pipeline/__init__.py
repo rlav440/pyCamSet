@@ -1,27 +1,27 @@
 """
-Purpose: Public API for the pyCamSet phased calibration pipeline.
+Purpose: Public API for the pyCamSet phased calibration bad_pipeline.
          Re-exports the six phase functions, the run_pipeline() orchestrator,
          file-caching helpers, and plot helpers so that callers can do:
-             from pyCamSet.pipeline import run_pipeline
-         Plot helpers live in pyCamSet.pipeline.pipeline_plots and are
+             from pyCamSet.bad_pipeline import run_pipeline
+         Plot helpers live in pyCamSet.bad_pipeline.pipeline_plots and are
          re-exported here for convenience.
 Status:  Working
 Future:  Add CLI entry-point and progress-callback support.
 """
 
 # Re-export the six phase functions and the top-level orchestrator.
-from pyCamSet.pipeline.phased_pipeline import (   # all six phases plus orchestrator
+from pyCamSet.bad_pipeline.phased_pipeline import (   # all six phases plus orchestrator
     run_phase1_detection,                          # Phase 1 — target construction and detection
     run_phase2_culling,                            # Phase 2 — image culling by detection count
     run_phase3_calibration,                        # Phase 3 — two-stage multi-camera calibration
     run_phase4_analysis,                           # Phase 4 — reprojection error analysis
     run_phase5_visualisation,                      # Phase 5 — calibration visualisation
     run_phase6_self_calibration,                   # Phase 6 — self (feature-free) bundle adjustment
-    run_pipeline,                                  # Full pipeline orchestrator (phases 1–6)
+    run_pipeline,                                  # Full bad_pipeline orchestrator (phases 1–6)
 )
 
 # Re-export caching helpers for users who want direct access.
-from pyCamSet.pipeline.pipeline_cache import (    # file I/O helpers
+from pyCamSet.bad_pipeline.pipeline_cache import (    # file I/O helpers
     save_json,                                     # write a dict to .json
     load_json,                                     # read a dict from .json
     save_csv,                                      # write rows to .csv
@@ -34,8 +34,8 @@ from pyCamSet.pipeline.pipeline_cache import (    # file I/O helpers
     cache_exists,                                  # check whether a cache file is non-empty
 )
 
-# Plot helpers live in pyCamSet.pipeline.pipeline_plots — re-exported here for convenience.
-from pyCamSet.pipeline.pipeline_plots import (    # headless plot helpers
+# Plot helpers live in pyCamSet.bad_pipeline.pipeline_plots — re-exported here for convenience.
+from pyCamSet.bad_pipeline.pipeline_plots import (    # headless plot helpers
     save_figure,                                   # save a matplotlib Figure to .png
     save_numeric_summary,                          # save a numeric dict to .csv
     plot_error_histogram,                          # histogram of reprojection errors

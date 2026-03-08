@@ -386,7 +386,7 @@ def make_4x4h_tform(euler_angles, trans, mode='opencv'):
 
 def px_array(res=[32, 32], startZero=False,):
     """
-    creates the index grid once during the full ingest pipeline
+    creates the index grid once during the full ingest bad_pipeline
     
     :param res: The resolution of the camera
     :param startZero: whether to start the grid at zero or have zero be the middle

@@ -1,18 +1,18 @@
 """
-Purpose: Plot-saving helpers for the pyCamSet phased calibration pipeline.
+Purpose: Plot-saving helpers for the pyCamSet phased calibration bad_pipeline.
          Re-exports the headless plotting functions from pyCamSet.utils.visualisation
          and exposes title_to_filename / save_csv from pipeline_cache so that
-         callers can use a single import for all pipeline plot utilities.
+         callers can use a single import for all bad_pipeline plot utilities.
 Status:  Working
 Future:  Add multi-page PDF export and resolution (DPI) configuration.
 """
 
-# File-naming and CSV helpers from the pipeline cache module
-from pyCamSet.pipeline.pipeline_cache import title_to_filename, save_csv  # re-exported for callers
+# File-naming and CSV helpers from the bad_pipeline cache module
+from pyCamSet.bad_pipeline.pipeline_cache import title_to_filename, save_csv  # re-exported for callers
 
 # All plotting functions live in pyCamSet.utils.visualisation (implemented there).
-# Re-export them here so that pipeline code can do:
-#   from pyCamSet.pipeline.pipeline_plots import plot_error_histogram, ...
+# Re-export them here so that bad_pipeline code can do:
+#   from pyCamSet.bad_pipeline.pipeline_plots import plot_error_histogram, ...
 from pyCamSet.utils.visualisation import (                    # headless plot helpers
     save_figure,                                              # save a matplotlib Figure to .png
     save_numeric_summary,                                     # save a numeric dict to .csv

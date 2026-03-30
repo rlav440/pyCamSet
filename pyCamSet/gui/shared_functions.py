@@ -16,30 +16,24 @@ Conventions
 """
 from __future__ import annotations
 
+import io
 import json
+import logging
 import re
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont, QPalette, QTextCursor
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
-    QFormLayout,
     QFrame,
-    QHBoxLayout,
     QLabel,
-    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
-    QSpinBox,
-    QSplitter,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -56,6 +50,8 @@ TAB_PHASE2 = "Phase 2 - Intrinsics"
 TAB_PHASE2_DIAG = "Phase 2 Diagnostics"
 TAB_PHASE3 = "Phase 3 - Bundle Adjustment"
 TAB_PHASE3_DIAG = "Phase 3 Diagnostics"
+TAB_PHASE4 = "Phase 4 - Self-Calibration"
+TAB_PHASE4_DIAG = "Phase 4 Diagnostics"
 
 # ---------------------------------------------------------------------------
 # Styling helpers
@@ -112,6 +108,14 @@ def make_orange_button(text: str, callback: Callable) -> QPushButton:
     """Return an orange push button connected to *callback*."""
     btn = QPushButton(text)
     btn.setStyleSheet(ORANGE_BTN_STYLE)
+    btn.clicked.connect(callback)
+    return btn
+
+
+def make_green_button(text: str, callback: Callable) -> QPushButton:
+    """Return a green push button connected to *callback*."""
+    btn = QPushButton(text)
+    btn.setStyleSheet(GREEN_BTN_STYLE)
     btn.clicked.connect(callback)
     return btn
 
@@ -217,10 +221,31 @@ class TerminalWidget(QTextEdit):
 class WorkspaceManager:
     """Manages workspace directory and run metadata."""
 
+    _PHASE_ALIASES = {
+        "phase5": "assess_calibration",
+        "phase_5": "assess_calibration",
+        "phase-5": "assess_calibration",
+        "phase 5": "assess_calibration",
+        "visualise_target": "assess_calibration",
+    }
+
     def __init__(self, workspace_path: Optional[Path] = None) -> None:
         self.workspace_path: Optional[Path] = Path(workspace_path) if workspace_path else None
         if self.workspace_path is not None:
             self.ensure_dirs()
+
+    @classmethod
+    def canonical_phase_name(cls, phase: str) -> str:
+        p = (phase or "").strip().lower()
+        return cls._PHASE_ALIASES.get(p, p)
+
+    @classmethod
+    def _phase_run_dirs(cls, phase: str) -> list[str]:
+        canonical = cls.canonical_phase_name(phase)
+        if canonical == "assess_calibration":
+            # Keep reading legacy folders created by earlier builds.
+            return ["assess_calibration_runs", "visualise_target_runs", "phase5_runs", "phase_5_runs"]
+        return [f"{canonical}_runs"]
 
     def set_workspace_path(self, workspace_path: Path, ensure: bool = True) -> None:
         """Set workspace path; optionally create standard sub-directories."""
@@ -232,14 +257,24 @@ class WorkspaceManager:
         """Create standard sub-directories if workspace path is set."""
         if self.workspace_path is None:
             return
-        for sub in ("phase0_runs", "phase1_runs", "phase2_runs", "phase3_runs", "phase4_runs", "phase5_runs"):
+        for sub in (
+            "phase0_runs",
+            "phase1_runs",
+            "phase2_runs",
+            "phase3_runs",
+            "phase4_runs",
+            "assess_calibration_runs",
+            "visualise_target_runs",
+            "phase5_runs",
+        ):
             (self.workspace_path / sub).mkdir(parents=True, exist_ok=True)
 
     def save_run(self, phase: str, run_id: str, metadata: dict) -> Path:
         """Persist metadata to <workspace>/<phase>_runs/<run_id>/metadata.json."""
         if self.workspace_path is None:
             raise RuntimeError("Workspace path is not set.")
-        run_dir = self.workspace_path / f"{phase}_runs" / run_id
+        phase_dir = self._phase_run_dirs(phase)[0]
+        run_dir = self.workspace_path / phase_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         meta_path = run_dir / "metadata.json"
         with open(meta_path, "w") as fh:
@@ -250,20 +285,24 @@ class WorkspaceManager:
         """Return all saved runs for phase sorted oldest-first."""
         if self.workspace_path is None:
             return []
-        runs_dir = self.workspace_path / f"{phase}_runs"
-        if not runs_dir.exists():
-            return []
+
         results: list[dict] = []
-        for run_dir in sorted(runs_dir.iterdir()):
-            meta_path = run_dir / "metadata.json"
-            if meta_path.exists():
-                try:
-                    with open(meta_path) as fh:
-                        data = json.load(fh)
-                    data.setdefault("run_id", run_dir.name)
-                    results.append(data)
-                except (json.JSONDecodeError, OSError):
-                    pass
+        for phase_dir in self._phase_run_dirs(phase):
+            runs_dir = self.workspace_path / phase_dir
+            if not runs_dir.exists():
+                continue
+            for run_dir in sorted(runs_dir.iterdir()):
+                meta_path = run_dir / "metadata.json"
+                if meta_path.exists():
+                    try:
+                        with open(meta_path) as fh:
+                            data = json.load(fh)
+                        data.setdefault("run_id", run_dir.name)
+                        results.append(data)
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
+        results.sort(key=lambda d: str(d.get("run_id", "")))
         return results
 
     def write_handoff(self, payload: dict) -> None:
@@ -326,7 +365,7 @@ class RunSelectorWidget(QWidget):
         return selected
 
     def refresh(self, runs: list[dict]) -> None:
-        """Repopulate with *runs* and pre-select the most recent 1–3."""
+        """Repopulate with *runs* and pre-select the most recent 1-3."""
         self._runs = runs
         self._list.clear()
         if not runs:
@@ -336,7 +375,8 @@ class RunSelectorWidget(QWidget):
         self._empty_lbl.hide()
         self._list.show()
         for run in runs:
-            self._list.addItem(QListWidgetItem(run.get("run_id", str(run))))
+            label = run.get("display_name") or run.get("run_id", str(run))
+            self._list.addItem(QListWidgetItem(str(label)))
         n = len(runs)
         for i in range(max(0, n - 3), n):
             self._list.item(i).setSelected(True)
@@ -448,4 +488,68 @@ def count_images_in_folder(folder: Path) -> int:
     if not folder.exists() or not folder.is_dir():
         return 0
     return sum(1 for p in folder.iterdir() if p.is_file() and p.suffix.lower() in _IMAGE_EXTS)
+
+
+def resolve_phase1_pickle_artifact(phase1_run: dict, ws_path: Path) -> Optional[Path]:
+    """Resolve detected_datapoints pickle robustly for older/newer run metadata."""
+    artifacts = phase1_run.get("artifacts") or {}
+    artifact_path = artifacts.get("detected_datapoints_pickle")
+    if artifact_path:
+        p = Path(artifact_path)
+        if p.exists():
+            return p
+
+    run_id = phase1_run.get("run_id")
+    if run_id:
+        p = ws_path / "phase1_runs" / str(run_id) / "detected_datapoints.pickle"
+        if p.exists():
+            return p
+
+    f_loc = (phase1_run.get("params") or {}).get("f_loc")
+    if f_loc:
+        p = Path(f_loc) / "detected_datapoints.pickle"
+        if p.exists():
+            return p
+
+    return None
+
+
+class EmitStream(io.TextIOBase):
+    """Redirect stream writes to a line-emitting callback."""
+
+    def __init__(self, emit: Callable[[str], None]):
+        super().__init__()
+        self._emit = emit
+        self._buf = ""
+
+    def write(self, s: str) -> int:
+        if not s:
+            return 0
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if line.strip():
+                self._emit(line)
+        return len(s)
+
+    def flush(self) -> None:
+        if self._buf.strip():
+            self._emit(self._buf.strip())
+        self._buf = ""
+
+
+class EmitLogHandler(logging.Handler):
+    """Forward Python logging records to a line-emitting callback."""
+
+    def __init__(self, emit: Callable[[str], None]):
+        super().__init__(level=logging.INFO)
+        self._emit = emit
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            if msg.strip():
+                self._emit(msg)
+        except Exception:
+            pass
 

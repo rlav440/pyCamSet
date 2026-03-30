@@ -8,7 +8,6 @@ Implements Phase 2 from phase_planning.md using existing pyCamSet functions:
 from __future__ import annotations
 
 import contextlib
-import io
 import json
 import logging
 from pathlib import Path
@@ -41,6 +40,8 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE2,
     TAB_PHASE2_DIAG,
     TAB_PHASE3,
+    EmitLogHandler,
+    EmitStream,
     PhaseWorker,
     RunSelectorWidget,
     TerminalWidget,
@@ -52,6 +53,7 @@ from pyCamSet.gui.shared_functions import (
     make_run_id,
     make_section_label,
     make_separator,
+    resolve_phase1_pickle_artifact,
 )
 
 try:
@@ -80,27 +82,7 @@ def _extract_detection_payload(payload):
 
 
 def _resolve_phase1_pickle(phase1_run: dict, ws_path: Path) -> Optional[Path]:
-    """Resolve the best available detected_datapoints pickle from a Phase 1 run."""
-    artifacts = phase1_run.get("artifacts") or {}
-    artifact_path = artifacts.get("detected_datapoints_pickle")
-    if artifact_path:
-        p = Path(artifact_path)
-        if p.exists():
-            return p
-
-    run_id = phase1_run.get("run_id")
-    if run_id:
-        p = ws_path / "phase1_runs" / str(run_id) / "detected_datapoints.pickle"
-        if p.exists():
-            return p
-
-    f_loc = (phase1_run.get("params") or {}).get("f_loc")
-    if f_loc:
-        p = Path(f_loc) / "detected_datapoints.pickle"
-        if p.exists():
-            return p
-
-    return None
+    return resolve_phase1_pickle_artifact(phase1_run, ws_path)
 
 
 def _make_grid_image(width: int, height: int, step: int = 48) -> np.ndarray:
@@ -131,44 +113,6 @@ def _make_grid_image(width: int, height: int, step: int = 48) -> np.ndarray:
     cv2.circle(img, (cx, cy), max(6, s // 4), (40, 40, 220), 2, lineType=cv2.LINE_AA)
 
     return img
-
-
-class _EmitStream(io.TextIOBase):
-    """Redirect stream writes to worker terminal emit callback."""
-    def __init__(self, emit):
-        super().__init__()
-        self._emit = emit
-        self._buf = ""
-
-    def write(self, s: str) -> int:
-        if not s:
-            return 0
-        self._buf += s
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            if line.strip():
-                self._emit(line)
-        return len(s)
-
-    def flush(self) -> None:
-        if self._buf.strip():
-            self._emit(self._buf.strip())
-        self._buf = ""
-
-
-class _EmitLogHandler(logging.Handler):
-    """Forward Python logging records to GUI terminal."""
-    def __init__(self, emit):
-        super().__init__(level=logging.INFO)
-        self._emit = emit
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            msg = self.format(record)
-            if msg.strip():
-                self._emit(msg)
-        except Exception:
-            pass
 
 
 class _SuppressDtctConfigFilter(logging.Filter):
@@ -564,8 +508,8 @@ class Phase2Tab(QWidget):
             detections = None
             cam_res = None
 
-            stream = _EmitStream(emit)
-            log_handler = _EmitLogHandler(emit)
+            stream = EmitStream(emit)
+            log_handler = EmitLogHandler(emit)
             log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
             root_logger = logging.getLogger()
             root_logger.addHandler(log_handler)

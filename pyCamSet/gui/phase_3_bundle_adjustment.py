@@ -7,7 +7,6 @@ bundle-adjustment functions and persisting run diagnostics.
 from __future__ import annotations
 
 import contextlib
-import io
 import json
 import logging
 from pathlib import Path
@@ -36,17 +35,26 @@ from PySide6.QtWidgets import (
 from pyCamSet.gui.shared_functions import (
     IMAGE_FOLDER_SCHEMATIC,
     TAB_PHASE3,
+    TAB_PHASE4,
+    EmitLogHandler,
+    EmitStream,
     PhaseWorker,
     RunSelectorWidget,
     TerminalWidget,
     WorkspaceManager,
     build_target,
     extract_detection,
-    make_continue_button,
     make_orange_button,
+    make_green_button,
     make_run_id,
     make_section_label,
     make_separator,
+    resolve_phase1_pickle_artifact,
+)
+from pyCamSet.gui.assess_calibration import (
+    AssessCalibrationWidget,
+    merge_phase3_phase4_runs,
+    ordered_visualisation_selection,
 )
 
 try:
@@ -75,50 +83,9 @@ def _extract_detection_payload(payload):
     return extract_detection(payload)
 
 
-class _EmitStream(io.TextIOBase):
-    """Redirect stream writes to worker terminal emit callback."""
-    def __init__(self, emit):
-        super().__init__()
-        self._emit = emit
-        self._buf = ""
-
-    def write(self, s: str) -> int:
-        if not s:
-            return 0
-        self._buf += s
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            if line.strip():
-                self._emit(line)
-        return len(s)
-
-    def flush(self) -> None:
-        if self._buf.strip():
-            self._emit(self._buf.strip())
-        self._buf = ""
-
-
-class _EmitLogHandler(logging.Handler):
-    """Forward Python logging records to GUI terminal."""
-    def __init__(self, emit):
-        super().__init__(level=logging.INFO)
-        self._emit = emit
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            msg = self.format(record)
-            if msg.strip():
-                self._emit(msg)
-        except Exception:
-            pass
-
-
 @contextlib.contextmanager
 def _suppress_matplotlib_gui():
-    """
-    Prevent Matplotlib GUI windows from being created in worker threads.
-    Keeps diagnostics generation non-interactive and thread-safe.
-    """
+    """Prevent Matplotlib GUI windows from being created in worker threads."""
     plt = None
     orig_show = None
     try:
@@ -141,27 +108,7 @@ def _suppress_matplotlib_gui():
 
 
 def _resolve_phase1_pickle(phase1_run: dict, ws_path: Path) -> Optional[Path]:
-    """Resolve detected_datapoints pickle robustly for older/newer run metadata."""
-    artifacts = phase1_run.get("artifacts") or {}
-    p = artifacts.get("detected_datapoints_pickle")
-    if p:
-        pp = Path(p)
-        if pp.exists():
-            return pp
-
-    rid = phase1_run.get("run_id")
-    if rid:
-        pp = ws_path / "phase1_runs" / str(rid) / "detected_datapoints.pickle"
-        if pp.exists():
-            return pp
-
-    f_loc = (phase1_run.get("params") or {}).get("f_loc")
-    if f_loc:
-        pp = Path(f_loc) / "detected_datapoints.pickle"
-        if pp.exists():
-            return pp
-
-    return None
+    return resolve_phase1_pickle_artifact(phase1_run, ws_path)
 
 
 class Phase3Tab(QWidget):
@@ -200,7 +147,7 @@ class Phase3Tab(QWidget):
         top_row.addWidget(form_widget, stretch=1)
 
         side = QWidget()
-        side.setFixedWidth(200)
+        side.setFixedWidth(240)
         side_layout = QVBoxLayout(side)
         side_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         top_row.addWidget(side)
@@ -288,10 +235,10 @@ class Phase3Tab(QWidget):
         run_btn.clicked.connect(self._run_phase3)
         btn_row.addWidget(run_btn)
         btn_row.addWidget(make_orange_button("Diagnostics ▼", self._open_diagnostics))
-        btn_row.addStretch()
+        side_layout.addWidget(make_green_button("Phase 4 - Self-Calibration", self._continue_to_phase4))
+        side_layout.addWidget(make_green_button("Assess Calibration", self._visualise_target_from_primary))
+        side_layout.addStretch()
         form.addRow(btn_row)
-
-        side_layout.addWidget(make_continue_button(self._continue_to_next))
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
@@ -467,8 +414,8 @@ class Phase3Tab(QWidget):
 
             diagnostics: dict = {}
 
-            stream = _EmitStream(emit)
-            log_handler = _EmitLogHandler(emit)
+            stream = EmitStream(emit)
+            log_handler = EmitLogHandler(emit)
             log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
             root_logger = logging.getLogger()
             root_logger.addHandler(log_handler)
@@ -644,13 +591,61 @@ class Phase3Tab(QWidget):
             self._diagnostics_tab.refresh()
             self._notebook.setCurrentWidget(self._diagnostics_tab)
 
-    def _continue_to_next(self) -> None:
+    def _continue_to_phase4(self) -> None:
         runs = self._workspace_mgr.load_runs("phase3")
         if not runs:
             QMessageBox.information(self, "No runs", "Run Phase 3 first.")
             return
-        self._workspace_mgr.write_handoff({"phase": "phase3", "runs": [runs[-1]]})
-        QMessageBox.information(self, "Handoff written", "handoff.json written for Phase 3.")
+
+        chosen = runs[-1]
+        f_loc = (chosen.get("params") or {}).get("f_loc")
+        run_id = chosen.get("run_id")
+        camset_path = (chosen.get("artifacts") or {}).get("optimised_camset")
+
+        self._workspace_mgr.write_handoff(
+            {
+                "phase": "phase3",
+                "runs": [chosen],
+                "image_folder": f_loc,
+                "phase3_run_id": run_id,
+                "optimised_camset": camset_path,
+            }
+        )
+
+        for i in range(self._notebook.count()):
+            if self._notebook.tabText(i) != TAB_PHASE4:
+                continue
+            phase4_tab = self._notebook.widget(i)
+
+            def _try_call(obj, names: tuple[str, ...], value: str) -> bool:
+                for meth in names:
+                    if hasattr(obj, meth):
+                        try:
+                            getattr(obj, meth)(value)
+                            return True
+                        except Exception:
+                            pass
+                return False
+
+            if f_loc:
+                _try_call(phase4_tab, ("set_image_folder", "set_floc", "set_image_path"), str(f_loc))
+            if run_id:
+                _try_call(phase4_tab, ("set_phase3_run_id", "set_selected_phase3_run_id"), str(run_id))
+            if camset_path:
+                _try_call(phase4_tab, ("set_phase3_camset_path", "set_camset_path"), str(camset_path))
+
+            self._notebook.setCurrentIndex(i)
+            return
+
+    def _visualise_target_from_primary(self) -> None:
+        if self._diagnostics_tab is None:
+            return
+        self._diagnostics_tab.refresh()
+        self._notebook.setCurrentWidget(self._diagnostics_tab)
+        self._diagnostics_tab.visualise_from_primary()
+
+    def _continue_to_next(self) -> None:
+        self._continue_to_phase4()
 
 
 class Phase3DiagnosticsTab(QWidget):
@@ -730,15 +725,26 @@ class Phase3DiagnosticsTab(QWidget):
         self._poses_layout = QVBoxLayout(self._poses_widget)
         self._sub_tabs.addTab(self._poses_widget, "Extrinsics View (D3.13)")
 
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(make_continue_button(self._continue_to_next))
-        root.addLayout(btn_row)
+        self._visual_widget = QWidget()
+        visual_layout = QVBoxLayout(self._visual_widget)
+        visual_btn_row = QHBoxLayout()
+        self._visual_btn = QPushButton("Assess Calibration")
+        self._visual_btn.clicked.connect(self._run_visualise_target)
+        visual_btn_row.addWidget(self._visual_btn)
+        visual_btn_row.addStretch()
+        visual_layout.addLayout(visual_btn_row)
+        self._visual_panel = AssessCalibrationWidget()
+        visual_layout.addWidget(self._visual_panel, stretch=1)
+        self._sub_tabs.addTab(self._visual_widget, "Assess Calibration")
 
         self.refresh()
 
     def refresh(self) -> None:
-        runs = self._workspace_mgr.load_runs("phase3")
+        runs = merge_phase3_phase4_runs(
+            self._workspace_mgr.load_runs("phase3"),
+            self._workspace_mgr.load_runs("phase4"),
+        )
+        self._all_runs = runs
         self._run_selector.refresh(runs)
         selected = self._run_selector.get_selected()
         self._render_summary(selected)
@@ -785,34 +791,38 @@ class Phase3DiagnosticsTab(QWidget):
             return
 
         for run in runs:
+            phase = str(run.get("phase", "phase3"))
             d = run.get("diagnostics", {})
-            hdr = QLabel(f"Run: {run.get('run_id', 'unknown')}")
+            hdr = QLabel(f"Run: {run.get('run_id', 'unknown')} ({phase})")
             hdr.setStyleSheet("font-weight: bold; margin-top: 8px;")
             self._summary_layout.addWidget(hdr)
 
             form = QFormLayout()
             form.setContentsMargins(16, 0, 0, 0)
-            form.addRow("D3.1 missing poses:", QLabel(str(d.get("D3.1_n_missing_poses", "—"))))
-            form.addRow("D3.2 outlier-removed poses:", QLabel(str(d.get("D3.2_n_outlier_removed", "—"))))
-            form.addRow("D3.5 initial euclid (px):", QLabel(f"{float(d.get('D3.5_initial_euclid_px', float('nan'))):.5f}"))
-            form.addRow("D3.6 final euclid (px):", QLabel(f"{float(d.get('D3.6_final_euclid_px', float('nan'))):.5f}"))
-            form.addRow("D3.7 reduction ratio:", QLabel(f"{float(d.get('D3.7_error_reduction_ratio', float('nan'))):.5f}"))
+            if phase != "phase3":
+                form.addRow("Note:", QLabel("This run is from Phase 4; D3 metrics are not available."))
+            else:
+                form.addRow("D3.1 missing poses:", QLabel(str(d.get("D3.1_n_missing_poses", "—"))))
+                form.addRow("D3.2 outlier-removed poses:", QLabel(str(d.get("D3.2_n_outlier_removed", "—"))))
+                form.addRow("D3.5 initial euclid (px):", QLabel(f"{float(d.get('D3.5_initial_euclid_px', float('nan'))):.5f}"))
+                form.addRow("D3.6 final euclid (px):", QLabel(f"{float(d.get('D3.6_final_euclid_px', float('nan'))):.5f}"))
+                form.addRow("D3.7 reduction ratio:", QLabel(f"{float(d.get('D3.7_error_reduction_ratio', float('nan'))):.5f}"))
 
-            s = d.get("D3.8_solver_status", {})
-            form.addRow("D3.8 solver status:", QLabel(f"{s.get('status', '—')} | success={s.get('success', '—')}"))
-            msg_lbl = QLabel(str(s.get("message", "—")))
-            msg_lbl.setWordWrap(True)
-            form.addRow("D3.8 solver message:", msg_lbl)
-            form.addRow("D3.9 nfev:", QLabel(str(d.get("D3.9_nfev", "—"))))
+                s = d.get("D3.8_solver_status", {})
+                form.addRow("D3.8 solver status:", QLabel(f"{s.get('status', '—')} | success={s.get('success', '—')}"))
+                msg_lbl = QLabel(str(s.get("message", "—")))
+                msg_lbl.setWordWrap(True)
+                form.addRow("D3.8 solver message:", msg_lbl)
+                form.addRow("D3.9 nfev:", QLabel(str(d.get("D3.9_nfev", "—"))))
 
-            ratio = d.get("D3.10_parameter_observation_ratio", {})
-            form.addRow(
-                "D3.10 params/obs:",
-                QLabel(
-                    f"{ratio.get('param_count', '—')} / {ratio.get('observation_count', '—')}"
-                    f" (ratio={float(ratio.get('ratio', float('nan'))):.6f})"
-                ),
-            )
+                ratio = d.get("D3.10_parameter_observation_ratio", {})
+                form.addRow(
+                    "D3.10 params/obs:",
+                    QLabel(
+                        f"{ratio.get('param_count', '—')} / {ratio.get('observation_count', '—')}"
+                        f" (ratio={float(ratio.get('ratio', float('nan'))):.6f})"
+                    ),
+                )
 
             if run.get("error"):
                 form.addRow("Error:", QLabel(str(run["error"])))
@@ -829,10 +839,14 @@ class Phase3DiagnosticsTab(QWidget):
                 item.widget().deleteLater()
 
         if not runs:
-            self._initial_layout.addWidget(QLabel("Select a run to view D3.4."))
+            self._initial_layout.addWidget(QLabel("Select at least one Phase 3 run to view D3.4."))
             return
 
-        run = runs[-1]
+        run = next((r for r in reversed(runs) if str(r.get("phase", "phase3")) == "phase3"), None)
+        if run is None:
+            self._initial_layout.addWidget(QLabel("Select at least one Phase 3 run to view D3.4."))
+            return
+
         vals = run.get("diagnostics", {}).get("D3.3_per_image_initial_reprojection", [])
         if not vals:
             self._initial_layout.addWidget(QLabel("No D3.3 data in selected run."))
@@ -866,10 +880,14 @@ class Phase3DiagnosticsTab(QWidget):
                 item.widget().deleteLater()
 
         if not runs:
-            self._residual_layout.addWidget(QLabel("Select a run to view D3.11/D3.12."))
+            self._residual_layout.addWidget(QLabel("Select at least one Phase 3 run to view D3.11/D3.12."))
             return
 
-        run = runs[-1]
+        run = next((r for r in reversed(runs) if str(r.get("phase", "phase3")) == "phase3"), None)
+        if run is None:
+            self._residual_layout.addWidget(QLabel("Select at least one Phase 3 run to view D3.11/D3.12."))
+            return
+
         d = run.get("diagnostics", {})
         per_cam = d.get("D3.12_per_camera_mean_reprojection", {})
 
@@ -912,10 +930,14 @@ class Phase3DiagnosticsTab(QWidget):
                 item.widget().deleteLater()
 
         if not runs:
-            self._poses_layout.addWidget(QLabel("Select a run to view D3.13."))
+            self._poses_layout.addWidget(QLabel("Select at least one Phase 3 run to view D3.13."))
             return
 
-        run = runs[-1]
+        run = next((r for r in reversed(runs) if str(r.get("phase", "phase3")) == "phase3"), None)
+        if run is None:
+            self._poses_layout.addWidget(QLabel("Select at least one Phase 3 run to view D3.13."))
+            return
+
         camset_path = run.get("artifacts", {}).get("optimised_camset")
         if not camset_path:
             self._poses_layout.addWidget(QLabel("No optimised camset artifact in selected run."))
@@ -958,6 +980,18 @@ class Phase3DiagnosticsTab(QWidget):
         ax.set_ylabel("Y")
         ax.set_zlabel("Z")
         self._poses_layout.addWidget(FigureCanvasQTAgg(fig))
+
+    def _run_visualise_target(self) -> None:
+        selected = self._run_selector.get_selected()
+        chosen = ordered_visualisation_selection(selected, getattr(self, "_all_runs", []), max_runs=2)
+        if not chosen:
+            QMessageBox.information(self, "Select runs", "Select one or two runs first.")
+            return
+        self._visual_panel.render_runs(chosen)
+
+    def visualise_from_primary(self) -> None:
+        self._sub_tabs.setCurrentWidget(self._visual_widget)
+        self._run_visualise_target()
 
     def _continue_to_next(self) -> None:
         selected = self._run_selector.get_selected()

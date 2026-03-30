@@ -32,6 +32,8 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE2_DIAG,
     TAB_PHASE3,
     TAB_PHASE3_DIAG,
+    TAB_PHASE4,
+    TAB_PHASE4_DIAG,
     WorkspaceManager,
 )
 
@@ -75,6 +77,7 @@ class PyCamSetApp(QMainWindow):
         from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab, Phase1Tab
         from pyCamSet.gui.phase_2_intrinsics import Phase2DiagnosticsTab, Phase2Tab
         from pyCamSet.gui.phase_3_bundle_adjustment import Phase3DiagnosticsTab, Phase3Tab
+        from pyCamSet.gui.phase_4_self_calibration import Phase4DiagnosticsTab, Phase4Tab
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -157,15 +160,33 @@ class PyCamSetApp(QMainWindow):
         diag3_idx = self._notebook.addTab(self.phase3_diag_tab, TAB_PHASE3_DIAG)
         self._notebook.tabBar().setTabVisible(diag3_idx, False)
 
+        self.phase4_tab = Phase4Tab(
+            notebook=self._notebook,
+            info_cb=self._info_cb,
+            terminal_cb=self._terminal_cb,
+            workspace_mgr=ws,
+        )
+        self._notebook.addTab(self.phase4_tab, TAB_PHASE4)
+
+        self.phase4_diag_tab = Phase4DiagnosticsTab(
+            notebook=self._notebook,
+            info_cb=self._info_cb,
+            workspace_mgr=ws,
+        )
+        diag4_idx = self._notebook.addTab(self.phase4_diag_tab, TAB_PHASE4_DIAG)
+        self._notebook.tabBar().setTabVisible(diag4_idx, False)
+
         # Cross-tab wiring
         self.phase1_tab.set_diagnostics_tab(self.phase1_diag_tab)
         self.phase2_tab.set_diagnostics_tab(self.phase2_diag_tab)
         self.phase3_tab.set_diagnostics_tab(self.phase3_diag_tab)
+        self.phase4_tab.set_diagnostics_tab(self.phase4_diag_tab)
 
         def _propagate_image_folder(path: str) -> None:
             self.phase1_tab.set_image_folder(path)
             self.phase2_tab.set_image_folder(path)
             self.phase3_tab.set_image_folder(path)
+            self.phase4_tab.set_image_folder(path)
 
         self.phase0_tab.set_phase1_path_callback(_propagate_image_folder)
 
@@ -179,6 +200,7 @@ class PyCamSetApp(QMainWindow):
 
         self._notebook.currentChanged.connect(self._on_tab_changed)
         self._apply_phase3_handoff()
+        self._apply_phase4_handoff()
 
     def _apply_generic_option_tooltips(self, root: QWidget, phase_name: str) -> None:
         for w in root.findChildren(QWidget):
@@ -327,11 +349,66 @@ class PyCamSetApp(QMainWindow):
                     except Exception:
                         pass
 
+    def _apply_phase4_handoff(self) -> None:
+        payload = self._read_handoff()
+        if not payload or payload.get("phase") != "phase3":
+            return
+
+        run = None
+        runs = payload.get("runs") or []
+        if runs:
+            run = runs[0]
+
+        f_loc = payload.get("image_folder") or ((run or {}).get("params") or {}).get("f_loc")
+        run_id = payload.get("phase3_run_id") or (run or {}).get("run_id")
+        camset_path = payload.get("optimised_camset") or ((run or {}).get("artifacts") or {}).get("optimised_camset")
+        tab = self.phase4_tab
+
+        if f_loc:
+            for meth in ("set_image_folder", "set_floc", "set_image_path"):
+                if hasattr(tab, meth):
+                    try:
+                        getattr(tab, meth)(str(f_loc))
+                        break
+                    except Exception:
+                        pass
+
+        if run_id:
+            for meth in ("set_phase3_run_id", "set_selected_phase3_run_id"):
+                if hasattr(tab, meth):
+                    try:
+                        getattr(tab, meth)(str(run_id))
+                        break
+                    except Exception:
+                        pass
+            for combo in tab.findChildren(QComboBox):
+                idx = combo.findData(str(run_id))
+                if idx < 0:
+                    idx = combo.findText(str(run_id))
+                if idx >= 0:
+                    try:
+                        combo.setCurrentIndex(idx)
+                        break
+                    except Exception:
+                        pass
+
+        if camset_path:
+            for meth in ("set_phase3_camset_path", "set_camset_path"):
+                if hasattr(tab, meth):
+                    try:
+                        getattr(tab, meth)(str(camset_path))
+                        break
+                    except Exception:
+                        pass
+
     def _on_tab_changed(self, index: int) -> None:
         name = self._notebook.tabText(index)
         if name == TAB_PHASE3:
             self._apply_phase3_handoff()
             self._normalize_outlier_combos(self.phase3_tab)
+        elif name == TAB_PHASE4:
+            self._apply_phase4_handoff()
+            self._normalize_outlier_combos(self.phase4_tab)
         elif name == TAB_PHASE2:
             self._normalize_outlier_combos(self.phase2_tab)
 

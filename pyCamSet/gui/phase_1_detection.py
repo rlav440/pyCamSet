@@ -22,16 +22,25 @@ D1.7 Minimum features in any image–camera pair.
 from __future__ import annotations
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Optional
+import contextlib
+import io
+import logging
+import math
+import pickle
+import shutil
 
 import numpy as np
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -46,11 +55,15 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
+    IMAGE_FOLDER_SCHEMATIC,
+    TAB_PHASE1,
     TAB_PHASE1_DIAG,
     PhaseWorker,
     RunSelectorWidget,
     TerminalWidget,
     WorkspaceManager,
+    count_images_in_folder,
+    get_camera_subfolders,
     make_continue_button,
     make_orange_button,
     make_run_id,
@@ -66,12 +79,50 @@ try:
     )
     from pyCamSet.calibration_targets.target_Ccube import Ccube
     from pyCamSet.calibration_targets.target_charuco import ChArUco
-    from pyCamSet.utils.general_utils import get_subfolder_names
     _PYCAMSET_OK = True
 except ImportError:
     _PYCAMSET_OK = False
 
 _TARGET_CHOICES = ["Ccube", "ChArUco"]
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+
+
+class _EmitStream(io.TextIOBase):
+    """Redirect stream writes to the worker terminal emit callback."""
+    def __init__(self, emit):
+        super().__init__()
+        self._emit = emit
+        self._buf = ""
+
+    def write(self, s: str) -> int:
+        if not s:
+            return 0
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if line.strip():
+                self._emit(line)
+        return len(s)
+
+    def flush(self) -> None:
+        if self._buf.strip():
+            self._emit(self._buf.strip())
+        self._buf = ""
+
+
+class _EmitLogHandler(logging.Handler):
+    """Forward Python logging records to GUI terminal."""
+    def __init__(self, emit):
+        super().__init__(level=logging.INFO)
+        self._emit = emit
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            if msg.strip():
+                self._emit(msg)
+        except Exception:
+            pass
 
 
 def _build_target(target_type: str, n_points: int, length: float):
@@ -141,8 +192,10 @@ class Phase1Tab(QWidget):
         floc_row = QHBoxLayout()
         self._floc_edit = QLineEdit()
         self._floc_edit.setPlaceholderText("Root folder with per-camera sub-folders")
+        self._floc_edit.setToolTip(IMAGE_FOLDER_SCHEMATIC)
         floc_btn = QPushButton("Browse…")
         floc_btn.setFixedWidth(70)
+        floc_btn.setToolTip("Select the root folder that contains one subfolder per camera.")
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
         floc_row.addWidget(floc_btn)
@@ -152,25 +205,38 @@ class Phase1Tab(QWidget):
         form.addRow(make_separator())
         form.addRow(make_section_label("Detection Options"))
 
-        self._draw_cb = QCheckBox("Draw detections (draw)")
-        self._draw_cb.setToolTip(
-            "Render corner overlays on each image as it is processed."
-        )
-        form.addRow(self._draw_cb)
-
         self._cache_cb = QCheckBox("Cache detections (caching)")
         self._cache_cb.setChecked(True)
         self._cache_cb.setToolTip(
-            "Save/load detected_datapoints.pickle.  "
-            "Disable to force re-detection."
+            "If enabled, pyCamSet can reuse saved detections when available."
         )
         form.addRow(self._cache_cb)
+
+        self._hd_cb = QCheckBox("High Distortion Mode")
+        self._hd_cb.setToolTip("Enable for very wide/FOV-distorted imagery.")
+        form.addRow(self._hd_cb)
 
         self._nlim_edit = QLineEdit()
         self._nlim_edit.setPlaceholderText("blank = no limit")
         self._nlim_edit.setFixedWidth(100)
-        self._nlim_edit.setToolTip("Max images per camera folder.")
+        self._nlim_edit.setToolTip("Optional cap on number of images processed per camera.")
         form.addRow("Max images per camera (n_lim):", self._nlim_edit)
+
+        self._threads_edit = QLineEdit()
+        self._threads_edit.setPlaceholderText("blank = auto")
+        self._threads_edit.setFixedWidth(100)
+        self._threads_edit.setToolTip("Optional worker thread count (integer).")
+        form.addRow("Threads:", self._threads_edit)
+
+        self._fp_edit = QLineEdit()
+        self._fp_edit.setPlaceholderText('e.g. {"cam0": "int"} or blank')
+        self._fp_edit.setToolTip("Optional JSON dict for fixed camera parameters.")
+        form.addRow("Fixed params (JSON):", self._fp_edit)
+
+        self._po_edit = QLineEdit()
+        self._po_edit.setPlaceholderText("JSON dict or blank")
+        self._po_edit.setToolTip("Optional JSON dict for backend/problem options.")
+        form.addRow("Problem options (JSON):", self._po_edit)
 
         # ── Target configuration ───────────────────────────────────────
         form.addRow(make_separator())
@@ -189,21 +255,24 @@ class Phase1Tab(QWidget):
         self._npts_spin.setValue(6)
         self._npts_spin.setFixedWidth(80)
         self._npts_spin.setToolTip(
-            "For Ccube: points per face edge.  For ChArUco: squares in x."
+            "For Ccube: points per face edge. For ChArUco: squares in x."
         )
         form.addRow("n_points / squares_x:", self._npts_spin)
 
         self._length_edit = QLineEdit("30.0")
         self._length_edit.setFixedWidth(100)
-        self._length_edit.setToolTip("Physical size of the target feature in millimetres.")
+        self._length_edit.setToolTip("Physical feature size in millimetres.")
         form.addRow("Length / square size (mm):", self._length_edit)
 
         # ── Action buttons ─────────────────────────────────────────────
         btn_row = QHBoxLayout()
         run_btn = QPushButton("▶  Run Phase 1")
+        run_btn.setToolTip("Run target detection for the selected image folder.")
         run_btn.clicked.connect(self._run_phase1)
         btn_row.addWidget(run_btn)
-        btn_row.addWidget(make_orange_button("Diagnostics ▼", self._open_diagnostics))
+        diag_btn = make_orange_button("Diagnostics ▼", self._open_diagnostics)
+        diag_btn.setToolTip("Open Phase 1 diagnostics (hidden tab).")
+        btn_row.addWidget(diag_btn)
         btn_row.addStretch()
         form.addRow(btn_row)
 
@@ -220,6 +289,9 @@ class Phase1Tab(QWidget):
         path = QFileDialog.getExistingDirectory(self, "Select image folder")
         if path:
             self._floc_edit.setText(path)
+
+    def set_image_folder(self, path: str) -> None:
+        self._floc_edit.setText(path)
 
     def _collect_params(self) -> Optional[dict]:
         floc = self._floc_edit.text().strip()
@@ -241,11 +313,39 @@ class Phase1Tab(QWidget):
             QMessageBox.critical(self, "Validation Error", "Length must be a number.")
             return None
 
+        threads = None
+        if self._threads_edit.text().strip():
+            try:
+                threads = int(self._threads_edit.text().strip())
+            except ValueError:
+                QMessageBox.critical(self, "Validation Error", "Threads must be an integer.")
+                return None
+
+        import json
+        fixed_params = None
+        if self._fp_edit.text().strip():
+            try:
+                fixed_params = json.loads(self._fp_edit.text().strip())
+            except json.JSONDecodeError as exc:
+                QMessageBox.critical(self, "Validation Error", f"Fixed params JSON: {exc}")
+                return None
+
+        problem_options = None
+        if self._po_edit.text().strip():
+            try:
+                problem_options = json.loads(self._po_edit.text().strip())
+            except json.JSONDecodeError as exc:
+                QMessageBox.critical(self, "Validation Error", f"Problem options JSON: {exc}")
+                return None
+
         return {
             "f_loc": floc,
-            "draw": self._draw_cb.isChecked(),
             "caching": self._cache_cb.isChecked(),
+            "high_distortion": self._hd_cb.isChecked(),
             "n_lim": n_lim,
+            "threads": threads,
+            "fixed_params": fixed_params,
+            "problem_options": problem_options,
             "target_type": self._target_combo.currentText(),
             "n_points": self._npts_spin.value(),
             "length": length,
@@ -264,131 +364,203 @@ class Phase1Tab(QWidget):
             f"(n={params['n_points']}, length={params['length']} mm)"
         )
         self._terminal.append_line(f"caching      : {params['caching']}")
-        self._terminal.append_line(f"draw         : {params['draw']}")
-        self._terminal.append_line(f"n_lim        : {params['n_lim']}")
+        self._terminal.append_line(f"high_distort : {params['high_distortion']}")
+        self._terminal.append_line(f"threads      : {params['threads'] or 'auto'}")
         self._terminal.append_line("Starting detection…")
 
         def work_fn(emit: callable) -> dict:
             diagnostics: dict = {}
             error_msg: Optional[str] = None
+            det_pickle_src: Optional[Path] = None
+
+            stream = _EmitStream(emit)
+            log_handler = _EmitLogHandler(emit)
+            log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
+            root_logger = logging.getLogger()
+            root_logger.addHandler(log_handler)
 
             try:
-                f_loc = Path(params["f_loc"])
+                with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+                    f_loc = Path(params["f_loc"])
 
-                if not _PYCAMSET_OK:
-                    raise RuntimeError(
-                        "pyCamSet calibration module not importable.  "
-                        "Check your installation."
+                    cam_folders = get_camera_subfolders(f_loc)
+                    cam_names = [p.name for p in cam_folders]
+                    cam_img_counts = {p.name: count_images_in_folder(p) for p in cam_folders}
+                    emit(f"1a  Camera sub-folders: {cam_names}")
+                    if len(cam_folders) < 2:
+                        raise RuntimeError("Need at least two camera sub-folders.")
+                    counts = [count_images_in_folder(p) for p in cam_folders]
+                    if not counts or any(c <= 0 for c in counts) or len(set(counts)) != 1:
+                        raise RuntimeError("Camera folders must contain equal non-zero image counts.")
+
+                    target = _build_target(
+                        params["target_type"],
+                        params["n_points"],
+                        params["length"],
                     )
 
-                # 1a — existing get_subfolder_names
-                cam_names = get_subfolder_names(f_loc)
-                emit(f"1a  Camera sub-folders: {cam_names}")
+                    detect_root = f_loc
+                    tmp_ctx: Optional[TemporaryDirectory] = None
+                    root_entries = list(f_loc.iterdir())
+                    allowed = {p.name for p in cam_folders}
+                    has_extra_entries = any(p.name not in allowed for p in root_entries)
+                    if has_extra_entries:
+                        tmp_ctx = TemporaryDirectory(prefix="pycamset_phase1_")
+                        detect_root = Path(tmp_ctx.name)
+                        emit("1a  Using filtered staging folder (camera subfolders only).")
+                        for cam in cam_folders:
+                            dst = detect_root / cam.name
+                            try:
+                                dst.symlink_to(cam, target_is_directory=True)
+                            except Exception:
+                                shutil.copytree(cam, dst)
 
-                # Build target from existing pyCamSet classes
-                target = _build_target(
-                    params["target_type"],
-                    params["n_points"],
-                    params["length"],
-                )
-
-                # 1b — existing detect_datapoints_in_imfile
-                detections, cam_res = detect_datapoints_in_imfile(
-                    f_loc=f_loc,
-                    calibration_target=target,
-                    caching=params["caching"],
-                    draw=params["draw"],
-                    n_lim=params["n_lim"],
-                )
-                emit("1b  Detection complete.")
-
-                # 1c — existing validate_detections
-                validate_detections(detections, target)
-                emit("1c  Validation complete.")
-
-                # ── Diagnostics ──────────────────────────────────────
-                try:
-                    # D1.1 — existing get_cam_list
-                    total_per_cam: dict[str, int] = {}
-                    for cam_det in detections.get_cam_list():
-                        cam_idx = int(cam_det.get_data()[0, 0])
-                        cam_name = detections.cam_names[cam_idx]
-                        total_per_cam[cam_name] = len(cam_det.get_data())
-                    diagnostics["D1.1_total_detections"] = total_per_cam
-                    for cam, n in total_per_cam.items():
-                        emit(f"D1.1  {cam}: {n} detections")
-
-                    # D1.2 + D1.3 — replicate validate_detections logic
-                    corners_per_face = target.point_data.shape[-2]
-                    det_rate: dict[str, float] = {}
-                    completeness: dict[str, float] = {}
-                    for cam_det in detections.get_cam_list():
-                        cam_idx = int(cam_det.get_data()[0, 0])
-                        cam_name = detections.cam_names[cam_idx]
-                        detected_boards = 0
-                        fracs: list[float] = []
-                        for im_det in cam_det.get_image_list():
-                            datum = im_det.get_data()
-                            if datum is not None:
-                                detected_boards += 1
-                                n_keys = datum.shape[1] - 4
-                                if n_keys == 1:
-                                    fracs.append(datum.shape[0] / corners_per_face)
-                                else:
-                                    n_boards = len(np.unique(datum[:, 2:-2], axis=0))
-                                    fracs.append(
-                                        datum.shape[0] / corners_per_face / max(n_boards, 1)
-                                    )
-                        det_rate[cam_name] = detected_boards / detections.max_ims
-                        completeness[cam_name] = float(np.mean(fracs)) if fracs else 0.0
-                    diagnostics["D1.2_detection_rate"] = det_rate
-                    diagnostics["D1.3_board_completeness"] = completeness
-                    for cam in detections.cam_names:
-                        r = det_rate.get(cam, 0) * 100
-                        c = completeness.get(cam, 0) * 100
-                        emit(f"D1.2/D1.3  {cam}: rate={r:.1f}% completeness={c:.1f}%")
-
-                    # D1.4 — existing features_per_im_per_cam
-                    fpm = detections.features_per_im_per_cam()
-                    diagnostics["D1.4_features_matrix"] = fpm.tolist()
-
-                    # D1.6 — spatial coverage
                     try:
-                        from scipy.spatial import ConvexHull
-                        coverage: dict[str, float] = {}
-                        for cam_det, res in zip(detections.get_cam_list(), cam_res):
-                            cam_idx = int(cam_det.get_data()[0, 0])
+                        detections, cam_res = detect_datapoints_in_imfile(
+                            f_loc=detect_root,
+                            calibration_target=target,
+                            caching=params["caching"],
+                            draw=False,
+                            n_lim=params["n_lim"],
+                        )
+                        emit("1b  Detection complete.")
+
+                        if detect_root != f_loc:
+                            for artifact_name in ("detected_datapoints.pickle",):
+                                src = detect_root / artifact_name
+                                if src.exists():
+                                    dst = f_loc / artifact_name
+                                    shutil.copy2(src, dst)
+                                    if artifact_name == "detected_datapoints.pickle":
+                                        det_pickle_src = dst
+                        else:
+                            cand = f_loc / "detected_datapoints.pickle"
+                            if cand.exists():
+                                det_pickle_src = cand
+
+                    finally:
+                        if tmp_ctx is not None:
+                            tmp_ctx.cleanup()
+
+                    validate_detections(detections, target)
+                    emit("1c  Validation complete.")
+
+                    try:
+                        # D1.1 unchanged
+                        total_per_cam: dict[str, int] = {}
+                        for cam_det in detections.get_cam_list():
+                            data = cam_det.get_data()
+                            if data is None or len(data) == 0:
+                                continue
+                            cam_idx = int(data[0, 0])
                             cam_name = detections.cam_names[cam_idx]
-                            pts = cam_det.get_data()[:, -2:]
-                            img_area = float(res[0]) * float(res[1])
-                            if len(pts) >= 3:
-                                try:
-                                    hull_area = ConvexHull(pts).volume
-                                    coverage[cam_name] = hull_area / img_area
-                                except Exception:
+                            total_per_cam[cam_name] = len(data)
+                        diagnostics["D1.1_total_detections"] = total_per_cam
+
+                        # D1.2 / D1.3 revised
+                        corners_per_face = int(target.point_data.shape[-2])
+                        det_rate: dict[str, float] = {}
+                        completeness: dict[str, float] = {}
+
+                        for cam_det in detections.get_cam_list():
+                            data0 = cam_det.get_data()
+                            if data0 is None or len(data0) == 0:
+                                continue
+                            cam_idx = int(data0[0, 0])
+                            cam_name = detections.cam_names[cam_idx]
+                            expected = int(cam_img_counts.get(cam_name, detections.max_ims))
+                            if params["n_lim"] is not None:
+                                expected = min(expected, int(params["n_lim"]))
+                            expected = max(expected, 1)
+
+                            detected_images = 0
+                            per_image_frac: list[float] = []
+
+                            for im_det in cam_det.get_image_list():
+                                datum = im_det.get_data()
+                                if datum is None or len(datum) == 0:
+                                    continue
+                                detected_images += 1
+
+                                id_cols = datum[:, 2:-2]
+                                if id_cols.ndim == 1:
+                                    id_cols = id_cols.reshape(-1, 1)
+
+                                if id_cols.shape[1] <= 0:
+                                    continue
+
+                                if id_cols.shape[1] == 1:
+                                    # point-id only
+                                    n_unique_points = len(np.unique(id_cols[:, 0]))
+                                    per_image_frac.append(n_unique_points / max(corners_per_face, 1))
+                                else:
+                                    # board-id columns + final point-id column
+                                    board_cols = id_cols[:, :-1]
+                                    point_col = id_cols[:, -1]
+                                    board_ids = np.unique(board_cols, axis=0)
+                                    board_fracs: list[float] = []
+                                    for b in board_ids:
+                                        mask = np.all(board_cols == b, axis=1)
+                                        n_unique_points = len(np.unique(point_col[mask]))
+                                        board_fracs.append(n_unique_points / max(corners_per_face, 1))
+                                    if board_fracs:
+                                        per_image_frac.append(float(np.mean(board_fracs)))
+
+                            det_rate[cam_name] = float(detected_images) / float(expected)
+                            completeness[cam_name] = float(np.mean(per_image_frac)) if per_image_frac else 0.0
+
+                        diagnostics["D1.2_detection_rate"] = det_rate
+                        diagnostics["D1.3_board_completeness"] = completeness
+
+                        for cam in detections.cam_names:
+                            r = det_rate.get(cam, 0.0) * 100.0
+                            c = completeness.get(cam, 0.0) * 100.0
+                            emit(f"D1.2/D1.3  {cam}: rate={r:.1f}% completeness={c:.1f}%")
+
+                        # D1.4 — existing features_per_im_per_cam
+                        fpm = detections.features_per_im_per_cam()
+                        diagnostics["D1.4_features_matrix"] = fpm.tolist()
+
+                        # D1.6 — spatial coverage
+                        try:
+                            from scipy.spatial import ConvexHull
+                            coverage: dict[str, float] = {}
+                            for cam_det, res in zip(detections.get_cam_list(), cam_res):
+                                cam_idx = int(cam_det.get_data()[0, 0])
+                                cam_name = detections.cam_names[cam_idx]
+                                pts = cam_det.get_data()[:, -2:]
+                                img_area = float(res[0]) * float(res[1])
+                                if len(pts) >= 3:
+                                    try:
+                                        hull_area = ConvexHull(pts).volume
+                                        coverage[cam_name] = hull_area / img_area
+                                    except Exception:
+                                        coverage[cam_name] = float("nan")
+                                else:
                                     coverage[cam_name] = float("nan")
-                            else:
-                                coverage[cam_name] = float("nan")
-                        diagnostics["D1.6_spatial_coverage"] = coverage
-                    except ImportError:
-                        pass
+                            diagnostics["D1.6_spatial_coverage"] = coverage
+                        except ImportError:
+                            pass
 
-                    # D1.7 — min features
-                    min_feat = int(np.min(fpm[fpm > 0])) if np.any(fpm > 0) else 0
-                    diagnostics["D1.7_min_features"] = min_feat
-                    emit(f"D1.7  Min features in any image–camera: {min_feat}")
+                        # D1.7 — min features
+                        min_feat = int(np.min(fpm[fpm > 0])) if np.any(fpm > 0) else 0
+                        diagnostics["D1.7_min_features"] = min_feat
+                        emit(f"D1.7  Min features in any image–camera: {min_feat}")
 
-                    diagnostics["cam_names"] = detections.cam_names
-                    diagnostics["n_images"] = int(detections.max_ims)
+                        diagnostics["cam_names"] = detections.cam_names
+                        diagnostics["n_images"] = int(detections.max_ims)
 
-                except Exception as diag_exc:
-                    emit(f"  (partial diagnostics: {diag_exc})")
+                    except Exception as diag_exc:
+                        emit(f"  (partial diagnostics: {diag_exc})")
 
-                emit("Phase 1 complete.")
+                    emit("Phase 1 complete.")
 
             except Exception as exc:
                 error_msg = str(exc)
                 diagnostics["error"] = error_msg
+            finally:
+                stream.flush()
+                root_logger.removeHandler(log_handler)
 
             run_id = make_run_id()
             metadata = {
@@ -398,7 +570,26 @@ class Phase1Tab(QWidget):
                 "diagnostics": diagnostics,
                 "error": error_msg,
             }
-            self._workspace_mgr.save_run("phase1", run_id, metadata)
+
+            # Save metadata first, then copy per-run artifacts and update metadata.
+            meta_path = self._workspace_mgr.save_run("phase1", run_id, metadata)
+            run_dir = meta_path.parent
+            run_pickle = run_dir / "detected_datapoints.pickle"
+
+            if det_pickle_src is None:
+                cand = Path(params["f_loc"]) / "detected_datapoints.pickle"
+                if cand.exists():
+                    det_pickle_src = cand
+
+            if det_pickle_src is not None and det_pickle_src.exists():
+                try:
+                    shutil.copy2(det_pickle_src, run_pickle)
+                    metadata.setdefault("artifacts", {})["detected_datapoints_pickle"] = str(run_pickle)
+                    self._workspace_mgr.save_run("phase1", run_id, metadata)
+                    emit(f"Artifact saved: {run_pickle}")
+                except Exception as copy_exc:
+                    emit(f"Warning: could not save run-local pickle: {copy_exc}")
+
             emit(f"Run saved: {run_id}")
             return metadata
 
@@ -415,10 +606,7 @@ class Phase1Tab(QWidget):
     def _open_diagnostics(self) -> None:
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
-        for i in range(self._notebook.count()):
-            if self._notebook.tabText(i) == TAB_PHASE1_DIAG:
-                self._notebook.setCurrentIndex(i)
-                return
+            self._notebook.setCurrentWidget(self._diagnostics_tab)
 
     def _continue_to_next(self) -> None:
         runs = self._workspace_mgr.load_runs("phase1")
@@ -458,11 +646,23 @@ class Phase1DiagnosticsTab(QWidget):
         self._notebook = notebook
         self._info_cb = info_cb
         self._workspace_mgr = workspace_mgr
+
+        self._draw_state: dict = {}
+        self._draw_index: int = 0
+        self._draw_status_lbl: Optional[QLabel] = None
+
         self._build_ui()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
+
+        top_btn_row = QHBoxLayout()
+        top_btn_row.addWidget(
+            make_orange_button("▲ Detection Settings", self._go_to_detection_settings)
+        )
+        top_btn_row.addStretch()
+        root.addLayout(top_btn_row)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         root.addWidget(splitter, stretch=1)
@@ -496,7 +696,6 @@ class Phase1DiagnosticsTab(QWidget):
 
         splitter.setSizes([200, 700])
 
-        # Summary sub-tab
         self._summary_widget = QWidget()
         self._summary_scroll = QScrollArea()
         self._summary_scroll.setWidgetResizable(True)
@@ -508,16 +707,38 @@ class Phase1DiagnosticsTab(QWidget):
         summary_root = QVBoxLayout(self._summary_widget)
         summary_root.addWidget(self._summary_scroll)
         self._sub_tabs.addTab(self._summary_widget, "Summary (D1.1–D1.3, D1.6–D1.7)")
+        self._sub_tabs.tabBar().setTabToolTip(
+            0,
+            "Summary metrics:\n"
+            "D1.1 total detections per camera\n"
+            "D1.2 detection rate (%)\n"
+            "D1.3 board completeness (%)\n"
+            "D1.6 spatial coverage\n"
+            "D1.7 minimum features",
+        )
 
-        # Heatmap sub-tab
         self._heatmap_widget = QWidget()
         self._heatmap_layout = QVBoxLayout(self._heatmap_widget)
         self._sub_tabs.addTab(self._heatmap_widget, "Heatmap (D1.4)")
+        self._sub_tabs.tabBar().setTabToolTip(
+            1, "D1.4 features-per-image-per-camera heatmap."
+        )
 
-        # Montage sub-tab
         self._montage_widget = QWidget()
         self._montage_layout = QVBoxLayout(self._montage_widget)
-        self._sub_tabs.addTab(self._montage_widget, "Montage (D1.5)")
+        self._sub_tabs.addTab(self._montage_widget, "Draw Detections")
+        self._sub_tabs.tabBar().setTabToolTip(
+            2, "Render an in-GUI montage with detected points overlaid (D1.5)."
+        )
+
+        # Keyboard navigation for Draw Detections tab
+        self._prev_shortcut = QShortcut(QKeySequence(Qt.Key_Left), self._montage_widget)
+        self._prev_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._prev_shortcut.activated.connect(lambda: self._step_draw_image(-1))
+
+        self._next_shortcut = QShortcut(QKeySequence(Qt.Key_Right), self._montage_widget)
+        self._next_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._next_shortcut.activated.connect(lambda: self._step_draw_image(+1))
 
         # ── Bottom: continue button ────────────────────────────────────
         btn_row = QHBoxLayout()
@@ -536,9 +757,18 @@ class Phase1DiagnosticsTab(QWidget):
         self._render_montage(selected)
 
     def _on_selection_changed(self, runs: list[dict]) -> None:
+        self._run_selector.enforce_max_selection(5)
+        runs = self._run_selector.get_selected()
         self._render_summary(runs)
         self._render_heatmap(runs)
         self._render_montage(runs)
+
+    def _go_to_detection_settings(self) -> None:
+        """Return from hidden diagnostics tab to main Phase 1 tab."""
+        for i in range(self._notebook.count()):
+            if self._notebook.tabText(i) == TAB_PHASE1:
+                self._notebook.setCurrentIndex(i)
+                return
 
     # ------------------------------------------------------------------
 
@@ -551,72 +781,167 @@ class Phase1DiagnosticsTab(QWidget):
                 self._clear_layout(item.layout())
 
         if not runs:
-            lbl = QLabel("Select one or more runs from the list to compare.")
+            lbl = QLabel("Select one or more runs (up to 5) from the list to compare.")
             lbl.setStyleSheet("color: gray;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._summary_layout.addWidget(lbl)
             return
 
+        try:
+            import matplotlib
+            matplotlib.use("QtAgg")
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        except ImportError:
+            lbl = QLabel("matplotlib not available — cannot render summary plots.")
+            lbl.setStyleSheet("color: gray;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._summary_layout.addWidget(lbl)
+            return
+
+        runs = runs[-5:]
+        run_ids = [r.get("run_id", "unknown") for r in runs]
+        short_ids = [rid[-8:] if len(rid) > 8 else rid for rid in run_ids]
+
+        d11_vals, d12_vals, d13_vals, d16_vals, d17_vals = [], [], [], [], []
+        for run in runs:
+            d = run.get("diagnostics", {})
+            det_dict = d.get("D1.1_total_detections", {}) or {}
+            rate_dict = d.get("D1.2_detection_rate", {}) or {}
+            comp_dict = d.get("D1.3_board_completeness", {}) or {}
+            cov_dict = d.get("D1.6_spatial_coverage", {}) or {}
+
+            d11_vals.append(float(sum(det_dict.values())) if det_dict else 0.0)
+            d12_vals.append(float(np.mean(list(rate_dict.values())) * 100.0) if rate_dict else 0.0)
+            d13_vals.append(float(np.mean(list(comp_dict.values())) * 100.0) if comp_dict else 0.0)
+            cov_vals = [float(v) for v in cov_dict.values() if np.isfinite(v)]
+            d16_vals.append(float(np.mean(cov_vals) * 100.0) if cov_vals else 0.0)
+            try:
+                d17_vals.append(float(d.get("D1.7_min_features", 0) or 0))
+            except Exception:
+                d17_vals.append(0.0)
+
+        metric_specs = [
+            ("D1.1 Total Detections", d11_vals, "count"),
+            ("D1.2 Detection Rate %", d12_vals, "%"),
+            ("D1.3 Completeness %", d13_vals, "%"),
+            ("D1.6 Coverage %", d16_vals, "%"),
+            ("D1.7 Min Features", d17_vals, "count"),
+        ]
+
+        self._summary_layout.addWidget(make_section_label("Summary plots"))
+
+        plots_host = QWidget()
+        plots_grid = QGridLayout(plots_host)
+        plots_grid.setContentsMargins(0, 0, 0, 0)
+        plots_grid.setHorizontalSpacing(14)
+        plots_grid.setVerticalSpacing(14)
+
+        # Larger plots + wrap rows to avoid squishing.
+        avail_w = max(1, self._summary_scroll.viewport().width())
+        target_plot_w_px = 520
+        n_cols = max(1, min(3, avail_w // target_plot_w_px))
+
+        cmap = matplotlib.colormaps.get_cmap("tab10")
+        x = np.arange(len(runs))
+
+        for i, (title, vals, ylab) in enumerate(metric_specs):
+            fig = Figure(figsize=(5.4, 3.8), tight_layout=True)
+            ax = fig.add_subplot(111)
+            colors = [cmap(k % 10) for k in range(len(runs))]
+            bars = ax.bar(x, vals, color=colors, edgecolor="#222222", linewidth=0.4)
+            ax.set_title(title, fontsize=10)
+            ax.set_ylabel(ylab, fontsize=9)
+            ax.set_xticks(x)
+            ax.set_xticklabels(short_ids, rotation=25, ha="right", fontsize=8)
+            ax.grid(axis="y", alpha=0.25)
+
+            # Value labels for readability
+            for b, v in zip(bars, vals):
+                ax.text(
+                    b.get_x() + b.get_width() / 2.0,
+                    b.get_height(),
+                    f"{v:.1f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=7,
+                )
+
+            canvas = FigureCanvasQTAgg(fig)
+            canvas.setMinimumSize(500, 330)
+
+            r = i // n_cols
+            c = i % n_cols
+            plots_grid.addWidget(canvas, r, c)
+
+        self._summary_layout.addWidget(plots_host)
+        self._summary_layout.addWidget(make_separator())
+        self._summary_layout.addWidget(make_section_label("Per-run tables"))
+
+        # Restored earlier compact table-style layout per run
         for run in runs:
             run_id = run.get("run_id", "unknown")
+            d = run.get("diagnostics", {})
+
+            det_dict = d.get("D1.1_total_detections", {}) or {}
+            rate_dict = d.get("D1.2_detection_rate", {}) or {}
+            comp_dict = d.get("D1.3_board_completeness", {}) or {}
+            cov_dict = d.get("D1.6_spatial_coverage", {}) or {}
+
             hdr = QLabel(f"Run: {run_id}")
             hdr.setStyleSheet("font-weight: bold; margin-top: 8px;")
             self._summary_layout.addWidget(hdr)
 
-            d = run.get("diagnostics", {})
-            p = run.get("params", {})
-            cam_names = d.get("cam_names", list(d.get("D1.1_total_detections", {}).keys()))
-
-            form = QFormLayout()
-            form.setContentsMargins(16, 0, 0, 0)
-            form.addRow("f_loc:", QLabel(str(p.get("f_loc", "—"))))
-            form.addRow(
-                "target:",
-                QLabel(
-                    f"{p.get('target_type','—')} n={p.get('n_points','—')}"
-                    f" L={p.get('length','—')} mm"
-                ),
+            # Top summary lines (same content, compact style)
+            cov_vals = [float(v) for v in cov_dict.values() if np.isfinite(v)]
+            summary_form = QFormLayout()
+            summary_form.setContentsMargins(16, 0, 0, 0)
+            summary_form.addRow("D1.1 Total detections (sum):", QLabel(str(int(sum(det_dict.values())) if det_dict else 0)))
+            summary_form.addRow(
+                "D1.2 Detection Rate % (mean):",
+                QLabel(f"{(float(np.mean(list(rate_dict.values())) * 100.0) if rate_dict else 0.0):.2f}"),
             )
-            form.addRow("D1.7  Min features:", QLabel(str(d.get("D1.7_min_features", "—"))))
-            self._summary_layout.addLayout(form)
+            summary_form.addRow(
+                "D1.3 Completeness % (mean):",
+                QLabel(f"{(float(np.mean(list(comp_dict.values())) * 100.0) if comp_dict else 0.0):.2f}"),
+            )
+            summary_form.addRow(
+                "D1.6 Coverage % (mean):",
+                QLabel(f"{(float(np.mean(cov_vals) * 100.0) if cov_vals else 0.0):.2f}"),
+            )
+            summary_form.addRow("D1.7 Min features:", QLabel(str(d.get("D1.7_min_features", "—"))))
+            self._summary_layout.addLayout(summary_form)
 
-            if cam_names:
-                # Table header
-                hdr_row = QHBoxLayout()
-                for hdr_text, stretch in [
+            cams = sorted(set(det_dict.keys()) | set(rate_dict.keys()) | set(comp_dict.keys()) | set(cov_dict.keys()))
+            if cams:
+                head = QHBoxLayout()
+                for text, stretch in [
                     ("Camera", 2),
                     ("D1.1 Detections", 1),
-                    ("D1.2 Rate %", 1),
+                    ("D1.2 Detection Rate %", 1),
                     ("D1.3 Completeness %", 1),
-                    ("D1.6 Coverage", 1),
+                    ("D1.6 Coverage %", 1),
                 ]:
-                    lbl = QLabel(hdr_text)
+                    lbl = QLabel(text)
                     lbl.setStyleSheet("font-weight: bold;")
-                    hdr_row.addWidget(lbl, stretch=stretch)
-                self._summary_layout.addLayout(hdr_row)
+                    head.addWidget(lbl, stretch=stretch)
+                self._summary_layout.addLayout(head)
 
-                det = d.get("D1.1_total_detections", {})
-                rate = d.get("D1.2_detection_rate", {})
-                comp = d.get("D1.3_board_completeness", {})
-                cov = d.get("D1.6_spatial_coverage", {})
+                # Data rows
+                for cam in cams:
+                    row = QHBoxLayout()
+                    d11 = int(det_dict.get(cam, 0))
+                    d12 = float(rate_dict.get(cam, 0.0) * 100.0)
+                    d13 = float(comp_dict.get(cam, 0.0) * 100.0)
+                    c16 = cov_dict.get(cam, float("nan"))
+                    d16s = f"{(float(c16) * 100.0):.1f}" if np.isfinite(c16) else "—"
 
-                for cam in cam_names:
-                    cam_row = QHBoxLayout()
-                    for val, stretch in [
-                        (cam, 2),
-                        (str(det.get(cam, "—")), 1),
-                        (f"{rate.get(cam, 0)*100:.1f}" if cam in rate else "—", 1),
-                        (f"{comp.get(cam, 0)*100:.1f}" if cam in comp else "—", 1),
-                        (f"{cov.get(cam, float('nan')):.3f}" if cam in cov else "—", 1),
-                    ]:
-                        cam_row.addWidget(QLabel(val), stretch=stretch)
-                    self._summary_layout.addLayout(cam_row)
-
-            if run.get("error"):
-                err_lbl = QLabel(f"Error: {run['error']}")
-                err_lbl.setStyleSheet("color: red;")
-                err_lbl.setWordWrap(True)
-                self._summary_layout.addWidget(err_lbl)
+                    row.addWidget(QLabel(cam), stretch=2)
+                    row.addWidget(QLabel(str(d11)), stretch=1)
+                    row.addWidget(QLabel(f"{d12:.1f}"), stretch=1)
+                    row.addWidget(QLabel(f"{d13:.1f}"), stretch=1)
+                    row.addWidget(QLabel(d16s), stretch=1)
+                    self._summary_layout.addLayout(row)
 
             self._summary_layout.addWidget(make_separator())
 
@@ -690,33 +1015,303 @@ class Phase1DiagnosticsTab(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        self._montage_layout.addWidget(make_section_label("D1.5 — Detection overlay montage"))
+        title = make_section_label("Draw Detections (D1.5)")
+        title.setToolTip("Render camera images with detected feature points overlaid.")
+        self._montage_layout.addWidget(title)
 
-        msg = QLabel(
-            "Detection overlays are rendered live when the Phase 1 run is executed "
-            "with 'Draw detections' enabled (draw=True).  Each frame is shown via "
-            "OpenCV's imshow() as it is processed.\n\n"
-            "The raw detection data is saved to:\n"
-            "  <f_loc>/detected_datapoints.pickle\n\n"
-            "You can reload and visualise detections at any time by loading that "
-            "file via pyCamSet.utils.saving.load_pickle() and calling "
-            "target.find_in_imfolder(..., draw=True) again with caching=False."
+        nav_row = QHBoxLayout()
+        prev_btn = QPushButton("◀")
+        prev_btn.setToolTip("Previous detected image (Left Arrow key).")
+        prev_btn.clicked.connect(lambda: self._step_draw_image(-1))
+        nav_row.addWidget(prev_btn)
+
+        next_btn = QPushButton("▶")
+        next_btn.setToolTip("Next detected image (Right Arrow key).")
+        next_btn.clicked.connect(lambda: self._step_draw_image(+1))
+        nav_row.addWidget(next_btn)
+
+        self._draw_status_lbl = QLabel("Image 0 of 0")
+        nav_row.addWidget(self._draw_status_lbl)
+        nav_row.addStretch()
+        self._montage_layout.addLayout(nav_row)
+
+        info = QLabel(
+            "Select one or more runs on the left, then click 'Draw Detections'. "
+            "Use ◀/▶ buttons or keyboard Left/Right to cycle images."
         )
-        msg.setWordWrap(True)
-        self._montage_layout.addWidget(msg)
+        info.setWordWrap(True)
+        self._montage_layout.addWidget(info)
+
+        draw_btn = QPushButton("Draw Detections")
+        draw_btn.setToolTip("Render the latest selected run with available detection data.")
+        draw_btn.clicked.connect(self._draw_detections_clicked)
+        self._montage_layout.addWidget(draw_btn)
 
         for run in runs:
-            floc = run.get("params", {}).get("f_loc", "")
-            if floc:
-                pickle_path = Path(floc) / "detected_datapoints.pickle"
-                exists = "✓ exists" if pickle_path.exists() else "✗ not found"
-                color = "#2e7d32" if pickle_path.exists() else "#b71c1c"
-                path_lbl = QLabel(f"{pickle_path}  [{exists}]")
-                path_lbl.setStyleSheet(f"color: {color};")
-                path_lbl.setWordWrap(True)
-                self._montage_layout.addWidget(path_lbl)
+            pkl_path = self._resolve_pickle_path_for_run(run)
+            if pkl_path is None:
+                continue
+            exists = "✓ exists" if pkl_path.exists() else "✗ not found"
+            color = "#2e7d32" if pkl_path.exists() else "#b71c1c"
+            path_lbl = QLabel(f"{pkl_path}  [{exists}]")
+            path_lbl.setStyleSheet(f"color: {color};")
+            path_lbl.setWordWrap(True)
+            self._montage_layout.addWidget(path_lbl)
 
         self._montage_layout.addStretch()
+
+    def open_draw_detections_for_latest(self) -> None:
+        """Programmatically open D1.5 tab and render latest run with detections."""
+        self._sub_tabs.setCurrentIndex(2)  # Draw Detections tab
+        runs = self._workspace_mgr.load_runs("phase1")
+        if not runs:
+            return
+        chosen = None
+        for run in reversed(runs):
+            p = self._resolve_pickle_path_for_run(run)
+            if p is not None and p.exists():
+                chosen = run
+                break
+        if chosen is not None:
+            self._draw_detections_for_run(chosen, show_errors=False)
+
+    def _draw_detections_clicked(self) -> None:
+        runs = self._run_selector.get_selected()
+        if not runs:
+            QMessageBox.information(self, "No run selected", "Select at least one run.")
+            return
+
+        chosen = None
+        for run in reversed(runs):
+            p = self._resolve_pickle_path_for_run(run)
+            if p is not None and p.exists():
+                chosen = run
+                break
+
+        if chosen is None:
+            QMessageBox.warning(
+                self,
+                "No detections file",
+                "No selected run has an available detected_datapoints.pickle.",
+            )
+            return
+
+        self._draw_detections_for_run(chosen, show_errors=True)
+
+    def _draw_detections_for_run(self, chosen: dict, show_errors: bool = True) -> None:
+        try:
+            import matplotlib
+            matplotlib.use("QtAgg")
+            import matplotlib.image as mpimg
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        except ImportError:
+            if show_errors:
+                QMessageBox.warning(self, "Missing dependency", "matplotlib is required.")
+            return
+
+        floc = Path(chosen["params"]["f_loc"])
+        det_path = self._resolve_pickle_path_for_run(chosen)
+        if det_path is None or not det_path.exists():
+            if show_errors:
+                QMessageBox.warning(self, "No detections file", "No pickle found for this run.")
+            return
+
+        try:
+            with open(det_path, "rb") as fh:
+                payload = pickle.load(fh)
+            detections = self._extract_detections_obj(payload)
+            if detections is None:
+                raise TypeError("Unsupported pickle payload (no object with get_cam_list).")
+        except Exception as exc:
+            if show_errors:
+                QMessageBox.critical(self, "Load error", f"Could not load detections pickle:\n{exc}")
+            return
+
+        cam_map = {}
+        for cam_det in detections.get_cam_list():
+            data = cam_det.get_data()
+            if data is not None and len(data):
+                cam_idx = int(data[0, 0])
+                cam_map[detections.cam_names[cam_idx]] = cam_det
+
+        cam_folders = {p.name: p for p in get_camera_subfolders(floc)}
+        cams = [c for c in detections.cam_names if c in cam_folders]
+        if not cams:
+            if show_errors:
+                QMessageBox.warning(self, "No cameras", "No matching camera folders found.")
+            return
+
+        # Build fast draw state
+        cam_images: dict[str, list[Path]] = {}
+        cam_points: dict[str, dict[int, np.ndarray]] = {}
+        max_images = 0
+
+        for cam in cams:
+            ims = sorted([p for p in cam_folders[cam].iterdir() if p.is_file() and p.suffix.lower() in _IMAGE_EXTS])
+            cam_images[cam] = ims
+            max_images = max(max_images, len(ims))
+            per_im: dict[int, np.ndarray] = {}
+            cam_det = cam_map.get(cam, None)
+            data = cam_det.get_data() if cam_det is not None else None
+            if data is not None and len(data) and data.shape[1] >= 2:
+                for im_idx in np.unique(data[:, 1].astype(int)):
+                    pts = data[data[:, 1].astype(int) == int(im_idx)][:, -2:]
+                    per_im[int(im_idx)] = pts
+            cam_points[cam] = per_im
+
+        if max_images <= 0:
+            if show_errors:
+                QMessageBox.warning(self, "No images", "No images found in camera folders.")
+            return
+
+        while self._montage_layout.count():
+            item = self._montage_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # top controls
+        title = make_section_label("Draw Detections (D1.5)")
+        self._montage_layout.addWidget(title)
+        nav_row = QHBoxLayout()
+        prev_btn = QPushButton("◀")
+        prev_btn.clicked.connect(lambda: self._step_draw_image(-1))
+        nav_row.addWidget(prev_btn)
+        next_btn = QPushButton("▶")
+        next_btn.clicked.connect(lambda: self._step_draw_image(+1))
+        nav_row.addWidget(next_btn)
+        self._draw_status_lbl = QLabel("Image 0 of 0")
+        nav_row.addWidget(self._draw_status_lbl)
+        nav_row.addStretch()
+        self._montage_layout.addLayout(nav_row)
+
+        n = len(cams)
+        cols = min(3, n)
+        rows = int(math.ceil(n / cols))
+        fig = Figure(figsize=(5 * cols, 3.5 * rows), tight_layout=True)
+        canvas = FigureCanvasQTAgg(fig)
+
+        axes: dict[str, object] = {}
+        im_art: dict[str, object] = {}
+        sc_art: dict[str, object] = {}
+        empty = np.empty((0, 2))
+
+        for i, cam in enumerate(cams, start=1):
+            ax = fig.add_subplot(rows, cols, i)
+            axes[cam] = ax
+            ims = cam_images[cam]
+            if not ims:
+                ax.set_title(f"{cam} (no images)")
+                ax.axis("off")
+                continue
+            img0 = mpimg.imread(ims[0])
+            im_artist = ax.imshow(img0, cmap="gray" if getattr(img0, "ndim", 3) == 2 else None)
+            sc_artist = ax.scatter([], [], s=10, c="lime", marker="o", linewidths=0.4)
+            ax.axis("off")
+            im_art[cam] = im_artist
+            sc_art[cam] = sc_artist
+
+        self._montage_layout.addWidget(canvas)
+        self._montage_layout.addStretch()
+
+        self._draw_state = {
+            "fig": fig,
+            "canvas": canvas,
+            "cams": cams,
+            "cam_images": cam_images,
+            "cam_points": cam_points,
+            "axes": axes,
+            "im_art": im_art,
+            "sc_art": sc_art,
+            "max_images": max_images,
+            "empty": empty,
+            "mpimg": mpimg,
+        }
+        self._draw_index = 0
+        self._update_draw_frame()
+
+    def _step_draw_image(self, delta: int) -> None:
+        if not self._draw_state:
+            return
+        if self._sub_tabs.currentIndex() != 2:
+            return
+        n = int(self._draw_state.get("max_images", 0))
+        if n <= 0:
+            return
+        self._draw_index = (self._draw_index + delta) % n
+        self._update_draw_frame()
+
+    def _update_draw_frame(self) -> None:
+        if not self._draw_state:
+            return
+
+        cams = self._draw_state["cams"]
+        cam_images = self._draw_state["cam_images"]
+        cam_points = self._draw_state["cam_points"]
+        axes = self._draw_state["axes"]
+        im_art = self._draw_state["im_art"]
+        sc_art = self._draw_state["sc_art"]
+        max_images = int(self._draw_state["max_images"])
+        empty = self._draw_state["empty"]
+        mpimg = self._draw_state["mpimg"]
+
+        idx = self._draw_index % max_images
+        for cam in cams:
+            ims = cam_images.get(cam, [])
+            ax = axes.get(cam)
+            if ax is None:
+                continue
+            if not ims or cam not in im_art:
+                ax.set_title(f"{cam} (no images)")
+                continue
+
+            im_idx = idx % len(ims)
+            img = mpimg.imread(ims[im_idx])
+            im_art[cam].set_data(img)
+
+            pts = cam_points.get(cam, {}).get(im_idx, empty)
+            sc_art[cam].set_offsets(pts if len(pts) else empty)
+            ax.set_title(f"{cam} | im {im_idx} | pts {len(pts)}")
+
+        if self._draw_status_lbl is not None:
+            self._draw_status_lbl.setText(f"Image 0 of 0")
+        self._draw_state["canvas"].draw_idle()
+
+    def _resolve_pickle_path_for_run(self, run: dict) -> Optional[Path]:
+        """Resolve detected_datapoints.pickle path for a Phase 1 run."""
+        art_path = run.get("artifacts", {}).get("detected_datapoints_pickle")
+        if art_path:
+            return Path(art_path)
+
+        run_id = run.get("run_id")
+        if run_id:
+            p = self._workspace_mgr.workspace_path / "phase1_runs" / run_id / "detected_datapoints.pickle"
+            if p.exists():
+                return p
+
+        f_loc = run.get("params", {}).get("f_loc")
+        if f_loc:
+            return Path(f_loc) / "detected_datapoints.pickle"
+
+        return None
+
+    @staticmethod
+    def _extract_detections_obj(payload):
+        if hasattr(payload, "get_cam_list"):
+            return payload
+        if isinstance(payload, (tuple, list)):
+            for item in payload:
+                if hasattr(item, "get_cam_list"):
+                    return item
+        if isinstance(payload, dict):
+            for key in ("detections", "target_detection", "target_detections", "data"):
+                item = payload.get(key)
+                if hasattr(item, "get_cam_list"):
+                    return item
+            for item in payload.values():
+                if hasattr(item, "get_cam_list"):
+                    return item
+        return None
 
     @staticmethod
     def _clear_layout(layout) -> None:
@@ -729,15 +1324,29 @@ class Phase1DiagnosticsTab(QWidget):
 
     def _continue_to_next(self) -> None:
         selected = self._run_selector.get_selected()
+
         if not selected:
-            runs = self._workspace_mgr.load_runs("phase1")
-            selected = runs[-1:] if runs else []
-        if not selected:
-            QMessageBox.information(self, "No runs", "No Phase 1 runs available.")
+            QMessageBox.information(
+                self,
+                "Select one run",
+                "Please select exactly one Phase 1 run to continue to Phase 2.",
+            )
             return
-        self._workspace_mgr.write_handoff({"phase": "phase1", "runs": selected})
+
+        if len(selected) > 1:
+            QMessageBox.information(
+                self,
+                "Select one run",
+                "Multiple runs are selected. Please select exactly one run to continue to Phase 2.",
+            )
+            return
+
+        chosen = selected[0]
+        self._workspace_mgr.write_handoff({"phase": "phase1", "runs": [chosen]})
         QMessageBox.information(
             self,
             "Handoff written",
-            "handoff.json written to workspace.\nProceed to Phase 2.",
+            f"Run {chosen.get('run_id', 'unknown')} set for Phase 2.\n"
+            "handoff.json written to workspace.",
         )
+

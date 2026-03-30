@@ -1,0 +1,21 @@
+{
+  "run_id": "20260330_171714_d211f4",
+  "phase": "phase1",
+  "params": {
+    "f_loc": "E:/R_pan/Calibration/12h-33m-07s/filtered-per-image_cut_tiffs_12h-33m-07s",
+    "draw": true,
+    "caching": true,
+    "high_distortion": false,
+    "n_lim": null,
+    "threads": null,
+    "fixed_params": null,
+    "problem_options": null,
+    "target_type": "Ccube",
+    "n_points": 6,
+    "length": 30.0
+  },
+  "diagnostics": {
+    "error": "OpenCV(4.13.0) D:\\a\\opencv-python\\opencv-python\\opencv\\modules\\highgui\\src\\window.cpp:1301: error: (-2:Unspecified error) The function is not implemented. Rebuild the library with Windows, GTK+ 2.x or Cocoa support. If you are on Ubuntu or Debian, install libgtk2.0-dev and pkg-config, then re-run cmake or configure script in function 'cvShowImage'\n"
+  },
+  "error": "OpenCV(4.13.0) D:\\a\\opencv-python\\opencv-python\\opencv\\modules\\highgui\\src\\window.cpp:1301: error: (-2:Unspecified error) The function is not implemented. Rebuild the library with Windows, GTK+ 2.x or Cocoa support. If you are on Ubuntu or Debian, install libgtk2.0-dev and pkg-config, then re-run cmake or configure script in function 'cvShowImage'\n"
+}

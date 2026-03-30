@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyCamSet.gui.shared_functions import TAB_PHASE0_DIAG, TAB_PHASE1, WorkspaceManager
+from pyCamSet.gui.shared_functions import TAB_PHASE0, TAB_PHASE1, TAB_PHASE1_DIAG, WorkspaceManager
 
 
 class PyCamSetApp(QMainWindow):
@@ -60,7 +60,7 @@ class PyCamSetApp(QMainWindow):
 
     def _build_ui(self) -> None:
         # Deferred imports so module is importable without a display server
-        from pyCamSet.gui.phase_0_input import Phase0DiagnosticsTab, Phase0Tab
+        from pyCamSet.gui.phase_0_input import Phase0Tab
         from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab, Phase1Tab
 
         central = QWidget()
@@ -94,14 +94,7 @@ class PyCamSetApp(QMainWindow):
             terminal_cb=self._terminal_cb,
             workspace_mgr=ws,
         )
-        self._notebook.addTab(self.phase0_tab, "Phase 0")
-
-        self.phase0_diag_tab = Phase0DiagnosticsTab(
-            notebook=self._notebook,
-            info_cb=self._info_cb,
-            workspace_mgr=ws,
-        )
-        self._notebook.addTab(self.phase0_diag_tab, TAB_PHASE0_DIAG)
+        self._notebook.addTab(self.phase0_tab, TAB_PHASE0)
 
         self.phase1_tab = Phase1Tab(
             notebook=self._notebook,
@@ -116,11 +109,12 @@ class PyCamSetApp(QMainWindow):
             info_cb=self._info_cb,
             workspace_mgr=ws,
         )
-        self._notebook.addTab(self.phase1_diag_tab, "Phase 1 Diagnostics")
+        diag_idx = self._notebook.addTab(self.phase1_diag_tab, TAB_PHASE1_DIAG)
+        self._notebook.tabBar().setTabVisible(diag_idx, False)
 
         # Cross-tab wiring
-        self.phase0_tab.set_diagnostics_tab(self.phase0_diag_tab)
         self.phase1_tab.set_diagnostics_tab(self.phase1_diag_tab)
+        self.phase0_tab.set_phase1_path_callback(self.phase1_tab.set_image_folder)
 
     def _on_info_toggle(self) -> None:
         """Enable or disable all Qt tool-tips application-wide."""

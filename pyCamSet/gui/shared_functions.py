@@ -48,9 +48,8 @@ from PySide6.QtWidgets import (
 # Tab-name constants (shared across modules)
 # ---------------------------------------------------------------------------
 
-TAB_PHASE0 = "Phase 0"
-TAB_PHASE0_DIAG = "Phase 0 Diagnostics"
-TAB_PHASE1 = "Phase 1"
+TAB_PHASE0 = "Phase 0 - Data Input"
+TAB_PHASE1 = "Phase 1 - Detection"
 TAB_PHASE1_DIAG = "Phase 1 Diagnostics"
 
 # ---------------------------------------------------------------------------
@@ -291,6 +290,21 @@ class RunSelectorWidget(QWidget):
         for i in range(max(0, n - 3), n):
             self._list.item(i).setSelected(True)
 
+    def enforce_max_selection(self, max_selected: int) -> None:
+        """Keep only the most recent selected rows when selection exceeds *max_selected*."""
+        selected_rows = sorted(self._list.row(item) for item in self._list.selectedItems())
+        if len(selected_rows) <= max_selected:
+            return
+        keep = set(selected_rows[-max_selected:])
+        self._list.blockSignals(True)
+        for row in selected_rows:
+            if row not in keep:
+                item = self._list.item(row)
+                if item is not None:
+                    item.setSelected(False)
+        self._list.blockSignals(False)
+        self._emit_selection()
+
 
 # ---------------------------------------------------------------------------
 # Background worker thread
@@ -332,3 +346,55 @@ class PhaseWorker(QThread):
         except Exception as exc:
             self.error.emit(str(exc))
             self.finished.emit({"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Shared image-folder validation helpers
+# ---------------------------------------------------------------------------
+
+IMAGE_FOLDER_SCHEMATIC = (
+    "Expected image folder layout:\n\n"
+    "<image_folder>/\n"
+    "  cam0/\n"
+    "    img_0001.png\n"
+    "    img_0002.png\n"
+    "  cam1/\n"
+    "    img_0001.png\n"
+    "    img_0002.png\n\n"
+    "Also valid (extra non-camera artefacts allowed at root):\n\n"
+    "<image_folder>/\n"
+    "  cam0/\n"
+    "  cam1/\n"
+    "  detected_datapoints.pickle\n"
+    "  session.camset\n"
+    "  .pycamset_workspace/\n\n"
+    "Ignored as camera folders:\n"
+    "  - folder named 'sparse'\n"
+    "  - any folder starting with '.'\n"
+    "  - any individual file"
+)
+
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+
+
+def get_camera_subfolders(root: Path) -> list[Path]:
+    """Return valid camera subfolders (ignores sparse, dot-folders, and files)."""
+    root = Path(root)
+    if not root.exists() or not root.is_dir():
+        return []
+    return sorted(
+        [
+            p for p in root.iterdir()
+            if p.is_dir() and p.name != "sparse" and not p.name.startswith(".")
+        ],
+        key=lambda p: p.name.lower(),
+    )
+
+
+def count_images_in_folder(folder: Path) -> int:
+    """Count image files directly inside *folder*."""
+    folder = Path(folder)
+    if not folder.exists() or not folder.is_dir():
+        return 0
+    return sum(1 for p in folder.iterdir() if p.is_file() and p.suffix.lower() in _IMAGE_EXTS)
+

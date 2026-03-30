@@ -114,9 +114,10 @@ class Phase0Tab(QWidget):
         self._ws_edit = QLineEdit()
         self._ws_edit.setPlaceholderText("<f_loc>/.pycamset_workspace")
         self._ws_edit.setToolTip(
-            "Workspace path for run metadata and handoff.json "
-            "(default: <f_loc>/.pycamset_workspace)."
+            "Workspace is fixed to <image_folder>/.pycamset_workspace."
         )
+        self._ws_edit.setReadOnly(True)
+        self._ws_edit.setEnabled(False)
         form.addRow("Workspace:", self._ws_edit)
 
         btn_row = QHBoxLayout()
@@ -159,8 +160,8 @@ class Phase0Tab(QWidget):
             self._floc_edit.setText(path)
 
     def _on_floc_change(self, text: str) -> None:
-        if text.strip() and not self._ws_edit.text().strip():
-            self._ws_edit.setText(str(Path(text.strip()) / ".pycamset_workspace"))
+        floc = text.strip()
+        self._ws_edit.setText(str(Path(floc) / ".pycamset_workspace") if floc else "")
 
     def _confirm_image_folder_validity(self) -> None:
         floc = self._floc_edit.text().strip()
@@ -209,9 +210,9 @@ class Phase0Tab(QWidget):
             "Image path appears to be organized correctly. Ready for next phase."
         )
 
-        ws_str = self._ws_edit.text().strip() or str(f_loc / ".pycamset_workspace")
-        self._workspace_mgr.workspace_path = Path(ws_str)
-        self._workspace_mgr.ensure_dirs()
+        ws_path = f_loc / ".pycamset_workspace"
+        self._ws_edit.setText(str(ws_path))
+        self._workspace_mgr.set_workspace_path(ws_path, ensure=True)
 
         if self._phase1_path_cb is not None:
             self._phase1_path_cb(str(f_loc))

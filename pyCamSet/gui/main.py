@@ -50,8 +50,8 @@ class PyCamSetApp(QMainWindow):
         self._terminal_cb = QCheckBox("Show Terminal Output")
         self._terminal_cb.setChecked(True)
 
-        # Shared workspace manager (path updated when f_loc is set)
-        self._workspace_mgr = WorkspaceManager(Path(".pycamset_workspace"))
+        # Lazy workspace manager: do not create any workspace dir at startup.
+        self._workspace_mgr = WorkspaceManager(None)
 
         self._build_ui()
         self._on_info_toggle()  # apply initial tooltip state

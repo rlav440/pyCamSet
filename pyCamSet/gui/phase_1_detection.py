@@ -193,6 +193,7 @@ class Phase1Tab(QWidget):
         self._floc_edit = QLineEdit()
         self._floc_edit.setPlaceholderText("Root folder with per-camera sub-folders")
         self._floc_edit.setToolTip(IMAGE_FOLDER_SCHEMATIC)
+        self._floc_edit.textChanged.connect(self._on_floc_changed)
         floc_btn = QPushButton("Browse…")
         floc_btn.setFixedWidth(70)
         floc_btn.setToolTip("Select the root folder that contains one subfolder per camera.")
@@ -292,6 +293,24 @@ class Phase1Tab(QWidget):
 
     def set_image_folder(self, path: str) -> None:
         self._floc_edit.setText(path)
+        self._sync_workspace_from_floc(path, create_if_missing=True)
+
+    def _on_floc_changed(self, text: str) -> None:
+        self._sync_workspace_from_floc(text, create_if_missing=True)
+
+    def _sync_workspace_from_floc(self, floc_text: str, create_if_missing: bool = True) -> None:
+        floc = (floc_text or "").strip()
+        if not floc:
+            return
+        f_loc = Path(floc)
+        if not f_loc.exists() or not f_loc.is_dir():
+            return
+
+        ws_path = f_loc / ".pycamset_workspace"
+        if self._workspace_mgr.workspace_path != ws_path:
+            self._workspace_mgr.set_workspace_path(ws_path, ensure=create_if_missing)
+            if self._diagnostics_tab is not None:
+                self._diagnostics_tab.refresh()
 
     def _collect_params(self) -> Optional[dict]:
         floc = self._floc_edit.text().strip()
@@ -355,6 +374,11 @@ class Phase1Tab(QWidget):
         params = self._collect_params()
         if params is None:
             return
+
+        f_loc = Path(params["f_loc"])
+        canonical_ws = f_loc / ".pycamset_workspace"
+        if self._workspace_mgr.workspace_path is None or self._workspace_mgr.workspace_path != canonical_ws:
+            self._workspace_mgr.set_workspace_path(canonical_ws, ensure=True)
 
         self._terminal.clear_terminal()
         self._terminal.append_line("=== Phase 1: Target Detection ===")
@@ -571,7 +595,10 @@ class Phase1Tab(QWidget):
                 "error": error_msg,
             }
 
-            # Save metadata first, then copy per-run artifacts and update metadata.
+            # Defensive fallback: always guarantee workspace is set before save.
+            if self._workspace_mgr.workspace_path is None:
+                self._workspace_mgr.set_workspace_path(Path(params["f_loc"]) / ".pycamset_workspace", ensure=True)
+
             meta_path = self._workspace_mgr.save_run("phase1", run_id, metadata)
             run_dir = meta_path.parent
             run_pickle = run_dir / "detected_datapoints.pickle"

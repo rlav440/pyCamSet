@@ -169,29 +169,30 @@ class TerminalWidget(QTextEdit):
 
 
 class WorkspaceManager:
-    """Manages the ``<dataset>/.pycamset_workspace`` directory and run metadata.
+    """Manages workspace directory and run metadata."""
 
-    Directory layout::
+    def __init__(self, workspace_path: Optional[Path] = None) -> None:
+        self.workspace_path: Optional[Path] = Path(workspace_path) if workspace_path else None
+        if self.workspace_path is not None:
+            self.ensure_dirs()
 
-        <workspace>/
-          phase0_runs/<YYYYMMDD_HHMMSS_<hex>>/metadata.json
-          phase1_runs/<YYYYMMDD_HHMMSS_<hex>>/metadata.json
-          handoff.json
-
-    :param workspace_path: Root of the workspace.  Created on first use.
-    """
-
-    def __init__(self, workspace_path: Path) -> None:
+    def set_workspace_path(self, workspace_path: Path, ensure: bool = True) -> None:
+        """Set workspace path; optionally create standard sub-directories."""
         self.workspace_path = Path(workspace_path)
-        self.ensure_dirs()
+        if ensure:
+            self.ensure_dirs()
 
     def ensure_dirs(self) -> None:
-        """Create the standard sub-directories if they do not exist."""
+        """Create standard sub-directories if workspace path is set."""
+        if self.workspace_path is None:
+            return
         for sub in ("phase0_runs", "phase1_runs"):
             (self.workspace_path / sub).mkdir(parents=True, exist_ok=True)
 
     def save_run(self, phase: str, run_id: str, metadata: dict) -> Path:
-        """Persist *metadata* to ``<workspace>/<phase>_runs/<run_id>/metadata.json``."""
+        """Persist metadata to <workspace>/<phase>_runs/<run_id>/metadata.json."""
+        if self.workspace_path is None:
+            raise RuntimeError("Workspace path is not set.")
         run_dir = self.workspace_path / f"{phase}_runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         meta_path = run_dir / "metadata.json"
@@ -200,7 +201,9 @@ class WorkspaceManager:
         return meta_path
 
     def load_runs(self, phase: str) -> list[dict]:
-        """Return all saved runs for *phase* sorted oldest-first."""
+        """Return all saved runs for phase sorted oldest-first."""
+        if self.workspace_path is None:
+            return []
         runs_dir = self.workspace_path / f"{phase}_runs"
         if not runs_dir.exists():
             return []
@@ -218,7 +221,9 @@ class WorkspaceManager:
         return results
 
     def write_handoff(self, payload: dict) -> None:
-        """Write *payload* to ``<workspace>/handoff.json``."""
+        """Write payload to <workspace>/handoff.json."""
+        if self.workspace_path is None:
+            raise RuntimeError("Workspace path is not set.")
         with open(self.workspace_path / "handoff.json", "w") as fh:
             json.dump(payload, fh, indent=2, default=str)
 

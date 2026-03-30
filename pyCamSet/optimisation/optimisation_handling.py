@@ -49,7 +49,7 @@ def make_optimisation_function(
     return bundle_loss_fun, bundle_loss_jac, init_params
 
 
-def run_bundle_adjustment(param_handler: TemplateBundleHandler,
+def run_bundle_adjustment(param_handler: th.TemplateBundleHandler,
                           threads: int = 1) -> tuple[OptimizeResult, CameraSet]:
     """
     A function that takes an abstract parameter handler, turns it into a cost function, and returns the
@@ -110,10 +110,56 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     camset = param_handler.get_camset(optimisation.x)
     camset.set_calibration_history(optimisation, param_handler)
 
-
     init_err = loss_fn(optimisation.x)
     init_euclid = np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1))
     logging.info(f"Check test with a result of {init_euclid:.2f}")
 
     return optimisation, camset
 
+
+def get_bundle_adjustment_stats(
+    optimisation: OptimizeResult,
+    init_params: np.ndarray,
+    init_err: np.ndarray,
+    elapsed_sec: float,
+) -> dict:
+    """Build a compact diagnostics dictionary for a completed bundle-adjustment run."""
+    init_euclid = float(np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1)))
+    final_euclid = float(np.mean(np.linalg.norm(np.reshape(optimisation.fun, (-1, 2)), axis=1)))
+    return {
+        "initial_euclid": init_euclid,
+        "final_euclid": final_euclid,
+        "param_count": int(len(init_params)),
+        "observation_count": int(len(optimisation.fun) // 2),
+        "elapsed_sec": float(elapsed_sec),
+        "status": int(optimisation.status),
+        "success": bool(optimisation.success),
+        "message": str(optimisation.message),
+        "nfev": int(optimisation.nfev),
+    }
+
+
+def run_bundle_adjustment_with_stats(
+    param_handler: th.TemplateBundleHandler,
+    threads: int = 1,
+) -> tuple[OptimizeResult, CameraSet, dict]:
+    """Run bundle adjustment and also return structured run statistics for GUI diagnostics."""
+    loss_fn, bundle_jac, init_params = make_optimisation_function(param_handler, threads)
+    init_err = loss_fn(init_params)
+
+    start = time.time()
+    optimisation = least_squares(
+        loss_fn,
+        init_params,
+        verbose=param_handler.problem_opts['verbosity'],
+        jac=bundle_jac if bundle_jac is not None else "2-point",
+        max_nfev=param_handler.problem_opts["max_nfev"],
+        x_scale='jac',
+        xtol=1e-4,
+    )
+    elapsed = time.time() - start
+
+    camset = param_handler.get_camset(optimisation.x)
+    camset.set_calibration_history(optimisation, param_handler)
+    stats = get_bundle_adjustment_stats(optimisation, init_params, init_err, elapsed)
+    return optimisation, camset, stats

@@ -62,6 +62,7 @@ from pyCamSet.gui.shared_functions import (
     RunSelectorWidget,
     TerminalWidget,
     WorkspaceManager,
+    build_target,
     count_images_in_folder,
     get_camera_subfolders,
     make_continue_button,
@@ -77,10 +78,10 @@ try:
         detect_datapoints_in_imfile,
         validate_detections,
     )
-    from pyCamSet.calibration_targets.target_Ccube import Ccube
-    from pyCamSet.calibration_targets.target_charuco import ChArUco
     _PYCAMSET_OK = True
 except ImportError:
+    detect_datapoints_in_imfile = None
+    validate_detections = None
     _PYCAMSET_OK = False
 
 _TARGET_CHOICES = ["Ccube", "ChArUco"]
@@ -129,15 +130,7 @@ def _build_target(target_type: str, n_points: int, length: float):
     """Construct the calibration target object from existing pyCamSet classes."""
     if not _PYCAMSET_OK:
         raise RuntimeError("pyCamSet calibration targets are not importable.")
-    if target_type == "Ccube":
-        return Ccube(n_points=n_points, length=length)
-    if target_type == "ChArUco":
-        return ChArUco(
-            num_squares_x=n_points,
-            num_squares_y=n_points,
-            square_size=length,
-        )
-    raise ValueError(f"Unknown target type: {target_type!r}")
+    return build_target(target_type, n_points, length)
 
 
 class Phase1Tab(QWidget):
@@ -1301,7 +1294,7 @@ class Phase1DiagnosticsTab(QWidget):
             ax.set_title(f"{cam} | im {im_idx} | pts {len(pts)}")
 
         if self._draw_status_lbl is not None:
-            self._draw_status_lbl.setText(f"Image 0 of 0")
+            self._draw_status_lbl.setText(f"Image {idx + 1} of {max_images}")
         self._draw_state["canvas"].draw_idle()
 
     def _resolve_pickle_path_for_run(self, run: dict) -> Optional[Path]:
@@ -1311,8 +1304,9 @@ class Phase1DiagnosticsTab(QWidget):
             return Path(art_path)
 
         run_id = run.get("run_id")
-        if run_id:
-            p = self._workspace_mgr.workspace_path / "phase1_runs" / run_id / "detected_datapoints.pickle"
+        ws = self._workspace_mgr.workspace_path
+        if run_id and ws is not None:
+            p = ws / "phase1_runs" / run_id / "detected_datapoints.pickle"
             if p.exists():
                 return p
 

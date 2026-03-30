@@ -17,6 +17,7 @@ Conventions
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -51,6 +52,10 @@ from PySide6.QtWidgets import (
 TAB_PHASE0 = "Phase 0 - Data Input"
 TAB_PHASE1 = "Phase 1 - Detection"
 TAB_PHASE1_DIAG = "Phase 1 Diagnostics"
+TAB_PHASE2 = "Phase 2 - Intrinsics"
+TAB_PHASE2_DIAG = "Phase 2 Diagnostics"
+TAB_PHASE3 = "Phase 3 - Bundle Adjustment"
+TAB_PHASE3_DIAG = "Phase 3 Diagnostics"
 
 # ---------------------------------------------------------------------------
 # Styling helpers
@@ -128,10 +133,50 @@ def make_run_id() -> str:
     return f"{ts}_{uuid.uuid4().hex[:6]}"
 
 
+def build_target(target_type: str, n_points: int, length: float):
+    """Construct a calibration target from canonical GUI options."""
+    from pyCamSet.calibration_targets.target_Ccube import Ccube
+    from pyCamSet.calibration_targets.target_charuco import ChArUco
+
+    if target_type == "Ccube":
+        return Ccube(n_points=n_points, length=length)
+    if target_type == "ChArUco":
+        return ChArUco(num_squares_x=n_points, num_squares_y=n_points, square_size=length)
+    raise ValueError(f"Unknown target type: {target_type!r}")
+
+
+def extract_detection_and_cam_res(payload):
+    """Extract (TargetDetection, cam_res) from common persisted payload shapes."""
+    if hasattr(payload, "get_cam_list"):
+        return payload, None
+
+    if isinstance(payload, (tuple, list)) and len(payload) >= 1:
+        detections = payload[0]
+        cam_res = payload[1] if len(payload) > 1 else None
+        if hasattr(detections, "get_cam_list"):
+            return detections, cam_res
+
+    if isinstance(payload, dict):
+        for key in ("detections", "target_detection", "target_detections", "data"):
+            det = payload.get(key)
+            if hasattr(det, "get_cam_list"):
+                return det, payload.get("cam_res")
+
+    return None, None
+
+
+def extract_detection(payload):
+    """Extract only TargetDetection from common persisted payload shapes."""
+    detections, _ = extract_detection_and_cam_res(payload)
+    return detections
+
+
 # ---------------------------------------------------------------------------
 # Terminal widget
 # ---------------------------------------------------------------------------
 
+
+_ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 class TerminalWidget(QTextEdit):
     """A dark, append-only terminal pane.
@@ -151,8 +196,9 @@ class TerminalWidget(QTextEdit):
 
     def append_line(self, text: str) -> None:
         """Append *text* + newline and scroll to bottom."""
+        clean = _ANSI_RE.sub("", str(text)).replace("\r", "")
         self.moveCursor(QTextCursor.MoveOperation.End)
-        self.insertPlainText(text + "\n")
+        self.insertPlainText(clean + "\n")
         self.ensureCursorVisible()
 
     def clear_terminal(self) -> None:
@@ -186,7 +232,7 @@ class WorkspaceManager:
         """Create standard sub-directories if workspace path is set."""
         if self.workspace_path is None:
             return
-        for sub in ("phase0_runs", "phase1_runs"):
+        for sub in ("phase0_runs", "phase1_runs", "phase2_runs", "phase3_runs", "phase4_runs", "phase5_runs"):
             (self.workspace_path / sub).mkdir(parents=True, exist_ok=True)
 
     def save_run(self, phase: str, run_id: str, metadata: dict) -> Path:

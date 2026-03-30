@@ -152,6 +152,9 @@ class TemplateBundleHandler:
         self.param_len = None
         self.jac_mask = None
         self.missing_poses: list | None = missing_poses
+        self.initial_per_im_error: np.ndarray | None = None
+        self.missing_poses_before_outlier_rejection: np.ndarray | None = None
+        self.missing_poses_after_outlier_rejection: np.ndarray | None = None
 
         # we define an abstract function block to handle the calibration
         self.op_fun: afb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.template_points()
@@ -326,9 +329,12 @@ class TemplateBundleHandler:
             detection=self.detection, cams=self.camset, calibration_target=self.target
         )
 
+        self.initial_per_im_error = np.array(per_im_error, dtype=float)
         self.missing_poses = np.array([np.isnan(t[0,0]) for t in target_poses])
+        self.missing_poses_before_outlier_rejection = self.missing_poses.copy()
         self.find_and_exclude_transform_outliers(per_im_error)
-        
+        self.missing_poses_after_outlier_rejection = np.array(self.missing_poses, dtype=bool)
+
         for idc, intr_unfixed in enumerate(self.bundlePrimitive.intr_unfixed):
             if intr_unfixed:
                 param_array.append(

@@ -1,14 +1,18 @@
 """
 Shared utilities, mixins, widget factories, and constants for the pyCamSet GUI.
 
+All UI is built with PySide6 (Qt6).
+
 Conventions
 -----------
-- All tkinter widgets are created via the factory helpers at module bottom.
-- Hover tooltips are gated by a single shared ``tk.BooleanVar`` (``info_var``).
-- The terminal pane is a dark ``tk.Text`` in DISABLED state; writes go through
-  :meth:`TerminalMixin.terminal_append`.
+- Hover tooltips are gated by a shared ``QCheckBox`` (``info_cb``) via its
+  ``isChecked()`` state — set as ``setToolTipsEnabled(bool)`` on every widget.
+- The terminal pane is a dark, read-only ``QTextEdit`` written to via
+  :meth:`TerminalWidget.append_line`.
 - :class:`WorkspaceManager` owns all disk I/O; nothing else writes to the
   workspace directory.
+- Background work runs inside :class:`PhaseWorker`, a ``QThread`` subclass
+  that emits ``line_ready(str)`` and ``finished(dict)`` signals.
 """
 from __future__ import annotations
 
@@ -18,11 +22,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-import tkinter as tk
-from tkinter import ttk
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QColor, QFont, QPalette, QTextCursor
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+    QSplitter,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 # ---------------------------------------------------------------------------
-# Tab name constants  — used for cross-tab navigation
+# Tab-name constants (shared across modules)
 # ---------------------------------------------------------------------------
 
 TAB_PHASE0 = "Phase 0"
@@ -30,135 +53,121 @@ TAB_PHASE0_DIAG = "Phase 0 Diagnostics"
 TAB_PHASE1 = "Phase 1"
 TAB_PHASE1_DIAG = "Phase 1 Diagnostics"
 
+# ---------------------------------------------------------------------------
+# Styling helpers
+# ---------------------------------------------------------------------------
+
+ORANGE = "#e07b00"
+DARK_ORANGE = "#c06000"
+GREEN = "#2e7d32"
+DARK_GREEN = "#1b5e20"
+SECTION_COLOR = "#1976d2"
+
+ORANGE_BTN_STYLE = (
+    f"QPushButton {{ background-color: {ORANGE}; color: white; font-weight: bold;"
+    f" border-radius: 4px; padding: 4px 10px; }}"
+    f"QPushButton:hover {{ background-color: {DARK_ORANGE}; }}"
+    f"QPushButton:pressed {{ background-color: {DARK_ORANGE}; }}"
+)
+
+GREEN_BTN_STYLE = (
+    f"QPushButton {{ background-color: {GREEN}; color: white; font-weight: bold;"
+    f" border-radius: 4px; padding: 4px 10px; }}"
+    f"QPushButton:hover {{ background-color: {DARK_GREEN}; }}"
+    f"QPushButton:pressed {{ background-color: {DARK_GREEN}; }}"
+)
+
+SECTION_STYLE = "QLabel { color: #1976d2; font-weight: bold; margin-top: 6px; }"
+
+TERMINAL_STYLE = (
+    "QTextEdit { background: #1e1e1e; color: #d4d4d4; font-family: Courier, monospace;"
+    " font-size: 10pt; border: none; }"
+)
 
 # ---------------------------------------------------------------------------
-# Info-hover mixin
+# Section label factory
 # ---------------------------------------------------------------------------
 
-class InfoHoverMixin:
-    """Mixin that gates tooltip/info-hover pop-ups via a shared ``BooleanVar``.
 
-    Call :meth:`init_hover` once during ``__init__``, then use
-    :meth:`bind_hover` on any widget you want to annotate.
+def make_section_label(text: str) -> QLabel:
+    """Return a styled section-header label."""
+    lbl = QLabel(text)
+    lbl.setStyleSheet(SECTION_STYLE)
+    return lbl
+
+
+def make_separator() -> QFrame:
+    """Return a horizontal separator line."""
+    sep = QFrame()
+    sep.setFrameShape(QFrame.Shape.HLine)
+    sep.setFrameShadow(QFrame.Shadow.Sunken)
+    return sep
+
+
+def make_orange_button(text: str, callback: Callable) -> QPushButton:
+    """Return an orange push button connected to *callback*."""
+    btn = QPushButton(text)
+    btn.setStyleSheet(ORANGE_BTN_STYLE)
+    btn.clicked.connect(callback)
+    return btn
+
+
+def make_continue_button(callback: Callable) -> QPushButton:
+    """Return a green "Continue to Next Phase" button."""
+    btn = QPushButton("Continue to Next Phase ▶")
+    btn.setStyleSheet(GREEN_BTN_STYLE)
+    btn.clicked.connect(callback)
+    return btn
+
+
+def make_run_id() -> str:
+    """Return a unique, timestamp-ordered run identifier.
+
+    Format: ``YYYYMMDD_HHMMSS_<6-char hex>``
+    """
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{ts}_{uuid.uuid4().hex[:6]}"
+
+
+# ---------------------------------------------------------------------------
+# Terminal widget
+# ---------------------------------------------------------------------------
+
+
+class TerminalWidget(QTextEdit):
+    """A dark, append-only terminal pane.
+
+    Controlled by a :class:`QCheckBox`; hidden when the box is unchecked.
     """
 
-    def init_hover(self, info_var: tk.BooleanVar) -> None:
-        """Store the shared toggle and reset the active tooltip window."""
-        self._info_var: tk.BooleanVar = info_var
-        self._tooltip_win: Optional[tk.Toplevel] = None
+    def __init__(self, show_cb: QCheckBox, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setStyleSheet(TERMINAL_STYLE)
+        self.setMinimumHeight(110)
+        self.setMaximumHeight(200)
+        self._show_cb = show_cb
+        show_cb.stateChanged.connect(self._on_toggle)
+        self._on_toggle()
 
-    def bind_hover(self, widget: tk.Widget, text: str) -> None:
-        """Bind ``<Enter>``/``<Leave>`` events to show/hide a tooltip."""
-        widget.bind("<Enter>", lambda e, t=text: self._show_tooltip(e, t))
-        widget.bind("<Leave>", lambda _e: self._hide_tooltip())
+    def append_line(self, text: str) -> None:
+        """Append *text* + newline and scroll to bottom."""
+        self.moveCursor(QTextCursor.MoveOperation.End)
+        self.insertPlainText(text + "\n")
+        self.ensureCursorVisible()
 
-    # ------------------------------------------------------------------
+    def clear_terminal(self) -> None:
+        """Erase all terminal content."""
+        self.clear()
 
-    def _show_tooltip(self, event: tk.Event, text: str) -> None:
-        if not getattr(self, "_info_var", None) or not self._info_var.get():
-            return
-        self._hide_tooltip()
-        x = event.widget.winfo_rootx() + 20
-        y = event.widget.winfo_rooty() + 20
-        win = tk.Toplevel()
-        win.wm_overrideredirect(True)
-        win.wm_geometry(f"+{x}+{y}")
-        tk.Label(
-            win,
-            text=text,
-            background="#ffffe0",
-            relief="solid",
-            borderwidth=1,
-            wraplength=280,
-            justify="left",
-            padx=4,
-            pady=2,
-        ).pack()
-        self._tooltip_win = win
-
-    def _hide_tooltip(self) -> None:
-        if self._tooltip_win:
-            try:
-                self._tooltip_win.destroy()
-            except tk.TclError:
-                pass
-            self._tooltip_win = None
-
-
-# ---------------------------------------------------------------------------
-# Terminal pane mixin
-# ---------------------------------------------------------------------------
-
-class TerminalMixin:
-    """Mixin that provides a scrollable, dark terminal pane with show/hide.
-
-    Call :meth:`init_terminal` once, then use :meth:`terminal_append` and
-    :meth:`terminal_clear` to write to it.  The pane honours the shared
-    ``show_var`` ``BooleanVar`` and hides/shows itself when it changes.
-    """
-
-    def init_terminal(self, parent: tk.Widget, show_var: tk.BooleanVar) -> tk.Frame:
-        """Build the terminal frame and return it (already packed conditionally).
-
-        :param parent: The containing widget the terminal frame is packed into.
-        :param show_var: Shared BooleanVar controlling visibility.
-        """
-        self._terminal_frame = tk.Frame(parent, bg="#1e1e1e")
-        self._show_terminal_var = show_var
-
-        sb = ttk.Scrollbar(self._terminal_frame)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self._terminal_text = tk.Text(
-            self._terminal_frame,
-            state=tk.DISABLED,
-            bg="#1e1e1e",
-            fg="#d4d4d4",
-            font=("Courier", 10),
-            wrap=tk.WORD,
-            yscrollcommand=sb.set,
-            height=8,
-            selectbackground="#264f78",
-        )
-        self._terminal_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        sb.config(command=self._terminal_text.yview)
-
-        show_var.trace_add("write", lambda *_: self._on_show_terminal_change())
-        self._on_show_terminal_change()
-        return self._terminal_frame
-
-    def terminal_append(self, text: str) -> None:
-        """Append *text* followed by a newline to the terminal pane."""
-        w = getattr(self, "_terminal_text", None)
-        if w is None:
-            return
-        w.config(state=tk.NORMAL)
-        w.insert(tk.END, text + "\n")
-        w.see(tk.END)
-        w.config(state=tk.DISABLED)
-
-    def terminal_clear(self) -> None:
-        """Erase all content from the terminal pane."""
-        w = getattr(self, "_terminal_text", None)
-        if w is None:
-            return
-        w.config(state=tk.NORMAL)
-        w.delete("1.0", tk.END)
-        w.config(state=tk.DISABLED)
-
-    def _on_show_terminal_change(self) -> None:
-        f = getattr(self, "_terminal_frame", None)
-        if f is None:
-            return
-        if getattr(self, "_show_terminal_var", None) and self._show_terminal_var.get():
-            f.pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=(0, 4))
-        else:
-            f.pack_forget()
+    def _on_toggle(self) -> None:
+        self.setVisible(self._show_cb.isChecked())
 
 
 # ---------------------------------------------------------------------------
 # Workspace manager
 # ---------------------------------------------------------------------------
+
 
 class WorkspaceManager:
     """Manages the ``<dataset>/.pycamset_workspace`` directory and run metadata.
@@ -183,13 +192,7 @@ class WorkspaceManager:
             (self.workspace_path / sub).mkdir(parents=True, exist_ok=True)
 
     def save_run(self, phase: str, run_id: str, metadata: dict) -> Path:
-        """Persist *metadata* to ``<workspace>/<phase>_runs/<run_id>/metadata.json``.
-
-        :param phase: ``"phase0"`` or ``"phase1"``.
-        :param run_id: Unique identifier (from :func:`make_run_id`).
-        :param metadata: JSON-serialisable dict of parameters and diagnostics.
-        :returns: Path to the written file.
-        """
+        """Persist *metadata* to ``<workspace>/<phase>_runs/<run_id>/metadata.json``."""
         run_dir = self.workspace_path / f"{phase}_runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         meta_path = run_dir / "metadata.json"
@@ -198,11 +201,7 @@ class WorkspaceManager:
         return meta_path
 
     def load_runs(self, phase: str) -> list[dict]:
-        """Return all saved runs for *phase* sorted oldest-first.
-
-        :param phase: ``"phase0"`` or ``"phase1"``.
-        :returns: List of metadata dicts (may be empty).
-        """
+        """Return all saved runs for *phase* sorted oldest-first."""
         runs_dir = self.workspace_path / f"{phase}_runs"
         if not runs_dir.exists():
             return []
@@ -220,171 +219,116 @@ class WorkspaceManager:
         return results
 
     def write_handoff(self, payload: dict) -> None:
-        """Write *payload* to ``<workspace>/handoff.json``.
-
-        Used by "Continue to Next Phase" to pass selected run(s) downstream.
-        """
+        """Write *payload* to ``<workspace>/handoff.json``."""
         with open(self.workspace_path / "handoff.json", "w") as fh:
             json.dump(payload, fh, indent=2, default=str)
-
-
-def make_run_id() -> str:
-    """Return a unique, timestamp-ordered run identifier.
-
-    Format: ``YYYYMMDD_HHMMSS_<6-char hex>``
-    """
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{ts}_{uuid.uuid4().hex[:6]}"
 
 
 # ---------------------------------------------------------------------------
 # Run selector widget
 # ---------------------------------------------------------------------------
 
-class RunSelectorFrame(tk.Frame):
-    """Listbox-based multi-select widget that shows available saved runs.
 
-    The most recent ``min(3, n)`` runs are pre-selected on every :meth:`refresh`.
+class RunSelectorWidget(QWidget):
+    """A ``QListWidget``-based multi-select of saved runs.
 
-    :param parent: Parent widget.
-    :param runs: Initial list of run-metadata dicts.
-    :param on_select: Optional callback invoked with ``list[dict]`` when the
-        selection changes.
+    The most recent ``min(3, n)`` runs are pre-selected on every
+    :meth:`refresh`.
+
+    :param on_select: Optional callback invoked with ``list[dict]`` on change.
     """
+
+    selection_changed = Signal(object)  # emits list[dict]
 
     def __init__(
         self,
-        parent: tk.Widget,
         runs: list[dict],
-        on_select: Optional[Callable[[list[dict]], None]] = None,
-        **kwargs,
+        parent: Optional[QWidget] = None,
     ) -> None:
-        super().__init__(parent, **kwargs)
-        self._on_select = on_select
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        layout.addWidget(make_section_label("Saved runs"))
+
+        self._list = QListWidget()
+        self._list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self._list.itemSelectionChanged.connect(self._emit_selection)
+        layout.addWidget(self._list)
+
+        self._empty_lbl = QLabel("No runs saved yet.")
+        self._empty_lbl.setStyleSheet("color: gray;")
+        layout.addWidget(self._empty_lbl)
+
         self._runs: list[dict] = []
-
-        tk.Label(self, text="Saved runs", font=("TkDefaultFont", 9, "bold")).pack(anchor="w")
-
-        list_frame = tk.Frame(self)
-        list_frame.pack(fill=tk.BOTH, expand=True)
-
-        sb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self._listbox = tk.Listbox(
-            list_frame,
-            selectmode=tk.MULTIPLE,
-            yscrollcommand=sb.set,
-            height=10,
-            exportselection=False,
-        )
-        self._listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        sb.config(command=self._listbox.yview)
-        self._listbox.bind("<<ListboxSelect>>", self._on_listbox_select)
-
-        self._empty_label = tk.Label(self, text="No runs saved yet.", fg="gray")
         self.refresh(runs)
 
-    def _on_listbox_select(self, _event: Optional[tk.Event] = None) -> None:
-        if self._on_select:
-            self._on_select(self.get_selected())
+    def _emit_selection(self) -> None:
+        self.selection_changed.emit(self.get_selected())
 
     def get_selected(self) -> list[dict]:
-        """Return the currently selected run-metadata dicts."""
-        return [self._runs[i] for i in self._listbox.curselection()]
+        """Return currently selected run-metadata dicts."""
+        selected = []
+        for item in self._list.selectedItems():
+            idx = self._list.row(item)
+            if 0 <= idx < len(self._runs):
+                selected.append(self._runs[idx])
+        return selected
 
     def refresh(self, runs: list[dict]) -> None:
-        """Repopulate the listbox with *runs* and pre-select most recent 1–3."""
+        """Repopulate with *runs* and pre-select the most recent 1–3."""
         self._runs = runs
-        self._listbox.delete(0, tk.END)
+        self._list.clear()
         if not runs:
-            self._listbox.pack_forget()
-            self._empty_label.pack(anchor="w")
+            self._list.hide()
+            self._empty_lbl.show()
             return
-        self._empty_label.pack_forget()
-        self._listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._empty_lbl.hide()
+        self._list.show()
         for run in runs:
-            self._listbox.insert(tk.END, run.get("run_id", str(run)))
-        # pre-select the most recent min(3, n) entries
+            self._list.addItem(QListWidgetItem(run.get("run_id", str(run))))
         n = len(runs)
         for i in range(max(0, n - 3), n):
-            self._listbox.selection_set(i)
+            self._list.item(i).setSelected(True)
 
 
 # ---------------------------------------------------------------------------
-# Widget factory helpers
+# Background worker thread
 # ---------------------------------------------------------------------------
 
-def make_section_label(parent: tk.Widget, text: str) -> tk.Label:
-    """Return a bold section-header label (not yet placed in a layout)."""
-    return tk.Label(parent, text=text, font=("TkDefaultFont", 10, "bold"), anchor="w")
 
+class PhaseWorker(QThread):
+    """A ``QThread`` that executes a callable and emits progress signals.
 
-def make_labeled_entry(
-    parent: tk.Widget,
-    label: str,
-    default: str = "",
-    width: int = 40,
-) -> tuple[tk.Label, ttk.Entry, tk.StringVar]:
-    """Return ``(label_widget, entry_widget, string_var)`` — not yet placed."""
-    lbl = tk.Label(parent, text=label, anchor="w")
-    var = tk.StringVar(value=default)
-    entry = ttk.Entry(parent, textvariable=var, width=width)
-    return lbl, entry, var
+    :param work_fn: ``(append_fn) -> dict`` — receives a callable to emit log
+        lines; returns a diagnostics dict.
 
+    Signals
+    -------
+    line_ready(str)
+        Emitted for each log line the worker wishes to display.
+    finished(dict)
+        Emitted with the diagnostics dict when work is complete.
+    error(str)
+        Emitted with an error message if an exception is raised.
+    """
 
-def make_labeled_checkbox(
-    parent: tk.Widget,
-    label: str,
-    default: bool = False,
-) -> tuple[ttk.Checkbutton, tk.BooleanVar]:
-    """Return ``(checkbutton, bool_var)`` — not yet placed."""
-    var = tk.BooleanVar(value=default)
-    cb = ttk.Checkbutton(parent, text=label, variable=var)
-    return cb, var
+    line_ready = Signal(str)
+    finished = Signal(dict)
+    error = Signal(str)
 
+    def __init__(
+        self,
+        work_fn: Callable[[Callable[[str], None]], dict],
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._work_fn = work_fn
 
-def make_labeled_spinbox(
-    parent: tk.Widget,
-    label: str,
-    from_: int,
-    to: int,
-    default: int,
-) -> tuple[tk.Label, ttk.Spinbox, tk.IntVar]:
-    """Return ``(label_widget, spinbox_widget, int_var)`` — not yet placed."""
-    lbl = tk.Label(parent, text=label, anchor="w")
-    var = tk.IntVar(value=default)
-    spinbox = ttk.Spinbox(parent, from_=from_, to=to, textvariable=var, width=8)
-    return lbl, spinbox, var
-
-
-def make_orange_button(parent: tk.Widget, text: str, command: Callable) -> tk.Button:
-    """Return an orange ``tk.Button`` — not yet placed."""
-    return tk.Button(
-        parent,
-        text=text,
-        command=command,
-        bg="#e07b00",
-        fg="white",
-        activebackground="#c06000",
-        activeforeground="white",
-        relief="raised",
-        font=("TkDefaultFont", 10, "bold"),
-        cursor="hand2",
-    )
-
-
-def make_continue_button(parent: tk.Widget, command: Callable) -> tk.Button:
-    """Return a green "Continue to Next Phase" ``tk.Button`` — not yet placed."""
-    return tk.Button(
-        parent,
-        text="Continue to Next Phase ▶",
-        command=command,
-        bg="#2e7d32",
-        fg="white",
-        activebackground="#1b5e20",
-        activeforeground="white",
-        relief="raised",
-        font=("TkDefaultFont", 10, "bold"),
-        cursor="hand2",
-    )
+    def run(self) -> None:
+        try:
+            result = self._work_fn(self.line_ready.emit)
+            self.finished.emit(result)
+        except Exception as exc:
+            self.error.emit(str(exc))
+            self.finished.emit({"error": str(exc)})

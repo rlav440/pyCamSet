@@ -1,122 +1,149 @@
 """
-pyCamSet GUI — main application window.
+pyCamSet GUI — main application window (PySide6).
 
 Launch with::
 
     python -m pyCamSet.gui.main
-
-or from the package entry-point if configured in ``setup.cfg``.
 """
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import ttk
 from pathlib import Path
 
-from pyCamSet.gui.shared_functions import WorkspaceManager, TAB_PHASE0_DIAG, TAB_PHASE1
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QFrame,
+    QHBoxLayout,
+    QMainWindow,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from pyCamSet.gui.shared_functions import TAB_PHASE0_DIAG, TAB_PHASE1, WorkspaceManager
 
 
-class PyCamSetApp(tk.Tk):
+class PyCamSetApp(QMainWindow):
     """Top-level application window.
 
     Responsibilities
     ----------------
     - Two global checkboxes wired into every child tab:
-        1. **Enable Informational Windows** — gates hover tooltips.
+        1. **Enable Informational Windows** — enables Qt tool-tips.
         2. **Show Terminal Output** — shows/hides the per-tab terminal pane.
-    - A ``ttk.Notebook`` with four top-level tabs:
+    - A ``QTabWidget`` with four top-level tabs:
         ``Phase 0`` | ``Phase 0 Diagnostics`` | ``Phase 1`` | ``Phase 1 Diagnostics``
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("pyCamSet — Multi-Camera Calibration")
-        self.geometry("1140x820")
-        self.minsize(860, 640)
+        self.setWindowTitle("pyCamSet — Multi-Camera Calibration")
+        self.resize(1140, 820)
+        self.setMinimumSize(860, 640)
 
         # Shared state injected into child tabs
-        self.info_var = tk.BooleanVar(value=True)
-        self.show_terminal_var = tk.BooleanVar(value=True)
+        self._info_cb = QCheckBox("Enable Informational Windows")
+        self._info_cb.setChecked(True)
+        self._info_cb.stateChanged.connect(self._on_info_toggle)
 
-        # Workspace manager — updated by Phase0Tab once f_loc is set
+        self._terminal_cb = QCheckBox("Show Terminal Output")
+        self._terminal_cb.setChecked(True)
+
+        # Shared workspace manager (path updated when f_loc is set)
         self._workspace_mgr = WorkspaceManager(Path(".pycamset_workspace"))
 
-        self._build_global_controls()
-        self._build_tabs()
+        self._build_ui()
+        self._on_info_toggle()  # apply initial tooltip state
 
     # ------------------------------------------------------------------
 
-    def _build_global_controls(self) -> None:
-        ctrl = ttk.Frame(self, padding=(8, 4))
-        ctrl.pack(side=tk.TOP, fill=tk.X)
+    def _build_ui(self) -> None:
+        # Deferred imports so module is importable without a display server
+        from pyCamSet.gui.phase_0_input import Phase0DiagnosticsTab, Phase0Tab
+        from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab, Phase1Tab
 
-        ttk.Checkbutton(
-            ctrl,
-            text="Enable Informational Windows",
-            variable=self.info_var,
-        ).pack(side=tk.LEFT, padx=(0, 16))
+        central = QWidget()
+        self.setCentralWidget(central)
+        root_layout = QVBoxLayout(central)
+        root_layout.setContentsMargins(4, 4, 4, 4)
+        root_layout.setSpacing(4)
 
-        ttk.Checkbutton(
-            ctrl,
-            text="Show Terminal Output",
-            variable=self.show_terminal_var,
-        ).pack(side=tk.LEFT)
+        # ── Global controls ────────────────────────────────────────────
+        ctrl_row = QHBoxLayout()
+        ctrl_row.addWidget(self._info_cb)
+        ctrl_row.addSpacing(16)
+        ctrl_row.addWidget(self._terminal_cb)
+        ctrl_row.addStretch()
+        root_layout.addLayout(ctrl_row)
 
-        ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        root_layout.addWidget(sep)
 
-    def _build_tabs(self) -> None:
-        # Deferred imports keep the module importable without a display server
-        from pyCamSet.gui.phase_0_input import Phase0Tab, Phase0DiagnosticsTab
-        from pyCamSet.gui.phase_1_detection import Phase1Tab, Phase1DiagnosticsTab
-
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-
+        # ── Tab widget ─────────────────────────────────────────────────
         ws = self._workspace_mgr
 
+        self._notebook = QTabWidget()
+        root_layout.addWidget(self._notebook)
+
         self.phase0_tab = Phase0Tab(
-            self.notebook,
-            notebook=self.notebook,
-            info_var=self.info_var,
-            show_terminal_var=self.show_terminal_var,
+            notebook=self._notebook,
+            info_cb=self._info_cb,
+            terminal_cb=self._terminal_cb,
             workspace_mgr=ws,
         )
-        self.notebook.add(self.phase0_tab, text="Phase 0")
+        self._notebook.addTab(self.phase0_tab, "Phase 0")
 
         self.phase0_diag_tab = Phase0DiagnosticsTab(
-            self.notebook,
-            notebook=self.notebook,
-            info_var=self.info_var,
+            notebook=self._notebook,
+            info_cb=self._info_cb,
             workspace_mgr=ws,
         )
-        self.notebook.add(self.phase0_diag_tab, text=TAB_PHASE0_DIAG)
+        self._notebook.addTab(self.phase0_diag_tab, TAB_PHASE0_DIAG)
 
         self.phase1_tab = Phase1Tab(
-            self.notebook,
-            notebook=self.notebook,
-            info_var=self.info_var,
-            show_terminal_var=self.show_terminal_var,
+            notebook=self._notebook,
+            info_cb=self._info_cb,
+            terminal_cb=self._terminal_cb,
             workspace_mgr=ws,
         )
-        self.notebook.add(self.phase1_tab, text=TAB_PHASE1)
+        self._notebook.addTab(self.phase1_tab, TAB_PHASE1)
 
         self.phase1_diag_tab = Phase1DiagnosticsTab(
-            self.notebook,
-            notebook=self.notebook,
-            info_var=self.info_var,
+            notebook=self._notebook,
+            info_cb=self._info_cb,
             workspace_mgr=ws,
         )
-        self.notebook.add(self.phase1_diag_tab, text="Phase 1 Diagnostics")
+        self._notebook.addTab(self.phase1_diag_tab, "Phase 1 Diagnostics")
 
         # Cross-tab wiring
         self.phase0_tab.set_diagnostics_tab(self.phase0_diag_tab)
         self.phase1_tab.set_diagnostics_tab(self.phase1_diag_tab)
 
+    def _on_info_toggle(self) -> None:
+        """Enable or disable all Qt tool-tips application-wide."""
+        QApplication.instance().setProperty(
+            "tooltipsEnabled", self._info_cb.isChecked()
+        )
+
+    def switch_to_tab(self, name: str) -> None:
+        """Switch to the named tab by its display text."""
+        for i in range(self._notebook.count()):
+            if self._notebook.tabText(i) == name:
+                self._notebook.setCurrentIndex(i)
+                return
+
 
 def main() -> None:
     """Launch the pyCamSet GUI."""
-    app = PyCamSetApp()
-    app.mainloop()
+    import sys
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = PyCamSetApp()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

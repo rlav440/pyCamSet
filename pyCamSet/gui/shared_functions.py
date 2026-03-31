@@ -140,6 +140,60 @@ def make_continue_button(callback: Callable) -> QPushButton:
     return btn
 
 
+class CollapsibleSection(QWidget):
+    """A labelled section with a toggle header button and collapsible QFormLayout body.
+
+    Usage::
+
+        section = CollapsibleSection("Paths", expanded=True)
+        section.addRow("Image folder:", edit)
+        layout.addWidget(section)
+    """
+
+    def __init__(self, title: str, expanded: bool = True, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._title = title
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 2, 0, 2)
+        root.setSpacing(0)
+
+        self._btn = QPushButton()
+        self._btn.setCheckable(True)
+        self._btn.setChecked(expanded)
+        self._btn.setStyleSheet(
+            "QPushButton { text-align: left; font-weight: bold; color: #1976d2;"
+            " background: transparent; border: none; padding: 2px 0px; font-size: 10pt; }"
+            "QPushButton:hover { color: #0d47a1; }"
+        )
+        self._btn.clicked.connect(self._on_toggle)
+        root.addWidget(self._btn)
+
+        self._body = QWidget()
+        self._form = QFormLayout(self._body)
+        self._form.setContentsMargins(4, 0, 0, 4)
+        self._form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        root.addWidget(self._body)
+
+        self._update_label(expanded)
+
+    def _update_label(self, expanded: bool) -> None:
+        arrow = "▼" if expanded else "▶"
+        self._btn.setText(f"{arrow}  {self._title}")
+
+    def _on_toggle(self, checked: bool) -> None:
+        self._body.setVisible(checked)
+        self._update_label(checked)
+        self._btn.setChecked(checked)
+
+    def addRow(self, *args) -> None:  # noqa: N802
+        """Proxy for the internal :class:`QFormLayout.addRow`."""
+        self._form.addRow(*args)
+
+    def form(self) -> QFormLayout:
+        """Return the internal :class:`QFormLayout`."""
+        return self._form
+
+
 def make_run_id() -> str:
     """Return a unique, timestamp-ordered run identifier.
 
@@ -302,7 +356,6 @@ class WorkspaceManager:
         if self.workspace_path is None:
             return
         for sub in (
-            "phase0_runs",
             "phase1_runs",
             "phase2_runs",
             "phase3_runs",

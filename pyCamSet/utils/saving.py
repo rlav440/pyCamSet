@@ -3,6 +3,7 @@ import base64
 import logging
 import json
 import numpy as np
+from scipy.spatial.transform import Rotation as R
 import blosc
 import dill
 
@@ -329,3 +330,201 @@ def decompress(save_dict, prealloc_arr=None):
     else:
         arr=arr.reshape(shape)
     return arr
+
+
+# ---------------------------------------------------------------------------
+# Convert camset to colmap-readable format
+# ---------------------------------------------------------------------------
+
+def rotation_matrix_to_quaternion_wxyz(rot_mat: np.ndarray) -> np.ndarray:
+    """Convert a 3x3 rotation matrix to COLMAP quaternion (w, x, y, z)."""
+    r = R.from_matrix(rot_mat)                        # construct scipy Rotation
+    quat_xyzw = r.as_quat()                          # scipy returns (x, y, z, w)
+    # reorder to COLMAP convention: (w, x, y, z)
+    return np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
+
+
+def export_cameras_txt(cams, output_folder: Path):
+    """
+    Write cameras.txt containing one entry per physical camera.
+
+    Camera names, intrinsics, distortion, and resolution are all read
+    directly from the CameraSet's internal dictionary — no user input
+    beyond the CameraSet object itself is required.
+
+    :param cams: pyCamSet CameraSet object
+    :param output_folder: directory to write cameras.txt into
+    """
+    output_folder = Path(output_folder)               # normalise to Path
+    output_folder.mkdir(parents=True, exist_ok=True)  # ensure dir exists
+
+    cam_names = cams.get_names()                      # keys of _cam_dict
+
+    lines = [
+        "# Camera list with one line of data per camera:",
+        "#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]",
+        f"# Number of cameras: {len(cam_names)}",
+    ]
+
+    for idx, cam_name in enumerate(cam_names):
+        cam_id = idx + 1                              # COLMAP uses 1-indexed IDs
+        cam = cams[cam_name]                          # retrieve Camera object
+
+        # --- intrinsics from the 3x3 K matrix ---
+        K = cam.intrinsic                             # pyCamSet pinhole K
+        fx, fy = K[0, 0], K[1, 1]                    # focal lengths in pixels
+        cx, cy = K[0, 2], K[1, 2]                    # principal point
+
+        # --- resolution (pyCamSet stores [width, height]) ---
+        width, height = int(cam.res[0]), int(cam.res[1])
+
+        # --- distortion: pyCamSet [k1, k2, p1, p2, k3] ---
+        dist = cam.distortion_coefs                   # 5-param Brown-Conrady
+        if len(dist) >= 5:
+            k1, k2, p1, p2, k3 = dist[:5]
+        else:
+            padded = list(dist) + [0.0] * (5 - len(dist))
+            k1, k2, p1, p2, k3 = padded
+
+        # FULL_OPENCV params: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
+        # k4, k5, k6 are not modelled by pyCamSet — set to zero
+        k4, k5, k6 = 0.0, 0.0, 0.0
+        model = "FULL_OPENCV"
+        params = (
+            f"{fx} {fy} {cx} {cy} "
+            f"{k1} {k2} {p1} {p2} {k3} {k4} {k5} {k6}"
+        )
+        lines.append(f"{cam_id} {model} {width} {height} {params}")
+
+    cameras_path = output_folder / "cameras.txt"      # target file path
+    with open(cameras_path, "w") as f:
+        f.write("\n".join(lines) + "\n")              # write all lines
+
+    print(f"Wrote cameras.txt with {len(cam_names)} cameras to {output_folder}")
+
+
+def export_rig_config(
+    cams,
+    output_path: Path,
+    ref_cam_name: str | None = None,
+):
+    """
+    Generate a COLMAP rig configuration JSON from pyCamSet relative extrinsics.
+
+    Camera names are read from the CameraSet dictionary keys.  COLMAP's
+    ``image_prefix`` for each camera is derived automatically as
+    ``"{cam_name}/"`` — matching the pyCamSet convention where images are
+    organised into per-camera subfolders named after the camera.
+
+    The reference camera is assigned identity pose in the rig frame.
+    All other cameras' poses are expressed relative to it.
+
+    This function avoids deepcopy of the CameraSet, which would fail
+    when the calibration handler contains unpicklable objects (e.g.
+    cv2.aruco.Dictionary from a ChArUco calibration).
+
+    :param cams: pyCamSet CameraSet object
+    :param output_path: path to write the JSON file (e.g. "rig_config.json")
+    :param ref_cam_name: name of the camera to use as the rig reference.
+                         If None, defaults to the first camera in the set.
+    """
+    cam_names = cams.get_names()                      # ordered camera names
+
+    # --- default to first camera if no reference specified ---
+    if ref_cam_name is None:
+        ref_cam_name = cam_names[0]                   # first key in _cam_dict
+
+    # --- validate the reference camera exists ---
+    if ref_cam_name not in cam_names:
+        raise ValueError(
+            f"Reference camera '{ref_cam_name}' not found in CameraSet. "
+            f"Available names: {cam_names}"
+        )
+
+    # --- compute sensor_from_rig transforms WITHOUT deepcopy ---
+    # The rig frame is defined as the reference camera's coordinate system.
+    # For any camera C with extrinsic E_c (cam-from-world) and reference
+    # camera R with extrinsic E_r (ref-from-world), the sensor_from_rig
+    # transform is:
+    #
+    #   sensor_from_rig = E_c @ inv(E_r)
+    #
+    # For the reference camera itself, this yields identity.
+    ref_ext = cams[ref_cam_name].extrinsic            # 4x4 ref cam-from-world
+    ref_ext_inv = np.linalg.inv(ref_ext)              # 4x4 world-from-ref
+
+    rig_cameras = []                                  # list of rig camera entries
+
+    for cam_name in cam_names:
+        # --- image_prefix derived from the camera name ---
+        # COLMAP matches images via StringStartsWith(image.Name(), prefix).
+        # With images in subfolders like "cam_name/step_000.png", the image
+        # name stored in the database is "cam_name/step_000.png", so the
+        # prefix "cam_name/" selects all images from that camera.
+        prefix = f"{cam_name}/"                       # automatic derivation
+
+        entry = {"image_prefix": prefix}              # required for every camera
+
+        if cam_name == ref_cam_name:
+            # --- reference sensor: identity pose, no cam_from_rig needed ---
+            entry["ref_sensor"] = True
+        else:
+            # --- non-reference sensor: compute cam_from_rig directly ---
+            cam_ext = cams[cam_name].extrinsic        # 4x4 cam-from-world
+            sensor_from_rig = cam_ext @ ref_ext_inv   # 4x4 cam-from-ref
+
+            R_mat = sensor_from_rig[:3, :3]           # 3x3 rotation
+            t_vec = sensor_from_rig[:3, 3]            # 3x1 translation
+
+            # convert rotation to COLMAP quaternion [w, x, y, z]
+            quat = rotation_matrix_to_quaternion_wxyz(R_mat)
+
+            entry["cam_from_rig_rotation"] = quat.tolist()
+            entry["cam_from_rig_translation"] = t_vec.tolist()
+
+        rig_cameras.append(entry)
+
+    # --- COLMAP expects a JSON array of rigs, each with a "cameras" key ---
+    rig_config = [{"cameras": rig_cameras}]
+
+    output_path = Path(output_path)                   # normalise to Path
+    with open(output_path, "w") as f:
+        json.dump(rig_config, f, indent=2)            # write formatted JSON
+
+    # --- summary ---
+    non_ref = [n for n in cam_names if n != ref_cam_name]
+    print(f"Wrote rig config to {output_path}")
+    print(f"  Reference camera: {ref_cam_name}")
+    print(f"  Non-reference cameras: {non_ref}")
+    print(f"  Image prefixes (auto-derived): "
+          f"{[f'{n}/' for n in cam_names]}")
+
+
+# ---------------------------------------------------------------------------
+# Convenience wrapper: export everything needed in one call
+# ---------------------------------------------------------------------------
+def camset_to_colmap(
+    cams,
+    output_folder: Path,
+    ref_cam_name: str | None = None,
+):
+    """
+    Export a pyCamSet CameraSet to COLMAP format in a single call.
+
+    Produces:
+      - cameras.txt       (intrinsics for each physical camera)
+      - rig_config.json   (inter-camera geometry for rig constraint)
+
+    :param cams: pyCamSet CameraSet object
+    :param output_folder: directory to write output files into
+    :param ref_cam_name: optional reference camera name; defaults to the
+                         first camera in the set if not provided.
+    """
+    output_folder = Path(output_folder)               # normalise to Path
+
+    export_cameras_txt(cams, output_folder)           # write cameras.txt
+    export_rig_config(                                # write rig_config.json
+        cams,
+        output_folder / "rig_config.json",
+        ref_cam_name=ref_cam_name,
+    )

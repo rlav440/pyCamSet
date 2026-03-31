@@ -166,7 +166,7 @@ class Phase1Tab(QWidget):
         self._cache_cb = QCheckBox("Cache detections (caching)")
         self._cache_cb.setChecked(True)
         self._cache_cb.setToolTip(
-            "Concept: when enabled pyCamSet can re-use a previously saved\n"
+            "Concept: when enabled pyCamSet can reuse a previously saved\n"
             "detected_datapoints.pickle rather than reprocessing every image.\n\n"
             "Default: enabled\n"
             "Range: on / off\n"

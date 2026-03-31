@@ -25,19 +25,16 @@ import pytest
 
 def _make_qt_stub():
     """Return a minimal stub for PySide6 so shared_functions can be imported."""
-    pyside6 = types.ModuleType("PySide6")
+    pyside6_stub = types.ModuleType("PySide6")
 
     for submod in ("QtCore", "QtGui", "QtWidgets"):
         mod = types.ModuleType(f"PySide6.{submod}")
         sys.modules[f"PySide6.{submod}"] = mod
-        setattr(pyside6, submod, mod)
+        setattr(pyside6_stub, submod, mod)
 
     # Create stub classes that shared_functions imports at module level
     class _Stub:
         def __init__(self, *a, **kw):
-            pass
-
-        def __init_subclass__(cls, **kw):
             pass
 
     class Signal(_Stub):
@@ -60,8 +57,8 @@ def _make_qt_stub():
         Key_Left = 0
         Key_Right = 0
 
-    names_core = ["QThread", "Signal", "QTextCursor", "Qt"]
-    names_gui  = ["QTextCursor", "QKeySequence", "QShortcut"]
+    names_core    = ["QThread", "Signal", "QTextCursor", "Qt"]
+    names_gui     = ["QTextCursor", "QKeySequence", "QShortcut"]
     names_widgets = [
         "QCheckBox", "QFrame", "QLabel", "QListWidget", "QListWidgetItem",
         "QPushButton", "QTextEdit", "QVBoxLayout", "QWidget", "QFormLayout",
@@ -80,8 +77,8 @@ def _make_qt_stub():
     for n in names_gui:
         setattr(sys.modules["PySide6.QtGui"], n, _Stub)
 
-    sys.modules["PySide6"] = pyside6
-    return pyside6
+    sys.modules["PySide6"] = pyside6_stub
+    return pyside6_stub
 
 
 _make_qt_stub()

@@ -147,7 +147,7 @@ _FIGURE_TOOLTIPS: dict[str, str] = {
     "Target Reconstruction": (
         "3-D scatter of reconstructed calibration-target points.\n\n"
         "What it shows: the spatial layout of the calibration target as\n"
-        "estimated by the bundle adjuster.\n\n"
+        "estimated by the bundle adjustment.\n\n"
         "How to interpret: points should form a tight, regular pattern\n"
         "matching the physical target geometry.  Outliers or a distorted\n"
         "cluster suggest residual calibration error."

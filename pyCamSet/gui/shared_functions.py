@@ -32,7 +32,6 @@ import json
 import logging
 import re
 import uuid
-from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -41,6 +40,7 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QFormLayout,
     QFrame,
     QLabel,
     QListWidget,
@@ -662,7 +662,7 @@ class EmitLogHandler(logging.Handler):
 # ---------------------------------------------------------------------------
 
 
-@contextmanager
+@contextlib.contextmanager
 def suppress_matplotlib_gui():
     """Context manager that forces Matplotlib into non-interactive ``Agg`` mode.
 
@@ -695,9 +695,6 @@ def suppress_matplotlib_gui():
 # ---------------------------------------------------------------------------
 # Predecessor-chain UI helper
 # ---------------------------------------------------------------------------
-
-from PySide6.QtWidgets import QFormLayout  # noqa: E402  (import after Qt setup)
-
 
 def render_predecessor_chain_section(layout, workspace_mgr: "WorkspaceManager", run: dict) -> None:
     """Append a labelled *Upstream Run Chain* section to *layout*.

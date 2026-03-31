@@ -1,7 +1,7 @@
 """
 Phase 4 - Self-calibration GUI.
 
-Implements Phase 4 from phase_planning.md using SelfBundleHandler with an
+Implements Phase 4 using SelfBundleHandler with an
 explicit user-triggered flow and diagnostics, including Assess Calibration.
 """
 from __future__ import annotations

@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
+    TAB_EXPORT_CALIBRATION,
+    TAB_CREATE_TARGET,
     TAB_PHASE0,
     TAB_PHASE1,
     TAB_PHASE1_DIAG,
@@ -92,6 +94,8 @@ class PyCamSetApp(QMainWindow):
 
     def _build_ui(self) -> None:
         # Deferred imports so module is importable without a display server
+        from pyCamSet.gui.create_target import CreateTargetTab
+        from pyCamSet.gui.export_calibration_tab import ExportCalibrationTab
         from pyCamSet.gui.phase_0_input import Phase0Tab
         from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab, Phase1Tab
         from pyCamSet.gui.phase_2_intrinsics import Phase2DiagnosticsTab, Phase2Tab
@@ -122,6 +126,14 @@ class PyCamSetApp(QMainWindow):
 
         self._notebook = QTabWidget()
         root_layout.addWidget(self._notebook)
+
+        self.create_target_tab = CreateTargetTab(
+            notebook=self._notebook,
+            info_cb=self._info_cb,
+            terminal_cb=self._terminal_cb,
+            workspace_mgr=ws,
+        )
+        self._notebook.addTab(self.create_target_tab, TAB_CREATE_TARGET)
 
         self.phase0_tab = Phase0Tab(
             notebook=self._notebook,
@@ -194,6 +206,14 @@ class PyCamSetApp(QMainWindow):
         )
         diag4_idx = self._notebook.addTab(self.phase4_diag_tab, TAB_PHASE4_DIAG)
         self._notebook.tabBar().setTabVisible(diag4_idx, False)
+
+        self.export_calibration_tab = ExportCalibrationTab(
+            notebook=self._notebook,
+            info_cb=self._info_cb,
+            terminal_cb=self._terminal_cb,
+            workspace_mgr=ws,
+        )
+        self._notebook.addTab(self.export_calibration_tab, TAB_EXPORT_CALIBRATION)
 
         # Cross-tab wiring
         self.phase1_tab.set_diagnostics_tab(self.phase1_diag_tab)
@@ -430,6 +450,8 @@ class PyCamSetApp(QMainWindow):
             self._normalize_outlier_combos(self.phase4_tab)
         elif name == TAB_PHASE2:
             self._normalize_outlier_combos(self.phase2_tab)
+        elif name == TAB_EXPORT_CALIBRATION:
+            self.export_calibration_tab.refresh()
 
     def _on_info_toggle(self) -> None:
         """Enable or disable all Qt tool-tips application-wide."""

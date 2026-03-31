@@ -1,7 +1,7 @@
 """
 Phase 2 - Per-camera initial calibration (intrinsics) GUI.
 
-Implements Phase 2 from phase_planning.md using existing pyCamSet functions:
+Implements Phase 2 using existing pyCamSet functions:
 - run_initial_calibration
 - detect_datapoints_in_imfile (for optional high-distortion re-detection)
 """

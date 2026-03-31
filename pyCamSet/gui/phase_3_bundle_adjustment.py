@@ -1,7 +1,7 @@
 """
 Phase 3 - Template bundle adjustment GUI.
 
-Implements Phase 3 from phase_planning.md by orchestrating core pyCamSet
+Implements Phase 3 by orchestrating core pyCamSet
 bundle-adjustment functions and persisting run diagnostics.
 """
 from __future__ import annotations

@@ -151,7 +151,7 @@ class Phase2Tab(QWidget):
         top_row.addWidget(side)
 
         # ── Paths (collapsible) ────────────────────────────────────────
-        paths_sect = CollapsibleSection("Paths", expanded=True)
+        paths_sect = CollapsibleSection("Paths", expanded=False)
         form_root.addWidget(paths_sect)
 
         floc_row = QHBoxLayout()
@@ -254,7 +254,7 @@ class Phase2Tab(QWidget):
 
         # ── Calibration Target (collapsible) ───────────────────────────
         form_root.addWidget(make_separator())
-        target_sect = CollapsibleSection("Calibration Target", expanded=True)
+        target_sect = CollapsibleSection("Calibration Target", expanded=False)
         form_root.addWidget(target_sect)
 
         self._target_combo = QComboBox()
@@ -1110,32 +1110,48 @@ class Phase2DiagnosticsTab(QWidget):
             w = max(64, min(1600, w))
             h = max(64, min(1000, h))
 
+            K = np.array(cam.intrinsic, dtype=np.float64)
+            D = np.array(cam.distortion_coefs, dtype=np.float64).reshape(-1)
+
+            # Forward distortion field: for each ideal (undistorted) grid point,
+            # compute where it ends up after applying lens distortion.
+            # Displacement = distorted_position − ideal_position.
             step = max(16, min(w, h) // 20)
             xs = np.arange(step // 2, w, step, dtype=np.float32)
             ys = np.arange(step // 2, h, step, dtype=np.float32)
             gx, gy = np.meshgrid(xs, ys)
-            pts = np.stack([gx.ravel(), gy.ravel()], axis=1).reshape(-1, 1, 2)
+            pts_ideal = np.stack([gx.ravel(), gy.ravel()], axis=1).astype(np.float64)
 
-            K = np.array(cam.intrinsic, dtype=np.float64)
-            D = np.array(cam.distortion_coefs, dtype=np.float64).reshape(-1)
+            # Normalise to camera-space rays
+            cx, cy = float(K[0, 2]), float(K[1, 2])
+            fx, fy = float(K[0, 0]), float(K[1, 1])
+            pts_norm = np.stack(
+                [(pts_ideal[:, 0] - cx) / fx,
+                 (pts_ideal[:, 1] - cy) / fy,
+                 np.ones(len(pts_ideal))],
+                axis=1,
+            ).astype(np.float32)
 
-            undist = cv2.undistortPoints(pts, K, D, P=K)
-            undist = undist.reshape(-1, 2)
-            orig = pts.reshape(-1, 2)
+            # Project with distortion (identity pose) → distorted pixel coordinates
+            R_eye = np.eye(3, dtype=np.float32)
+            t_zero = np.zeros(3, dtype=np.float32)
+            pts_distorted, _ = cv2.projectPoints(pts_norm, R_eye, t_zero, K, D)
+            pts_distorted = pts_distorted.reshape(-1, 2)
 
-            u = undist[:, 0] - orig[:, 0]
-            v = undist[:, 1] - orig[:, 1]
+            # Displacement vectors: distorted − ideal
+            u = pts_distorted[:, 0] - pts_ideal[:, 0]
+            v = pts_distorted[:, 1] - pts_ideal[:, 1]
             mag = np.hypot(u, v)
 
             ax = fig.add_subplot(n, 1, i)
-            sc = ax.quiver(orig[:, 0], orig[:, 1], u, -v, mag,
+            sc = ax.quiver(pts_ideal[:, 0], pts_ideal[:, 1], u, -v, mag,
                            cmap="plasma", angles="xy", scale_units="xy",
                            scale=0.25, width=0.002)
             fig.colorbar(sc, ax=ax, label="displacement (px)")
             ax.set_xlim(0, w)
             ax.set_ylim(h, 0)
             ax.set_aspect("equal")
-            ax.set_title(f"{cam.name} distortion field")
+            ax.set_title(f"{cam.name} — forward distortion field (distorted − ideal)")
             ax.set_xlabel("x (px)")
             ax.set_ylabel("y (px)")
 

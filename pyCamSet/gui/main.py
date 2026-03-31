@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from PySide6.QtCore import QEvent, QObject
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -38,6 +39,19 @@ from pyCamSet.gui.shared_functions import (
 )
 
 
+class _TooltipFilter(QObject):
+    """Application-level event filter that suppresses tooltip events when info_cb is unchecked."""
+
+    def __init__(self, info_cb: QCheckBox, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._info_cb = info_cb
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
+        if not self._info_cb.isChecked() and event.type() == QEvent.Type.ToolTip:
+            return True  # consume / block the tooltip event
+        return False
+
+
 class PyCamSetApp(QMainWindow):
     """Top-level application window.
 
@@ -59,6 +73,11 @@ class PyCamSetApp(QMainWindow):
         self._info_cb = QCheckBox("Enable Informational Windows")
         self._info_cb.setChecked(True)
         self._info_cb.stateChanged.connect(self._on_info_toggle)
+
+        # Install an application-level event filter that blocks hover tooltip
+        # events while "Enable Informational Windows" is unchecked.
+        self._tooltip_filter = _TooltipFilter(self._info_cb, self)
+        QApplication.instance().installEventFilter(self._tooltip_filter)
 
         self._terminal_cb = QCheckBox("Show Terminal Output")
         self._terminal_cb.setChecked(True)

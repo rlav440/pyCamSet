@@ -118,7 +118,7 @@ class Phase3Tab(QWidget):
         top_row.addWidget(side)
 
         # ── Paths (collapsible) ────────────────────────────────────────
-        paths_sect = CollapsibleSection("Paths", expanded=True)
+        paths_sect = CollapsibleSection("Paths", expanded=False)
         form_root.addWidget(paths_sect)
 
         floc_row = QHBoxLayout()
@@ -248,7 +248,7 @@ class Phase3Tab(QWidget):
 
         # ── Calibration Target (collapsible) ───────────────────────────
         form_root.addWidget(make_separator())
-        target_sect = CollapsibleSection("Calibration Target", expanded=True)
+        target_sect = CollapsibleSection("Calibration Target", expanded=False)
         form_root.addWidget(target_sect)
 
         self._target_combo = QComboBox()

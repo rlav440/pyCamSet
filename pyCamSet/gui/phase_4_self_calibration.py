@@ -42,6 +42,7 @@ from pyCamSet.gui.shared_functions import (
     RunSelectorWidget,
     TerminalWidget,
     WorkspaceManager,
+    make_green_button,
     make_orange_button,
     make_run_id,
     make_section_label,
@@ -109,7 +110,7 @@ class Phase4Tab(QWidget):
         top_row.addWidget(form_widget, stretch=1)
 
         # ── Paths (collapsible) ────────────────────────────────────────
-        paths_sect = CollapsibleSection("Paths", expanded=True)
+        paths_sect = CollapsibleSection("Paths", expanded=False)
         form_root.addWidget(paths_sect)
 
         floc_row = QHBoxLayout()
@@ -256,7 +257,7 @@ class Phase4Tab(QWidget):
         run_btn.clicked.connect(self._run_phase4)
         btn_row.addWidget(run_btn)
         btn_row.addWidget(make_orange_button("Diagnostics ▼", self._open_diagnostics))
-        btn_row.addWidget(make_orange_button("Assess Calibration", self._open_assess_calibration))
+        btn_row.addWidget(make_green_button("Assess Calibration", self._open_assess_calibration))
         btn_row.addStretch()
         form_root.addLayout(btn_row)
         form_root.addStretch()

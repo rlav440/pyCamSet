@@ -25,7 +25,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional
 import contextlib
-import io
 import logging
 import math
 import pickle
@@ -58,6 +57,8 @@ from pyCamSet.gui.shared_functions import (
     IMAGE_FOLDER_SCHEMATIC,
     TAB_PHASE1,
     TAB_PHASE1_DIAG,
+    EmitLogHandler,
+    EmitStream,
     PhaseWorker,
     RunSelectorWidget,
     TerminalWidget,
@@ -70,6 +71,7 @@ from pyCamSet.gui.shared_functions import (
     make_run_id,
     make_section_label,
     make_separator,
+    render_predecessor_chain_section,
 )
 
 # pyCamSet guarded imports
@@ -86,44 +88,6 @@ except ImportError:
 
 _TARGET_CHOICES = ["Ccube", "ChArUco"]
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
-
-
-class _EmitStream(io.TextIOBase):
-    """Redirect stream writes to the worker terminal emit callback."""
-    def __init__(self, emit):
-        super().__init__()
-        self._emit = emit
-        self._buf = ""
-
-    def write(self, s: str) -> int:
-        if not s:
-            return 0
-        self._buf += s
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            if line.strip():
-                self._emit(line)
-        return len(s)
-
-    def flush(self) -> None:
-        if self._buf.strip():
-            self._emit(self._buf.strip())
-        self._buf = ""
-
-
-class _EmitLogHandler(logging.Handler):
-    """Forward Python logging records to GUI terminal."""
-    def __init__(self, emit):
-        super().__init__(level=logging.INFO)
-        self._emit = emit
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            msg = self.format(record)
-            if msg.strip():
-                self._emit(msg)
-        except Exception:
-            pass
 
 
 def _build_target(target_type: str, n_points: int, length: float):
@@ -202,34 +166,73 @@ class Phase1Tab(QWidget):
         self._cache_cb = QCheckBox("Cache detections (caching)")
         self._cache_cb.setChecked(True)
         self._cache_cb.setToolTip(
-            "If enabled, pyCamSet can reuse saved detections when available."
+            "Concept: when enabled pyCamSet can re-use a previously saved\n"
+            "detected_datapoints.pickle rather than reprocessing every image.\n\n"
+            "Default: enabled\n"
+            "Range: on / off\n"
+            "Guidance: disable only if you suspect a stale cache is masking\n"
+            "a real change (e.g. new images added to an existing folder)."
         )
         form.addRow(self._cache_cb)
 
         self._hd_cb = QCheckBox("High Distortion Mode")
-        self._hd_cb.setToolTip("Enable for very wide/FOV-distorted imagery.")
+        self._hd_cb.setToolTip(
+            "Concept: enables a second detection pass that accounts for heavy\n"
+            "radial / fisheye distortion.  The detector uses a coarser initial\n"
+            "search, which is slower but more robust on wide-angle lenses.\n\n"
+            "Default: disabled\n"
+            "Range: on / off\n"
+            "Guidance: enable for cameras with an FOV > ~120 degrees or if\n"
+            "standard detection finds very few corners near the image edges."
+        )
         form.addRow(self._hd_cb)
 
         self._nlim_edit = QLineEdit()
         self._nlim_edit.setPlaceholderText("blank = no limit")
         self._nlim_edit.setFixedWidth(100)
-        self._nlim_edit.setToolTip("Optional cap on number of images processed per camera.")
+        self._nlim_edit.setToolTip(
+            "Concept: cap the number of images processed per camera.  Useful\n"
+            "for quick preview runs or when RAM is limited.\n\n"
+            "Default: blank (process all images)\n"
+            "Range: positive integer or blank\n"
+            "Guidance: for a quality calibration use at least 30–50 images;\n"
+            "n_lim < 15 may produce poor intrinsics."
+        )
         form.addRow("Max images per camera (n_lim):", self._nlim_edit)
 
         self._threads_edit = QLineEdit()
         self._threads_edit.setPlaceholderText("blank = auto")
         self._threads_edit.setFixedWidth(100)
-        self._threads_edit.setToolTip("Optional worker thread count (integer).")
+        self._threads_edit.setToolTip(
+            "Concept: number of parallel worker threads for image processing.\n\n"
+            "Default: blank (auto-detect from CPU core count)\n"
+            "Range: positive integer or blank\n"
+            "Guidance: set to 1 for debugging; leave blank for normal use."
+        )
         form.addRow("Threads:", self._threads_edit)
 
         self._fp_edit = QLineEdit()
         self._fp_edit.setPlaceholderText('e.g. {"cam0": "int"} or blank')
-        self._fp_edit.setToolTip("Optional JSON dict for fixed camera parameters.")
+        self._fp_edit.setToolTip(
+            "Concept: JSON dict that pins specific camera parameters to fixed\n"
+            "values during calibration, preventing them from being optimised.\n\n"
+            "Default: blank (all parameters free)\n"
+            "Range: valid JSON object, e.g. {\"cam0\": \"ext\"}\n"
+            "Guidance: use to hold extrinsics fixed for a known reference\n"
+            "camera.  Leave blank unless you have a specific reason."
+        )
         form.addRow("Fixed params (JSON):", self._fp_edit)
 
         self._po_edit = QLineEdit()
         self._po_edit.setPlaceholderText("JSON dict or blank")
-        self._po_edit.setToolTip("Optional JSON dict for backend/problem options.")
+        self._po_edit.setToolTip(
+            "Concept: JSON dict passed directly to the pyCamSet detection\n"
+            "back-end (e.g. to override corner-refinement window size).\n\n"
+            "Default: blank (use built-in defaults)\n"
+            "Range: valid JSON object\n"
+            "Guidance: advanced option — leave blank unless instructed by\n"
+            "the pyCamSet documentation."
+        )
         form.addRow("Problem options (JSON):", self._po_edit)
 
         # ── Target configuration ───────────────────────────────────────
@@ -240,7 +243,13 @@ class Phase1Tab(QWidget):
         self._target_combo.addItems(_TARGET_CHOICES)
         self._target_combo.setFixedWidth(140)
         self._target_combo.setToolTip(
-            "Ccube = corner-cube target; ChArUco = charuco board."
+            "Concept: the physical calibration target type.\n\n"
+            "Ccube — corner-cube target with coded markers; robust to partial\n"
+            "  occlusion and suitable for most multi-camera setups.\n"
+            "ChArUco — charuco board (chessboard + ArUco markers); widely\n"
+            "  supported and easy to print.\n\n"
+            "Default: Ccube\n"
+            "Guidance: match this exactly to the physical target you are using."
         )
         form.addRow("Target type:", self._target_combo)
 
@@ -249,13 +258,27 @@ class Phase1Tab(QWidget):
         self._npts_spin.setValue(6)
         self._npts_spin.setFixedWidth(80)
         self._npts_spin.setToolTip(
-            "For Ccube: points per face edge. For ChArUco: squares in x."
+            "Concept: the grid density of the calibration target.\n"
+            "For Ccube: number of points per face edge.\n"
+            "For ChArUco: number of squares along the x-axis.\n\n"
+            "Default: 6\n"
+            "Range: 2–20\n"
+            "Guidance: must exactly match the physical target you are using.\n"
+            "Higher values give more feature constraints per image."
         )
         form.addRow("n_points / squares_x:", self._npts_spin)
 
         self._length_edit = QLineEdit("30.0")
         self._length_edit.setFixedWidth(100)
-        self._length_edit.setToolTip("Physical feature size in millimetres.")
+        self._length_edit.setToolTip(
+            "Concept: the physical size of one feature on the calibration\n"
+            "target, in millimetres.  This sets the metric scale of the\n"
+            "calibration.\n\n"
+            "Default: 30.0 mm\n"
+            "Range: any positive float (mm)\n"
+            "Guidance: measure the actual printed/machined target — even a\n"
+            "1% error here propagates directly into reconstructed distances."
+        )
         form.addRow("Length / square size (mm):", self._length_edit)
 
         # ── Action buttons ─────────────────────────────────────────────
@@ -390,8 +413,8 @@ class Phase1Tab(QWidget):
             error_msg: Optional[str] = None
             det_pickle_src: Optional[Path] = None
 
-            stream = _EmitStream(emit)
-            log_handler = _EmitLogHandler(emit)
+            stream = EmitStream(emit)
+            log_handler = EmitLogHandler(emit)
             log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
             root_logger = logging.getLogger()
             root_logger.addHandler(log_handler)
@@ -964,6 +987,7 @@ class Phase1DiagnosticsTab(QWidget):
                     self._summary_layout.addLayout(row)
 
             self._summary_layout.addWidget(make_separator())
+            render_predecessor_chain_section(self._summary_layout, self._workspace_mgr, run)
 
     def _render_heatmap(self, runs: list[dict]) -> None:
         while self._heatmap_layout.count():

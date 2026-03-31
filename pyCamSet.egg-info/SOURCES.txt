@@ -12,6 +12,7 @@ pyCamSet/calibration/__init__.py
 pyCamSet/calibration/camera_calibrator.py
 pyCamSet/calibration_targets/__init__.py
 pyCamSet/calibration_targets/abstract_target.py
+pyCamSet/calibration_targets/create_Ccube.py
 pyCamSet/calibration_targets/net_maker.py
 pyCamSet/calibration_targets/shape_by_faces.py
 pyCamSet/calibration_targets/target_Ccube.py
@@ -20,6 +21,15 @@ pyCamSet/calibration_targets/target_detections.py
 pyCamSet/cameras/__init__.py
 pyCamSet/cameras/camera.py
 pyCamSet/cameras/camera_set.py
+pyCamSet/gui/__init__.py
+pyCamSet/gui/assess_calibration.py
+pyCamSet/gui/main.py
+pyCamSet/gui/phase_0_input.py
+pyCamSet/gui/phase_1_detection.py
+pyCamSet/gui/phase_2_intrinsics.py
+pyCamSet/gui/phase_3_bundle_adjustment.py
+pyCamSet/gui/phase_4_self_calibration.py
+pyCamSet/gui/shared_functions.py
 pyCamSet/optimisation/__init__.py
 pyCamSet/optimisation/abstract_function_blocks.py
 pyCamSet/optimisation/compiled_helpers.py
@@ -31,10 +41,6 @@ pyCamSet/optimisation/optimisation_handling.py
 pyCamSet/optimisation/standard_bundle_handler.py
 pyCamSet/optimisation/template_handler.py
 pyCamSet/optimisation/template_functions/__init__.py
-pyCamSet/pipeline/__init__.py
-pyCamSet/pipeline/phased_pipeline.py
-pyCamSet/pipeline/pipeline_cache.py
-pyCamSet/pipeline/pipeline_plots.py
 pyCamSet/reconstruction/__init__.py
 pyCamSet/reconstruction/acmmp_utils.py
 pyCamSet/reconstruction/reconstruction_utils.py

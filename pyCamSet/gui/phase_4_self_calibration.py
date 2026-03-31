@@ -45,6 +45,7 @@ from pyCamSet.gui.shared_functions import (
     make_run_id,
     make_section_label,
     make_separator,
+    render_predecessor_chain_section,
 )
 from pyCamSet.gui.assess_calibration import (
     AssessCalibrationWidget,
@@ -154,39 +155,87 @@ class Phase4Tab(QWidget):
 
         self._threads_edit = QLineEdit("1")
         self._threads_edit.setFixedWidth(100)
+        self._threads_edit.setToolTip(
+            "Concept: number of Jacobian evaluation threads used by scipy.\n\n"
+            "Default: 1\n"
+            "Range: positive integer\n"
+            "Guidance: start with 1; increase for large problems if memory allows."
+        )
         form.addRow("Threads:", self._threads_edit)
 
         self._max_nfev_spin = QSpinBox()
         self._max_nfev_spin.setRange(5, 5000)
         self._max_nfev_spin.setValue(300)
         self._max_nfev_spin.setFixedWidth(110)
+        self._max_nfev_spin.setToolTip(
+            "Concept: maximum cost-function evaluations for the solver.\n\n"
+            "Default: 300\n"
+            "Range: 5–5000\n"
+            "Guidance: increase to 1000 if the solver reports non-convergence.\n"
+            "Self-calibration is sensitive; prefer more evaluations over fewer."
+        )
         form.addRow("max_nfev:", self._max_nfev_spin)
 
         self._verbosity_spin = QSpinBox()
         self._verbosity_spin.setRange(0, 2)
         self._verbosity_spin.setValue(2)
         self._verbosity_spin.setFixedWidth(110)
+        self._verbosity_spin.setToolTip(
+            "Concept: solver verbosity level.\n\n"
+            "Default: 2\n"
+            "Range: 0 (silent), 1 (summary), 2 (per-iteration)\n"
+            "Guidance: keep at 2 to monitor self-calibration convergence."
+        )
         form.addRow("verbosity:", self._verbosity_spin)
 
         self._outliers_combo = QComboBox()
         self._outliers_combo.addItems(["n", "y"])
         self._outliers_combo.setCurrentText("n")
+        self._outliers_combo.setToolTip(
+            "Concept: whether to reject outlier poses before self-calibration.\n\n"
+            "Default: n (disabled)\n"
+            "Choices: n (disabled), y (enabled)\n"
+            "Guidance: enable only if Phase 3 already had clean data.  Outlier\n"
+            "rejection in Phase 4 can discard useful target-shape information."
+        )
         form.addRow("outliers:", self._outliers_combo)
 
         self._fixed_pose_edit = QLineEdit("0")
         self._fixed_pose_edit.setFixedWidth(110)
+        self._fixed_pose_edit.setToolTip(
+            "Concept: pose index whose extrinsic is held fixed as the anchor.\n\n"
+            "Default: 0\n"
+            "Range: 0 to (num_poses − 1)\n"
+            "Guidance: should match the value used in Phase 3."
+        )
         form.addRow("fixed_pose:", self._fixed_pose_edit)
 
         self._ref_cam_edit = QLineEdit("0")
         self._ref_cam_edit.setFixedWidth(110)
+        self._ref_cam_edit.setToolTip(
+            "Concept: camera index used as the metric reference.\n\n"
+            "Default: 0\n"
+            "Range: 0 to (num_cameras − 1)"
+        )
         form.addRow("ref_cam:", self._ref_cam_edit)
 
         self._ref_pose_edit = QLineEdit("0")
         self._ref_pose_edit.setFixedWidth(110)
+        self._ref_pose_edit.setToolTip(
+            "Concept: pose index used as the metric reference for the gauge.\n\n"
+            "Default: 0\n"
+            "Range: 0 to (num_poses − 1)"
+        )
         form.addRow("ref_pose:", self._ref_pose_edit)
 
         self._fp_edit = QLineEdit()
         self._fp_edit.setPlaceholderText('e.g. {"cam0": "ext"}')
+        self._fp_edit.setToolTip(
+            "Concept: JSON dict that pins specific parameters to fixed values.\n\n"
+            "Default: blank (all parameters free)\n"
+            "Range: valid JSON object\n"
+            "Guidance: leave blank unless you need to freeze a reference camera."
+        )
         form.addRow("Fixed params (JSON):", self._fp_edit)
 
         btn_row = QHBoxLayout()
@@ -632,6 +681,7 @@ class Phase4DiagnosticsTab(QWidget):
                 form.addRow("Error:", QLabel(str(run["error"])))
             self._summary_layout.addLayout(form)
             self._summary_layout.addWidget(make_separator())
+            render_predecessor_chain_section(self._summary_layout, self._workspace_mgr, run)
         self._summary_layout.addStretch()
 
     def _run_visualise_target(self) -> None:

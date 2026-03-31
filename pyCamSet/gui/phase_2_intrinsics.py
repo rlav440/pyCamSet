@@ -53,6 +53,7 @@ from pyCamSet.gui.shared_functions import (
     make_run_id,
     make_section_label,
     make_separator,
+    render_predecessor_chain_section,
     resolve_phase1_pickle_artifact,
 )
 
@@ -69,20 +70,6 @@ except ImportError:
     _PYCAMSET_OK = False
 
 _TARGET_CHOICES = ["Ccube", "ChArUco"]
-
-
-def _build_target(target_type: str, n_points: int, length: float):
-    if not _PYCAMSET_OK:
-        raise RuntimeError("pyCamSet modules are not importable.")
-    return build_target(target_type, n_points, length)
-
-
-def _extract_detection_payload(payload):
-    return extract_detection_and_cam_res(payload)
-
-
-def _resolve_phase1_pickle(phase1_run: dict, ws_path: Path) -> Optional[Path]:
-    return resolve_phase1_pickle_artifact(phase1_run, ws_path)
 
 
 def _make_grid_image(width: int, height: int, step: int = 48) -> np.ndarray:
@@ -444,7 +431,7 @@ class Phase2Tab(QWidget):
             self._phase1_lbl.setText("Detection source: auto (no Phase 1 run found)")
             return
 
-        det = _resolve_phase1_pickle(run, ws)
+        det = resolve_phase1_pickle_artifact(run, ws)
         rid = run.get("run_id", "unknown")
         src = str(det) if det is not None else "no pickle (fallback detect)"
         self._phase1_lbl.setText(f"Detection source: run {rid} -> {src}")
@@ -503,7 +490,7 @@ class Phase2Tab(QWidget):
                     emit(f"Override path missing: {override_pickle} (falling back to Phase 1 source)")
 
             if det_pickle is None and phase1_run is not None:
-                det_pickle = _resolve_phase1_pickle(phase1_run, ws_path)
+                det_pickle = resolve_phase1_pickle_artifact(phase1_run, ws_path)
 
             detections = None
             cam_res = None
@@ -516,12 +503,12 @@ class Phase2Tab(QWidget):
 
             try:
                 with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
-                    target = _build_target(params["target_type"], params["n_points"], params["length"])
+                    target = build_target(params["target_type"], params["n_points"], params["length"])
 
                     if det_pickle is not None and det_pickle.exists():
                         emit(f"Using detections: {det_pickle}")
                         payload = load_pickle(det_pickle)
-                        detections, cam_res = _extract_detection_payload(payload)
+                        detections, cam_res = extract_detection_and_cam_res(payload)
 
                     if detections is None or cam_res is None:
                         emit("Detection artifact missing/incompatible, falling back to detection pass.")
@@ -895,6 +882,7 @@ class Phase2DiagnosticsTab(QWidget):
 
             self._summary_layout.addLayout(form)
             self._summary_layout.addWidget(make_separator())
+            render_predecessor_chain_section(self._summary_layout, self._workspace_mgr, run)
 
         self._summary_layout.addStretch()
 

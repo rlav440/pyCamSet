@@ -1,3 +1,4 @@
+PySide6
 blosc
 coloredlogs
 dill

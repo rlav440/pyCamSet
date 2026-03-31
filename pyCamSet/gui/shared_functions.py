@@ -13,14 +13,26 @@ Conventions
   workspace directory.
 - Background work runs inside :class:`PhaseWorker`, a ``QThread`` subclass
   that emits ``line_ready(str)`` and ``finished(dict)`` signals.
+
+Backwards-compatibility policy
+-------------------------------
+This module intentionally does **not** support legacy data formats or API
+aliases from earlier pyCamSet builds.  If legacy input is detected (e.g. a
+``phase5`` folder name or an unrecognised detection-pickle shape), a
+``ValueError`` or ``RuntimeError`` is raised immediately with a clear message
+so the user can migrate their workspace rather than silently producing
+incorrect results.
 """
 from __future__ import annotations
 
+import contextlib
+import copy
 import io
 import json
 import logging
 import re
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -150,7 +162,21 @@ def build_target(target_type: str, n_points: int, length: float):
 
 
 def extract_detection_and_cam_res(payload):
-    """Extract (TargetDetection, cam_res) from common persisted payload shapes."""
+    """Extract ``(TargetDetection, cam_res)`` from a persisted detection payload.
+
+    Accepted formats
+    ----------------
+    1. A bare ``TargetDetection`` object (has ``get_cam_list``).
+    2. A ``(TargetDetection, cam_res)`` tuple/list produced by
+       ``detect_datapoints_in_imfile``.
+
+    Raises
+    ------
+    ValueError
+        If the payload is a legacy dict format or any other unrecognised shape.
+        Migrate the workspace by re-running Phase 1 to produce a current-format
+        pickle.
+    """
     if hasattr(payload, "get_cam_list"):
         return payload, None
 
@@ -161,12 +187,15 @@ def extract_detection_and_cam_res(payload):
             return detections, cam_res
 
     if isinstance(payload, dict):
-        for key in ("detections", "target_detection", "target_detections", "data"):
-            det = payload.get(key)
-            if hasattr(det, "get_cam_list"):
-                return det, payload.get("cam_res")
+        raise ValueError(
+            "Legacy dict-format detection pickle detected.  "
+            "Re-run Phase 1 to produce a current-format detected_datapoints.pickle."
+        )
 
-    return None, None
+    raise ValueError(
+        f"Unrecognised detection payload type: {type(payload).__name__!r}.  "
+        "Re-run Phase 1 to produce a current-format detected_datapoints.pickle."
+    )
 
 
 def extract_detection(payload):
@@ -219,15 +248,15 @@ class TerminalWidget(QTextEdit):
 
 
 class WorkspaceManager:
-    """Manages workspace directory and run metadata."""
+    """Manages workspace directory and run metadata.
 
-    _PHASE_ALIASES = {
-        "phase5": "assess_calibration",
-        "phase_5": "assess_calibration",
-        "phase-5": "assess_calibration",
-        "phase 5": "assess_calibration",
-        "visualise_target": "assess_calibration",
-    }
+    Supported phases: ``phase0`` through ``phase4``.  Legacy phase names such
+    as ``phase5``, ``visualise_target``, or ``assess_calibration`` are **not**
+    supported; passing them raises ``ValueError`` immediately.
+    """
+
+    _KNOWN_PHASES = {"phase0", "phase1", "phase2", "phase3", "phase4"}
+    _PHASE_ORDER = ["phase0", "phase1", "phase2", "phase3", "phase4"]
 
     def __init__(self, workspace_path: Optional[Path] = None) -> None:
         self.workspace_path: Optional[Path] = Path(workspace_path) if workspace_path else None
@@ -236,15 +265,30 @@ class WorkspaceManager:
 
     @classmethod
     def canonical_phase_name(cls, phase: str) -> str:
+        """Normalise *phase* to a canonical lower-case name.
+
+        Raises
+        ------
+        ValueError
+            If *phase* is a known legacy alias (e.g. ``phase5``,
+            ``visualise_target``) so the caller gets a clear migration hint
+            instead of silently reading stale data.
+        """
         p = (phase or "").strip().lower()
-        return cls._PHASE_ALIASES.get(p, p)
+        _LEGACY = {
+            "phase5", "phase_5", "phase-5", "phase 5",
+            "visualise_target", "assess_calibration",
+        }
+        if p in _LEGACY:
+            raise ValueError(
+                f"Legacy phase name {phase!r} is no longer supported.  "
+                "Re-run calibration to produce phase4 output in the current workspace layout."
+            )
+        return p
 
     @classmethod
     def _phase_run_dirs(cls, phase: str) -> list[str]:
         canonical = cls.canonical_phase_name(phase)
-        if canonical == "assess_calibration":
-            # Keep reading legacy folders created by earlier builds.
-            return ["assess_calibration_runs", "visualise_target_runs", "phase5_runs", "phase_5_runs"]
         return [f"{canonical}_runs"]
 
     def set_workspace_path(self, workspace_path: Path, ensure: bool = True) -> None:
@@ -263,9 +307,6 @@ class WorkspaceManager:
             "phase2_runs",
             "phase3_runs",
             "phase4_runs",
-            "assess_calibration_runs",
-            "visualise_target_runs",
-            "phase5_runs",
         ):
             (self.workspace_path / sub).mkdir(parents=True, exist_ok=True)
 
@@ -304,6 +345,61 @@ class WorkspaceManager:
 
         results.sort(key=lambda d: str(d.get("run_id", "")))
         return results
+
+    def build_predecessor_chain(self, run: dict) -> list[dict]:
+        """Return deep copies of all predecessor runs for *run*, oldest-first.
+
+        Follows ``inputs.phaseN_run_id`` links through persisted workspace
+        metadata.  At each step the direct parent is the highest-phase entry in
+        the current run's ``inputs`` dict.  The chain terminates when no
+        further parent can be resolved.
+
+        Returns an empty list if *run* has no tracked predecessors.
+        """
+        chain: list[dict] = []
+        visited: set[str] = set()
+        current = run
+
+        for _ in range(len(self._PHASE_ORDER)):
+            inputs = current.get("inputs") or {}
+
+            best_phase_idx = -1
+            parent_phase: Optional[str] = None
+            parent_run_id: Optional[str] = None
+
+            for key, val in inputs.items():
+                if not (key.endswith("_run_id") and val):
+                    continue
+                phase = key[: -len("_run_id")]
+                try:
+                    idx = self._PHASE_ORDER.index(phase)
+                except ValueError:
+                    continue
+                if idx > best_phase_idx:
+                    best_phase_idx = idx
+                    parent_phase = phase
+                    parent_run_id = str(val)
+
+            if parent_run_id is None or parent_run_id in visited:
+                break
+
+            visited.add(parent_run_id)
+            try:
+                parent_runs = self.load_runs(parent_phase)  # type: ignore[arg-type]
+            except ValueError:
+                break
+            parent = next(
+                (r for r in parent_runs if r.get("run_id") == parent_run_id),
+                None,
+            )
+            if parent is None:
+                break
+
+            chain.append(copy.deepcopy(parent))
+            current = parent
+
+        chain.reverse()
+        return chain
 
     def write_handoff(self, payload: dict) -> None:
         """Write payload to <workspace>/handoff.json."""
@@ -491,7 +587,20 @@ def count_images_in_folder(folder: Path) -> int:
 
 
 def resolve_phase1_pickle_artifact(phase1_run: dict, ws_path: Path) -> Optional[Path]:
-    """Resolve detected_datapoints pickle robustly for older/newer run metadata."""
+    """Resolve the ``detected_datapoints.pickle`` path for a Phase 1 run.
+
+    Resolution order
+    ----------------
+    1. The path stored in ``artifacts["detected_datapoints_pickle"]``.
+    2. ``<workspace>/phase1_runs/<run_id>/detected_datapoints.pickle``.
+
+    Raises
+    ------
+    RuntimeError
+        If neither location yields an existing file.  The caller should prompt
+        the user to re-run Phase 1 rather than falling back to a legacy f_loc
+        path (which would silently use stale data).
+    """
     artifacts = phase1_run.get("artifacts") or {}
     artifact_path = artifacts.get("detected_datapoints_pickle")
     if artifact_path:
@@ -502,12 +611,6 @@ def resolve_phase1_pickle_artifact(phase1_run: dict, ws_path: Path) -> Optional[
     run_id = phase1_run.get("run_id")
     if run_id:
         p = ws_path / "phase1_runs" / str(run_id) / "detected_datapoints.pickle"
-        if p.exists():
-            return p
-
-    f_loc = (phase1_run.get("params") or {}).get("f_loc")
-    if f_loc:
-        p = Path(f_loc) / "detected_datapoints.pickle"
         if p.exists():
             return p
 
@@ -553,3 +656,106 @@ class EmitLogHandler(logging.Handler):
         except Exception:
             pass
 
+
+# ---------------------------------------------------------------------------
+# Matplotlib thread-safety helper
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def suppress_matplotlib_gui():
+    """Context manager that forces Matplotlib into non-interactive ``Agg`` mode.
+
+    Use this inside ``PhaseWorker.run()`` to prevent Matplotlib from opening
+    GUI windows on a background thread, which would crash Qt.
+
+    On exit the original ``plt.show`` callable is restored (best-effort).
+    """
+    plt = None
+    orig_show = None
+    try:
+        import matplotlib
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as _plt
+        plt = _plt
+        orig_show = plt.show
+        plt.show = lambda *args, **kwargs: None
+    except Exception:
+        pass
+    try:
+        yield
+    finally:
+        if plt is not None and orig_show is not None:
+            try:
+                plt.show = orig_show
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Predecessor-chain UI helper
+# ---------------------------------------------------------------------------
+
+from PySide6.QtWidgets import QFormLayout  # noqa: E402  (import after Qt setup)
+
+
+def render_predecessor_chain_section(layout, workspace_mgr: "WorkspaceManager", run: dict) -> None:
+    """Append a labelled *Upstream Run Chain* section to *layout*.
+
+    For each predecessor (oldest-first) a compact read-only form is added
+    showing the phase, run-id, key params, and a selection of diagnostics.
+    All data is a deep copy — no destructive references.
+
+    The section is omitted entirely when the run has no trackable predecessors.
+    """
+    chain = workspace_mgr.build_predecessor_chain(run)
+    if not chain:
+        return
+
+    layout.addWidget(make_separator())
+    hdr = make_section_label("Upstream Run Chain")
+    hdr.setToolTip(
+        "Metadata from all predecessor phase runs that led to this result.\n"
+        "Oldest phase first.  All values are read-only copies."
+    )
+    layout.addWidget(hdr)
+
+    for pred in chain:
+        phase = str(pred.get("phase", "unknown"))
+        rid = str(pred.get("run_id", "unknown"))
+        pred_hdr = QLabel(f"  {phase}  |  {rid}")
+        pred_hdr.setStyleSheet("font-weight: bold; margin-top: 4px; color: #555;")
+        layout.addWidget(pred_hdr)
+
+        form = QFormLayout()
+        form.setContentsMargins(32, 0, 0, 0)
+
+        params = pred.get("params") or {}
+        interesting_params = {
+            k: v for k, v in params.items()
+            if k not in ("f_loc",) and v is not None
+        }
+        if interesting_params:
+            param_txt = ", ".join(
+                f"{k}={v}" for k, v in list(interesting_params.items())[:6]
+            )
+            plbl = QLabel(param_txt)
+            plbl.setWordWrap(True)
+            plbl.setStyleSheet("color: #444; font-size: 9pt;")
+            form.addRow("params:", plbl)
+
+        diag = pred.get("diagnostics") or {}
+        for key, val in list(diag.items())[:4]:
+            short_key = key.split("_", 1)[-1] if "_" in key else key
+            dlbl = QLabel(str(val)[:120])
+            dlbl.setWordWrap(True)
+            dlbl.setStyleSheet("font-size: 9pt;")
+            form.addRow(f"{short_key}:", dlbl)
+
+        if pred.get("error"):
+            err_lbl = QLabel(str(pred["error"])[:200])
+            err_lbl.setStyleSheet("color: red; font-size: 9pt;")
+            err_lbl.setWordWrap(True)
+            form.addRow("error:", err_lbl)
+
+        layout.addLayout(form)

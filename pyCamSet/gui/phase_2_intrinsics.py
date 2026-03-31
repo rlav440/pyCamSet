@@ -1125,7 +1125,7 @@ class Phase2DiagnosticsTab(QWidget):
 
             u = undist[:, 0] - orig[:, 0]
             v = undist[:, 1] - orig[:, 1]
-            mag = np.sqrt(u ** 2 + v ** 2)
+            mag = np.hypot(u, v)
 
             ax = fig.add_subplot(n, 1, i)
             sc = ax.quiver(orig[:, 0], orig[:, 1], u, -v, mag,

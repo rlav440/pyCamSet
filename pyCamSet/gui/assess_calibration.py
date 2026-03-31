@@ -288,7 +288,7 @@ class AssessCalibrationWidget(QWidget):
             colors = ["#ff7f0e", "#2ca02c"]
             bars = ax.bar(labels, vals, color=colors, edgecolor="#222", linewidth=0.6)
             for b, v in zip(bars, vals):
-                if not (v != v):  # not NaN
+                if not np.isnan(v):
                     ax.text(b.get_x() + b.get_width() / 2, b.get_height(),
                             f"{v:.4f}", ha="center", va="bottom", fontsize=9)
             ax.set_ylabel("Euclidean RPE (px)")
@@ -317,7 +317,7 @@ class AssessCalibrationWidget(QWidget):
                 ax.set_ylabel("Mean reprojection error (px)")
                 ax.set_title("Per-camera Reprojection Error")
                 med = _np.nanmedian(vals) if vals else float("nan")
-                if not (med != med):
+                if not _np.isnan(med):
                     ax.axhline(med, color="#d62728", linestyle="--", linewidth=1.1,
                                label=f"median={med:.4f}")
                     ax.legend(fontsize=8)

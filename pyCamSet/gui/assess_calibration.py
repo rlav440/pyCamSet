@@ -74,7 +74,15 @@ def canonical_phase_tag(value: str | None) -> str:
 
 
 def resolve_run_camset_artifact(run: dict) -> Optional[Path]:
-    """Return the first existing camset path from *run*'s artifact metadata."""
+    """Return the first existing camset path from *run*'s artifact metadata.
+
+    Recognised keys (in priority order): ``self_calibrated_camset``,
+    ``optimised_camset``, ``initial_camset``, ``camset``.
+
+    Legacy keys such as ``phase5_camset`` are **not** supported.  If a run
+    produced via an old build is passed, its ``artifacts`` dict will contain
+    none of the recognised keys and ``None`` is returned.
+    """
     artifacts = run.get("artifacts") or {}
     for key in (
         "self_calibrated_camset",

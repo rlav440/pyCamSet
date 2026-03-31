@@ -1151,7 +1151,7 @@ class Phase2DiagnosticsTab(QWidget):
             ax.set_xlim(0, w)
             ax.set_ylim(h, 0)
             ax.set_aspect("equal")
-            ax.set_title(f"{cam.name} — forward distortion field (distorted − ideal)")
+            ax.set_title(f"{cam.name} -- forward distortion field (distorted - ideal)")
             ax.set_xlabel("x (px)")
             ax.set_ylabel("y (px)")
 

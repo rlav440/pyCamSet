@@ -36,16 +36,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDialog,
+    QFileDialog,
     QFormLayout,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QScrollArea,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -74,6 +78,8 @@ DARK_ORANGE = "#c06000"
 GREEN = "#2e7d32"
 DARK_GREEN = "#1b5e20"
 SECTION_COLOR = "#1976d2"
+BABY_BLUE = "#8fd3ff"
+DARK_BABY_BLUE = "#67bde8"
 
 ORANGE_BTN_STYLE = (
     f"QPushButton {{ background-color: {ORANGE}; color: white; font-weight: bold;"
@@ -87,6 +93,13 @@ GREEN_BTN_STYLE = (
     f" border-radius: 4px; padding: 4px 10px; }}"
     f"QPushButton:hover {{ background-color: {DARK_GREEN}; }}"
     f"QPushButton:pressed {{ background-color: {DARK_GREEN}; }}"
+)
+
+BLUE_BTN_STYLE = (
+    f"QPushButton {{ background-color: {BABY_BLUE}; color: #083b5c; font-weight: bold;"
+    f" border-radius: 4px; padding: 4px 10px; }}"
+    f"QPushButton:hover {{ background-color: {DARK_BABY_BLUE}; }}"
+    f"QPushButton:pressed {{ background-color: {DARK_BABY_BLUE}; }}"
 )
 
 SECTION_STYLE = "QLabel { color: #1976d2; font-weight: bold; margin-top: 6px; }"
@@ -132,12 +145,88 @@ def make_green_button(text: str, callback: Callable) -> QPushButton:
     return btn
 
 
+def make_blue_button(text: str, callback: Callable) -> QPushButton:
+    """Return a baby-blue action button connected to *callback*."""
+    btn = QPushButton(text)
+    btn.setStyleSheet(BLUE_BTN_STYLE)
+    btn.clicked.connect(callback)
+    return btn
+
+
 def make_continue_button(callback: Callable) -> QPushButton:
     """Return a green "Continue to Next Phase" button."""
     btn = QPushButton("Continue to Next Phase ▶")
     btn.setStyleSheet(GREEN_BTN_STYLE)
     btn.clicked.connect(callback)
     return btn
+
+
+class MatplotlibFigureCard(QWidget):
+    """A labelled matplotlib card with a per-figure Expand button."""
+
+    def __init__(
+        self,
+        title: str,
+        fig,
+        canvas_cls,
+        parent: Optional[QWidget] = None,
+        min_height: int = 300,
+    ) -> None:
+        super().__init__(parent)
+        self._title = title
+        self._fig = fig
+        self._canvas_cls = canvas_cls
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 2, 0, 8)
+
+        header = QHBoxLayout()
+        header.addWidget(make_section_label(title))
+        header.addStretch()
+        expand_btn = QPushButton("Expand")
+        expand_btn.setFixedWidth(78)
+        expand_btn.clicked.connect(self._open_expanded)
+        header.addWidget(expand_btn)
+        layout.addLayout(header)
+
+        self._canvas = self._canvas_cls(self._fig)
+        self._canvas.setMinimumHeight(min_height)
+        self._canvas.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        layout.addWidget(self._canvas)
+
+    def _open_expanded(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle(self._title)
+        dlg.resize(1100, 780)
+        root = QVBoxLayout(dlg)
+        canvas = self._canvas_cls(self._fig)
+        canvas.setMinimumHeight(700)
+        root.addWidget(canvas)
+        dlg.exec()
+
+
+def make_scrollable_tab() -> tuple[QWidget, QVBoxLayout, QScrollArea]:
+    """Return (tab_widget, inner_layout, scroll_area) for vertically scrollable tab content."""
+    tab = QWidget()
+    root = QVBoxLayout(tab)
+    root.setContentsMargins(0, 0, 0, 0)
+
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+    inner = QWidget()
+    inner_layout = QVBoxLayout(inner)
+    inner_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+    scroll.setWidget(inner)
+
+    root.addWidget(scroll)
+    return tab, inner_layout, scroll
+
+
+# ---------------------------------------------------------------------------
+# Collapsible section widget
+# ---------------------------------------------------------------------------
 
 
 class CollapsibleSection(QWidget):
@@ -174,6 +263,8 @@ class CollapsibleSection(QWidget):
         self._form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         root.addWidget(self._body)
 
+        # Keep visual state and body visibility in sync at startup.
+        self._body.setVisible(expanded)
         self._update_label(expanded)
 
     def _update_label(self, expanded: bool) -> None:

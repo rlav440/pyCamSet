@@ -11,7 +11,7 @@ import contextlib
 import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import cv2
 import numpy as np
@@ -36,22 +36,23 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
-    IMAGE_FOLDER_SCHEMATIC,
     TAB_PHASE2,
-    TAB_PHASE2_DIAG,
     TAB_PHASE3,
     CollapsibleSection,
     EmitLogHandler,
     EmitStream,
+    MatplotlibFigureCard,
     PhaseWorker,
     RunSelectorWidget,
     TerminalWidget,
     WorkspaceManager,
     build_target,
     extract_detection_and_cam_res,
+    make_blue_button,
     make_continue_button,
     make_orange_button,
     make_run_id,
+    make_scrollable_tab,
     make_section_label,
     make_separator,
     render_predecessor_chain_section,
@@ -211,6 +212,38 @@ class Phase2Tab(QWidget):
         self._phase1_lbl.setWordWrap(True)
         paths_sect.addRow("", self._phase1_lbl)
 
+        # ── Calibration Target (collapsible) ───────────────────────────
+        form_root.addWidget(make_separator())
+        target_sect = CollapsibleSection("Calibration Target", expanded=False)
+        form_root.addWidget(target_sect)
+
+        self._target_combo = QComboBox()
+        self._target_combo.addItems(_TARGET_CHOICES)
+        self._target_combo.setFixedWidth(140)
+        self._target_combo.setToolTip(
+            "Concept: calibration target family.\n"
+            "Default: Ccube."
+        )
+        target_sect.addRow("Target type:", self._target_combo)
+
+        self._npts_spin = QSpinBox()
+        self._npts_spin.setRange(2, 30)
+        self._npts_spin.setValue(6)
+        self._npts_spin.setFixedWidth(90)
+        self._npts_spin.setToolTip(
+            "Concept: target discretization (points/squares along x).\n"
+            "Default: 6."
+        )
+        target_sect.addRow("n_points / squares_x:", self._npts_spin)
+
+        self._length_edit = QLineEdit("30.0")
+        self._length_edit.setFixedWidth(110)
+        self._length_edit.setToolTip(
+            "Concept: physical target size parameter in millimetres.\n"
+            "Default: 30.0 mm."
+        )
+        target_sect.addRow("Length / square size (mm):", self._length_edit)
+
         # ── Initial Calibration Options ────────────────────────────────
         form_root.addWidget(make_separator())
         form_root.addWidget(make_section_label("Initial Calibration Options"))
@@ -252,53 +285,21 @@ class Phase2Tab(QWidget):
         )
         opts_form.addRow("Fixed params (JSON):", self._fp_edit)
 
-        # ── Calibration Target (collapsible) ───────────────────────────
-        form_root.addWidget(make_separator())
-        target_sect = CollapsibleSection("Calibration Target", expanded=False)
-        form_root.addWidget(target_sect)
-
-        self._target_combo = QComboBox()
-        self._target_combo.addItems(_TARGET_CHOICES)
-        self._target_combo.setFixedWidth(140)
-        self._target_combo.setToolTip(
-            "Concept: calibration target family.\n"
-            "Default: Ccube."
-        )
-        target_sect.addRow("Target type:", self._target_combo)
-
-        self._npts_spin = QSpinBox()
-        self._npts_spin.setRange(2, 30)
-        self._npts_spin.setValue(6)
-        self._npts_spin.setFixedWidth(90)
-        self._npts_spin.setToolTip(
-            "Concept: target discretization (points/squares along x).\n"
-            "Default: 6."
-        )
-        target_sect.addRow("n_points / squares_x:", self._npts_spin)
-
-        self._length_edit = QLineEdit("30.0")
-        self._length_edit.setFixedWidth(110)
-        self._length_edit.setToolTip(
-            "Concept: physical target size parameter in millimetres.\n"
-            "Default: 30.0 mm."
-        )
-        target_sect.addRow("Length / square size (mm):", self._length_edit)
-
         # ── Action buttons ─────────────────────────────────────────────
         form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
-        run_btn = QPushButton("▶  Run Phase 2")
+        run_btn = make_blue_button("▶  Run Phase 2", self._run_phase2)
         run_btn.setToolTip("Run per-camera initial intrinsics calibration.")
-        run_btn.clicked.connect(self._run_phase2)
         btn_row.addWidget(run_btn)
         diag_btn = make_orange_button("Diagnostics ▼", self._open_diagnostics)
         diag_btn.setToolTip("Open Phase 2 diagnostics view.")
         btn_row.addWidget(diag_btn)
+        btn_row.addWidget(make_continue_button(self._continue_to_next))
         btn_row.addStretch()
         form_root.addLayout(btn_row)
         form_root.addStretch()
 
-        side_layout.addWidget(make_continue_button(self._continue_to_next))
+        side_layout.addStretch()
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
@@ -492,7 +493,7 @@ class Phase2Tab(QWidget):
             self._terminal.append_line(f"Override det : {override_pickle}")
         self._terminal.append_line("Starting…")
 
-        def work_fn(emit: callable) -> dict:
+        def work_fn(emit: Callable[[str], None]) -> dict:
             diagnostics: dict = {}
             error_msg: Optional[str] = None
             ws_path = self._workspace_mgr.workspace_path
@@ -812,16 +813,13 @@ class Phase2DiagnosticsTab(QWidget):
         summary_root.addWidget(self._summary_scroll)
         self._sub_tabs.addTab(self._summary_widget, "Summary (D2.1-D2.3, D2.5)")
 
-        self._per_view_widget = QWidget()
-        self._per_view_layout = QVBoxLayout(self._per_view_widget)
+        self._per_view_widget, self._per_view_layout, self._per_view_scroll = make_scrollable_tab()
         self._sub_tabs.addTab(self._per_view_widget, "Per-view Errors (D2.6-D2.7)")
 
-        self._grid_widget = QWidget()
-        self._grid_layout = QVBoxLayout(self._grid_widget)
+        self._grid_widget, self._grid_layout, self._grid_scroll = make_scrollable_tab()
         self._sub_tabs.addTab(self._grid_widget, "Undistorted Grid (D2.4)")
 
-        self._distortion_widget = QWidget()
-        self._distortion_layout = QVBoxLayout(self._distortion_widget)
+        self._distortion_widget, self._distortion_layout, self._distortion_scroll = make_scrollable_tab()
         self._sub_tabs.addTab(self._distortion_widget, "Distortion Field")
 
         btn_row = QHBoxLayout()
@@ -956,7 +954,15 @@ class Phase2DiagnosticsTab(QWidget):
         ax.set_ylabel("RMS reprojection error (px)")
         ax.grid(alpha=0.25)
         ax.legend(fontsize=8)
-        self._per_view_layout.addWidget(FigureCanvasQTAgg(fig))
+        self._per_view_layout.addWidget(
+            MatplotlibFigureCard(
+                f"D2.6/D2.7 per-view reprojection error ({run.get('run_id', '?')})",
+                fig,
+                FigureCanvasQTAgg,
+                parent=self._per_view_widget,
+                min_height=360,
+            )
+        )
 
     def _load_camset_cached(self, camset_path: Path) -> tuple[Optional[object], Optional[str], Optional[str]]:
         key = str(camset_path)
@@ -1055,7 +1061,15 @@ class Phase2DiagnosticsTab(QWidget):
             ax1.set_title(f"{cam.name} undistorted")
             ax1.axis("off")
 
-        self._grid_layout.addWidget(FigureCanvasQTAgg(fig))
+        self._grid_layout.addWidget(
+            MatplotlibFigureCard(
+                f"D2.4 Undistorted Grid ({run.get('run_id', '?')})",
+                fig,
+                FigureCanvasQTAgg,
+                parent=self._grid_widget,
+                min_height=420,
+            )
+        )
 
     def _render_distortion(self, runs: list[dict]) -> None:
         """Render per-camera distortion vector field (D2.8) from saved camset."""
@@ -1102,7 +1116,10 @@ class Phase2DiagnosticsTab(QWidget):
             self._distortion_layout.addWidget(QLabel("Camera set is empty."))
             return
 
-        fig = Figure(figsize=(10.5, max(3.5, 2.8 * n)), tight_layout=True)
+        import math
+        n_cols = 2
+        n_rows = int(math.ceil(n / n_cols))
+        fig = Figure(figsize=(12.0, max(4.0, 4.2 * n_rows)), tight_layout=True)
         for i, cam in enumerate(cams, start=1):
             res = np.array(cam.res).astype(int).reshape(-1)
             w = int(res[0]) if res.size >= 2 else 1280
@@ -1143,7 +1160,7 @@ class Phase2DiagnosticsTab(QWidget):
             v = pts_distorted[:, 1] - pts_ideal[:, 1]
             mag = np.hypot(u, v)
 
-            ax = fig.add_subplot(n, 1, i)
+            ax = fig.add_subplot(n_rows, n_cols, i)
             sc = ax.quiver(pts_ideal[:, 0], pts_ideal[:, 1], u, -v, mag,
                            cmap="plasma", angles="xy", scale_units="xy",
                            scale=0.25, width=0.002)
@@ -1155,7 +1172,15 @@ class Phase2DiagnosticsTab(QWidget):
             ax.set_xlabel("x (px)")
             ax.set_ylabel("y (px)")
 
-        self._distortion_layout.addWidget(FigureCanvasQTAgg(fig))
+        self._distortion_layout.addWidget(
+            MatplotlibFigureCard(
+                f"D2.8 Distortion Field ({run.get('run_id', '?')})",
+                fig,
+                FigureCanvasQTAgg,
+                parent=self._distortion_widget,
+                min_height=460,
+            )
+        )
 
     def _continue_to_next(self) -> None:
         selected = self._run_selector.get_selected()

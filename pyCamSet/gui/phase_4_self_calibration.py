@@ -42,6 +42,7 @@ from pyCamSet.gui.shared_functions import (
     RunSelectorWidget,
     TerminalWidget,
     WorkspaceManager,
+    make_blue_button,
     make_green_button,
     make_orange_button,
     make_run_id,
@@ -50,9 +51,9 @@ from pyCamSet.gui.shared_functions import (
     render_predecessor_chain_section,
 )
 from pyCamSet.gui.assess_calibration import (
-    AssessCalibrationWidget,
+    launch_visualise_calibration_for_run,
     merge_phase3_phase4_runs,
-    ordered_visualisation_selection,
+    select_latest_visualisation_run,
 )
 
 try:
@@ -252,9 +253,8 @@ class Phase4Tab(QWidget):
         # ── Action buttons ─────────────────────────────────────────────
         form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
-        run_btn = QPushButton("▶  Run Phase 4")
+        run_btn = make_blue_button("▶  Run Phase 4", self._run_phase4)
         run_btn.setToolTip("Run self-calibration.")
-        run_btn.clicked.connect(self._run_phase4)
         btn_row.addWidget(run_btn)
         btn_row.addWidget(make_orange_button("Diagnostics ▼", self._open_diagnostics))
         btn_row.addWidget(make_green_button("Assess Calibration", self._open_assess_calibration))
@@ -503,8 +503,28 @@ class Phase4Tab(QWidget):
                     displacement = np.linalg.norm(updated_target - ref_target, axis=1)
                     mean_disp_mm = float(np.nanmean(displacement) * 1000.0) if displacement.size else float("nan")
 
+                    per_im_init = np.array(getattr(handler, "initial_per_im_error", []), dtype=float)
+                    per_cam_err: dict[str, float] = {}
+                    try:
+                        dd = np.asarray(handler.get_detection_data(flatten=True))
+                        residual_xy = np.reshape(np.asarray(optimisation.fun, dtype=float), (-1, 2))
+                        residual_norm = np.linalg.norm(residual_xy, axis=1)
+                        if dd.ndim == 2 and dd.shape[1] >= 1:
+                            cam_idx = dd[:, 0].astype(int)
+                            if cam_idx.size != residual_norm.size:
+                                n = min(cam_idx.size, residual_norm.size)
+                                cam_idx = cam_idx[:n]
+                                residual_norm = residual_norm[:n]
+                            cam_names = list(getattr(handler, "cam_names", []))
+                            for idx, name in enumerate(cam_names):
+                                mask = cam_idx == idx
+                                per_cam_err[name] = float(np.mean(residual_norm[mask])) if np.any(mask) else float("nan")
+                    except Exception as diag_exc:
+                        emit(f"Warning: D4.12 skipped due to diagnostics error: {diag_exc}")
+
                     diagnostics["D4.1_n_free_target_points"] = int(np.sum(visible))
                     diagnostics["D4.2_gauge_fixed_points"] = {"count": len(fixed_inds), "indices": fixed_inds}
+                    diagnostics["D4.3_per_image_initial_reprojection"] = per_im_init.tolist()
                     diagnostics["D4.3_initial_euclid_px"] = init_euclid
                     diagnostics["D4.3_final_euclid_px"] = final_euclid
                     diagnostics["D4.4_vs_phase3_delta_px"] = d44
@@ -513,6 +533,7 @@ class Phase4Tab(QWidget):
                     diagnostics["D4.8_shape_change_arrows"] = "available in Assess Calibration"
                     diagnostics["D4.9_planarity_rms_mm"] = "available in backend special_plots"
                     diagnostics["D4.10_accuracy_precision"] = "available in Assess Calibration"
+                    diagnostics["D4.12_per_camera_mean_reprojection"] = per_cam_err
 
                     metadata = {
                         "run_id": run_id,
@@ -636,8 +657,11 @@ class Phase4DiagnosticsTab(QWidget):
         visual_btn_row.addWidget(self._visual_btn)
         visual_btn_row.addStretch()
         visual_layout.addLayout(visual_btn_row)
-        self._visual_panel = AssessCalibrationWidget()
-        visual_layout.addWidget(self._visual_panel, stretch=1)
+        visual_hint = QLabel("Opens native matplotlib/pyvista windows for one selected run.")
+        visual_hint.setStyleSheet("color: #666;")
+        visual_hint.setWordWrap(True)
+        visual_layout.addWidget(visual_hint)
+        visual_layout.addStretch()
         self._sub_tabs.addTab(self._visual_widget, "Assess Calibration")
 
         self.refresh()
@@ -711,12 +735,14 @@ class Phase4DiagnosticsTab(QWidget):
 
     def _run_visualise_target(self) -> None:
         selected = self._run_selector.get_selected()
-        chosen = ordered_visualisation_selection(selected, self._all_runs, max_runs=2)
-        if not chosen:
+        chosen = select_latest_visualisation_run(selected, self._all_runs)
+        if chosen is None:
             if self._info_cb.isChecked():
-                QMessageBox.information(self, "Select runs", "Select one or two runs first.")
+                QMessageBox.information(self, "Select run", "Select at least one run first.")
             return
-        self._visual_panel.render_runs(chosen)
+        ok, msg = launch_visualise_calibration_for_run(chosen)
+        if not ok:
+            QMessageBox.warning(self, "Assess Calibration", msg)
 
     def visualise_from_primary(self) -> None:
         self._sub_tabs.setCurrentWidget(self._visual_widget)

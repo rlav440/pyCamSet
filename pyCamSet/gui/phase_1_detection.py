@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional
+from typing import Callable, Optional
 import contextlib
 import logging
 import math
@@ -61,6 +61,7 @@ from pyCamSet.gui.shared_functions import (
     CollapsibleSection,
     EmitLogHandler,
     EmitStream,
+    MatplotlibFigureCard,
     PhaseWorker,
     RunSelectorWidget,
     TerminalWidget,
@@ -68,9 +69,11 @@ from pyCamSet.gui.shared_functions import (
     build_target,
     count_images_in_folder,
     get_camera_subfolders,
+    make_blue_button,
     make_continue_button,
     make_orange_button,
     make_run_id,
+    make_scrollable_tab,
     make_section_label,
     make_separator,
     render_predecessor_chain_section,
@@ -162,6 +165,53 @@ class Phase1Tab(QWidget):
         floc_row.addWidget(floc_btn)
         paths_sect.addRow("Image folder (f_loc):", floc_row)
 
+        # ── Calibration Target (collapsible) ───────────────────────────
+        form_root.addWidget(make_separator())
+        target_sect = CollapsibleSection("Calibration Target", expanded=False)
+        form_root.addWidget(target_sect)
+
+        self._target_combo = QComboBox()
+        self._target_combo.addItems(_TARGET_CHOICES)
+        self._target_combo.setFixedWidth(140)
+        self._target_combo.setToolTip(
+            "Concept: the physical calibration target type.\n\n"
+            "Ccube — corner-cube target with coded markers; robust to partial\n"
+            "  occlusion and suitable for most multi-camera setups.\n"
+            "ChArUco — charuco board (chessboard + ArUco markers); widely\n"
+            "  supported and easy to print.\n\n"
+            "Default: Ccube\n"
+            "Guidance: match this exactly to the physical target you are using."
+        )
+        target_sect.addRow("Target type:", self._target_combo)
+
+        self._npts_spin = QSpinBox()
+        self._npts_spin.setRange(2, 20)
+        self._npts_spin.setValue(6)
+        self._npts_spin.setFixedWidth(80)
+        self._npts_spin.setToolTip(
+            "Concept: the grid density of the calibration target.\n"
+            "For Ccube: number of points per face edge.\n"
+            "For ChArUco: number of squares along the x-axis.\n\n"
+            "Default: 6\n"
+            "Range: 2–20\n"
+            "Guidance: must exactly match the physical target you are using.\n"
+            "Higher values give more feature constraints per image."
+        )
+        target_sect.addRow("n_points / squares_x:", self._npts_spin)
+
+        self._length_edit = QLineEdit("30.0")
+        self._length_edit.setFixedWidth(100)
+        self._length_edit.setToolTip(
+            "Concept: the physical size of one feature on the calibration\n"
+            "target, in millimetres.  This sets the metric scale of the\n"
+            "calibration.\n\n"
+            "Default: 30.0 mm\n"
+            "Range: any positive float (mm)\n"
+            "Guidance: measure the actual printed/machined target — even a\n"
+            "1% error here propagates directly into reconstructed distances."
+        )
+        target_sect.addRow("Length / square size (mm):", self._length_edit)
+
         # ── Detection options ──────────────────────────────────────────
         form_root.addWidget(make_separator())
         form_root.addWidget(make_section_label("Detection Options"))
@@ -243,69 +293,22 @@ class Phase1Tab(QWidget):
         )
         detect_form.addRow("Problem options (JSON):", self._po_edit)
 
-        # ── Calibration Target (collapsible) ───────────────────────────
-        form_root.addWidget(make_separator())
-        target_sect = CollapsibleSection("Calibration Target", expanded=False)
-        form_root.addWidget(target_sect)
-
-        self._target_combo = QComboBox()
-        self._target_combo.addItems(_TARGET_CHOICES)
-        self._target_combo.setFixedWidth(140)
-        self._target_combo.setToolTip(
-            "Concept: the physical calibration target type.\n\n"
-            "Ccube — corner-cube target with coded markers; robust to partial\n"
-            "  occlusion and suitable for most multi-camera setups.\n"
-            "ChArUco — charuco board (chessboard + ArUco markers); widely\n"
-            "  supported and easy to print.\n\n"
-            "Default: Ccube\n"
-            "Guidance: match this exactly to the physical target you are using."
-        )
-        target_sect.addRow("Target type:", self._target_combo)
-
-        self._npts_spin = QSpinBox()
-        self._npts_spin.setRange(2, 20)
-        self._npts_spin.setValue(6)
-        self._npts_spin.setFixedWidth(80)
-        self._npts_spin.setToolTip(
-            "Concept: the grid density of the calibration target.\n"
-            "For Ccube: number of points per face edge.\n"
-            "For ChArUco: number of squares along the x-axis.\n\n"
-            "Default: 6\n"
-            "Range: 2–20\n"
-            "Guidance: must exactly match the physical target you are using.\n"
-            "Higher values give more feature constraints per image."
-        )
-        target_sect.addRow("n_points / squares_x:", self._npts_spin)
-
-        self._length_edit = QLineEdit("30.0")
-        self._length_edit.setFixedWidth(100)
-        self._length_edit.setToolTip(
-            "Concept: the physical size of one feature on the calibration\n"
-            "target, in millimetres.  This sets the metric scale of the\n"
-            "calibration.\n\n"
-            "Default: 30.0 mm\n"
-            "Range: any positive float (mm)\n"
-            "Guidance: measure the actual printed/machined target — even a\n"
-            "1% error here propagates directly into reconstructed distances."
-        )
-        target_sect.addRow("Length / square size (mm):", self._length_edit)
-
         # ── Action buttons ─────────────────────────────────────────────
         form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
-        run_btn = QPushButton("▶  Run Phase 1")
+        run_btn = make_blue_button("▶  Run Phase 1", self._run_phase1)
         run_btn.setToolTip("Run target detection for the selected image folder.")
-        run_btn.clicked.connect(self._run_phase1)
         btn_row.addWidget(run_btn)
         diag_btn = make_orange_button("Diagnostics ▼", self._open_diagnostics)
         diag_btn.setToolTip("Open Phase 1 diagnostics (hidden tab).")
         btn_row.addWidget(diag_btn)
+        btn_row.addWidget(make_continue_button(self._continue_to_next))
         btn_row.addStretch()
         form_root.addLayout(btn_row)
         form_root.addStretch()
 
         # ── Side panel ────────────────────────────────────────────────
-        side_layout.addWidget(make_continue_button(self._continue_to_next))
+        side_layout.addStretch()
 
         # ── Terminal ─────────────────────────────────────────────────
         self._terminal = TerminalWidget(terminal_cb, parent=self)
@@ -419,7 +422,7 @@ class Phase1Tab(QWidget):
         self._terminal.append_line(f"threads      : {params['threads'] or 'auto'}")
         self._terminal.append_line("Starting detection…")
 
-        def work_fn(emit: callable) -> dict:
+        def work_fn(emit: Callable[[str], None]) -> dict:
             diagnostics: dict = {}
             error_msg: Optional[str] = None
             det_pickle_src: Optional[Path] = None
@@ -776,8 +779,7 @@ class Phase1DiagnosticsTab(QWidget):
             "D1.7 minimum features",
         )
 
-        self._heatmap_widget = QWidget()
-        self._heatmap_layout = QVBoxLayout(self._heatmap_widget)
+        self._heatmap_widget, self._heatmap_layout, self._heatmap_scroll = make_scrollable_tab()
         self._sub_tabs.addTab(self._heatmap_widget, "Heatmap (D1.4)")
         self._sub_tabs.tabBar().setTabToolTip(
             1, "D1.4 features-per-image-per-camera heatmap."
@@ -804,6 +806,10 @@ class Phase1DiagnosticsTab(QWidget):
         self._draw_status_lbl.setStyleSheet("font-family: monospace;")
         nav_bar.addWidget(self._draw_status_lbl)
         nav_bar.addStretch()
+        self._draw_expand_btn = QPushButton("Expand")
+        self._draw_expand_btn.setFixedWidth(70)
+        self._draw_expand_btn.clicked.connect(self._expand_draw_figure)
+        nav_bar.addWidget(self._draw_expand_btn)
         self._draw_btn = QPushButton("Draw Detections")
         self._draw_btn.clicked.connect(self._draw_detections_clicked)
         nav_bar.addWidget(self._draw_btn)
@@ -962,9 +968,11 @@ class Phase1DiagnosticsTab(QWidget):
             canvas = FigureCanvasQTAgg(fig)
             canvas.setMinimumSize(500, 330)
 
+            card = MatplotlibFigureCard(title, fig, FigureCanvasQTAgg, parent=plots_host, min_height=330)
+
             r = i // n_cols
             c = i % n_cols
-            plots_grid.addWidget(canvas, r, c)
+            plots_grid.addWidget(card, r, c)
 
         self._summary_layout.addWidget(plots_host)
         self._summary_layout.addWidget(make_separator())
@@ -1099,8 +1107,27 @@ class Phase1DiagnosticsTab(QWidget):
             ax.set_xticklabels(cam_names, rotation=30, ha="right", fontsize=8)
         fig.colorbar(im, ax=ax, label="features detected")
 
-        canvas = FigureCanvasQTAgg(fig)
-        self._heatmap_layout.addWidget(canvas)
+        card = MatplotlibFigureCard(
+            f"D1.4 Features per image per camera ({selected_run.get('run_id', '?')})",
+            fig,
+            FigureCanvasQTAgg,
+            parent=self._heatmap_widget,
+            min_height=360,
+        )
+        self._heatmap_layout.addWidget(card)
+
+    def _expand_draw_figure(self) -> None:
+        if not self._draw_state:
+            return
+        try:
+            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        except ImportError:
+            return
+        fig = self._draw_state.get("fig")
+        if fig is None:
+            return
+        card = MatplotlibFigureCard("D1.5 Draw Detections", fig, FigureCanvasQTAgg, parent=self)
+        card._open_expanded()
 
     def open_draw_detections_for_latest(self) -> None:
         """Programmatically open D1.5 tab and render latest run with detections."""

@@ -3,7 +3,7 @@ pyCamSet GUI — main application window (PySide6).
 
 Launch with::
 
-    python -m pyCamSet.gui.main
+    python -m pyCamSet.gui
 """
 from __future__ import annotations
 

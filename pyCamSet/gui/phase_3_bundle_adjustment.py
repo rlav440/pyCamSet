@@ -39,15 +39,18 @@ from pyCamSet.gui.shared_functions import (
     CollapsibleSection,
     EmitLogHandler,
     EmitStream,
+    MatplotlibFigureCard,
     PhaseWorker,
     RunSelectorWidget,
     TerminalWidget,
     WorkspaceManager,
     build_target,
     extract_detection,
+    make_blue_button,
     make_orange_button,
     make_green_button,
     make_run_id,
+    make_scrollable_tab,
     make_section_label,
     make_separator,
     render_predecessor_chain_section,
@@ -55,9 +58,9 @@ from pyCamSet.gui.shared_functions import (
     suppress_matplotlib_gui,
 )
 from pyCamSet.gui.assess_calibration import (
-    AssessCalibrationWidget,
+    launch_visualise_calibration_for_run,
     merge_phase3_phase4_runs,
-    ordered_visualisation_selection,
+    select_latest_visualisation_run,
 )
 
 try:
@@ -137,6 +140,42 @@ class Phase3Tab(QWidget):
         self._src_lbl.setWordWrap(True)
         self._src_lbl.setStyleSheet("color: #666;")
         paths_sect.addRow("Input runs:", self._src_lbl)
+
+        # ── Calibration Target (collapsible) ───────────────────────────
+        form_root.addWidget(make_separator())
+        target_sect = CollapsibleSection("Calibration Target", expanded=False)
+        form_root.addWidget(target_sect)
+
+        self._target_combo = QComboBox()
+        self._target_combo.addItems(_TARGET_CHOICES)
+        self._target_combo.setFixedWidth(140)
+        self._target_combo.setToolTip(
+            "Concept: the physical calibration target type.\n\n"
+            "Default: Ccube\n"
+            "Guidance: must match the target used in Phase 1 detection."
+        )
+        target_sect.addRow("Target type:", self._target_combo)
+
+        self._npts_spin = QSpinBox()
+        self._npts_spin.setRange(2, 30)
+        self._npts_spin.setValue(6)
+        self._npts_spin.setFixedWidth(90)
+        self._npts_spin.setToolTip(
+            "Concept: grid density of the calibration target.\n\n"
+            "Default: 6\n"
+            "Range: 2–30\n"
+            "Guidance: must exactly match the value used in Phase 1."
+        )
+        target_sect.addRow("n_points / squares_x:", self._npts_spin)
+
+        self._length_edit = QLineEdit("30.0")
+        self._length_edit.setFixedWidth(110)
+        self._length_edit.setToolTip(
+            "Concept: physical size of one feature on the target (mm).\n\n"
+            "Default: 30.0 mm\n"
+            "Guidance: must exactly match the value used in Phase 1."
+        )
+        target_sect.addRow("Length / square size (mm):", self._length_edit)
 
         # ── Bundle Adjustment Options ──────────────────────────────────
         form_root.addWidget(make_separator())
@@ -246,56 +285,19 @@ class Phase3Tab(QWidget):
         )
         opts_form.addRow("Fixed params (JSON):", self._fp_edit)
 
-        # ── Calibration Target (collapsible) ───────────────────────────
-        form_root.addWidget(make_separator())
-        target_sect = CollapsibleSection("Calibration Target", expanded=False)
-        form_root.addWidget(target_sect)
-
-        self._target_combo = QComboBox()
-        self._target_combo.addItems(_TARGET_CHOICES)
-        self._target_combo.setFixedWidth(140)
-        self._target_combo.setToolTip(
-            "Concept: the physical calibration target type.\n\n"
-            "Default: Ccube\n"
-            "Guidance: must match the target used in Phase 1 detection."
-        )
-        target_sect.addRow("Target type:", self._target_combo)
-
-        self._npts_spin = QSpinBox()
-        self._npts_spin.setRange(2, 30)
-        self._npts_spin.setValue(6)
-        self._npts_spin.setFixedWidth(90)
-        self._npts_spin.setToolTip(
-            "Concept: grid density of the calibration target.\n\n"
-            "Default: 6\n"
-            "Range: 2–30\n"
-            "Guidance: must exactly match the value used in Phase 1."
-        )
-        target_sect.addRow("n_points / squares_x:", self._npts_spin)
-
-        self._length_edit = QLineEdit("30.0")
-        self._length_edit.setFixedWidth(110)
-        self._length_edit.setToolTip(
-            "Concept: physical size of one feature on the target (mm).\n\n"
-            "Default: 30.0 mm\n"
-            "Guidance: must exactly match the value used in Phase 1."
-        )
-        target_sect.addRow("Length / square size (mm):", self._length_edit)
-
         # ── Action buttons ─────────────────────────────────────────────
         form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
-        run_btn = QPushButton("▶  Run Phase 3")
+        run_btn = make_blue_button("▶  Run Phase 3", self._run_phase3)
         run_btn.setToolTip("Run template bundle adjustment.")
-        run_btn.clicked.connect(self._run_phase3)
         btn_row.addWidget(run_btn)
         btn_row.addWidget(make_orange_button("Diagnostics ▼", self._open_diagnostics))
+        btn_row.addWidget(make_green_button("Phase 4 - Self-Calibration", self._continue_to_phase4))
+        btn_row.addWidget(make_green_button("Assess Calibration", self._visualise_target_from_primary))
         btn_row.addStretch()
         form_root.addLayout(btn_row)
         form_root.addStretch()
 
-        side_layout.addWidget(make_green_button("Phase 4 - Self-Calibration", self._continue_to_phase4))
-        side_layout.addWidget(make_green_button("Assess Calibration", self._visualise_target_from_primary))
         side_layout.addStretch()
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
@@ -729,7 +731,6 @@ class Phase3DiagnosticsTab(QWidget):
 
         top_btn_row = QHBoxLayout()
         top_btn_row.addWidget(make_orange_button("▲ Bundle Settings", self._go_to_settings))
-        top_btn_row.addWidget(make_green_button("Phase 4 - Self-Calibration ▶", self._go_to_phase4))
         top_btn_row.addStretch()
         root.addLayout(top_btn_row)
 
@@ -775,12 +776,10 @@ class Phase3DiagnosticsTab(QWidget):
         summary_root.addWidget(self._summary_scroll)
         self._sub_tabs.addTab(self._summary_widget, "Summary (D3.1-D3.10)")
 
-        self._initial_widget = QWidget()
-        self._initial_layout = QVBoxLayout(self._initial_widget)
+        self._initial_widget, self._initial_layout, self._initial_scroll = make_scrollable_tab()
         self._sub_tabs.addTab(self._initial_widget, "Initial Per-image Error (D3.4)")
 
-        self._residual_widget = QWidget()
-        self._residual_layout = QVBoxLayout(self._residual_widget)
+        self._residual_widget, self._residual_layout, self._residual_scroll = make_scrollable_tab()
         self._sub_tabs.addTab(self._residual_widget, "Residuals / Per-camera (D3.11-D3.12)")
 
         self._visual_widget = QWidget()
@@ -791,9 +790,17 @@ class Phase3DiagnosticsTab(QWidget):
         visual_btn_row.addWidget(self._visual_btn)
         visual_btn_row.addStretch()
         visual_layout.addLayout(visual_btn_row)
-        self._visual_panel = AssessCalibrationWidget()
-        visual_layout.addWidget(self._visual_panel, stretch=1)
+        visual_hint = QLabel("Opens native matplotlib/pyvista windows for one selected run.")
+        visual_hint.setStyleSheet("color: #666;")
+        visual_hint.setWordWrap(True)
+        visual_layout.addWidget(visual_hint)
+        visual_layout.addStretch()
         self._sub_tabs.addTab(self._visual_widget, "Assess Calibration")
+
+        bottom_btn_row = QHBoxLayout()
+        bottom_btn_row.addStretch()
+        bottom_btn_row.addWidget(make_green_button("Phase 4 - Self-Calibration ▶", self._go_to_phase4))
+        root.addLayout(bottom_btn_row)
 
         self.refresh()
 
@@ -953,7 +960,15 @@ class Phase3DiagnosticsTab(QWidget):
         ax.set_ylabel("Initial error (aggregated px)")
         ax.grid(axis="y", alpha=0.2)
         ax.legend(fontsize=8)
-        self._initial_layout.addWidget(FigureCanvasQTAgg(fig))
+        self._initial_layout.addWidget(
+            MatplotlibFigureCard(
+                f"D3.4 Per-image initial reprojection error ({run.get('run_id', '?')})",
+                fig,
+                FigureCanvasQTAgg,
+                parent=self._initial_widget,
+                min_height=360,
+            )
+        )
 
     def _render_residuals(self, runs: list[dict]) -> None:
         while self._residual_layout.count():
@@ -1003,7 +1018,15 @@ class Phase3DiagnosticsTab(QWidget):
         for b, v in zip(bars, vals):
             ax.text(b.get_x() + b.get_width() / 2, b.get_height(), f"{v:.3f}", ha="center", va="bottom", fontsize=7)
 
-        self._residual_layout.addWidget(FigureCanvasQTAgg(fig))
+        self._residual_layout.addWidget(
+            MatplotlibFigureCard(
+                f"D3.12 Per-camera mean reprojection error ({run.get('run_id', '?')})",
+                fig,
+                FigureCanvasQTAgg,
+                parent=self._residual_widget,
+                min_height=360,
+            )
+        )
 
     def _render_poses(self, runs: list[dict]) -> None:
         while self._poses_layout.count():
@@ -1065,12 +1088,14 @@ class Phase3DiagnosticsTab(QWidget):
 
     def _run_visualise_target(self) -> None:
         selected = self._run_selector.get_selected()
-        chosen = ordered_visualisation_selection(selected, getattr(self, "_all_runs", []), max_runs=2)
-        if not chosen:
+        chosen = select_latest_visualisation_run(selected, getattr(self, "_all_runs", []))
+        if chosen is None:
             if self._info_cb.isChecked():
-                QMessageBox.information(self, "Select runs", "Select one or two runs first.")
+                QMessageBox.information(self, "Select run", "Select at least one run first.")
             return
-        self._visual_panel.render_runs(chosen)
+        ok, msg = launch_visualise_calibration_for_run(chosen)
+        if not ok:
+            QMessageBox.warning(self, "Assess Calibration", msg)
 
     def visualise_from_primary(self) -> None:
         self._sub_tabs.setCurrentWidget(self._visual_widget)

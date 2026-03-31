@@ -49,7 +49,9 @@ from pyCamSet.gui.shared_functions import (
     make_run_id,
     make_section_label,
     make_separator,
+    render_predecessor_chain_section,
     resolve_phase1_pickle_artifact,
+    suppress_matplotlib_gui,
 )
 from pyCamSet.gui.assess_calibration import (
     AssessCalibrationWidget,
@@ -71,44 +73,6 @@ except ImportError:
     _PYCAMSET_OK = False
 
 _TARGET_CHOICES = ["Ccube", "ChArUco"]
-
-
-def _build_target(target_type: str, n_points: int, length: float):
-    if not _PYCAMSET_OK:
-        raise RuntimeError("pyCamSet modules are not importable.")
-    return build_target(target_type, n_points, length)
-
-
-def _extract_detection_payload(payload):
-    return extract_detection(payload)
-
-
-@contextlib.contextmanager
-def _suppress_matplotlib_gui():
-    """Prevent Matplotlib GUI windows from being created in worker threads."""
-    plt = None
-    orig_show = None
-    try:
-        import matplotlib
-        matplotlib.use("Agg", force=True)
-        import matplotlib.pyplot as _plt
-        plt = _plt
-        orig_show = plt.show
-        plt.show = lambda *args, **kwargs: None
-    except Exception:
-        pass
-    try:
-        yield
-    finally:
-        if plt is not None and orig_show is not None:
-            try:
-                plt.show = orig_show
-            except Exception:
-                pass
-
-
-def _resolve_phase1_pickle(phase1_run: dict, ws_path: Path) -> Optional[Path]:
-    return resolve_phase1_pickle_artifact(phase1_run, ws_path)
 
 
 class Phase3Tab(QWidget):
@@ -176,40 +140,101 @@ class Phase3Tab(QWidget):
 
         self._threads_edit = QLineEdit("1")
         self._threads_edit.setFixedWidth(110)
+        self._threads_edit.setToolTip(
+            "Concept: number of Jacobian evaluation threads used by scipy.\n\n"
+            "Default: 1\n"
+            "Range: positive integer\n"
+            "Guidance: values > 1 can speed up large problems but increase\n"
+            "memory usage.  Start with 1 for reproducibility."
+        )
         form.addRow("Threads:", self._threads_edit)
 
         self._max_nfev_spin = QSpinBox()
         self._max_nfev_spin.setRange(5, 5000)
         self._max_nfev_spin.setValue(300)
         self._max_nfev_spin.setFixedWidth(110)
+        self._max_nfev_spin.setToolTip(
+            "Concept: maximum number of cost-function evaluations the\n"
+            "Levenberg-Marquardt solver is allowed to perform.\n\n"
+            "Default: 300\n"
+            "Range: 5–5000\n"
+            "Guidance: if the solver reports it did not converge, try\n"
+            "increasing to 1000.  Values > 2000 rarely improve results\n"
+            "and greatly increase runtime."
+        )
         form.addRow("max_nfev:", self._max_nfev_spin)
 
         self._verbosity_spin = QSpinBox()
         self._verbosity_spin.setRange(0, 2)
         self._verbosity_spin.setValue(2)
         self._verbosity_spin.setFixedWidth(110)
+        self._verbosity_spin.setToolTip(
+            "Concept: verbosity level passed to the scipy least_squares solver.\n\n"
+            "Default: 2\n"
+            "Range: 0 (silent), 1 (summary only), 2 (per-iteration output)\n"
+            "Guidance: keep at 2 to monitor convergence; set to 0 for\n"
+            "automated / batch runs."
+        )
         form.addRow("verbosity:", self._verbosity_spin)
 
         self._outliers_combo = QComboBox()
         self._outliers_combo.addItems(["y", "n", "ask"])
         self._outliers_combo.setCurrentText("n")
-        self._outliers_combo.setToolTip("Outlier rejection mode. In GUI mode, 'ask' is auto-resolved to 'y'.")
+        self._outliers_combo.setToolTip(
+            "Concept: whether to reject outlier poses before bundle adjustment.\n"
+            "Outlier poses are those whose initial reprojection error exceeds\n"
+            "a threshold (median + 20 px by default).\n\n"
+            "Default: n (disabled)\n"
+            "Choices: n (disabled), y (enabled), ask (auto-resolved to y in GUI)\n"
+            "Guidance: enable if you see a few images with very high initial\n"
+            "reprojection error (> median + 20 px in D3.4).  Disabling keeps\n"
+            "all poses, which is safer when data is sparse."
+        )
         form.addRow("outliers:", self._outliers_combo)
 
         self._fixed_pose_edit = QLineEdit("0")
         self._fixed_pose_edit.setFixedWidth(110)
+        self._fixed_pose_edit.setToolTip(
+            "Concept: the pose (image) index whose extrinsic is held fixed\n"
+            "as the coordinate-system anchor during bundle adjustment.\n\n"
+            "Default: 0\n"
+            "Range: 0 to (num_poses − 1)\n"
+            "Guidance: leave at 0 unless you have a specific reference image\n"
+            "that defines a known world frame."
+        )
         form.addRow("fixed_pose:", self._fixed_pose_edit)
 
         self._ref_cam_edit = QLineEdit("0")
         self._ref_cam_edit.setFixedWidth(110)
+        self._ref_cam_edit.setToolTip(
+            "Concept: the camera index used as the metric reference.\n\n"
+            "Default: 0\n"
+            "Range: 0 to (num_cameras − 1)\n"
+            "Guidance: leave at 0 unless camera 0 is unusable."
+        )
         form.addRow("ref_cam:", self._ref_cam_edit)
 
         self._ref_pose_edit = QLineEdit("0")
         self._ref_pose_edit.setFixedWidth(110)
+        self._ref_pose_edit.setToolTip(
+            "Concept: the pose (image) index used as the metric reference\n"
+            "for the gauge constraint.\n\n"
+            "Default: 0\n"
+            "Range: 0 to (num_poses − 1)\n"
+            "Guidance: leave at 0 for most setups."
+        )
         form.addRow("ref_pose:", self._ref_pose_edit)
 
         self._fp_edit = QLineEdit()
         self._fp_edit.setPlaceholderText('e.g. {"cam0": "ext"}')
+        self._fp_edit.setToolTip(
+            "Concept: JSON dict that pins specific camera parameters to\n"
+            "fixed values, preventing them from being optimised.\n\n"
+            "Default: blank (all parameters free)\n"
+            "Range: valid JSON object, e.g. {\"cam0\": \"ext\"}\n"
+            "Guidance: use to hold one camera's extrinsics fixed when you\n"
+            "have a known reference.  Leave blank otherwise."
+        )
         form.addRow("Fixed params (JSON):", self._fp_edit)
 
         form.addRow(make_separator())
@@ -218,16 +243,32 @@ class Phase3Tab(QWidget):
         self._target_combo = QComboBox()
         self._target_combo.addItems(_TARGET_CHOICES)
         self._target_combo.setFixedWidth(140)
+        self._target_combo.setToolTip(
+            "Concept: the physical calibration target type.\n\n"
+            "Default: Ccube\n"
+            "Guidance: must match the target used in Phase 1 detection."
+        )
         form.addRow("Target type:", self._target_combo)
 
         self._npts_spin = QSpinBox()
         self._npts_spin.setRange(2, 30)
         self._npts_spin.setValue(6)
         self._npts_spin.setFixedWidth(90)
+        self._npts_spin.setToolTip(
+            "Concept: grid density of the calibration target.\n\n"
+            "Default: 6\n"
+            "Range: 2–30\n"
+            "Guidance: must exactly match the value used in Phase 1."
+        )
         form.addRow("n_points / squares_x:", self._npts_spin)
 
         self._length_edit = QLineEdit("30.0")
         self._length_edit.setFixedWidth(110)
+        self._length_edit.setToolTip(
+            "Concept: physical size of one feature on the target (mm).\n\n"
+            "Default: 30.0 mm\n"
+            "Guidance: must exactly match the value used in Phase 1."
+        )
         form.addRow("Length / square size (mm):", self._length_edit)
 
         btn_row = QHBoxLayout()
@@ -421,7 +462,7 @@ class Phase3Tab(QWidget):
             root_logger.addHandler(log_handler)
 
             try:
-                with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream), _suppress_matplotlib_gui():
+                with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream), suppress_matplotlib_gui():
                     emit("Phase 3 running in non-interactive plotting mode (thread-safe).")
 
                     camset_path = self._preferred_phase2_camset_path or phase2_run.get("artifacts", {}).get("initial_camset")
@@ -430,17 +471,17 @@ class Phase3Tab(QWidget):
                     if not Path(camset_path).exists():
                         raise RuntimeError(f"Phase 2 camset path does not exist: {camset_path}")
 
-                    p1_pickle = _resolve_phase1_pickle(phase1_run, ws_path)
+                    p1_pickle = resolve_phase1_pickle_artifact(phase1_run, ws_path)
                     if not p1_pickle:
                         raise RuntimeError("Could not resolve Phase 1 detected_datapoints.pickle artifact.")
 
                     cams = load_CameraSet(Path(camset_path))
                     payload = load_pickle(Path(p1_pickle))
-                    detections = _extract_detection_payload(payload)
+                    detections = extract_detection(payload)
                     if detections is None:
                         raise RuntimeError("Could not extract TargetDetection from Phase 1 pickle.")
 
-                    target = _build_target(params["target_type"], params["n_points"], params["length"])
+                    target = build_target(params["target_type"], params["n_points"], params["length"])
                     handler = TemplateBundleHandler(
                         camset=cams,
                         target=target,
@@ -829,6 +870,7 @@ class Phase3DiagnosticsTab(QWidget):
 
             self._summary_layout.addLayout(form)
             self._summary_layout.addWidget(make_separator())
+            render_predecessor_chain_section(self._summary_layout, self._workspace_mgr, run)
 
         self._summary_layout.addStretch()
 

@@ -42,21 +42,32 @@ except ImportError:  # pragma: no cover - handled at runtime in widget
 
 
 def canonical_phase_tag(value: str | None) -> str:
+    """Normalise *value* to a canonical phase tag (e.g. ``"phase3"``).
+
+    Returns ``"unknown"`` for blank input.  Legacy aliases such as ``phase5``
+    or ``visualise_target`` are no longer mapped; they are returned as-is so
+    the caller can see the raw value from persisted metadata.
+    """
     txt = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if txt in {"phase5", "phase_5", "visualise_target", "assess_calibration"}:
-        return "assess_calibration"
     return txt or "unknown"
 
 
 def resolve_run_camset_artifact(run: dict) -> Optional[Path]:
+    """Return the first existing camset path from *run*'s artifact metadata.
+
+    Recognised keys (in priority order): ``self_calibrated_camset``,
+    ``optimised_camset``, ``initial_camset``, ``camset``.
+
+    Legacy keys such as ``phase5_camset`` are **not** supported.  If a run
+    produced via an old build is passed, its ``artifacts`` dict will contain
+    none of the recognised keys and ``None`` is returned.
+    """
     artifacts = run.get("artifacts") or {}
     for key in (
         "self_calibrated_camset",
         "optimised_camset",
         "initial_camset",
         "camset",
-        "phase5_camset",
-        "phase_5_camset",
     ):
         p = artifacts.get(key)
         if p:
@@ -132,6 +143,26 @@ def _extract_run_view_data(run: dict) -> RunViewData:
     return RunViewData(run=run, cam_positions=cam_positions_arr, target_points=target_points)
 
 
+_FIGURE_TOOLTIPS: dict[str, str] = {
+    "Target Reconstruction": (
+        "3-D scatter of reconstructed calibration-target points.\n\n"
+        "What it shows: the spatial layout of the calibration target as\n"
+        "estimated by the bundle adjustment.\n\n"
+        "How to interpret: points should form a tight, regular pattern\n"
+        "matching the physical target geometry.  Outliers or a distorted\n"
+        "cluster suggest residual calibration error."
+    ),
+    "Camera Layout": (
+        "3-D scatter of estimated camera optical-centre positions.\n\n"
+        "What it shows: where each camera is located in the world frame\n"
+        "after optimisation.\n\n"
+        "How to interpret: cameras should be distributed around the\n"
+        "target volume.  Overlapping or wildly separated positions can\n"
+        "indicate a degenerate or poorly constrained calibration."
+    ),
+}
+
+
 class _FigureCard(QWidget):
     def __init__(self, title: str, plot_fn: Callable[[Any], None], parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -142,7 +173,10 @@ class _FigureCard(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         hdr = QHBoxLayout()
-        hdr.addWidget(make_section_label(title))
+        title_lbl = make_section_label(title)
+        if title in _FIGURE_TOOLTIPS:
+            title_lbl.setToolTip(_FIGURE_TOOLTIPS[title])
+        hdr.addWidget(title_lbl)
         hdr.addStretch()
         expand = QPushButton("Expand")
         expand.clicked.connect(self._open_expanded)

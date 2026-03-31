@@ -40,6 +40,7 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE2,
     TAB_PHASE2_DIAG,
     TAB_PHASE3,
+    CollapsibleSection,
     EmitLogHandler,
     EmitStream,
     PhaseWorker,
@@ -138,9 +139,9 @@ class Phase2Tab(QWidget):
         root.addLayout(top_row)
 
         form_widget = QWidget()
-        form = QFormLayout(form_widget)
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form_root = QVBoxLayout(form_widget)
+        form_root.setContentsMargins(0, 0, 0, 0)
+        form_root.setSpacing(4)
         top_row.addWidget(form_widget, stretch=1)
 
         side = QWidget()
@@ -149,7 +150,9 @@ class Phase2Tab(QWidget):
         side_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         top_row.addWidget(side)
 
-        form.addRow(make_section_label("Paths"))
+        # ── Paths (collapsible) ────────────────────────────────────────
+        paths_sect = CollapsibleSection("Paths", expanded=True)
+        form_root.addWidget(paths_sect)
 
         floc_row = QHBoxLayout()
         self._floc_edit = QLineEdit()
@@ -165,7 +168,7 @@ class Phase2Tab(QWidget):
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
         floc_row.addWidget(floc_btn)
-        form.addRow("Image folder (f_loc):", floc_row)
+        paths_sect.addRow("Image folder (f_loc):", floc_row)
 
         src_row = QHBoxLayout()
         self._phase1_run_combo = QComboBox()
@@ -180,7 +183,7 @@ class Phase2Tab(QWidget):
         src_refresh_btn.clicked.connect(self._refresh_phase1_sources)
         src_row.addWidget(self._phase1_run_combo)
         src_row.addWidget(src_refresh_btn)
-        form.addRow("Phase 1 run:", src_row)
+        paths_sect.addRow("Phase 1 run:", src_row)
 
         det_row = QHBoxLayout()
         self._det_pickle_edit = QLineEdit()
@@ -201,15 +204,21 @@ class Phase2Tab(QWidget):
         det_row.addWidget(self._det_pickle_edit)
         det_row.addWidget(det_browse_btn)
         det_row.addWidget(det_clear_btn)
-        form.addRow("Detection source path:", det_row)
+        paths_sect.addRow("Detection source path:", det_row)
 
         self._phase1_lbl = QLabel("Detection source: auto")
         self._phase1_lbl.setStyleSheet("color: #666;")
         self._phase1_lbl.setWordWrap(True)
-        form.addRow("", self._phase1_lbl)
+        paths_sect.addRow("", self._phase1_lbl)
 
-        form.addRow(make_separator())
-        form.addRow(make_section_label("Initial Calibration Options"))
+        # ── Initial Calibration Options ────────────────────────────────
+        form_root.addWidget(make_separator())
+        form_root.addWidget(make_section_label("Initial Calibration Options"))
+
+        opts_form = QFormLayout()
+        opts_form.setContentsMargins(0, 0, 0, 0)
+        opts_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form_root.addLayout(opts_form)
 
         self._cache_cb = QCheckBox("Use detection cache when fallback-detecting")
         self._cache_cb.setChecked(True)
@@ -217,14 +226,14 @@ class Phase2Tab(QWidget):
             "Concept: reuse cached detections during fallback detection.\n"
             "Default: enabled."
         )
-        form.addRow(self._cache_cb)
+        opts_form.addRow(self._cache_cb)
 
         self._hd_cb = QCheckBox("High Distortion Mode (2c re-detection)")
         self._hd_cb.setToolTip(
             "Concept: perform an extra detection+calibration pass using initial intrinsics.\n"
             "Default: disabled."
         )
-        form.addRow(self._hd_cb)
+        opts_form.addRow(self._hd_cb)
 
         self._nlim_edit = QLineEdit()
         self._nlim_edit.setPlaceholderText("blank = no limit")
@@ -233,7 +242,7 @@ class Phase2Tab(QWidget):
             "Concept: cap number of images processed per camera.\n"
             "Default: blank (no limit)."
         )
-        form.addRow("Max images per camera (n_lim):", self._nlim_edit)
+        opts_form.addRow("Max images per camera (n_lim):", self._nlim_edit)
 
         self._fp_edit = QLineEdit()
         self._fp_edit.setPlaceholderText('e.g. {"cam0": "int"}')
@@ -241,10 +250,12 @@ class Phase2Tab(QWidget):
             "Concept: JSON map of fixed camera parameters during optimization.\n"
             "Default: blank (no fixed params)."
         )
-        form.addRow("Fixed params (JSON):", self._fp_edit)
+        opts_form.addRow("Fixed params (JSON):", self._fp_edit)
 
-        form.addRow(make_separator())
-        form.addRow(make_section_label("Calibration Target"))
+        # ── Calibration Target (collapsible) ───────────────────────────
+        form_root.addWidget(make_separator())
+        target_sect = CollapsibleSection("Calibration Target", expanded=True)
+        form_root.addWidget(target_sect)
 
         self._target_combo = QComboBox()
         self._target_combo.addItems(_TARGET_CHOICES)
@@ -253,7 +264,7 @@ class Phase2Tab(QWidget):
             "Concept: calibration target family.\n"
             "Default: Ccube."
         )
-        form.addRow("Target type:", self._target_combo)
+        target_sect.addRow("Target type:", self._target_combo)
 
         self._npts_spin = QSpinBox()
         self._npts_spin.setRange(2, 30)
@@ -263,7 +274,7 @@ class Phase2Tab(QWidget):
             "Concept: target discretization (points/squares along x).\n"
             "Default: 6."
         )
-        form.addRow("n_points / squares_x:", self._npts_spin)
+        target_sect.addRow("n_points / squares_x:", self._npts_spin)
 
         self._length_edit = QLineEdit("30.0")
         self._length_edit.setFixedWidth(110)
@@ -271,8 +282,10 @@ class Phase2Tab(QWidget):
             "Concept: physical target size parameter in millimetres.\n"
             "Default: 30.0 mm."
         )
-        form.addRow("Length / square size (mm):", self._length_edit)
+        target_sect.addRow("Length / square size (mm):", self._length_edit)
 
+        # ── Action buttons ─────────────────────────────────────────────
+        form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
         run_btn = QPushButton("▶  Run Phase 2")
         run_btn.setToolTip("Run per-camera initial intrinsics calibration.")
@@ -282,12 +295,20 @@ class Phase2Tab(QWidget):
         diag_btn.setToolTip("Open Phase 2 diagnostics view.")
         btn_row.addWidget(diag_btn)
         btn_row.addStretch()
-        form.addRow(btn_row)
+        form_root.addLayout(btn_row)
+        form_root.addStretch()
 
         side_layout.addWidget(make_continue_button(self._continue_to_next))
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
+
+    def set_selected_phase1_run_id(self, run_id: str) -> None:
+        """Select the given Phase 1 run in the combo box (called from Phase 1 tab)."""
+        self._refresh_phase1_sources()
+        idx = self._phase1_run_combo.findData(str(run_id))
+        if idx >= 0:
+            self._phase1_run_combo.setCurrentIndex(idx)
 
     def _browse_floc(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select image folder")
@@ -649,7 +670,8 @@ class Phase2Tab(QWidget):
     def _continue_to_next(self) -> None:
         runs = self._workspace_mgr.load_runs("phase2")
         if not runs:
-            QMessageBox.information(self, "No runs", "Run Phase 2 first.")
+            if self._info_cb.isChecked():
+                QMessageBox.information(self, "No runs", "Run Phase 2 first.")
             return
 
         chosen = runs[-1]
@@ -798,6 +820,10 @@ class Phase2DiagnosticsTab(QWidget):
         self._grid_layout = QVBoxLayout(self._grid_widget)
         self._sub_tabs.addTab(self._grid_widget, "Undistorted Grid (D2.4)")
 
+        self._distortion_widget = QWidget()
+        self._distortion_layout = QVBoxLayout(self._distortion_widget)
+        self._sub_tabs.addTab(self._distortion_widget, "Distortion Field")
+
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         btn_row.addWidget(make_continue_button(self._continue_to_next))
@@ -812,6 +838,7 @@ class Phase2DiagnosticsTab(QWidget):
         self._render_summary(chosen)
         self._render_per_view(chosen)
         self._render_grids(chosen)
+        self._render_distortion(chosen)
 
     def _on_selection_changed(self, runs: list[dict]) -> None:
         self._run_selector.enforce_max_selection(4)
@@ -819,6 +846,7 @@ class Phase2DiagnosticsTab(QWidget):
         self._render_summary(chosen)
         self._render_per_view(chosen)
         self._render_grids(chosen)
+        self._render_distortion(chosen)
 
     def _go_to_settings(self) -> None:
         for i in range(self._notebook.count()):
@@ -1029,14 +1057,99 @@ class Phase2DiagnosticsTab(QWidget):
 
         self._grid_layout.addWidget(FigureCanvasQTAgg(fig))
 
+    def _render_distortion(self, runs: list[dict]) -> None:
+        """Render per-camera distortion vector field (D2.8) from saved camset."""
+        while self._distortion_layout.count():
+            item = self._distortion_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                self._clear_layout(item.layout())
+
+        if not runs:
+            lbl = QLabel("Select a run to view the distortion field.")
+            lbl.setStyleSheet("color: gray;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._distortion_layout.addWidget(lbl)
+            return
+
+        if load_CameraSet is None:
+            self._distortion_layout.addWidget(QLabel("pyCamSet camera loading is unavailable (import error)."))
+            return
+
+        run = runs[-1]
+        camset_path = run.get("artifacts", {}).get("initial_camset")
+        if not camset_path:
+            self._distortion_layout.addWidget(QLabel("No camset artifact found for selected run."))
+            return
+
+        cams, note, err = self._load_camset_cached(Path(camset_path))
+        if err is not None or cams is None:
+            self._distortion_layout.addWidget(QLabel(f"Could not load camset: {err}"))
+            return
+
+        try:
+            import matplotlib
+            matplotlib.use("QtAgg")
+            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+            from matplotlib.figure import Figure
+        except ImportError:
+            self._distortion_layout.addWidget(QLabel("matplotlib not available."))
+            return
+
+        n = len(cams)
+        if n <= 0:
+            self._distortion_layout.addWidget(QLabel("Camera set is empty."))
+            return
+
+        fig = Figure(figsize=(10.5, max(3.5, 2.8 * n)), tight_layout=True)
+        for i, cam in enumerate(cams, start=1):
+            res = np.array(cam.res).astype(int).reshape(-1)
+            w = int(res[0]) if res.size >= 2 else 1280
+            h = int(res[1]) if res.size >= 2 else 720
+            w = max(64, min(1600, w))
+            h = max(64, min(1000, h))
+
+            step = max(16, min(w, h) // 20)
+            xs = np.arange(step // 2, w, step, dtype=np.float32)
+            ys = np.arange(step // 2, h, step, dtype=np.float32)
+            gx, gy = np.meshgrid(xs, ys)
+            pts = np.stack([gx.ravel(), gy.ravel()], axis=1).reshape(-1, 1, 2)
+
+            K = np.array(cam.intrinsic, dtype=np.float64)
+            D = np.array(cam.distortion_coefs, dtype=np.float64).reshape(-1)
+
+            undist = cv2.undistortPoints(pts, K, D, P=K)
+            undist = undist.reshape(-1, 2)
+            orig = pts.reshape(-1, 2)
+
+            u = undist[:, 0] - orig[:, 0]
+            v = undist[:, 1] - orig[:, 1]
+            mag = np.sqrt(u ** 2 + v ** 2)
+
+            ax = fig.add_subplot(n, 1, i)
+            sc = ax.quiver(orig[:, 0], orig[:, 1], u, -v, mag,
+                           cmap="plasma", angles="xy", scale_units="xy",
+                           scale=0.25, width=0.002)
+            fig.colorbar(sc, ax=ax, label="displacement (px)")
+            ax.set_xlim(0, w)
+            ax.set_ylim(h, 0)
+            ax.set_aspect("equal")
+            ax.set_title(f"{cam.name} distortion field")
+            ax.set_xlabel("x (px)")
+            ax.set_ylabel("y (px)")
+
+        self._distortion_layout.addWidget(FigureCanvasQTAgg(fig))
+
     def _continue_to_next(self) -> None:
         selected = self._run_selector.get_selected()
         if len(selected) != 1:
-            QMessageBox.information(
-                self,
-                "Select one run",
-                "Please select exactly one Phase 2 run to continue to Phase 3.",
-            )
+            if self._info_cb.isChecked():
+                QMessageBox.information(
+                    self,
+                    "Select one run",
+                    "Please select exactly one Phase 2 run to continue to Phase 3.",
+                )
             return
 
         chosen = selected[0]

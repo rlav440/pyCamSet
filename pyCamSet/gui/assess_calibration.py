@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QSplitter,
     QVBoxLayout,
@@ -164,10 +163,11 @@ _FIGURE_TOOLTIPS: dict[str, str] = {
 
 
 class _FigureCard(QWidget):
-    def __init__(self, title: str, plot_fn: Callable[[Any], None], parent: Optional[QWidget] = None) -> None:
+    def __init__(self, title: str, plot_fn: Callable[[Any], None], run_dir: Optional[Path] = None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._title = title
         self._plot_fn = plot_fn
+        self._run_dir = run_dir
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -178,6 +178,9 @@ class _FigureCard(QWidget):
             title_lbl.setToolTip(_FIGURE_TOOLTIPS[title])
         hdr.addWidget(title_lbl)
         hdr.addStretch()
+        save_btn = QPushButton("Save as PNG")
+        save_btn.clicked.connect(self._save_png)
+        hdr.addWidget(save_btn)
         expand = QPushButton("Expand")
         expand.clicked.connect(self._open_expanded)
         hdr.addWidget(expand)
@@ -187,9 +190,27 @@ class _FigureCard(QWidget):
             layout.addWidget(QLabel("matplotlib is unavailable."))
             return
 
-        fig = Figure(figsize=(5.4, 4.2), tight_layout=True)
-        self._plot_fn(fig)
-        layout.addWidget(FigureCanvasQTAgg(fig))
+        self._fig = Figure(figsize=(5.4, 4.2), tight_layout=True)
+        self._plot_fn(self._fig)
+        layout.addWidget(FigureCanvasQTAgg(self._fig))
+
+    def _save_png(self) -> None:
+        if not hasattr(self, "_fig") or self._fig is None:
+            return
+        if self._run_dir is not None and self._run_dir.exists():
+            safe_title = self._title.replace(" ", "_").replace("/", "_").replace("\\", "_")
+            save_path = self._run_dir / f"{safe_title}.png"
+        else:
+            from PySide6.QtWidgets import QFileDialog
+            path, _ = QFileDialog.getSaveFileName(self, "Save Figure", f"{self._title}.png", "PNG files (*.png)")
+            if not path:
+                return
+            save_path = Path(path)
+        try:
+            self._fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Save failed", f"Could not save PNG:\n{exc}")
 
     def _open_expanded(self) -> None:
         if FigureCanvasQTAgg is None or Figure is None:
@@ -240,6 +261,70 @@ class AssessCalibrationWidget(QWidget):
         hdr.setStyleSheet("font-weight: bold;")
         layout.addWidget(hdr)
 
+        # Determine the run's metadata directory for Save-as-PNG
+        run_dir: Optional[Path] = None
+        artifacts = data.run.get("artifacts") or {}
+        for key in ("self_calibrated_camset", "optimised_camset", "initial_camset", "camset"):
+            p = artifacts.get(key)
+            if p:
+                run_dir = Path(p).parent
+                break
+
+        diag = data.run.get("diagnostics") or {}
+
+        # ── Mean Euclidean RPE ─────────────────────────────────────────
+        phase_tag = canonical_phase_tag(data.run.get("phase"))
+        if phase_tag == "phase4":
+            init_rpe = float(diag.get("D4.3_initial_euclid_px", float("nan")))
+            final_rpe = float(diag.get("D4.3_final_euclid_px", float("nan")))
+        else:
+            init_rpe = float(diag.get("D3.5_initial_euclid_px", float("nan")))
+            final_rpe = float(diag.get("D3.6_final_euclid_px", float("nan")))
+
+        def _plot_mean_rpe(fig: Any) -> None:
+            ax = fig.add_subplot(111)
+            labels = ["Initial RPE", "Final RPE"]
+            vals = [init_rpe, final_rpe]
+            colors = ["#ff7f0e", "#2ca02c"]
+            bars = ax.bar(labels, vals, color=colors, edgecolor="#222", linewidth=0.6)
+            for b, v in zip(bars, vals):
+                if not (v != v):  # not NaN
+                    ax.text(b.get_x() + b.get_width() / 2, b.get_height(),
+                            f"{v:.4f}", ha="center", va="bottom", fontsize=9)
+            ax.set_ylabel("Euclidean RPE (px)")
+            ax.set_title("Mean Euclidean Reprojection Error")
+            ax.grid(axis="y", alpha=0.25)
+
+        layout.addWidget(_FigureCard("Mean Euclidean RPE", _plot_mean_rpe, run_dir=run_dir, parent=panel))
+
+        # ── Per-camera RPE ─────────────────────────────────────────────
+        per_cam: dict = {}
+        if phase_tag == "phase3":
+            per_cam = dict(diag.get("D3.12_per_camera_mean_reprojection") or {})
+        elif phase_tag == "phase4":
+            # Phase 4 may not have per-camera data; fall back to phase3 ancestor
+            per_cam = {}
+
+        if per_cam:
+            def _plot_per_cam_rpe(fig: Any, _pc: dict = per_cam) -> None:
+                import numpy as _np
+                cams = list(_pc.keys())
+                vals = [float(_pc[c]) for c in cams]
+                ax = fig.add_subplot(111)
+                bars = ax.bar(range(len(cams)), vals, color="#1f77b4", edgecolor="#222", linewidth=0.5)
+                ax.set_xticks(range(len(cams)))
+                ax.set_xticklabels(cams, rotation=25, ha="right", fontsize=8)
+                ax.set_ylabel("Mean reprojection error (px)")
+                ax.set_title("Per-camera Reprojection Error")
+                med = _np.nanmedian(vals) if vals else float("nan")
+                if not (med != med):
+                    ax.axhline(med, color="#d62728", linestyle="--", linewidth=1.1,
+                               label=f"median={med:.4f}")
+                    ax.legend(fontsize=8)
+                ax.grid(axis="y", alpha=0.25)
+
+            layout.addWidget(_FigureCard("Per-camera RPE", _plot_per_cam_rpe, run_dir=run_dir, parent=panel))
+
         def _plot_target(fig: Any) -> None:
             ax = fig.add_subplot(111, projection="3d")
             pts = data.target_points
@@ -266,8 +351,8 @@ class AssessCalibrationWidget(QWidget):
             ax.set_ylabel("Y")
             ax.set_zlabel("Z")
 
-        layout.addWidget(_FigureCard("Target Reconstruction", _plot_target, parent=panel))
-        layout.addWidget(_FigureCard("Camera Layout", _plot_cams, parent=panel))
+        layout.addWidget(_FigureCard("Target Reconstruction", _plot_target, run_dir=run_dir, parent=panel))
+        layout.addWidget(_FigureCard("Camera Layout", _plot_cams, run_dir=run_dir, parent=panel))
         layout.addStretch()
         return panel
 
@@ -277,9 +362,7 @@ class AssessCalibrationWidget(QWidget):
             self._replace_splitter_widgets([])
             return
 
-        if len(runs) > 2:
-            QMessageBox.information(self, "Selection limit", "Select up to two runs for Assess Calibration.")
-            return
+        runs = runs[-2:]  # Silently limit to the last two runs
 
         try:
             bundles = [_extract_run_view_data(run) for run in runs]

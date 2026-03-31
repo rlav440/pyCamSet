@@ -57,6 +57,8 @@ from pyCamSet.gui.shared_functions import (
     IMAGE_FOLDER_SCHEMATIC,
     TAB_PHASE1,
     TAB_PHASE1_DIAG,
+    TAB_PHASE2,
+    CollapsibleSection,
     EmitLogHandler,
     EmitStream,
     PhaseWorker,
@@ -132,9 +134,9 @@ class Phase1Tab(QWidget):
         root.addLayout(top_row)
 
         form_widget = QWidget()
-        form = QFormLayout(form_widget)
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form_root = QVBoxLayout(form_widget)
+        form_root.setContentsMargins(0, 0, 0, 0)
+        form_root.setSpacing(4)
         top_row.addWidget(form_widget, stretch=1)
 
         side = QWidget()
@@ -143,8 +145,9 @@ class Phase1Tab(QWidget):
         side_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         top_row.addWidget(side)
 
-        # ── Paths ──────────────────────────────────────────────────────
-        form.addRow(make_section_label("Paths"))
+        # ── Paths (collapsible) ────────────────────────────────────────
+        paths_sect = CollapsibleSection("Paths", expanded=True)
+        form_root.addWidget(paths_sect)
 
         floc_row = QHBoxLayout()
         self._floc_edit = QLineEdit()
@@ -157,11 +160,16 @@ class Phase1Tab(QWidget):
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
         floc_row.addWidget(floc_btn)
-        form.addRow("Image folder (f_loc):", floc_row)
+        paths_sect.addRow("Image folder (f_loc):", floc_row)
 
         # ── Detection options ──────────────────────────────────────────
-        form.addRow(make_separator())
-        form.addRow(make_section_label("Detection Options"))
+        form_root.addWidget(make_separator())
+        form_root.addWidget(make_section_label("Detection Options"))
+
+        detect_form = QFormLayout()
+        detect_form.setContentsMargins(0, 0, 0, 0)
+        detect_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form_root.addLayout(detect_form)
 
         self._cache_cb = QCheckBox("Cache detections (caching)")
         self._cache_cb.setChecked(True)
@@ -173,7 +181,7 @@ class Phase1Tab(QWidget):
             "Guidance: disable only if you suspect a stale cache is masking\n"
             "a real change (e.g. new images added to an existing folder)."
         )
-        form.addRow(self._cache_cb)
+        detect_form.addRow(self._cache_cb)
 
         self._hd_cb = QCheckBox("High Distortion Mode")
         self._hd_cb.setToolTip(
@@ -185,7 +193,7 @@ class Phase1Tab(QWidget):
             "Guidance: enable for cameras with an FOV > ~120 degrees or if\n"
             "standard detection finds very few corners near the image edges."
         )
-        form.addRow(self._hd_cb)
+        detect_form.addRow(self._hd_cb)
 
         self._nlim_edit = QLineEdit()
         self._nlim_edit.setPlaceholderText("blank = no limit")
@@ -198,7 +206,7 @@ class Phase1Tab(QWidget):
             "Guidance: for a quality calibration use at least 30–50 images;\n"
             "n_lim < 15 may produce poor intrinsics."
         )
-        form.addRow("Max images per camera (n_lim):", self._nlim_edit)
+        detect_form.addRow("Max images per camera (n_lim):", self._nlim_edit)
 
         self._threads_edit = QLineEdit()
         self._threads_edit.setPlaceholderText("blank = auto")
@@ -209,7 +217,7 @@ class Phase1Tab(QWidget):
             "Range: positive integer or blank\n"
             "Guidance: set to 1 for debugging; leave blank for normal use."
         )
-        form.addRow("Threads:", self._threads_edit)
+        detect_form.addRow("Threads:", self._threads_edit)
 
         self._fp_edit = QLineEdit()
         self._fp_edit.setPlaceholderText('e.g. {"cam0": "int"} or blank')
@@ -221,7 +229,7 @@ class Phase1Tab(QWidget):
             "Guidance: use to hold extrinsics fixed for a known reference\n"
             "camera.  Leave blank unless you have a specific reason."
         )
-        form.addRow("Fixed params (JSON):", self._fp_edit)
+        detect_form.addRow("Fixed params (JSON):", self._fp_edit)
 
         self._po_edit = QLineEdit()
         self._po_edit.setPlaceholderText("JSON dict or blank")
@@ -233,11 +241,12 @@ class Phase1Tab(QWidget):
             "Guidance: advanced option — leave blank unless instructed by\n"
             "the pyCamSet documentation."
         )
-        form.addRow("Problem options (JSON):", self._po_edit)
+        detect_form.addRow("Problem options (JSON):", self._po_edit)
 
-        # ── Target configuration ───────────────────────────────────────
-        form.addRow(make_separator())
-        form.addRow(make_section_label("Calibration Target"))
+        # ── Calibration Target (collapsible) ───────────────────────────
+        form_root.addWidget(make_separator())
+        target_sect = CollapsibleSection("Calibration Target", expanded=True)
+        form_root.addWidget(target_sect)
 
         self._target_combo = QComboBox()
         self._target_combo.addItems(_TARGET_CHOICES)
@@ -251,7 +260,7 @@ class Phase1Tab(QWidget):
             "Default: Ccube\n"
             "Guidance: match this exactly to the physical target you are using."
         )
-        form.addRow("Target type:", self._target_combo)
+        target_sect.addRow("Target type:", self._target_combo)
 
         self._npts_spin = QSpinBox()
         self._npts_spin.setRange(2, 20)
@@ -266,7 +275,7 @@ class Phase1Tab(QWidget):
             "Guidance: must exactly match the physical target you are using.\n"
             "Higher values give more feature constraints per image."
         )
-        form.addRow("n_points / squares_x:", self._npts_spin)
+        target_sect.addRow("n_points / squares_x:", self._npts_spin)
 
         self._length_edit = QLineEdit("30.0")
         self._length_edit.setFixedWidth(100)
@@ -279,9 +288,10 @@ class Phase1Tab(QWidget):
             "Guidance: measure the actual printed/machined target — even a\n"
             "1% error here propagates directly into reconstructed distances."
         )
-        form.addRow("Length / square size (mm):", self._length_edit)
+        target_sect.addRow("Length / square size (mm):", self._length_edit)
 
         # ── Action buttons ─────────────────────────────────────────────
+        form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
         run_btn = QPushButton("▶  Run Phase 1")
         run_btn.setToolTip("Run target detection for the selected image folder.")
@@ -291,7 +301,8 @@ class Phase1Tab(QWidget):
         diag_btn.setToolTip("Open Phase 1 diagnostics (hidden tab).")
         btn_row.addWidget(diag_btn)
         btn_row.addStretch()
-        form.addRow(btn_row)
+        form_root.addLayout(btn_row)
+        form_root.addStretch()
 
         # ── Side panel ────────────────────────────────────────────────
         side_layout.addWidget(make_continue_button(self._continue_to_next))
@@ -654,14 +665,19 @@ class Phase1Tab(QWidget):
     def _continue_to_next(self) -> None:
         runs = self._workspace_mgr.load_runs("phase1")
         if not runs:
-            QMessageBox.information(self, "No runs", "Run Phase 1 first.")
+            if self._info_cb.isChecked():
+                QMessageBox.information(self, "No runs", "Run Phase 1 first.")
             return
-        self._workspace_mgr.write_handoff({"phase": "phase1", "runs": [runs[-1]]})
-        QMessageBox.information(
-            self,
-            "Handoff written",
-            "handoff.json written to workspace.\nProceed to Phase 2.",
-        )
+        chosen = runs[-1]
+        self._workspace_mgr.write_handoff({"phase": "phase1", "runs": [chosen]})
+        run_id = chosen.get("run_id", "")
+        for i in range(self._notebook.count()):
+            if self._notebook.tabText(i) == TAB_PHASE2:
+                tab = self._notebook.widget(i)
+                if hasattr(tab, "set_selected_phase1_run_id"):
+                    tab.set_selected_phase1_run_id(run_id)
+                self._notebook.setCurrentIndex(i)
+                return
 
 
 # ---------------------------------------------------------------------------
@@ -1074,7 +1090,7 @@ class Phase1DiagnosticsTab(QWidget):
         next_btn.clicked.connect(lambda: self._step_draw_image(+1))
         nav_row.addWidget(next_btn)
 
-        self._draw_status_lbl = QLabel("Image 0 of 0")
+        self._draw_status_lbl = QLabel("0/0")
         nav_row.addWidget(self._draw_status_lbl)
         nav_row.addStretch()
         self._montage_layout.addLayout(nav_row)
@@ -1122,7 +1138,8 @@ class Phase1DiagnosticsTab(QWidget):
     def _draw_detections_clicked(self) -> None:
         runs = self._run_selector.get_selected()
         if not runs:
-            QMessageBox.information(self, "No run selected", "Select at least one run.")
+            if self._info_cb.isChecked():
+                QMessageBox.information(self, "No run selected", "Select at least one run.")
             return
 
         chosen = None
@@ -1224,7 +1241,7 @@ class Phase1DiagnosticsTab(QWidget):
         next_btn = QPushButton("▶")
         next_btn.clicked.connect(lambda: self._step_draw_image(+1))
         nav_row.addWidget(next_btn)
-        self._draw_status_lbl = QLabel("Image 0 of 0")
+        self._draw_status_lbl = QLabel("0/0")
         nav_row.addWidget(self._draw_status_lbl)
         nav_row.addStretch()
         self._montage_layout.addLayout(nav_row)
@@ -1318,7 +1335,7 @@ class Phase1DiagnosticsTab(QWidget):
             ax.set_title(f"{cam} | im {im_idx} | pts {len(pts)}")
 
         if self._draw_status_lbl is not None:
-            self._draw_status_lbl.setText(f"Image {idx + 1} of {max_images}")
+            self._draw_status_lbl.setText(f"{idx + 1}/{max_images}")
         self._draw_state["canvas"].draw_idle()
 
     def _resolve_pickle_path_for_run(self, run: dict) -> Optional[Path]:
@@ -1371,27 +1388,31 @@ class Phase1DiagnosticsTab(QWidget):
         selected = self._run_selector.get_selected()
 
         if not selected:
-            QMessageBox.information(
-                self,
-                "Select one run",
-                "Please select exactly one Phase 1 run to continue to Phase 2.",
-            )
+            if self._info_cb.isChecked():
+                QMessageBox.information(
+                    self,
+                    "Select one run",
+                    "Please select exactly one Phase 1 run to continue to Phase 2.",
+                )
             return
 
         if len(selected) > 1:
-            QMessageBox.information(
-                self,
-                "Select one run",
-                "Multiple runs are selected. Please select exactly one run to continue to Phase 2.",
-            )
+            if self._info_cb.isChecked():
+                QMessageBox.information(
+                    self,
+                    "Select one run",
+                    "Multiple runs are selected. Please select exactly one run to continue to Phase 2.",
+                )
             return
 
         chosen = selected[0]
         self._workspace_mgr.write_handoff({"phase": "phase1", "runs": [chosen]})
-        QMessageBox.information(
-            self,
-            "Handoff written",
-            f"Run {chosen.get('run_id', 'unknown')} set for Phase 2.\n"
-            "handoff.json written to workspace.",
-        )
+        run_id = chosen.get("run_id", "")
+        for i in range(self._notebook.count()):
+            if self._notebook.tabText(i) == TAB_PHASE2:
+                tab = self._notebook.widget(i)
+                if hasattr(tab, "set_selected_phase1_run_id"):
+                    tab.set_selected_phase1_run_id(run_id)
+                self._notebook.setCurrentIndex(i)
+                return
 

@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from pyCamSet.gui.shared_functions import (
     IMAGE_FOLDER_SCHEMATIC,
     TAB_PHASE4,
+    CollapsibleSection,
     EmitLogHandler,
     EmitStream,
     PhaseWorker,
@@ -102,12 +103,15 @@ class Phase4Tab(QWidget):
         root.addLayout(top_row)
 
         form_widget = QWidget()
-        form = QFormLayout(form_widget)
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form_root = QVBoxLayout(form_widget)
+        form_root.setContentsMargins(0, 0, 0, 0)
+        form_root.setSpacing(4)
         top_row.addWidget(form_widget, stretch=1)
 
-        form.addRow(make_section_label("Paths"))
+        # ── Paths (collapsible) ────────────────────────────────────────
+        paths_sect = CollapsibleSection("Paths", expanded=True)
+        form_root.addWidget(paths_sect)
+
         floc_row = QHBoxLayout()
         self._floc_edit = QLineEdit()
         self._floc_edit.setPlaceholderText("Root folder with per-camera sub-folders")
@@ -118,7 +122,7 @@ class Phase4Tab(QWidget):
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
         floc_row.addWidget(floc_btn)
-        form.addRow("Image folder (f_loc):", floc_row)
+        paths_sect.addRow("Image folder (f_loc):", floc_row)
 
         src_row = QHBoxLayout()
         self._phase3_run_combo = QComboBox()
@@ -128,7 +132,7 @@ class Phase4Tab(QWidget):
         src_refresh.clicked.connect(self._refresh_phase3_sources)
         src_row.addWidget(self._phase3_run_combo)
         src_row.addWidget(src_refresh)
-        form.addRow("Phase 3 run:", src_row)
+        paths_sect.addRow("Phase 3 run:", src_row)
 
         p3cam_row = QHBoxLayout()
         self._phase3_camset_edit = QLineEdit()
@@ -143,15 +147,21 @@ class Phase4Tab(QWidget):
         p3cam_row.addWidget(self._phase3_camset_edit)
         p3cam_row.addWidget(p3cam_btn)
         p3cam_row.addWidget(p3cam_clear)
-        form.addRow("Phase 3 camset path:", p3cam_row)
+        paths_sect.addRow("Phase 3 camset path:", p3cam_row)
 
         self._source_lbl = QLabel("Source: auto")
         self._source_lbl.setWordWrap(True)
         self._source_lbl.setStyleSheet("color: #666;")
-        form.addRow("", self._source_lbl)
+        paths_sect.addRow("", self._source_lbl)
 
-        form.addRow(make_separator())
-        form.addRow(make_section_label("Self-Calibration Options"))
+        # ── Self-Calibration Options ───────────────────────────────────
+        form_root.addWidget(make_separator())
+        form_root.addWidget(make_section_label("Self-Calibration Options"))
+
+        opts_form = QFormLayout()
+        opts_form.setContentsMargins(0, 0, 0, 0)
+        opts_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form_root.addLayout(opts_form)
 
         self._threads_edit = QLineEdit("1")
         self._threads_edit.setFixedWidth(100)
@@ -161,7 +171,7 @@ class Phase4Tab(QWidget):
             "Range: positive integer\n"
             "Guidance: start with 1; increase for large problems if memory allows."
         )
-        form.addRow("Threads:", self._threads_edit)
+        opts_form.addRow("Threads:", self._threads_edit)
 
         self._max_nfev_spin = QSpinBox()
         self._max_nfev_spin.setRange(5, 5000)
@@ -174,7 +184,7 @@ class Phase4Tab(QWidget):
             "Guidance: increase to 1000 if the solver reports non-convergence.\n"
             "Self-calibration is sensitive; prefer more evaluations over fewer."
         )
-        form.addRow("max_nfev:", self._max_nfev_spin)
+        opts_form.addRow("max_nfev:", self._max_nfev_spin)
 
         self._verbosity_spin = QSpinBox()
         self._verbosity_spin.setRange(0, 2)
@@ -186,7 +196,7 @@ class Phase4Tab(QWidget):
             "Range: 0 (silent), 1 (summary), 2 (per-iteration)\n"
             "Guidance: keep at 2 to monitor self-calibration convergence."
         )
-        form.addRow("verbosity:", self._verbosity_spin)
+        opts_form.addRow("verbosity:", self._verbosity_spin)
 
         self._outliers_combo = QComboBox()
         self._outliers_combo.addItems(["n", "y"])
@@ -198,7 +208,7 @@ class Phase4Tab(QWidget):
             "Guidance: enable only if Phase 3 already had clean data.  Outlier\n"
             "rejection in Phase 4 can discard useful target-shape information."
         )
-        form.addRow("outliers:", self._outliers_combo)
+        opts_form.addRow("outliers:", self._outliers_combo)
 
         self._fixed_pose_edit = QLineEdit("0")
         self._fixed_pose_edit.setFixedWidth(110)
@@ -208,7 +218,7 @@ class Phase4Tab(QWidget):
             "Range: 0 to (num_poses − 1)\n"
             "Guidance: should match the value used in Phase 3."
         )
-        form.addRow("fixed_pose:", self._fixed_pose_edit)
+        opts_form.addRow("fixed_pose:", self._fixed_pose_edit)
 
         self._ref_cam_edit = QLineEdit("0")
         self._ref_cam_edit.setFixedWidth(110)
@@ -217,7 +227,7 @@ class Phase4Tab(QWidget):
             "Default: 0\n"
             "Range: 0 to (num_cameras − 1)"
         )
-        form.addRow("ref_cam:", self._ref_cam_edit)
+        opts_form.addRow("ref_cam:", self._ref_cam_edit)
 
         self._ref_pose_edit = QLineEdit("0")
         self._ref_pose_edit.setFixedWidth(110)
@@ -226,7 +236,7 @@ class Phase4Tab(QWidget):
             "Default: 0\n"
             "Range: 0 to (num_poses − 1)"
         )
-        form.addRow("ref_pose:", self._ref_pose_edit)
+        opts_form.addRow("ref_pose:", self._ref_pose_edit)
 
         self._fp_edit = QLineEdit()
         self._fp_edit.setPlaceholderText('e.g. {"cam0": "ext"}')
@@ -236,15 +246,20 @@ class Phase4Tab(QWidget):
             "Range: valid JSON object\n"
             "Guidance: leave blank unless you need to freeze a reference camera."
         )
-        form.addRow("Fixed params (JSON):", self._fp_edit)
+        opts_form.addRow("Fixed params (JSON):", self._fp_edit)
 
+        # ── Action buttons ─────────────────────────────────────────────
+        form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
         run_btn = QPushButton("▶  Run Phase 4")
+        run_btn.setToolTip("Run self-calibration.")
         run_btn.clicked.connect(self._run_phase4)
         btn_row.addWidget(run_btn)
         btn_row.addWidget(make_orange_button("Diagnostics ▼", self._open_diagnostics))
+        btn_row.addWidget(make_orange_button("Assess Calibration", self._open_assess_calibration))
         btn_row.addStretch()
-        form.addRow(btn_row)
+        form_root.addLayout(btn_row)
+        form_root.addStretch()
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
@@ -407,7 +422,8 @@ class Phase4Tab(QWidget):
             QMessageBox.critical(self, "Import error", "pyCamSet optimisation modules are unavailable.")
             return
         if self._worker is not None and self._worker.isRunning():
-            QMessageBox.information(self, "Phase 4 running", "Phase 4 is already running.")
+            if self._info_cb.isChecked():
+                QMessageBox.information(self, "Phase 4 running", "Phase 4 is already running.")
             return
 
         self._sync_workspace_from_floc(params["f_loc"])
@@ -418,7 +434,8 @@ class Phase4Tab(QWidget):
         phase3_run = self._load_phase3_run()
         phase3_camset = self._resolve_phase3_camset(phase3_run)
         if phase3_camset is None:
-            QMessageBox.information(self, "No Phase 3 source", "Select a valid Phase 3 run/camset first.")
+            if self._info_cb.isChecked():
+                QMessageBox.information(self, "No Phase 3 source", "Select a valid Phase 3 run/camset first.")
             return
 
         self._terminal.clear_terminal()
@@ -542,6 +559,13 @@ class Phase4Tab(QWidget):
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
             self._notebook.setCurrentWidget(self._diagnostics_tab)
+
+    def _open_assess_calibration(self) -> None:
+        """Open the Phase 4 diagnostics tab and trigger Assess Calibration."""
+        if self._diagnostics_tab is not None:
+            self._diagnostics_tab.refresh()
+            self._notebook.setCurrentWidget(self._diagnostics_tab)
+            self._diagnostics_tab.visualise_from_primary()
 
 
 class Phase4DiagnosticsTab(QWidget):
@@ -688,7 +712,8 @@ class Phase4DiagnosticsTab(QWidget):
         selected = self._run_selector.get_selected()
         chosen = ordered_visualisation_selection(selected, self._all_runs, max_runs=2)
         if not chosen:
-            QMessageBox.information(self, "Select runs", "Select one or two runs first.")
+            if self._info_cb.isChecked():
+                QMessageBox.information(self, "Select runs", "Select one or two runs first.")
             return
         self._visual_panel.render_runs(chosen)
 

@@ -107,6 +107,11 @@ class CreateTargetTab(QWidget):
         self._length_edit.textChanged.connect(self._sync_default_name)
         ccube_form.addRow("length (mm):", self._length_edit)
 
+        self._ccube_dict_combo = QComboBox()
+        self._ccube_dict_combo.addItems(_ARUCO_DICT_CHOICES)
+        self._ccube_dict_combo.setCurrentText("DICT_4X4_1000")
+        ccube_form.addRow("dictionary:", self._ccube_dict_combo)
+
         self._param_stack.addWidget(ccube_params)
 
         charuco_params = QWidget()
@@ -200,6 +205,7 @@ class CreateTargetTab(QWidget):
             if target_type == _TARGET_CCUBE:
                 payload["n_points"] = int(self._npts_spin.value())
                 payload["length"] = float(self._length_edit.text().strip())
+                payload["aruco_dict"] = self._ccube_dict_combo.currentText()
             else:
                 payload["num_squares_x"] = int(self._charuco_x_spin.value())
                 payload["num_squares_y"] = int(self._charuco_y_spin.value())
@@ -269,6 +275,7 @@ class CreateTargetTab(QWidget):
                 _, out_path = generate_ccube_target(
                     n_points=int(collected["n_points"]),
                     length=float(collected["length"]),
+                    aruco_dict=str(collected["aruco_dict"]),
                     output_dir=collected["out_dir"],
                     file_name=collected["file_name"],
                     export_kind=collected["export_kind"],
@@ -302,6 +309,7 @@ class CreateTargetTab(QWidget):
                 cube = build_ccube(
                     n_points=int(collected["n_points"]),
                     length=float(collected["length"]),
+                    aruco_dict=str(collected["aruco_dict"]),
                 )
                 cube.plot()  # External pyvista/matplotlib window
             else:

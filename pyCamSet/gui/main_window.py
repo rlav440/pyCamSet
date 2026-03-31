@@ -467,7 +467,7 @@ class PyCamSetApp(QMainWindow):
                 return
 
 
-def main() -> None:
+def main_window() -> None:
     """Launch the pyCamSet GUI."""
     import sys
 
@@ -478,4 +478,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main_window()

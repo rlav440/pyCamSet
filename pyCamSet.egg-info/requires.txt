@@ -12,3 +12,4 @@ uniplot
 scikit-learn
 dill
 PySide6
+open3d

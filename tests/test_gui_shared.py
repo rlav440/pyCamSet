@@ -60,7 +60,7 @@ def _make_qt_stub():
     names_core    = ["QThread", "Signal", "QTextCursor", "Qt"]
     names_gui     = ["QTextCursor", "QKeySequence", "QShortcut"]
     names_widgets = [
-        "QCheckBox", "QFrame", "QLabel", "QListWidget", "QListWidgetItem",
+        "QCheckBox", "QFileDialog", "QFrame", "QLabel", "QListWidget", "QListWidgetItem",
         "QPushButton", "QTextEdit", "QVBoxLayout", "QWidget", "QFormLayout",
         "QHBoxLayout", "QScrollArea", "QSplitter", "QDialog", "QMessageBox",
     ]

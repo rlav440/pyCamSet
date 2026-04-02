@@ -13,6 +13,7 @@ pyCamSet/calibration/camera_calibrator.py
 pyCamSet/calibration_targets/__init__.py
 pyCamSet/calibration_targets/abstract_target.py
 pyCamSet/calibration_targets/create_Ccube.py
+pyCamSet/calibration_targets/create_charuco.py
 pyCamSet/calibration_targets/net_maker.py
 pyCamSet/calibration_targets/shape_by_faces.py
 pyCamSet/calibration_targets/target_Ccube.py
@@ -22,8 +23,11 @@ pyCamSet/cameras/__init__.py
 pyCamSet/cameras/camera.py
 pyCamSet/cameras/camera_set.py
 pyCamSet/gui/__init__.py
+pyCamSet/gui/__main__.py
 pyCamSet/gui/assess_calibration.py
-pyCamSet/gui/main.py
+pyCamSet/gui/create_target.py
+pyCamSet/gui/export_calibration_tab.py
+pyCamSet/gui/main_window.py
 pyCamSet/gui/phase_0_input.py
 pyCamSet/gui/phase_1_detection.py
 pyCamSet/gui/phase_2_intrinsics.py
@@ -48,3 +52,4 @@ pyCamSet/utils/__init__.py
 pyCamSet/utils/general_utils.py
 pyCamSet/utils/saving.py
 pyCamSet/utils/visualisation.py
+tests/test_gui_shared.py

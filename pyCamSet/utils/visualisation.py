@@ -1,4 +1,5 @@
 from __future__ import annotations
+import datetime
 from math import copysign
 from copy import copy
 import matplotlib.pyplot as plt
@@ -10,6 +11,14 @@ from matplotlib.colors import LogNorm, LinearSegmentedColormap
 
 from pyCamSet.utils.general_utils import h_tform, get_close_square_tuple
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc, n_inv_pose
+
+# Optional Open3D import — deferred to avoid import-time failures when unavailable.
+try:
+    import open3d as _o3d
+    _OPEN3D_OK = True
+except ImportError:  # pragma: no cover
+    _o3d = None
+    _OPEN3D_OK = False
 
 blues_with_white = LinearSegmentedColormap.from_list('Blues_with_white', [(1, 1, 1), *plt.cm.Blues(np.linspace(0, 1, 1024)[:900])])
 
@@ -329,6 +338,135 @@ def visualise_calibration(
     else:
 
         plotter.add_text("n/a for single timestep images", position='upper_edge', font='times')
+
+    def _screenshot_callback() -> None:
+        fname = datetime.datetime.now().strftime("calibration_3d_%Y%m%d_%H%M%S.png")
+        plotter.screenshot(fname)
+        print(f"Screenshot saved: {fname}")
+
+    plotter.add_key_event("s", _screenshot_callback)
     plotter.show()
     param_handler.special_plots(o_results['x'])
+
+
+def visualise_calibration_open3d(
+    o_results: dict,
+    param_handler,
+    output_widget=None,
+) -> tuple[bool, str]:
+    """Open3D equivalent of :func:`visualise_calibration`.
+
+    Renders the 3D calibration assessment using Open3D.
+
+    :param o_results: The optimisation results dict with keys ``err`` and ``x``.
+    :param param_handler: The parameter handler used in the optimisation.
+    :param output_widget: Optional Qt QLabel.  When provided the rendered image
+        is embedded in the widget as a ``QPixmap`` rather than opening a native
+        Open3D window.
+    :returns: ``(success, message)`` tuple.
+    """
+    if not _OPEN3D_OK or _o3d is None:
+        return False, (
+            "Open3D is not installed. Install it with:\n"
+            "    pip install open3d\n"
+            "and restart the application."
+        )
+
+    try:
+        euclidean_err = np.linalg.norm(np.reshape(o_results['err'], (-1, 2)), axis=1)
+        e_lim = np.median(euclidean_err) * 3
+
+        detection = param_handler.get_detection()
+        cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
+
+        to_reconstruct = detection.sort(['key', 'im_num']).get_data()
+        reconstructed, reconstructed_subset, where_mask, _ = cams.multi_cam_triangulate(
+            to_reconstruct, return_used=True
+        )
+        error_subset = np.array([np.mean(euclidean_err[datum]) for datum in where_mask])
+
+        # Build point cloud coloured by reprojection error
+        raw_obj_points: list[np.ndarray] = []
+        errors: list[float] = []
+        mean_dist = np.mean(np.linalg.norm(param_handler.target.point_data, axis=-1))
+
+        inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True)[1])
+        im_nums = reconstructed_subset[inv, 1]
+
+        for point, im, c in zip(reconstructed, im_nums, error_subset):
+            inv_pose = np.empty(12)
+            n_inv_pose(poses[int(im)], inv_pose)
+            obj_point = np.empty(3)
+            n_htform_prealloc(point, inv_pose, obj_point)
+            if np.linalg.norm(obj_point) < 3 * mean_dist:
+                raw_obj_points.append(point)
+                errors.append(float(c))
+
+        geoms = []
+        if raw_obj_points:
+            pts_arr = np.array(raw_obj_points)
+            pcd = _o3d.geometry.PointCloud()
+            pcd.points = _o3d.utility.Vector3dVector(pts_arr)
+            # Colour by normalised reprojection error (blue → red via viridis)
+            norm = plt.Normalize(vmin=0, vmax=max(e_lim, 1e-9))
+            colours_f = plt.cm.viridis(norm(np.clip(errors, 0, e_lim)))[:, :3]
+            pcd.colors = _o3d.utility.Vector3dVector(colours_f)
+            geoms.append(pcd)
+
+        # Camera frustums
+        for cam in cams:
+            try:
+                pos = np.array(cam.position).reshape(3)
+                sphere = _o3d.geometry.TriangleMesh.create_sphere(radius=0.02)
+                sphere.translate(pos)
+                sphere.paint_uniform_color([0.1, 0.5, 1.0])
+                geoms.append(sphere)
+            except Exception:
+                pass
+
+        if output_widget is not None:
+            # Offscreen rendering → embed in Qt widget
+            try:
+                renderer = _o3d.visualization.rendering.OffscreenRenderer(800, 600)
+                renderer.scene.set_background([0.1, 0.1, 0.18, 1.0])
+                mat = _o3d.visualization.rendering.MaterialRecord()
+                mat.shader = "defaultUnlit"
+                mat.point_size = 4.0
+                for i, geom in enumerate(geoms):
+                    renderer.scene.add_geometry(f"geom_{i}", geom, mat)
+                if geoms:
+                    bounds = geoms[0].get_axis_aligned_bounding_box()
+                    for g in geoms[1:]:
+                        bounds = bounds + g.get_axis_aligned_bounding_box()
+                    renderer.setup_camera(60, bounds, bounds.get_center())
+                img_o3d = renderer.render_to_image()
+                img_np = np.asarray(img_o3d)
+                from PySide6.QtCore import Qt
+                from PySide6.QtGui import QImage, QPixmap
+                h, w, ch = img_np.shape
+                qt_img = QImage(img_np.data, w, h, ch * w, QImage.Format.Format_RGB888)
+                pixmap = QPixmap.fromImage(qt_img)
+                output_widget.setPixmap(
+                    pixmap.scaled(
+                        output_widget.width() or 800,
+                        output_widget.height() or 600,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    )
+                )
+                return True, "Open3D visualisation rendered."
+            except Exception as exc:
+                output_widget.setText(f"Open3D render failed: {exc}")
+                return False, str(exc)
+        else:
+            _o3d.visualization.draw_geometries(
+                geoms,
+                window_name="Calibration Assessment (Open3D)",
+                width=1000,
+                height=700,
+            )
+            return True, "Open3D visualisation shown."
+
+    except Exception as exc:
+        return False, f"Open3D visualisation error: {exc}"
 

@@ -19,9 +19,10 @@ except ImportError:  # pragma: no cover
     load_CameraSet = None
 
 try:
-    from pyCamSet.utils.visualisation import visualise_calibration
+    from pyCamSet.utils.visualisation import visualise_calibration, visualise_calibration_open3d
 except ImportError:  # pragma: no cover
     visualise_calibration = None
+    visualise_calibration_open3d = None
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,6 +30,17 @@ _IGNORED_VISUALISATION_WARNING_MODULES = (
     r"numpy\._core\.",
     r"pyvista\.core\.utilities\.",
 )
+
+
+def canonical_phase_tag(phase: Optional[str]) -> str:
+    """Return a normalised, lower-case phase tag.
+
+    :param phase: Raw phase string.  ``None`` or empty returns ``"unknown"``.
+    :returns: Normalised phase string — no legacy aliasing is applied.
+    """
+    if not phase:
+        return "unknown"
+    return str(phase).strip().lower()
 
 
 def resolve_run_camset_artifact(run: dict) -> Optional[Path]:
@@ -138,3 +150,36 @@ def launch_visualise_calibration_for_run(run: dict) -> tuple[bool, str]:
         return False, f"Could not run visualise_calibration: {msg or str(exc)}"
 
     return True, success_message
+
+
+def launch_visualise_calibration_open3d_for_run(
+    run: dict, output_widget=None
+) -> tuple[bool, str]:
+    """Launch Open3D calibration visualisation for *run*.
+
+    :param run: Run metadata dict with an artifacts section containing a camset path.
+    :param output_widget: Optional Qt QLabel.  When provided the result is
+        rendered offscreen and embedded; otherwise an Open3D native window is opened.
+    :returns: ``(success, message)`` tuple.
+    """
+    if load_CameraSet is None or visualise_calibration_open3d is None:
+        return False, "Open3D visualisation dependencies are unavailable."
+
+    camset_path = resolve_run_camset_artifact(run)
+    if camset_path is None:
+        return False, "Selected run has no readable camset artifact."
+
+    try:
+        cams = load_CameraSet(camset_path)
+    except Exception as exc:  # pragma: no cover
+        return False, f"Could not load camset: {exc}"
+
+    handler = getattr(cams, "calibration_handler", None)
+    if handler is None:
+        return False, "Loaded camset does not contain calibration handler data."
+
+    o_results = _build_o_results(cams)
+    if o_results is None:
+        return False, "Loaded camset does not contain calibration optimisation results."
+
+    return visualise_calibration_open3d(o_results, handler, output_widget=output_widget)

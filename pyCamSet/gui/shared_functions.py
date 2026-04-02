@@ -165,7 +165,7 @@ def make_continue_button(callback: Callable) -> QPushButton:
 
 
 class MatplotlibFigureCard(QWidget):
-    """A labelled matplotlib card with a per-figure Expand button."""
+    """A labelled matplotlib card with per-figure Expand and Save PNG buttons."""
 
     def __init__(
         self,
@@ -186,6 +186,10 @@ class MatplotlibFigureCard(QWidget):
         header = QHBoxLayout()
         header.addWidget(make_section_label(title))
         header.addStretch()
+        save_btn = QPushButton("Save PNG")
+        save_btn.setFixedWidth(82)
+        save_btn.clicked.connect(self._save_png)
+        header.addWidget(save_btn)
         expand_btn = QPushButton("Expand")
         expand_btn.setFixedWidth(78)
         expand_btn.clicked.connect(self._open_expanded)
@@ -196,6 +200,15 @@ class MatplotlibFigureCard(QWidget):
         self._canvas.setMinimumHeight(min_height)
         self._canvas.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         layout.addWidget(self._canvas)
+
+    def _save_png(self) -> None:
+        import re
+        safe_title = re.sub(r'[^\w\s-]', '', self._title).strip().replace(' ', '_')
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Figure as PNG", f"{safe_title}.png", "PNG Files (*.png)"
+        )
+        if path:
+            self._fig.savefig(path, dpi=150, bbox_inches="tight")
 
     def _open_expanded(self) -> None:
         dlg = QDialog(self)
@@ -450,6 +463,7 @@ class WorkspaceManager:
         if self.workspace_path is None:
             return
         for sub in (
+            "phase0_runs",
             "phase1_runs",
             "phase2_runs",
             "phase3_runs",

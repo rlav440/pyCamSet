@@ -221,13 +221,74 @@ class PyCamSetApp(QMainWindow):
         self.phase3_tab.set_diagnostics_tab(self.phase3_diag_tab)
         self.phase4_tab.set_diagnostics_tab(self.phase4_diag_tab)
 
+        # ── Global sync: camera list ───────────────────────────────────
+        def _propagate_cameras(names: list[str]) -> None:
+            self.phase1_tab.set_cameras(names)
+
+        self.phase0_tab.set_cameras_callback(_propagate_cameras)
+
+        # ── Global sync: image folder ──────────────────────────────────
+        self._syncing_floc = False
+
         def _propagate_image_folder(path: str) -> None:
-            self.phase1_tab.set_image_folder(path)
-            self.phase2_tab.set_image_folder(path)
-            self.phase3_tab.set_image_folder(path)
-            self.phase4_tab.set_image_folder(path)
+            if self._syncing_floc:
+                return
+            self._syncing_floc = True
+            try:
+                self.phase0_tab.set_image_folder(path)
+                self.phase1_tab.set_image_folder(path)
+                self.phase2_tab.set_image_folder(path)
+                self.phase3_tab.set_image_folder(path)
+                self.phase4_tab.set_image_folder(path)
+            finally:
+                self._syncing_floc = False
 
         self.phase0_tab.set_phase1_path_callback(_propagate_image_folder)
+
+        def _make_floc_changed(source_tab) -> None:
+            def _handler(text: str) -> None:
+                if text.strip():
+                    _propagate_image_folder(text.strip())
+            source_tab._floc_edit.textChanged.connect(_handler)
+
+        for tab in (self.phase1_tab, self.phase2_tab, self.phase3_tab, self.phase4_tab):
+            _make_floc_changed(tab)
+
+        # ── Global sync: calibration target (Phase 1/2/3) ─────────────
+        self._syncing_target = False
+
+        def _propagate_target(source_tab) -> None:
+            if self._syncing_target:
+                return
+            self._syncing_target = True
+            try:
+                t_type = source_tab._target_combo.currentText()
+                n_pts = source_tab._npts_spin.value()
+                length = source_tab._length_edit.text()
+                for tab in (self.phase1_tab, self.phase2_tab, self.phase3_tab):
+                    if tab is source_tab:
+                        continue
+                    if not hasattr(tab, "_target_combo"):
+                        continue
+                    tab._target_combo.blockSignals(True)
+                    tab._npts_spin.blockSignals(True)
+                    tab._length_edit.blockSignals(True)
+                    idx = tab._target_combo.findText(t_type)
+                    if idx >= 0:
+                        tab._target_combo.setCurrentIndex(idx)
+                    tab._npts_spin.setValue(n_pts)
+                    tab._length_edit.setText(length)
+                    tab._target_combo.blockSignals(False)
+                    tab._npts_spin.blockSignals(False)
+                    tab._length_edit.blockSignals(False)
+            finally:
+                self._syncing_target = False
+
+        for src in (self.phase1_tab, self.phase2_tab, self.phase3_tab):
+            if hasattr(src, "_target_combo"):
+                src._target_combo.currentIndexChanged.connect(lambda _v, s=src: _propagate_target(s))
+                src._npts_spin.valueChanged.connect(lambda _v, s=src: _propagate_target(s))
+                src._length_edit.textChanged.connect(lambda _v, s=src: _propagate_target(s))
 
         # Fallback tooltips for any controls missing explicit help text.
         self._apply_generic_option_tooltips(self.phase2_tab, "Phase 2")

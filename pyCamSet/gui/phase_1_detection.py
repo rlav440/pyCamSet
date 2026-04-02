@@ -122,10 +122,33 @@ class Phase1Tab(QWidget):
         self._workspace_mgr = workspace_mgr
         self._diagnostics_tab: Optional["Phase1DiagnosticsTab"] = None
         self._worker: Optional[PhaseWorker] = None
+        self._cam_checkboxes: dict[str, QCheckBox] = {}
         self._build_ui(terminal_cb)
 
     def set_diagnostics_tab(self, tab: "Phase1DiagnosticsTab") -> None:
         self._diagnostics_tab = tab
+
+    def set_cameras(self, camera_names: list[str]) -> None:
+        """Populate camera checkboxes from discovered camera names."""
+        self._rebuild_camera_checkboxes(camera_names)
+
+    def _rebuild_camera_checkboxes(self, camera_names: list[str]) -> None:
+        """Rebuild the camera checkbox list deterministically."""
+        while self._cameras_area_layout.count():
+            item = self._cameras_area_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._cam_checkboxes.clear()
+        if not camera_names:
+            lbl = QLabel("(no cameras found)")
+            lbl.setStyleSheet("color: gray; font-size: 10px;")
+            self._cameras_area_layout.addWidget(lbl)
+            return
+        for name in camera_names:
+            cb = QCheckBox(name)
+            cb.setChecked(True)
+            self._cam_checkboxes[name] = cb
+            self._cameras_area_layout.addWidget(cb)
 
     # ------------------------------------------------------------------
 
@@ -292,6 +315,23 @@ class Phase1Tab(QWidget):
             "the pyCamSet documentation."
         )
         detect_form.addRow("Problem options (JSON):", self._po_edit)
+
+        # ── Camera selection (populated from Phase 0) ──────────────────
+        form_root.addWidget(make_separator())
+        form_root.addWidget(make_section_label("Cameras"))
+        self._cameras_area = QWidget()
+        self._cameras_area_layout = QVBoxLayout(self._cameras_area)
+        self._cameras_area_layout.setContentsMargins(0, 0, 0, 0)
+        self._cameras_area_layout.setSpacing(2)
+        self._cameras_placeholder = QLabel("(set image folder in Phase 0 to populate)")
+        self._cameras_placeholder.setStyleSheet("color: gray; font-size: 10px;")
+        self._cameras_area_layout.addWidget(self._cameras_placeholder)
+        cam_scroll = QScrollArea()
+        cam_scroll.setWidgetResizable(True)
+        cam_scroll.setFixedHeight(90)
+        cam_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        cam_scroll.setWidget(self._cameras_area)
+        form_root.addWidget(cam_scroll)
 
         # ── Action buttons ─────────────────────────────────────────────
         form_root.addWidget(make_separator())

@@ -52,6 +52,7 @@ from pyCamSet.gui.shared_functions import (
 )
 from pyCamSet.gui.assess_calibration import (
     launch_visualise_calibration_for_run,
+    launch_visualise_calibration_open3d_for_run,
     merge_phase3_phase4_runs,
     select_latest_visualisation_run,
 )
@@ -652,15 +653,33 @@ class Phase4DiagnosticsTab(QWidget):
         self._visual_widget = QWidget()
         visual_layout = QVBoxLayout(self._visual_widget)
         visual_btn_row = QHBoxLayout()
+        self._pyvista_cb = QCheckBox("PyVista")
+        self._pyvista_cb.setChecked(True)
+        self._pyvista_cb.setToolTip("Use PyVista backend (opens native window).")
+        self._pyvista_cb.stateChanged.connect(self._on_pyvista_toggled)
+        visual_btn_row.addWidget(self._pyvista_cb)
+        self._open3d_cb = QCheckBox("Open3D")
+        self._open3d_cb.setChecked(False)
+        self._open3d_cb.setToolTip("Use Open3D backend (renders embedded in GUI).")
+        self._open3d_cb.stateChanged.connect(self._on_open3d_toggled)
+        visual_btn_row.addWidget(self._open3d_cb)
         self._visual_btn = QPushButton("Assess Calibration")
         self._visual_btn.clicked.connect(self._run_visualise_target)
         visual_btn_row.addWidget(self._visual_btn)
+        self._save_png_btn = QPushButton("Save PNG")
+        self._save_png_btn.setToolTip("Save the current visualisation as PNG.")
+        self._save_png_btn.clicked.connect(self._save_visualisation_png)
+        visual_btn_row.addWidget(self._save_png_btn)
         visual_btn_row.addStretch()
         visual_layout.addLayout(visual_btn_row)
-        visual_hint = QLabel("Opens native matplotlib/pyvista windows for one selected run.")
-        visual_hint.setStyleSheet("color: #666;")
-        visual_hint.setWordWrap(True)
-        visual_layout.addWidget(visual_hint)
+        self._open3d_output = QLabel("")
+        self._open3d_output.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._open3d_output.setMinimumHeight(400)
+        self._open3d_output.setStyleSheet("background: #1a1a2e; color: #666;")
+        self._open3d_output.setText("Select Open3D backend and click Assess Calibration to render here.")
+        self._open3d_output.setWordWrap(True)
+        self._open3d_output.setVisible(False)
+        visual_layout.addWidget(self._open3d_output)
         visual_layout.addStretch()
         self._sub_tabs.addTab(self._visual_widget, "Assess Calibration")
 
@@ -733,6 +752,20 @@ class Phase4DiagnosticsTab(QWidget):
             render_predecessor_chain_section(self._summary_layout, self._workspace_mgr, run)
         self._summary_layout.addStretch()
 
+    def _on_pyvista_toggled(self, state: int) -> None:
+        if state and self._open3d_cb.isChecked():
+            self._open3d_cb.blockSignals(True)
+            self._open3d_cb.setChecked(False)
+            self._open3d_cb.blockSignals(False)
+        self._open3d_output.setVisible(False)
+
+    def _on_open3d_toggled(self, state: int) -> None:
+        if state and self._pyvista_cb.isChecked():
+            self._pyvista_cb.blockSignals(True)
+            self._pyvista_cb.setChecked(False)
+            self._pyvista_cb.blockSignals(False)
+        self._open3d_output.setVisible(bool(state))
+
     def _run_visualise_target(self) -> None:
         selected = self._run_selector.get_selected()
         chosen = select_latest_visualisation_run(selected, self._all_runs)
@@ -740,9 +773,31 @@ class Phase4DiagnosticsTab(QWidget):
             if self._info_cb.isChecked():
                 QMessageBox.information(self, "Select run", "Select at least one run first.")
             return
-        ok, msg = launch_visualise_calibration_for_run(chosen)
+        if self._open3d_cb.isChecked():
+            ok, msg = launch_visualise_calibration_open3d_for_run(chosen, self._open3d_output)
+        else:
+            ok, msg = launch_visualise_calibration_for_run(chosen)
         if not ok:
             QMessageBox.warning(self, "Assess Calibration", msg)
+
+    def _save_visualisation_png(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Visualisation as PNG", "calibration_assessment.png", "PNG Files (*.png)"
+        )
+        if not path:
+            return
+        if self._open3d_cb.isChecked():
+            pm = self._open3d_output.pixmap()
+            if pm and not pm.isNull():
+                pm.save(path, "PNG")
+            else:
+                QMessageBox.warning(self, "Save PNG", "No Open3D image rendered yet.")
+        else:
+            QMessageBox.information(
+                self, "Save PNG",
+                "For PyVista, press 's' inside the native 3D window to save a screenshot."
+            )
 
     def visualise_from_primary(self) -> None:
         self._sub_tabs.setCurrentWidget(self._visual_widget)

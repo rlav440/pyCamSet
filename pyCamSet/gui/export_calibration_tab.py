@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.assess_calibration import merge_phase3_phase4_runs, resolve_run_camset_artifact
-from pyCamSet.gui.shared_functions import RunSelectorWidget, TerminalWidget, WorkspaceManager, make_blue_button, make_section_label, make_separator
+from pyCamSet.gui.shared_functions import RunSelectorWidget, TerminalWidget, WorkspaceManager, make_blue_button, make_green_button, make_section_label, make_separator
 
 try:
     from pyCamSet.utils.saving import camset_to_colmap, load_CameraSet
@@ -71,7 +71,7 @@ class ExportCalibrationTab(QWidget):
         refresh_btn = QPushButton("Refresh Runs")
         refresh_btn.clicked.connect(self.refresh)
         actions.addWidget(refresh_btn)
-        actions.addWidget(make_blue_button("Export to COLMAP Format", self._export_selected))
+        actions.addWidget(make_green_button("Export to COLMAP Format", self._export_selected))
         actions.addStretch()
         root.addLayout(actions)
 

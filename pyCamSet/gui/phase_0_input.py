@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
+    BLUE_BTN_STYLE,
     IMAGE_FOLDER_SCHEMATIC,
     TAB_PHASE1,
     TerminalWidget,
@@ -45,6 +46,7 @@ from pyCamSet.gui.shared_functions import (
     get_camera_subfolders,
     make_continue_button,
     make_section_label,
+    make_separator,
 )
 
 # pyCamSet helpers — guarded import
@@ -76,11 +78,27 @@ class Phase0Tab(QWidget):
         self._info_cb = info_cb
         self._workspace_mgr = workspace_mgr
         self._phase1_path_cb: Optional[Callable[[str], None]] = None
+        self._cameras_cb: Optional[Callable[[list[str]], None]] = None
         self._confirmed_floc: Optional[str] = None
+        self._camera_names: list[str] = []
+        self._cam_checkboxes: dict[str, QCheckBox] = {}
         self._build_ui(terminal_cb)
 
     def set_phase1_path_callback(self, cb: Callable[[str], None]) -> None:
         self._phase1_path_cb = cb
+
+    def set_cameras_callback(self, cb: Callable[[list[str]], None]) -> None:
+        """Register a callback that receives the list of camera names after validation."""
+        self._cameras_cb = cb
+
+    def get_camera_names(self) -> list[str]:
+        """Return the list of camera names discovered in the last successful validation."""
+        return list(self._camera_names)
+
+    def set_image_folder(self, path: str) -> None:
+        """Set the image folder path (for global sync; does not re-validate)."""
+        if self._floc_edit.text() != path:
+            self._floc_edit.setText(path)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -122,6 +140,7 @@ class Phase0Tab(QWidget):
 
         btn_row = QHBoxLayout()
         self._confirm_btn = QPushButton("Confirm Image Folder Validity")
+        self._confirm_btn.setStyleSheet(BLUE_BTN_STYLE)
         self._confirm_btn.setToolTip(
             "Validate that camera subfolders are present and each has "
             "the same non-zero image count."
@@ -146,6 +165,23 @@ class Phase0Tab(QWidget):
         self._status_lbl.setStyleSheet("color: #2e7d32; font-size: 11px;")
         self._status_lbl.setWordWrap(True)
         form.addRow("", self._status_lbl)
+
+        # ── Camera checkboxes (populated after validation) ─────────────
+        form.addRow(make_separator())
+        form.addRow(make_section_label("Discovered Cameras"))
+        self._cameras_area = QWidget()
+        self._cameras_layout = QVBoxLayout(self._cameras_area)
+        self._cameras_layout.setContentsMargins(0, 0, 0, 0)
+        self._cameras_layout.setSpacing(2)
+        self._cameras_placeholder = QLabel("(confirm image folder to populate)")
+        self._cameras_placeholder.setStyleSheet("color: gray; font-size: 10px;")
+        self._cameras_layout.addWidget(self._cameras_placeholder)
+        cam_scroll = QScrollArea()
+        cam_scroll.setWidgetResizable(True)
+        cam_scroll.setFixedHeight(100)
+        cam_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        cam_scroll.setWidget(self._cameras_area)
+        form.addRow(cam_scroll)
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
@@ -214,10 +250,35 @@ class Phase0Tab(QWidget):
         self._ws_edit.setText(str(ws_path))
         self._workspace_mgr.set_workspace_path(ws_path, ensure=True)
 
+        # Rebuild camera checkboxes
+        self._camera_names = [p.name for p in cam_folders]
+        self._rebuild_camera_checkboxes()
+
         if self._phase1_path_cb is not None:
             self._phase1_path_cb(str(f_loc))
 
+        if self._cameras_cb is not None:
+            self._cameras_cb(list(self._camera_names))
+
         self._terminal.append_line("Validation passed ✓")
+
+    def _rebuild_camera_checkboxes(self) -> None:
+        """Rebuild the camera checkbox list from the current _camera_names."""
+        while self._cameras_layout.count():
+            item = self._cameras_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._cam_checkboxes.clear()
+        if not self._camera_names:
+            lbl = QLabel("(no cameras found)")
+            lbl.setStyleSheet("color: gray; font-size: 10px;")
+            self._cameras_layout.addWidget(lbl)
+            return
+        for name in self._camera_names:
+            cb = QCheckBox(name)
+            cb.setChecked(True)
+            self._cam_checkboxes[name] = cb
+            self._cameras_layout.addWidget(cb)
 
     def _continue_to_next(self) -> None:
         if not self._confirmed_floc:

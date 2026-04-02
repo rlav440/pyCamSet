@@ -610,7 +610,6 @@ class Phase2Tab(QWidget):
                     diagnostics["D2.1_per_camera_rms_reprojection"] = d21_rms
                     diagnostics["D2.2_intrinsics"] = d22_intr
                     diagnostics["D2.3_distortion"] = d23_dst
-                    diagnostics["D2.4_undistorted_grid"] = "rendered in diagnostics tab from saved camset"
                     diagnostics["D2.5_intrinsic_stddev"] = "not available in current pyCamSet API"
                     diagnostics["D2.6_per_view_reprojection"] = d26_per_view
                     diagnostics["D2.7_per_view_error_plot"] = "rendered in diagnostics tab"
@@ -816,9 +815,6 @@ class Phase2DiagnosticsTab(QWidget):
         self._per_view_widget, self._per_view_layout, self._per_view_scroll = make_scrollable_tab()
         self._sub_tabs.addTab(self._per_view_widget, "Per-view Errors (D2.6-D2.7)")
 
-        self._grid_widget, self._grid_layout, self._grid_scroll = make_scrollable_tab()
-        self._sub_tabs.addTab(self._grid_widget, "Undistorted Grid (D2.4)")
-
         self._distortion_widget, self._distortion_layout, self._distortion_scroll = make_scrollable_tab()
         self._sub_tabs.addTab(self._distortion_widget, "Distortion Field")
 
@@ -835,7 +831,6 @@ class Phase2DiagnosticsTab(QWidget):
         chosen = self._run_selector.get_selected()
         self._render_summary(chosen)
         self._render_per_view(chosen)
-        self._render_grids(chosen)
         self._render_distortion(chosen)
 
     def _on_selection_changed(self, runs: list[dict]) -> None:
@@ -843,7 +838,6 @@ class Phase2DiagnosticsTab(QWidget):
         chosen = self._run_selector.get_selected()
         self._render_summary(chosen)
         self._render_per_view(chosen)
-        self._render_grids(chosen)
         self._render_distortion(chosen)
 
     def _go_to_settings(self) -> None:
@@ -983,93 +977,12 @@ class Phase2DiagnosticsTab(QWidget):
                     h.removeFilter(filt)
 
             note = (
-                "Note: CameraSet loaded without embedded detections (dtct_config missing). "
-                "This is non-fatal for D2.4."
+                "Note: CameraSet loaded without embedded detections (dtct_config missing)."
             )
             self._camset_cache[key] = (cams, note)
             return cams, note, None
         except Exception as exc:
             return None, None, str(exc)
-
-    def _render_grids(self, runs: list[dict]) -> None:
-        while self._grid_layout.count():
-            item = self._grid_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-            elif item.layout():
-                self._clear_layout(item.layout())
-
-        if not runs:
-            lbl = QLabel("Select a run to view undistortion diagnostics.")
-            lbl.setStyleSheet("color: gray;")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._grid_layout.addWidget(lbl)
-            return
-
-        if load_CameraSet is None:
-            self._grid_layout.addWidget(QLabel("pyCamSet camera loading is unavailable (import error)."))
-            return
-
-        run = runs[-1]
-        camset_path = run.get("artifacts", {}).get("initial_camset")
-        if not camset_path:
-            self._grid_layout.addWidget(QLabel("No camset artifact found for selected run."))
-            return
-
-        cams, note, err = self._load_camset_cached(Path(camset_path))
-        if err is not None or cams is None:
-            self._grid_layout.addWidget(QLabel(f"Could not load camset: {err}"))
-            return
-
-        if note:
-            info_lbl = QLabel(note)
-            info_lbl.setWordWrap(True)
-            info_lbl.setStyleSheet("color: #666;")
-            self._grid_layout.addWidget(info_lbl)
-
-        try:
-            import matplotlib
-            matplotlib.use("QtAgg")
-            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-            from matplotlib.figure import Figure
-        except ImportError:
-            self._grid_layout.addWidget(QLabel("matplotlib not available."))
-            return
-
-        n = len(cams)
-        if n <= 0:
-            self._grid_layout.addWidget(QLabel("Camera set is empty."))
-            return
-
-        fig = Figure(figsize=(10.5, max(3.5, 2.8 * n)), tight_layout=True)
-        for i, cam in enumerate(cams, start=1):
-            res = np.array(cam.res).astype(int).reshape(-1)
-            w = int(res[0]) if res.size >= 2 else 1280
-            h = int(res[1]) if res.size >= 2 else 720
-            w = max(320, min(1600, w))
-            h = max(240, min(1000, h))
-            grid = _make_grid_image(w, h)
-            und = cv2.undistort(grid, np.array(cam.intrinsic), np.array(cam.distortion_coefs))
-
-            ax0 = fig.add_subplot(n, 2, 2 * i - 1)
-            ax0.imshow(cv2.cvtColor(grid, cv2.COLOR_BGR2RGB))
-            ax0.set_title(f"{cam.name} distorted grid")
-            ax0.axis("off")
-
-            ax1 = fig.add_subplot(n, 2, 2 * i)
-            ax1.imshow(cv2.cvtColor(und, cv2.COLOR_BGR2RGB))
-            ax1.set_title(f"{cam.name} undistorted")
-            ax1.axis("off")
-
-        self._grid_layout.addWidget(
-            MatplotlibFigureCard(
-                f"D2.4 Undistorted Grid ({run.get('run_id', '?')})",
-                fig,
-                FigureCanvasQTAgg,
-                parent=self._grid_widget,
-                min_height=420,
-            )
-        )
 
     def _render_distortion(self, runs: list[dict]) -> None:
         """Render per-camera distortion vector field (D2.8) from saved camset."""

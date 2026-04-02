@@ -781,7 +781,6 @@ class Phase4DiagnosticsTab(QWidget):
             QMessageBox.warning(self, "Assess Calibration", msg)
 
     def _save_visualisation_png(self) -> None:
-        from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Visualisation as PNG", "calibration_assessment.png", "PNG Files (*.png)"
         )

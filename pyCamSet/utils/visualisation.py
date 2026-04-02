@@ -1,4 +1,5 @@
 from __future__ import annotations
+import datetime
 from math import copysign
 from copy import copy
 import matplotlib.pyplot as plt
@@ -339,7 +340,6 @@ def visualise_calibration(
         plotter.add_text("n/a for single timestep images", position='upper_edge', font='times')
 
     def _screenshot_callback() -> None:
-        import datetime
         fname = datetime.datetime.now().strftime("calibration_3d_%Y%m%d_%H%M%S.png")
         plotter.screenshot(fname)
         print(f"Screenshot saved: {fname}")

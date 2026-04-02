@@ -14,6 +14,7 @@ from typing import Callable, Optional
 
 import numpy as np
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -1134,8 +1135,6 @@ class Phase3DiagnosticsTab(QWidget):
             QMessageBox.warning(self, "Assess Calibration", msg)
 
     def _save_visualisation_png(self) -> None:
-        from PySide6.QtWidgets import QFileDialog
-        from PySide6.QtGui import QPixmap
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Visualisation as PNG", "calibration_assessment.png", "PNG Files (*.png)"
         )

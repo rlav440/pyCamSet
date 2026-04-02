@@ -16,6 +16,7 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -61,6 +62,7 @@ from pyCamSet.gui.shared_functions import (
 from pyCamSet.gui.assess_calibration import (
     launch_visualise_calibration_for_run,
     launch_visualise_calibration_open3d_for_run,
+    launch_save_pyvista_png_for_run,
     merge_phase3_phase4_runs,
     select_latest_visualisation_run,
 )
@@ -790,13 +792,17 @@ class Phase3DiagnosticsTab(QWidget):
         self._pyvista_cb = QCheckBox("PyVista")
         self._pyvista_cb.setChecked(True)
         self._pyvista_cb.setToolTip("Use PyVista backend (opens native window).")
-        self._pyvista_cb.stateChanged.connect(self._on_pyvista_toggled)
         visual_btn_row.addWidget(self._pyvista_cb)
         self._open3d_cb = QCheckBox("Open3D")
         self._open3d_cb.setChecked(False)
         self._open3d_cb.setToolTip("Use Open3D backend (renders embedded in GUI).")
-        self._open3d_cb.stateChanged.connect(self._on_open3d_toggled)
         visual_btn_row.addWidget(self._open3d_cb)
+        # Enforce mutual exclusivity via QButtonGroup.
+        self._backend_group = QButtonGroup(self)
+        self._backend_group.setExclusive(True)
+        self._backend_group.addButton(self._pyvista_cb)
+        self._backend_group.addButton(self._open3d_cb)
+        self._backend_group.buttonClicked.connect(self._on_backend_changed)
         self._visual_btn = QPushButton("Assess Calibration")
         self._visual_btn.clicked.connect(self._run_visualise_target)
         visual_btn_row.addWidget(self._visual_btn)
@@ -1106,18 +1112,16 @@ class Phase3DiagnosticsTab(QWidget):
         ax.set_zlabel("Z")
         self._poses_layout.addWidget(FigureCanvasQTAgg(fig))
 
+    def _on_backend_changed(self, btn) -> None:
+        """Handle backend selector toggle — update Open3D output visibility."""
+        self._open3d_output.setVisible(self._open3d_cb.isChecked())
+
     def _on_pyvista_toggled(self, state: int) -> None:
-        if state and self._open3d_cb.isChecked():
-            self._open3d_cb.blockSignals(True)
-            self._open3d_cb.setChecked(False)
-            self._open3d_cb.blockSignals(False)
+        # Kept for backwards compatibility; QButtonGroup handles exclusivity.
         self._open3d_output.setVisible(False)
 
     def _on_open3d_toggled(self, state: int) -> None:
-        if state and self._pyvista_cb.isChecked():
-            self._pyvista_cb.blockSignals(True)
-            self._pyvista_cb.setChecked(False)
-            self._pyvista_cb.blockSignals(False)
+        # Kept for backwards compatibility; QButtonGroup handles exclusivity.
         self._open3d_output.setVisible(bool(state))
 
     def _run_visualise_target(self) -> None:
@@ -1147,10 +1151,18 @@ class Phase3DiagnosticsTab(QWidget):
             else:
                 QMessageBox.warning(self, "Save PNG", "No Open3D image rendered yet.")
         else:
-            QMessageBox.information(
-                self, "Save PNG",
-                "For PyVista, press 's' inside the native 3D window to save a screenshot."
-            )
+            # PyVista: offscreen render to PNG.
+            selected = self._run_selector.get_selected()
+            chosen = select_latest_visualisation_run(selected, getattr(self, "_all_runs", []))
+            if chosen is None:
+                QMessageBox.warning(self, "Save PNG", "Select at least one run first.")
+                return
+            from pathlib import Path
+            ok, msg = launch_save_pyvista_png_for_run(chosen, Path(path))
+            if ok:
+                QMessageBox.information(self, "Save PNG", msg)
+            else:
+                QMessageBox.warning(self, "Save PNG", f"Could not save PNG:\n{msg}")
 
     def visualise_from_primary(self) -> None:
         self._sub_tabs.setCurrentWidget(self._visual_widget)

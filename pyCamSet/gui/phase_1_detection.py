@@ -123,6 +123,7 @@ class Phase1Tab(QWidget):
         self._diagnostics_tab: Optional["Phase1DiagnosticsTab"] = None
         self._worker: Optional[PhaseWorker] = None
         self._cam_checkboxes: dict[str, QCheckBox] = {}
+        self._cameras_cb = None  # set via set_cameras_callback
         self._build_ui(terminal_cb)
 
     def set_diagnostics_tab(self, tab: "Phase1DiagnosticsTab") -> None:
@@ -131,6 +132,14 @@ class Phase1Tab(QWidget):
     def set_cameras(self, camera_names: list[str]) -> None:
         """Populate camera checkboxes from discovered camera names."""
         self._rebuild_camera_checkboxes(camera_names)
+
+    def set_cameras_callback(self, cb) -> None:
+        """Register a callback that receives the list of camera names when floc changes."""
+        self._cameras_cb = cb
+
+    def get_camera_names(self) -> list[str]:
+        """Return the current camera names (from last floc scan or explicit set)."""
+        return [name for name in self._cam_checkboxes]
 
     def _rebuild_camera_checkboxes(self, camera_names: list[str]) -> None:
         """Rebuild the camera checkbox list deterministically."""
@@ -367,6 +376,17 @@ class Phase1Tab(QWidget):
 
     def _on_floc_changed(self, text: str) -> None:
         self._sync_workspace_from_floc(text, create_if_missing=True)
+        # Scan cameras so both Phase 0 and Phase 1 checkboxes stay in sync.
+        floc = (text or "").strip()
+        if floc:
+            f_loc = Path(floc)
+            if f_loc.exists() and f_loc.is_dir():
+                cam_folders = get_camera_subfolders(f_loc)
+                names = [p.name for p in cam_folders]
+                if names:
+                    self._rebuild_camera_checkboxes(names)
+                    if self._cameras_cb is not None:
+                        self._cameras_cb(names)
 
     def _sync_workspace_from_floc(self, floc_text: str, create_if_missing: bool = True) -> None:
         floc = (floc_text or "").strip()

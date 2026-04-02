@@ -222,10 +222,20 @@ class PyCamSetApp(QMainWindow):
         self.phase4_tab.set_diagnostics_tab(self.phase4_diag_tab)
 
         # ── Global sync: camera list ───────────────────────────────────
+        self._syncing_cameras = False
+
         def _propagate_cameras(names: list[str]) -> None:
-            self.phase1_tab.set_cameras(names)
+            if self._syncing_cameras:
+                return
+            self._syncing_cameras = True
+            try:
+                self.phase0_tab.set_camera_names(names)
+                self.phase1_tab.set_cameras(names)
+            finally:
+                self._syncing_cameras = False
 
         self.phase0_tab.set_cameras_callback(_propagate_cameras)
+        self.phase1_tab.set_cameras_callback(_propagate_cameras)
 
         # ── Global sync: image folder ──────────────────────────────────
         self._syncing_floc = False
@@ -254,7 +264,7 @@ class PyCamSetApp(QMainWindow):
         for tab in (self.phase1_tab, self.phase2_tab, self.phase3_tab, self.phase4_tab):
             _make_floc_changed(tab)
 
-        # ── Global sync: calibration target (Phase 1/2/3) ─────────────
+        # ── Global sync: calibration target (Phase 1/2/3/4) ──────────
         self._syncing_target = False
 
         def _propagate_target(source_tab) -> None:
@@ -265,7 +275,7 @@ class PyCamSetApp(QMainWindow):
                 t_type = source_tab._target_combo.currentText()
                 n_pts = source_tab._npts_spin.value()
                 length = source_tab._length_edit.text()
-                for tab in (self.phase1_tab, self.phase2_tab, self.phase3_tab):
+                for tab in (self.phase1_tab, self.phase2_tab, self.phase3_tab, self.phase4_tab):
                     if tab is source_tab:
                         continue
                     if not hasattr(tab, "_target_combo"):
@@ -284,7 +294,7 @@ class PyCamSetApp(QMainWindow):
             finally:
                 self._syncing_target = False
 
-        for src in (self.phase1_tab, self.phase2_tab, self.phase3_tab):
+        for src in (self.phase1_tab, self.phase2_tab, self.phase3_tab, self.phase4_tab):
             if hasattr(src, "_target_combo"):
                 src._target_combo.currentIndexChanged.connect(lambda _v, s=src: _propagate_target(s))
                 src._npts_spin.valueChanged.connect(lambda _v, s=src: _propagate_target(s))

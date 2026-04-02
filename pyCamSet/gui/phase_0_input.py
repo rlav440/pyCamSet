@@ -40,10 +40,12 @@ from pyCamSet.gui.shared_functions import (
     BLUE_BTN_STYLE,
     IMAGE_FOLDER_SCHEMATIC,
     TAB_PHASE1,
+    RunSelectorWidget,
     TerminalWidget,
     WorkspaceManager,
     count_images_in_folder,
     get_camera_subfolders,
+    make_blue_button,
     make_continue_button,
     make_section_label,
     make_separator,
@@ -100,6 +102,38 @@ class Phase0Tab(QWidget):
         if self._floc_edit.text() != path:
             self._floc_edit.setText(path)
 
+    def set_camera_names(self, names: list[str]) -> None:
+        """Update camera checkboxes without re-running validation.
+
+        Called from main_window when camera names are propagated cross-tab.
+        Preserves existing checked state for cameras that remain in the list.
+        """
+        if names == self._camera_names:
+            return  # no change — avoid redundant rebuilds
+        # Preserve checked state for cameras that remain.
+        old_states = {n: cb.isChecked() for n, cb in self._cam_checkboxes.items()}
+        self._camera_names = list(names)
+        self._rebuild_camera_checkboxes(restore_states=old_states)
+
+    def _rebuild_camera_checkboxes(self, restore_states: Optional[dict] = None) -> None:
+        """Rebuild the camera checkbox list from the current _camera_names."""
+        while self._cameras_layout.count():
+            item = self._cameras_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._cam_checkboxes.clear()
+        if not self._camera_names:
+            lbl = QLabel("(no cameras found)")
+            lbl.setStyleSheet("color: gray; font-size: 10px;")
+            self._cameras_layout.addWidget(lbl)
+            return
+        for name in self._camera_names:
+            cb = QCheckBox(name)
+            # Restore previous checked state, or default to True for new cameras.
+            cb.setChecked(True if restore_states is None else restore_states.get(name, True))
+            self._cam_checkboxes[name] = cb
+            self._cameras_layout.addWidget(cb)
+
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
@@ -139,13 +173,11 @@ class Phase0Tab(QWidget):
         form.addRow("Workspace:", self._ws_edit)
 
         btn_row = QHBoxLayout()
-        self._confirm_btn = QPushButton("Confirm Image Folder Validity")
-        self._confirm_btn.setStyleSheet(BLUE_BTN_STYLE)
+        self._confirm_btn = make_blue_button("Confirm Image Folder Validity", self._confirm_image_folder_validity)
         self._confirm_btn.setToolTip(
             "Validate that camera subfolders are present and each has "
             "the same non-zero image count."
         )
-        self._confirm_btn.clicked.connect(self._confirm_image_folder_validity)
         btn_row.addWidget(self._confirm_btn)
 
         self._ok_lbl = QLabel("")
@@ -262,23 +294,6 @@ class Phase0Tab(QWidget):
 
         self._terminal.append_line("Validation passed ✓")
 
-    def _rebuild_camera_checkboxes(self) -> None:
-        """Rebuild the camera checkbox list from the current _camera_names."""
-        while self._cameras_layout.count():
-            item = self._cameras_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        self._cam_checkboxes.clear()
-        if not self._camera_names:
-            lbl = QLabel("(no cameras found)")
-            lbl.setStyleSheet("color: gray; font-size: 10px;")
-            self._cameras_layout.addWidget(lbl)
-            return
-        for name in self._camera_names:
-            cb = QCheckBox(name)
-            cb.setChecked(True)
-            self._cam_checkboxes[name] = cb
-            self._cameras_layout.addWidget(cb)
 
     def _continue_to_next(self) -> None:
         if not self._confirmed_floc:

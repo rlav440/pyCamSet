@@ -1,5 +1,6 @@
 from __future__ import annotations
 import datetime
+import logging
 from math import copysign
 from copy import copy
 import matplotlib.pyplot as plt
@@ -19,6 +20,8 @@ try:
 except ImportError:  # pragma: no cover
     _o3d = None
     _OPEN3D_OK = False
+
+_LOGGER = logging.getLogger(__name__)
 
 blues_with_white = LinearSegmentedColormap.from_list('Blues_with_white', [(1, 1, 1), *plt.cm.Blues(np.linspace(0, 1, 1024)[:900])])
 
@@ -393,14 +396,20 @@ def visualise_calibration_open3d(
         inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True)[1])
         im_nums = reconstructed_subset[inv, 1]
 
+        bad_points = 0
         for point, im, c in zip(reconstructed, im_nums, error_subset):
             inv_pose = np.empty(12)
             n_inv_pose(poses[int(im)], inv_pose)
             obj_point = np.empty(3)
             n_htform_prealloc(point, inv_pose, obj_point)
             if np.linalg.norm(obj_point) < 3 * mean_dist:
-                raw_obj_points.append(point)
+                # Store obj_point (target/object coordinates) so all observations
+                # of the same physical feature collapse to the same location,
+                # producing a single clean cube rather than one cube per image pose.
+                raw_obj_points.append(obj_point.copy())
                 errors.append(float(c))
+            else:
+                bad_points += 1
 
         geoms = []
         if raw_obj_points:
@@ -413,19 +422,18 @@ def visualise_calibration_open3d(
             pcd.colors = _o3d.utility.Vector3dVector(colours_f)
             geoms.append(pcd)
 
-        # Camera frustums
-        for cam in cams:
-            try:
-                pos = np.array(cam.position).reshape(3)
-                sphere = _o3d.geometry.TriangleMesh.create_sphere(radius=0.02)
-                sphere.translate(pos)
-                sphere.paint_uniform_color([0.1, 0.5, 1.0])
-                geoms.append(sphere)
-            except Exception:
-                pass
+        # Add a small coordinate frame at the target origin for orientation.
+        # Camera positions are in world space and are NOT added here because
+        # all points have been transformed into target/object coordinates.
+        coord_frame_size = mean_dist * 0.5
+        coord_frame = _o3d.geometry.TriangleMesh.create_coordinate_frame(
+            size=coord_frame_size, origin=[0, 0, 0]
+        )
+        geoms.append(coord_frame)
 
         if output_widget is not None:
-            # Offscreen rendering → embed in Qt widget
+            # Try offscreen (EGL) rendering first; fall back to windowed OpenGL if it fails.
+            offscreen_ok = False
             try:
                 renderer = _o3d.visualization.rendering.OffscreenRenderer(800, 600)
                 renderer.scene.set_background([0.1, 0.1, 0.18, 1.0])
@@ -454,19 +462,134 @@ def visualise_calibration_open3d(
                         Qt.SmoothTransformation,
                     )
                 )
-                return True, "Open3D visualisation rendered."
-            except Exception as exc:
-                output_widget.setText(f"Open3D render failed: {exc}")
-                return False, str(exc)
+                offscreen_ok = True
+                return True, (
+                    f"Open3D visualisation rendered (offscreen). "
+                    f"{bad_points} erroneous points filtered."
+                )
+            except Exception as egl_exc:
+                egl_msg = str(egl_exc)
+                _LOGGER.warning(
+                    "Open3D offscreen/EGL render failed (%s); "
+                    "retrying with interactive windowed OpenGL.",
+                    egl_msg,
+                )
+                output_widget.setText(
+                    f"Open3D offscreen render failed:\n{egl_msg}\n\n"
+                    "Falling back to interactive windowed OpenGL visualisation.\n"
+                    "(A native Open3D window will open.)"
+                )
+
+            # Windowed fallback — opens native Open3D window.
+            if not offscreen_ok:
+                try:
+                    _o3d.visualization.draw_geometries(
+                        geoms,
+                        window_name="Calibration Assessment — Target Coordinates (Open3D)",
+                        width=1000,
+                        height=700,
+                    )
+                    return True, (
+                        f"Open3D visualisation shown (windowed fallback). "
+                        f"{bad_points} erroneous points filtered."
+                    )
+                except Exception as win_exc:
+                    msg = f"Open3D windowed render also failed: {win_exc}"
+                    output_widget.setText(msg)
+                    return False, msg
         else:
             _o3d.visualization.draw_geometries(
                 geoms,
-                window_name="Calibration Assessment (Open3D)",
+                window_name="Calibration Assessment — Target Coordinates (Open3D)",
                 width=1000,
                 height=700,
             )
-            return True, "Open3D visualisation shown."
+            return True, (
+                f"Open3D visualisation shown. "
+                f"{bad_points} erroneous points filtered."
+            )
 
     except Exception as exc:
         return False, f"Open3D visualisation error: {exc}"
+
+
+def render_calibration_pyvista_png(
+    o_results: dict,
+    param_handler,
+    output_path: str,
+) -> tuple[bool, str]:
+    """Render calibration assessment offscreen with PyVista and save to *output_path*.
+
+    :param o_results: The optimisation results dict with keys ``err`` and ``x``.
+    :param param_handler: The parameter handler used in the optimisation.
+    :param output_path: Destination file path for the PNG screenshot.
+    :returns: ``(success, message)`` tuple.
+    """
+    try:
+        euclidean_err = np.linalg.norm(np.reshape(o_results['err'], (-1, 2)), axis=1)
+        e_lim = np.median(euclidean_err) * 3
+
+        detection = param_handler.get_detection()
+        cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
+
+        to_reconstruct = detection.sort(['key', 'im_num']).get_data()
+        reconstructed, reconstructed_subset, where_mask, _ = cams.multi_cam_triangulate(
+            to_reconstruct, return_used=True
+        )
+        error_subset = np.array([np.mean(euclidean_err[datum]) for datum in where_mask])
+
+        mean_dist = np.mean(np.linalg.norm(param_handler.target.point_data, axis=-1))
+        inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True)[1])
+        im_nums = reconstructed_subset[inv, 1]
+        keys = reconstructed_subset[inv, 2:-2]
+
+        raw_obj_points: list[np.ndarray] = []
+        errors_scene: list[float] = []
+        mask = []
+        for point, im, c in zip(reconstructed, im_nums, error_subset):
+            inv_pose = np.empty(12)
+            n_inv_pose(poses[int(im)], inv_pose)
+            obj_point = np.empty(3)
+            n_htform_prealloc(point, inv_pose, obj_point)
+            good = bool(np.linalg.norm(obj_point) < 3 * mean_dist)
+            mask.append(good)
+            if good:
+                raw_obj_points.append(obj_point)
+                errors_scene.append(float(c))
+
+        m = np.array(mask)
+
+        pv.set_plot_theme('document')
+        pv.global_theme.multi_rendering_splitting_position = 0.50
+        plotter = pv.Plotter(shape='1|2', off_screen=True, window_size=(1600, 600))
+        plotter.title = "Calibration Evaluation (Offscreen)"
+
+        # Subplot 0: scene coordinates
+        plotter.subplot(0)
+        plotter.add_text("Reconstructed Points in Scene Coordinates",
+                         position='upper_edge', font_size=10, font="times")
+        cams.get_scene(scene=plotter, labels=False)
+        if np.any(m):
+            seen_pts = pv.PolyData(reconstructed[m])
+            seen_pts['Reprojection error (px)'] = error_subset[m]
+            plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=2, clim=[0, e_lim])
+
+        # Subplot 1: target coordinates
+        plotter.subplot(1)
+        plotter.add_text("Reconstructed Points in Target Coordinates",
+                         position="upper_edge", font_size=10, font='times')
+        bad_points = int(np.sum(~m))
+        plotter.add_text(f"{bad_points} erroneous Points",
+                         position='lower_left', font_size=10, font='times')
+        if raw_obj_points:
+            cube_locs = pv.PolyData(np.array(raw_obj_points))
+            cube_locs['Reprojection Error (px)'] = errors_scene
+            plotter.add_mesh(cube_locs, render_points_as_spheres=True, point_size=4, clim=[0, e_lim])
+
+        plotter.screenshot(output_path)
+        plotter.close()
+        return True, f"PyVista screenshot saved to {output_path}"
+
+    except Exception as exc:
+        return False, f"PyVista offscreen render failed: {exc}"
 

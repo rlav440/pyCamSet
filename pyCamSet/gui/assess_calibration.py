@@ -19,10 +19,15 @@ except ImportError:  # pragma: no cover
     load_CameraSet = None
 
 try:
-    from pyCamSet.utils.visualisation import visualise_calibration, visualise_calibration_open3d
+    from pyCamSet.utils.visualisation import (
+        visualise_calibration,
+        visualise_calibration_open3d,
+        render_calibration_pyvista_png,
+    )
 except ImportError:  # pragma: no cover
     visualise_calibration = None
     visualise_calibration_open3d = None
+    render_calibration_pyvista_png = None
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -183,3 +188,35 @@ def launch_visualise_calibration_open3d_for_run(
         return False, "Loaded camset does not contain calibration optimisation results."
 
     return visualise_calibration_open3d(o_results, handler, output_widget=output_widget)
+
+
+def launch_save_pyvista_png_for_run(run: dict, file_path: Path) -> tuple[bool, str]:
+    """Perform offscreen PyVista PNG export for a given run.
+
+    :param run: Run metadata dict with an artifacts section containing a camset path.
+    :param file_path: Target file path for the exported PNG image.
+    :returns: ``(success, message)`` tuple.
+    """
+    if load_CameraSet is None or render_calibration_pyvista_png is None:
+        return False, "PyVista PNG export dependencies are unavailable."
+
+    camset_path = resolve_run_camset_artifact(run)
+    if camset_path is None:
+        return False, "Selected run has no readable camset artifact."
+
+    try:
+        cams = load_CameraSet(camset_path)
+    except Exception as exc:  # pragma: no cover
+        return False, f"Could not load camset: {exc}"
+
+    handler = getattr(cams, "calibration_handler", None)
+    if handler is None:
+        return False, "Loaded camset does not contain calibration handler data."
+
+    o_results = _build_o_results(cams)
+    if o_results is None:
+        return False, "Loaded camset does not contain calibration optimisation results."
+
+    return render_calibration_pyvista_png(o_results, handler, output_path=str(file_path))
+
+

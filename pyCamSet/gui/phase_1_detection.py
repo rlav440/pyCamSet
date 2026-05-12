@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 import contextlib
 import logging
 import math
@@ -66,7 +66,10 @@ from pyCamSet.gui.shared_functions import (
     RunSelectorWidget,
     TerminalWidget,
     WorkspaceManager,
+    CHARUCO_DETECTION_OPTION_METADATA,
+    build_charuco_option_tooltip,
     build_target,
+    collect_charuco_detection_options,
     count_images_in_folder,
     get_camera_subfolders,
     make_blue_button,
@@ -95,11 +98,21 @@ _TARGET_CHOICES = ["Ccube", "ChArUco"]
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 
-def _build_target(target_type: str, n_points: int, length: float):
+def _build_target(
+    target_type: str,
+    n_points: int,
+    length: float,
+    charuco_detection_options: dict[str, dict[str, Any]] | None = None,
+):
     """Construct the calibration target object from existing pyCamSet classes."""
     if not _PYCAMSET_OK:
         raise RuntimeError("pyCamSet calibration targets are not importable.")
-    return build_target(target_type, n_points, length)
+    return build_target(
+        target_type,
+        n_points,
+        length,
+        charuco_detection_options=charuco_detection_options,
+    )
 
 
 class Phase1Tab(QWidget):
@@ -351,6 +364,46 @@ class Phase1Tab(QWidget):
         )
         detect_form.addRow("Problem options (JSON):", self._po_edit)
 
+        # ── ChArUco-specific detection options ─────────────────────────
+        form_root.addWidget(make_separator())
+        self._charuco_opts_section = CollapsibleSection("ChArUco Detection Options", expanded=False)
+        form_root.addWidget(self._charuco_opts_section)
+        self._charuco_option_widgets: dict[str, QWidget] = {}
+
+        charuco_note = QLabel("Applies only when Target type is ChArUco.")
+        charuco_note.setStyleSheet("color: gray; font-size: 10px;")
+        self._charuco_opts_section.addRow(charuco_note)
+
+        active_priority = None
+        for meta in CHARUCO_DETECTION_OPTION_METADATA:
+            priority = meta["priority"]
+            if priority != active_priority:
+                active_priority = priority
+                p_lbl = QLabel(f"Priority {priority}")
+                p_lbl.setStyleSheet("color: #1976d2; font-weight: bold;")
+                self._charuco_opts_section.addRow(p_lbl)
+
+            widget: QWidget
+            if meta["widget_type"] == "enum":
+                combo = QComboBox()
+                combo.addItems(list(meta.get("choices", [])))
+                combo.setCurrentText(str(meta["default"]))
+                combo.setFixedWidth(220)
+                widget = combo
+            else:
+                edit = QLineEdit("" if meta["default"] == "" else str(meta["default"]))
+                edit.setFixedWidth(220)
+                if meta["widget_type"] == "json_matrix":
+                    edit.setPlaceholderText('e.g. [[fx,0,cx],[0,fy,cy],[0,0,1]] or blank')
+                elif meta["widget_type"] == "json_vector":
+                    edit.setPlaceholderText("e.g. [k1,k2,p1,p2,k3] or blank")
+                widget = edit
+
+            tooltip = build_charuco_option_tooltip(meta)
+            widget.setToolTip(tooltip)
+            self._charuco_opts_section.addRow(f"{meta['label']}:", widget)
+            self._charuco_option_widgets[meta["key"]] = widget
+
         # ── Camera selection (populated from Phase 0) ──────────────────
         form_root.addWidget(make_separator())
         form_root.addWidget(make_section_label("Cameras"))
@@ -388,6 +441,9 @@ class Phase1Tab(QWidget):
         # ── Terminal ─────────────────────────────────────────────────
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
+
+        self._target_combo.currentTextChanged.connect(self._on_target_type_changed)
+        self._on_target_type_changed(self._target_combo.currentText())
 
     # ------------------------------------------------------------------
 
@@ -429,6 +485,11 @@ class Phase1Tab(QWidget):
             self._workspace_mgr.set_workspace_path(ws_path, ensure=create_if_missing)
             if self._diagnostics_tab is not None:
                 self._diagnostics_tab.refresh()
+
+    def _on_target_type_changed(self, target_type: str) -> None:
+        is_charuco = (target_type == "ChArUco")
+        if hasattr(self, "_charuco_opts_section"):
+            self._charuco_opts_section.setVisible(is_charuco)
 
     def _collect_params(self) -> Optional[dict]:
         floc = self._floc_edit.text().strip()
@@ -475,6 +536,20 @@ class Phase1Tab(QWidget):
                 QMessageBox.critical(self, "Validation Error", f"Problem options JSON: {exc}")
                 return None
 
+        charuco_detection_options = None
+        if self._target_combo.currentText() == "ChArUco":
+            raw_charuco_values: dict[str, Any] = {}
+            for key, widget in self._charuco_option_widgets.items():
+                if isinstance(widget, QComboBox):
+                    raw_charuco_values[key] = widget.currentText()
+                elif isinstance(widget, QLineEdit):
+                    raw_charuco_values[key] = widget.text().strip()
+            try:
+                charuco_detection_options = collect_charuco_detection_options(raw_charuco_values)
+            except ValueError as exc:
+                QMessageBox.critical(self, "Validation Error", str(exc))
+                return None
+
         selected_cameras = self.get_selected_cameras()
         if not selected_cameras:
             QMessageBox.critical(self, "Validation Error", "Select at least one camera.")
@@ -488,6 +563,7 @@ class Phase1Tab(QWidget):
             "threads": threads,
             "fixed_params": fixed_params,
             "problem_options": problem_options,
+            "charuco_detection_options": charuco_detection_options,
             "target_type": self._target_combo.currentText(),
             "n_points": self._npts_spin.value(),
             "length": length,
@@ -550,6 +626,7 @@ class Phase1Tab(QWidget):
                         params["target_type"],
                         params["n_points"],
                         params["length"],
+                        charuco_detection_options=params.get("charuco_detection_options"),
                     )
 
                     detect_root = f_loc
@@ -1519,4 +1596,3 @@ class Phase1DiagnosticsTab(QWidget):
                     tab.set_selected_phase1_run_id(run_id)
                 self._notebook.setCurrentIndex(i)
                 return
-

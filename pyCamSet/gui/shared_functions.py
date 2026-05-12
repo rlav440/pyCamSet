@@ -34,7 +34,7 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QTextCursor
@@ -310,7 +310,427 @@ def make_run_id() -> str:
     return f"{ts}_{uuid.uuid4().hex[:6]}"
 
 
-def build_target(target_type: str, n_points: int, length: float):
+CHARUCO_DETECTION_OPTION_METADATA: list[dict[str, Any]] = [
+    {
+        "key": "DetectorParameters.minMarkerPerimeterRate",
+        "label": "minMarkerPerimeterRate",
+        "priority": "A",
+        "default": 0.03,
+        "range": "Not explicitly specified in source; practically should be > 0",
+        "range_source": "Estimated by us",
+        "suggested": "0.01–0.02",
+        "concept": (
+            "Concept: minimum candidate marker size, expressed relative to image size. "
+            "Detection: rejects contours whose perimeter is too small before decoding. "
+            "Calibration: if valid small markers are rejected, ChArUco corners never exist, "
+            "so calibration fails from lack of correspondences."
+        ),
+        "widget_type": "float",
+        "parser_type": "positive_float",
+    },
+    {
+        "key": "DetectorParameters.adaptiveThreshWinSizeMin",
+        "label": "adaptiveThreshWinSizeMin",
+        "priority": "A",
+        "default": 3,
+        "range": "Not explicitly specified in source; should be a positive integer",
+        "range_source": "Estimated by us",
+        "suggested": "3",
+        "concept": (
+            "Concept: smallest local window used for adaptive thresholding. "
+            "Detection: controls the finest local binarisation scale tested before contour extraction. "
+            "Calibration: affects whether marker edges survive thresholding; poor thresholding reduces usable observations."
+        ),
+        "widget_type": "int",
+        "parser_type": "positive_int",
+    },
+    {
+        "key": "DetectorParameters.adaptiveThreshWinSizeMax",
+        "label": "adaptiveThreshWinSizeMax",
+        "priority": "A",
+        "default": 23,
+        "range": "Not explicitly specified in source; should be >= min",
+        "range_source": "Estimated by us",
+        "suggested": "31 or 41",
+        "concept": (
+            "Concept: largest local window used for adaptive thresholding. "
+            "Detection: controls the coarsest local binarisation scale tested. "
+            "Calibration: if the thresholding scale is mismatched to marker scale or illumination structure, "
+            "detections become sparse or unstable."
+        ),
+        "widget_type": "int",
+        "parser_type": "positive_int",
+    },
+    {
+        "key": "DetectorParameters.adaptiveThreshWinSizeStep",
+        "label": "adaptiveThreshWinSizeStep",
+        "priority": "A",
+        "default": 10,
+        "range": "Not explicitly specified in source; should be a positive integer",
+        "range_source": "Estimated by us",
+        "suggested": "4 or 6",
+        "concept": (
+            "Concept: spacing between tested adaptive-threshold window sizes. "
+            "Detection: determines how densely OpenCV samples threshold scales. "
+            "Calibration: coarse sampling can miss the useful threshold regime and reduce "
+            "the number of stable points available for calibration."
+        ),
+        "widget_type": "int",
+        "parser_type": "positive_int",
+    },
+    {
+        "key": "DetectorParameters.adaptiveThreshConstant",
+        "label": "adaptiveThreshConstant",
+        "priority": "A",
+        "default": 7,
+        "range": "Not explicitly specified in source",
+        "range_source": "Estimated by us",
+        "suggested": "3–7",
+        "concept": (
+            "Concept: constant subtracted in adaptive thresholding. "
+            "Detection: shifts the black/white decision boundary during binarisation. "
+            "Calibration: indirectly controls whether markers decode consistently across views, "
+            "which affects point count and repeatability."
+        ),
+        "widget_type": "float",
+        "parser_type": "float",
+    },
+    {
+        "key": "CharucoParameters.minMarkers",
+        "label": "minMarkers",
+        "priority": "A",
+        "default": 2,
+        "range": "0–2 (reported in earlier investigation; not independently verified here)",
+        "range_source": "Estimated by us",
+        "suggested": "1",
+        "concept": (
+            "Concept: required local marker support for accepting an interpolated ChArUco corner. "
+            "Detection: filters out corners that do not have enough adjacent detected markers. "
+            "Calibration: lower values increase point count but may lower point reliability; "
+            "this is a count-versus-quality trade-off."
+        ),
+        "widget_type": "int",
+        "parser_type": "min_markers_int",
+    },
+    {
+        "key": "DetectorParameters.cornerRefinementMethod",
+        "label": "cornerRefinementMethod",
+        "priority": "B",
+        "default": "CORNER_REFINE_NONE",
+        "range": "Enum: CORNER_REFINE_NONE, CORNER_REFINE_SUBPIX, CORNER_REFINE_CONTOUR, CORNER_REFINE_APRILTAG",
+        "range_source": "OpenCV-provided",
+        "suggested": "CORNER_REFINE_SUBPIX",
+        "concept": (
+            "Concept: method for refining detected ArUco marker corners. "
+            "Detection: improves marker-corner localisation before ChArUco interpolation. "
+            "Calibration: better marker corners generally improve interpolated chessboard corners "
+            "and reduce reprojection residuals."
+        ),
+        "widget_type": "enum",
+        "parser_type": "enum",
+        "choices": [
+            "CORNER_REFINE_NONE",
+            "CORNER_REFINE_SUBPIX",
+            "CORNER_REFINE_CONTOUR",
+            "CORNER_REFINE_APRILTAG",
+        ],
+    },
+    {
+        "key": "DetectorParameters.cornerRefinementWinSize",
+        "label": "cornerRefinementWinSize",
+        "priority": "B",
+        "default": 5,
+        "range": "Not explicitly specified in source",
+        "range_source": "Estimated by us",
+        "suggested": "3–5",
+        "concept": (
+            "Concept: local search window for marker-corner refinement. "
+            "Detection: sets the neighbourhood over which corner refinement operates. "
+            "Calibration: too small may under-refine; too large may drift on blurred or aliased edges, "
+            "affecting geometric precision."
+        ),
+        "widget_type": "int",
+        "parser_type": "positive_int",
+    },
+    {
+        "key": "DetectorParameters.cornerRefinementMaxIterations",
+        "label": "cornerRefinementMaxIterations",
+        "priority": "B",
+        "default": 30,
+        "range": "Not explicitly specified in source",
+        "range_source": "Estimated by us",
+        "suggested": "30",
+        "concept": (
+            "Concept: maximum iteration count for marker-corner refinement. "
+            "Detection: limits the refinement solver effort. "
+            "Calibration: mainly affects convergence robustness of localised corners rather than "
+            "whether markers are found at all."
+        ),
+        "widget_type": "int",
+        "parser_type": "positive_int",
+    },
+    {
+        "key": "DetectorParameters.cornerRefinementMinAccuracy",
+        "label": "cornerRefinementMinAccuracy",
+        "priority": "B",
+        "default": 0.1,
+        "range": "Not explicitly specified in source",
+        "range_source": "Estimated by us",
+        "suggested": "0.05–0.1",
+        "concept": (
+            "Concept: stopping tolerance for marker-corner refinement. "
+            "Detection: determines when refinement is considered converged. "
+            "Calibration: tighter values may improve localisation slightly, but usually with "
+            "diminishing returns if the image data are weak."
+        ),
+        "widget_type": "float",
+        "parser_type": "positive_float",
+    },
+    {
+        "key": "DetectorParameters.minOtsuStdDev",
+        "label": "minOtsuStdDev",
+        "priority": "B",
+        "default": 5.0,
+        "range": "Not explicitly specified in source",
+        "range_source": "Estimated by us",
+        "suggested": "2–4",
+        "concept": (
+            "Concept: minimum local intensity variation required before Otsu thresholding is used in decoding. "
+            "Detection: affects how marker bits are binarised during decoding in low-contrast patches. "
+            "Calibration: relevant only if markers are found but fail decoding due to weak contrast."
+        ),
+        "widget_type": "float",
+        "parser_type": "float",
+    },
+    {
+        "key": "RefineParameters.minRepDistance",
+        "label": "minRepDistance",
+        "priority": "B",
+        "default": 10.0,
+        "range": "Not explicitly specified in source; should be non-negative in practice",
+        "range_source": "Estimated by us",
+        "suggested": "10–20",
+        "concept": (
+            "Concept: tolerance for recovering rejected markers using board-guided refinement. "
+            "Detection: larger values allow more rejected candidates to be recovered as valid markers. "
+            "Calibration: can increase point count when detections are sparse, but may admit worse "
+            "correspondences if too loose."
+        ),
+        "widget_type": "float",
+        "parser_type": "non_negative_float",
+    },
+    {
+        "key": "DetectorParameters.errorCorrectionRate",
+        "label": "errorCorrectionRate",
+        "priority": "C",
+        "default": 0.6,
+        "range": "Not explicitly specified in header comment",
+        "range_source": "Estimated by us",
+        "suggested": "0.6–0.8",
+        "concept": (
+            "Concept: tolerance for correcting bit errors during marker identification. "
+            "Detection: increases permissiveness during dictionary matching. "
+            "Calibration: may recover weak markers, but if too permissive may increase false IDs, "
+            "which is geometrically harmful."
+        ),
+        "widget_type": "float",
+        "parser_type": "float",
+    },
+    {
+        "key": "DetectorParameters.perspectiveRemoveIgnoredMarginPerCell",
+        "label": "perspectiveRemoveIgnoredMarginPerCell",
+        "priority": "C",
+        "default": 0.13,
+        "range": "Not explicitly specified in source",
+        "range_source": "Estimated by us",
+        "suggested": "0.08–0.13",
+        "concept": (
+            "Concept: ignored fraction at cell borders during marker bit sampling. "
+            "Detection: reduces contamination from cell-border transitions when decoding. "
+            "Calibration: matters only indirectly through decode stability; usually secondary unless "
+            "markers are very small in pixels."
+        ),
+        "widget_type": "float",
+        "parser_type": "float",
+    },
+    {
+        "key": "DetectorParameters.polygonalApproxAccuracyRate",
+        "label": "polygonalApproxAccuracyRate",
+        "priority": "C",
+        "default": 0.03,
+        "range": "Not explicitly specified in source",
+        "range_source": "Estimated by us",
+        "suggested": "0.03–0.05",
+        "concept": (
+            "Concept: contour simplification tolerance when deciding whether a candidate looks square. "
+            "Detection: affects quad fitting from thresholded contours. "
+            "Calibration: only matters if contour extraction is the limiting stage; otherwise it is "
+            "secondary to thresholding and size rejection."
+        ),
+        "widget_type": "float",
+        "parser_type": "float",
+    },
+    {
+        "key": "CharucoParameters.cameraMatrix",
+        "label": "cameraMatrix",
+        "priority": "C",
+        "default": "",
+        "range": "Matrix presence/absence, not a scalar range",
+        "range_source": "OpenCV-provided",
+        "suggested": "leave empty initially",
+        "concept": (
+            "Concept: optional camera model for camera-aware ChArUco interpolation. "
+            "Detection: switches interpolation from local homography to a pose/projection-based route when provided. "
+            "Calibration: can improve interpolation in some regimes, but is not the first lever when "
+            "the main failure is missing markers."
+        ),
+        "widget_type": "json_matrix",
+        "parser_type": "optional_json_matrix_3x3",
+    },
+    {
+        "key": "CharucoParameters.distCoeffs",
+        "label": "distCoeffs",
+        "priority": "C",
+        "default": "",
+        "range": "Vector presence/absence, not a scalar range",
+        "range_source": "OpenCV-provided",
+        "suggested": "leave empty initially",
+        "concept": (
+            "Concept: optional distortion model paired with cameraMatrix. "
+            "Detection: used only in the camera-aware interpolation path. "
+            "Calibration: relevant if distortion is non-negligible and interpolation quality, rather than "
+            "raw marker count, is the limiting issue."
+        ),
+        "widget_type": "json_vector",
+        "parser_type": "optional_json_vector",
+    },
+]
+
+
+def build_charuco_option_tooltip(meta: dict[str, Any]) -> str:
+    """Build canonical tooltip/info text from a ChArUco option metadata row."""
+    return (
+        f"{meta['concept']}\n\n"
+        f"Default: {meta['default']}\n"
+        f"Range: {meta['range']}\n"
+        f"Range source: {meta['range_source']}\n"
+        f"Suggested value(s): {meta['suggested']}"
+    )
+
+
+def _parse_charuco_value(meta: dict[str, Any], raw_value: Any):
+    key = meta["key"]
+    parser = meta["parser_type"]
+    value = raw_value
+    if isinstance(value, str):
+        value = value.strip()
+    if value in (None, ""):
+        value = meta["default"]
+
+    if parser == "enum":
+        choices = list(meta.get("choices", []))
+        if value not in choices:
+            raise ValueError(f"{key} must be one of {choices}.")
+        return value
+
+    if parser in {"int", "positive_int", "min_markers_int"}:
+        try:
+            out = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be an integer.") from exc
+        if parser == "positive_int" and out < 1:
+            raise ValueError(f"{key} must be >= 1.")
+        if parser == "min_markers_int" and (out < 0 or out > 2):
+            raise ValueError(f"{key} must be between 0 and 2.")
+        return out
+
+    if parser in {"float", "positive_float", "non_negative_float"}:
+        try:
+            out = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be a number.") from exc
+        if parser == "positive_float" and out <= 0:
+            raise ValueError(f"{key} must be > 0.")
+        if parser == "non_negative_float" and out < 0:
+            raise ValueError(f"{key} must be >= 0.")
+        return out
+
+    if parser == "optional_json_matrix_3x3":
+        if value in ("", None):
+            return None
+        try:
+            data = json.loads(value) if isinstance(value, str) else value
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{key} must be valid JSON.") from exc
+        if not isinstance(data, list) or len(data) != 3:
+            raise ValueError(f"{key} must be a 3x3 JSON array.")
+        for row in data:
+            if not isinstance(row, list) or len(row) != 3:
+                raise ValueError(f"{key} must be a 3x3 JSON array.")
+            for elem in row:
+                try:
+                    float(elem)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"{key} entries must be numeric.") from exc
+        return data
+
+    if parser == "optional_json_vector":
+        if value in ("", None):
+            return None
+        try:
+            data = json.loads(value) if isinstance(value, str) else value
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{key} must be valid JSON.") from exc
+        if not isinstance(data, list):
+            raise ValueError(f"{key} must be a JSON array.")
+        for elem in data:
+            if isinstance(elem, list):
+                for sub_elem in elem:
+                    try:
+                        float(sub_elem)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"{key} entries must be numeric.") from exc
+            else:
+                try:
+                    float(elem)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"{key} entries must be numeric.") from exc
+        return data
+
+    raise ValueError(f"Unsupported parser type {parser!r} for {key}.")
+
+
+def collect_charuco_detection_options(raw_options: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Validate and normalise ChArUco detector options from raw GUI values."""
+    parsed_by_key: dict[str, Any] = {}
+    for meta in CHARUCO_DETECTION_OPTION_METADATA:
+        key = meta["key"]
+        parsed_by_key[key] = _parse_charuco_value(meta, raw_options.get(key))
+
+    min_key = "DetectorParameters.adaptiveThreshWinSizeMin"
+    max_key = "DetectorParameters.adaptiveThreshWinSizeMax"
+    if parsed_by_key[max_key] < parsed_by_key[min_key]:
+        raise ValueError(f"{max_key} must be >= {min_key}.")
+
+    options: dict[str, dict[str, Any]] = {
+        "DetectorParameters": {},
+        "CharucoParameters": {},
+        "RefineParameters": {},
+    }
+    for key, value in parsed_by_key.items():
+        group, name = key.split(".", 1)
+        if value is None and name in {"cameraMatrix", "distCoeffs"}:
+            continue
+        options[group][name] = value
+    return options
+
+
+def build_target(
+    target_type: str,
+    n_points: int,
+    length: float,
+    charuco_detection_options: dict[str, dict[str, Any]] | None = None,
+):
     """Construct a calibration target from canonical GUI options."""
     from pyCamSet.calibration_targets.target_Ccube import Ccube
     from pyCamSet.calibration_targets.target_charuco import ChArUco
@@ -318,7 +738,12 @@ def build_target(target_type: str, n_points: int, length: float):
     if target_type == "Ccube":
         return Ccube(n_points=n_points, length=length)
     if target_type == "ChArUco":
-        return ChArUco(num_squares_x=n_points, num_squares_y=n_points, square_size=length)
+        return ChArUco(
+            num_squares_x=n_points,
+            num_squares_y=n_points,
+            square_size=length,
+            detection_options=charuco_detection_options,
+        )
     raise ValueError(f"Unknown target type: {target_type!r}")
 
 

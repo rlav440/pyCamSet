@@ -18,7 +18,16 @@ from pyCamSet.utils.general_utils import downsample_valid
 
 
 class ChArUco(AbstractTarget):
-    def __init__(self, num_squares_x, num_squares_y, square_size, marker_fraction = 0.8, a_dict=cv2.aruco.DICT_4X4_1000, legacy=False):
+    def __init__(
+        self,
+        num_squares_x,
+        num_squares_y,
+        square_size,
+        marker_fraction=0.8,
+        a_dict=cv2.aruco.DICT_4X4_1000,
+        legacy=False,
+        detection_options: dict | None = None,
+    ):
         """
         Initialises a ChArUco board in mm.
 
@@ -44,14 +53,68 @@ class ChArUco(AbstractTarget):
             self.board.setLegacyPattern(True)
         self.point_data = np.asarray(self.board.getChessboardCorners(), dtype=np.float64).squeeze()
 
-        self.detection_params = aruco.CharucoParameters()
-        self.detection_params.tryRefineMarkers = True
-        # params.minMarkerPerimeterRate = 0.01
-        #params.adaptiveThreshConstant = 1 # for low light, but lowers accuracy
-        self.board_detectors = aruco.CharucoDetector(self.board, self.detection_params)
+        self.detection_options = detection_options or {}
+        self.detection_params = self._build_charuco_parameters(self.detection_options)
+        self.detector_params = self._build_detector_parameters(self.detection_options)
+        self.refine_params = self._build_refine_parameters(self.detection_options)
+        try:
+            self.board_detectors = aruco.CharucoDetector(
+                self.board,
+                self.detection_params,
+                self.detector_params,
+                self.refine_params,
+            )
+        except TypeError:
+            # Backward compatibility with OpenCV builds that only expose
+            # CharucoDetector(board, charucoParams).
+            self.board_detectors = aruco.CharucoDetector(self.board, self.detection_params)
         self.given_legacy_warning = False
 
         self._process_data()
+
+    @staticmethod
+    def _coerce_corner_refinement_method(value):
+        if isinstance(value, str):
+            return getattr(aruco, value, value)
+        return value
+
+    @classmethod
+    def _build_charuco_parameters(cls, detection_options: dict) -> aruco.CharucoParameters:
+        params = aruco.CharucoParameters()
+        params.tryRefineMarkers = True
+        for key, value in (detection_options.get("CharucoParameters", {}) or {}).items():
+            if not hasattr(params, key):
+                continue
+            if value is None:
+                continue
+            if key in {"cameraMatrix", "distCoeffs"}:
+                value = np.asarray(value, dtype=np.float64)
+            setattr(params, key, value)
+        return params
+
+    @classmethod
+    def _build_detector_parameters(cls, detection_options: dict) -> aruco.DetectorParameters:
+        params = aruco.DetectorParameters()
+        for key, value in (detection_options.get("DetectorParameters", {}) or {}).items():
+            if not hasattr(params, key):
+                continue
+            if value is None:
+                continue
+            if key == "cornerRefinementMethod":
+                value = cls._coerce_corner_refinement_method(value)
+            setattr(params, key, value)
+        return params
+
+    @staticmethod
+    def _build_refine_parameters(detection_options: dict) -> aruco.RefineParameters:
+        params = aruco.RefineParameters()
+        for key, value in (detection_options.get("RefineParameters", {}) or {}).items():
+            if not hasattr(params, key):
+                continue
+            if value is None:
+                continue
+            setattr(params, key, value)
+        return params
 
     def _board_size_mm(self) -> tuple[float, float]:
         n_x, n_y = self.board.getChessboardSize()

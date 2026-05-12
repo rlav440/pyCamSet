@@ -123,15 +123,24 @@ class Phase1Tab(QWidget):
         self._diagnostics_tab: Optional["Phase1DiagnosticsTab"] = None
         self._worker: Optional[PhaseWorker] = None
         self._cam_checkboxes: dict[str, QCheckBox] = {}
+        self._camera_names: list[str] = []
+        self._rebuilding_cameras = False
         self._cameras_cb = None  # set via set_cameras_callback
         self._build_ui(terminal_cb)
 
     def set_diagnostics_tab(self, tab: "Phase1DiagnosticsTab") -> None:
         self._diagnostics_tab = tab
 
-    def set_cameras(self, camera_names: list[str]) -> None:
-        """Populate camera checkboxes from discovered camera names."""
-        self._rebuild_camera_checkboxes(camera_names)
+    def set_cameras(self, camera_names: list[str], selected_cameras: Optional[list[str]] = None) -> None:
+        """Populate camera checkboxes from discovered camera names and optional selection."""
+        names = list(camera_names or [])
+        if selected_cameras is None:
+            restore = {n: cb.isChecked() for n, cb in self._cam_checkboxes.items()}
+        else:
+            selected_set = set(selected_cameras)
+            restore = {n: (n in selected_set) for n in names}
+        self._camera_names = names
+        self._rebuild_camera_checkboxes(names, restore_states=restore)
 
     def set_cameras_callback(self, cb) -> None:
         """Register a callback that receives the list of camera names when floc changes."""
@@ -139,10 +148,19 @@ class Phase1Tab(QWidget):
 
     def get_camera_names(self) -> list[str]:
         """Return the current camera names (from last floc scan or explicit set)."""
-        return [name for name in self._cam_checkboxes]
+        return list(self._camera_names)
 
-    def _rebuild_camera_checkboxes(self, camera_names: list[str]) -> None:
+    def get_selected_cameras(self) -> list[str]:
+        """Return currently checked camera names in visual order."""
+        return [
+            name
+            for name in self._camera_names
+            if self._cam_checkboxes.get(name) is not None and self._cam_checkboxes[name].isChecked()
+        ]
+
+    def _rebuild_camera_checkboxes(self, camera_names: list[str], restore_states: Optional[dict[str, bool]] = None) -> None:
         """Rebuild the camera checkbox list deterministically."""
+        self._rebuilding_cameras = True
         while self._cameras_area_layout.count():
             item = self._cameras_area_layout.takeAt(0)
             if item.widget():
@@ -152,12 +170,20 @@ class Phase1Tab(QWidget):
             lbl = QLabel("(no cameras found)")
             lbl.setStyleSheet("color: gray; font-size: 10px;")
             self._cameras_area_layout.addWidget(lbl)
+            self._rebuilding_cameras = False
             return
         for name in camera_names:
             cb = QCheckBox(name)
-            cb.setChecked(True)
+            cb.setChecked(True if restore_states is None else bool(restore_states.get(name, True)))
+            cb.stateChanged.connect(lambda _state: self._emit_cameras_changed())
             self._cam_checkboxes[name] = cb
             self._cameras_area_layout.addWidget(cb)
+        self._rebuilding_cameras = False
+
+    def _emit_cameras_changed(self) -> None:
+        if self._cameras_cb is None or self._rebuilding_cameras:
+            return
+        self._cameras_cb(self.get_camera_names(), self.get_selected_cameras())
 
     # ------------------------------------------------------------------
 
@@ -384,9 +410,11 @@ class Phase1Tab(QWidget):
                 cam_folders = get_camera_subfolders(f_loc)
                 names = [p.name for p in cam_folders]
                 if names:
-                    self._rebuild_camera_checkboxes(names)
+                    old_states = {n: cb.isChecked() for n, cb in self._cam_checkboxes.items()}
+                    self._camera_names = names
+                    self._rebuild_camera_checkboxes(names, restore_states=old_states)
                     if self._cameras_cb is not None:
-                        self._cameras_cb(names)
+                        self._cameras_cb(names, self.get_selected_cameras())
 
     def _sync_workspace_from_floc(self, floc_text: str, create_if_missing: bool = True) -> None:
         floc = (floc_text or "").strip()
@@ -447,6 +475,11 @@ class Phase1Tab(QWidget):
                 QMessageBox.critical(self, "Validation Error", f"Problem options JSON: {exc}")
                 return None
 
+        selected_cameras = self.get_selected_cameras()
+        if not selected_cameras:
+            QMessageBox.critical(self, "Validation Error", "Select at least one camera.")
+            return None
+
         return {
             "f_loc": floc,
             "caching": self._cache_cb.isChecked(),
@@ -458,6 +491,7 @@ class Phase1Tab(QWidget):
             "target_type": self._target_combo.currentText(),
             "n_points": self._npts_spin.value(),
             "length": length,
+            "selected_cameras": selected_cameras,
         }
 
     def _run_phase1(self) -> None:
@@ -480,6 +514,7 @@ class Phase1Tab(QWidget):
         self._terminal.append_line(f"caching      : {params['caching']}")
         self._terminal.append_line(f"high_distort : {params['high_distortion']}")
         self._terminal.append_line(f"threads      : {params['threads'] or 'auto'}")
+        self._terminal.append_line(f"selected cams: {params['selected_cameras']}")
         self._terminal.append_line("Starting detection…")
 
         def work_fn(emit: Callable[[str], None]) -> dict:
@@ -496,13 +531,17 @@ class Phase1Tab(QWidget):
             try:
                 with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
                     f_loc = Path(params["f_loc"])
+                    selected = list(params.get("selected_cameras") or [])
+                    selected_set = set(selected)
 
                     cam_folders = get_camera_subfolders(f_loc)
+                    if selected_set:
+                        cam_folders = [p for p in cam_folders if p.name in selected_set]
                     cam_names = [p.name for p in cam_folders]
                     cam_img_counts = {p.name: count_images_in_folder(p) for p in cam_folders}
                     emit(f"1a  Camera sub-folders: {cam_names}")
-                    if len(cam_folders) < 2:
-                        raise RuntimeError("Need at least two camera sub-folders.")
+                    if len(cam_folders) < 1:
+                        raise RuntimeError("No selected camera sub-folders found.")
                     counts = [count_images_in_folder(p) for p in cam_folders]
                     if not counts or any(c <= 0 for c in counts) or len(set(counts)) != 1:
                         raise RuntimeError("Camera folders must contain equal non-zero image counts.")
@@ -732,7 +771,13 @@ class Phase1Tab(QWidget):
                 QMessageBox.information(self, "No runs", "Run Phase 1 first.")
             return
         chosen = runs[-1]
-        self._workspace_mgr.write_handoff({"phase": "phase1", "runs": [chosen]})
+        self._workspace_mgr.write_handoff(
+            {
+                "phase": "phase1",
+                "runs": [chosen],
+                "selected_cameras": ((chosen.get("params") or {}).get("selected_cameras") or []),
+            }
+        )
         run_id = chosen.get("run_id", "")
         for i in range(self._notebook.count()):
             if self._notebook.tabText(i) == TAB_PHASE2:
@@ -1459,7 +1504,13 @@ class Phase1DiagnosticsTab(QWidget):
             return
 
         chosen = selected[0]
-        self._workspace_mgr.write_handoff({"phase": "phase1", "runs": [chosen]})
+        self._workspace_mgr.write_handoff(
+            {
+                "phase": "phase1",
+                "runs": [chosen],
+                "selected_cameras": ((chosen.get("params") or {}).get("selected_cameras") or []),
+            }
+        )
         run_id = chosen.get("run_id", "")
         for i in range(self._notebook.count()):
             if self._notebook.tabText(i) == TAB_PHASE2:

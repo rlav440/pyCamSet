@@ -80,43 +80,58 @@ class Phase0Tab(QWidget):
         self._info_cb = info_cb
         self._workspace_mgr = workspace_mgr
         self._phase1_path_cb: Optional[Callable[[str], None]] = None
-        self._cameras_cb: Optional[Callable[[list[str]], None]] = None
+        self._cameras_cb: Optional[Callable[..., None]] = None
         self._confirmed_floc: Optional[str] = None
         self._camera_names: list[str] = []
         self._cam_checkboxes: dict[str, QCheckBox] = {}
+        self._rebuilding_cameras = False
         self._build_ui(terminal_cb)
 
     def set_phase1_path_callback(self, cb: Callable[[str], None]) -> None:
         self._phase1_path_cb = cb
 
-    def set_cameras_callback(self, cb: Callable[[list[str]], None]) -> None:
-        """Register a callback that receives the list of camera names after validation."""
+    def set_cameras_callback(self, cb: Callable[..., None]) -> None:
+        """Register a callback that receives camera names and selected subset."""
         self._cameras_cb = cb
 
     def get_camera_names(self) -> list[str]:
         """Return the list of camera names discovered in the last successful validation."""
         return list(self._camera_names)
 
+    def get_selected_cameras(self) -> list[str]:
+        """Return currently checked camera names in visual order."""
+        return [name for name in self._camera_names if self._cam_checkboxes.get(name, None) and self._cam_checkboxes[name].isChecked()]
+
     def set_image_folder(self, path: str) -> None:
         """Set the image folder path (for global sync; does not re-validate)."""
         if self._floc_edit.text() != path:
             self._floc_edit.setText(path)
 
-    def set_camera_names(self, names: list[str]) -> None:
+    def set_camera_names(self, names: list[str], selected: Optional[list[str]] = None) -> None:
         """Update camera checkboxes without re-running validation.
 
         Called from main_window when camera names are propagated cross-tab.
         Preserves existing checked state for cameras that remain in the list.
         """
-        if names == self._camera_names:
+        if names == self._camera_names and selected is None:
             return  # no change — avoid redundant rebuilds
-        # Preserve checked state for cameras that remain.
-        old_states = {n: cb.isChecked() for n, cb in self._cam_checkboxes.items()}
+        if names == self._camera_names and selected is not None:
+            selected_set = set(selected)
+            current_selected = set(self.get_selected_cameras())
+            if current_selected == selected_set:
+                return
+        # Preserve checked state for cameras that remain unless explicit selected set is supplied.
+        if selected is None:
+            old_states = {n: cb.isChecked() for n, cb in self._cam_checkboxes.items()}
+        else:
+            selected_set = set(selected)
+            old_states = {n: (n in selected_set) for n in names}
         self._camera_names = list(names)
         self._rebuild_camera_checkboxes(restore_states=old_states)
 
     def _rebuild_camera_checkboxes(self, restore_states: Optional[dict] = None) -> None:
         """Rebuild the camera checkbox list from the current _camera_names."""
+        self._rebuilding_cameras = True
         while self._cameras_layout.count():
             item = self._cameras_layout.takeAt(0)
             if item.widget():
@@ -126,13 +141,28 @@ class Phase0Tab(QWidget):
             lbl = QLabel("(no cameras found)")
             lbl.setStyleSheet("color: gray; font-size: 10px;")
             self._cameras_layout.addWidget(lbl)
+            self._rebuilding_cameras = False
             return
         for name in self._camera_names:
             cb = QCheckBox(name)
             # Restore previous checked state, or default to True for new cameras.
             cb.setChecked(True if restore_states is None else restore_states.get(name, True))
+            cb.stateChanged.connect(lambda _state: self._emit_cameras_changed())
             self._cam_checkboxes[name] = cb
             self._cameras_layout.addWidget(cb)
+        self._rebuilding_cameras = False
+
+    def _emit_cameras_changed(self) -> None:
+        if self._cameras_cb is None:
+            return
+        if self._rebuilding_cameras:
+            return
+        names = list(self._camera_names)
+        selected = self.get_selected_cameras()
+        try:
+            self._cameras_cb(names, selected)
+        except TypeError:
+            self._cameras_cb(names)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -282,15 +312,15 @@ class Phase0Tab(QWidget):
         self._ws_edit.setText(str(ws_path))
         self._workspace_mgr.set_workspace_path(ws_path, ensure=True)
 
-        # Rebuild camera checkboxes
+        # Rebuild camera checkboxes while preserving any existing user selection.
+        old_states = {n: cb.isChecked() for n, cb in self._cam_checkboxes.items()}
         self._camera_names = [p.name for p in cam_folders]
-        self._rebuild_camera_checkboxes()
+        self._rebuild_camera_checkboxes(restore_states=old_states)
 
         if self._phase1_path_cb is not None:
             self._phase1_path_cb(str(f_loc))
 
-        if self._cameras_cb is not None:
-            self._cameras_cb(list(self._camera_names))
+        self._emit_cameras_changed()
 
         self._terminal.append_line("Validation passed ✓")
 
@@ -304,7 +334,18 @@ class Phase0Tab(QWidget):
             )
             return
         self._workspace_mgr.write_handoff(
-            {"phase": "phase0", "runs": [{"params": {"f_loc": self._confirmed_floc}}]}
+            {
+                "phase": "phase0",
+                "runs": [
+                    {
+                        "params": {
+                            "f_loc": self._confirmed_floc,
+                            "selected_cameras": self.get_selected_cameras(),
+                        }
+                    }
+                ],
+                "selected_cameras": self.get_selected_cameras(),
+            }
         )
         for i in range(self._notebook.count()):
             if self._notebook.tabText(i) == TAB_PHASE1:

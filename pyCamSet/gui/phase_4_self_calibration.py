@@ -480,11 +480,15 @@ class Phase4Tab(QWidget):
                 QMessageBox.information(self, "No Phase 3 source", "Select a valid Phase 3 run/camset first.")
             return
 
+        selected_cameras = list(((phase3_run.get("params") or {}).get("selected_cameras") or []) if phase3_run else [])
+        params["selected_cameras"] = selected_cameras
+
         self._terminal.clear_terminal()
         self._terminal.append_line("=== Phase 4: Self-Calibration ===")
         self._terminal.append_line(f"Image folder : {params['f_loc']}")
         self._terminal.append_line(f"Phase 3 run  : {phase3_run.get('run_id', 'unknown') if phase3_run else 'override'}")
         self._terminal.append_line(f"Camset       : {phase3_camset}")
+        self._terminal.append_line(f"selected cams: {selected_cameras if selected_cameras else 'all'}")
         self._terminal.append_line("Starting…")
 
         def work_fn(emit: Callable[[str], None]) -> dict:
@@ -505,6 +509,14 @@ class Phase4Tab(QWidget):
             try:
                 with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
                     prev_cams = load_CameraSet(phase3_camset)
+                    selected = list(params.get("selected_cameras") or [])
+                    if selected:
+                        camset_names = set(prev_cams.get_names())
+                        if camset_names != set(selected):
+                            raise RuntimeError(
+                                "Phase 3 camset cameras do not match selected camera subset. "
+                                "Re-run Phase 3 with the same selected cameras."
+                            )
                     prev_handler = getattr(prev_cams, "calibration_handler", None)
                     if prev_handler is None:
                         raise RuntimeError("Selected Phase 3 camset has no calibration handler metadata.")

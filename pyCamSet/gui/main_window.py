@@ -224,13 +224,13 @@ class PyCamSetApp(QMainWindow):
         # ── Global sync: camera list ───────────────────────────────────
         self._syncing_cameras = False
 
-        def _propagate_cameras(names: list[str]) -> None:
+        def _propagate_cameras(names: list[str], selected: list[str] | None = None) -> None:
             if self._syncing_cameras:
                 return
             self._syncing_cameras = True
             try:
-                self.phase0_tab.set_camera_names(names)
-                self.phase1_tab.set_cameras(names)
+                self.phase0_tab.set_camera_names(names, selected=selected)
+                self.phase1_tab.set_cameras(names, selected_cameras=selected)
             finally:
                 self._syncing_cameras = False
 

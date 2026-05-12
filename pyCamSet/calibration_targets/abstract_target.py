@@ -363,7 +363,7 @@ class AbstractTarget(ABC):
 
             for board in boards[mask]:
                 key_mask = np.squeeze(keys[:, :-1] == board)
-                if np.sum(key_mask) > 12: 
+                if np.sum(key_mask) >= 6:
                     if np.sum(key_mask) < 12:
                         logging.warning("Trying to calibrate with a small number of detections on a board.")
                     board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')

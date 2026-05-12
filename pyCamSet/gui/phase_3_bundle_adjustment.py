@@ -460,6 +460,12 @@ class Phase3Tab(QWidget):
                 QMessageBox.information(self, "No Phase 1 run", "No Phase 1 run found for detections.")
             return
 
+        selected_cameras = list(
+            ((phase2_run.get("params") or {}).get("selected_cameras") or [])
+            or ((phase1_run.get("params") or {}).get("selected_cameras") or [])
+        )
+        params["selected_cameras"] = selected_cameras
+
         self._src_lbl.setText(
             f"Phase 2: {phase2_run.get('run_id', '?')} | Phase 1: {phase1_run.get('run_id', '?')}"
         )
@@ -469,6 +475,7 @@ class Phase3Tab(QWidget):
         self._terminal.append_line(f"Image folder : {params['f_loc']}")
         self._terminal.append_line(f"Phase 2 run  : {phase2_run.get('run_id', 'unknown')}")
         self._terminal.append_line(f"Phase 1 run  : {phase1_run.get('run_id', 'unknown')}")
+        self._terminal.append_line(f"selected cams: {selected_cameras if selected_cameras else 'all'}")
         self._terminal.append_line("Starting…")
 
         def work_fn(emit: Callable[[str], None]) -> dict:
@@ -506,6 +513,22 @@ class Phase3Tab(QWidget):
                     detections = extract_detection(payload)
                     if detections is None:
                         raise RuntimeError("Could not extract TargetDetection from Phase 1 pickle.")
+
+                    selected = list(params.get("selected_cameras") or [])
+                    if selected:
+                        selected_set = set(selected)
+                        camset_names = set(cams.get_names())
+                        det_names = set(getattr(detections, "cam_names", []) or [])
+                        if camset_names != selected_set:
+                            raise RuntimeError(
+                                "Phase 2 camset cameras do not match selected camera subset. "
+                                "Re-run Phase 2 with the same selected cameras."
+                            )
+                        if det_names != selected_set:
+                            raise RuntimeError(
+                                "Phase 1 detections do not match selected camera subset. "
+                                "Re-run Phase 1/2 with the same selected cameras."
+                            )
 
                     target = build_target(params["target_type"], params["n_points"], params["length"])
                     handler = TemplateBundleHandler(
@@ -676,6 +699,7 @@ class Phase3Tab(QWidget):
                 "image_folder": f_loc,
                 "phase3_run_id": run_id,
                 "optimised_camset": camset_path,
+                "selected_cameras": ((chosen.get("params") or {}).get("selected_cameras") or []),
             }
         )
 
@@ -1178,7 +1202,14 @@ class Phase3DiagnosticsTab(QWidget):
                     "Please select exactly one Phase 3 run for handoff.",
                 )
             return
-        self._workspace_mgr.write_handoff({"phase": "phase3", "runs": [selected[0]]})
+        chosen = selected[0]
+        self._workspace_mgr.write_handoff(
+            {
+                "phase": "phase3",
+                "runs": [chosen],
+                "selected_cameras": ((chosen.get("params") or {}).get("selected_cameras") or []),
+            }
+        )
         if self._info_cb.isChecked():
             QMessageBox.information(self, "Handoff written", "handoff.json written for Phase 3.")
 

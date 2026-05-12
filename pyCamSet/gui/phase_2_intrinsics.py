@@ -11,7 +11,9 @@ import contextlib
 import json
 import logging
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Callable, Optional
+import shutil
 
 import cv2
 import numpy as np
@@ -483,12 +485,18 @@ class Phase2Tab(QWidget):
             QMessageBox.information(self, "No Phase 1 run", "Run Phase 1 first or choose a detection pickle override.")
             return
 
+        selected_cameras = []
+        if phase1_run is not None:
+            selected_cameras = list(((phase1_run.get("params") or {}).get("selected_cameras") or []))
+        params["selected_cameras"] = selected_cameras
+
         self._update_detection_source_label()
 
         self._terminal.clear_terminal()
         self._terminal.append_line("=== Phase 2: Per-camera Initial Calibration ===")
         self._terminal.append_line(f"Image folder : {params['f_loc']}")
         self._terminal.append_line(f"Phase 1 run  : {phase1_run.get('run_id', 'none') if phase1_run else 'none'}")
+        self._terminal.append_line(f"selected cams: {selected_cameras if selected_cameras else 'all'}")
         if override_pickle is not None:
             self._terminal.append_line(f"Override det : {override_pickle}")
         self._terminal.append_line("Starting…")
@@ -526,52 +534,93 @@ class Phase2Tab(QWidget):
             try:
                 with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
                     target = build_target(params["target_type"], params["n_points"], params["length"])
+                    selected = list(params.get("selected_cameras") or [])
+                    selected_set = set(selected)
+                    f_loc = Path(params["f_loc"])
 
-                    if det_pickle is not None and det_pickle.exists():
-                        emit(f"Using detections: {det_pickle}")
-                        payload = load_pickle(det_pickle)
-                        detections, cam_res = extract_detection_and_cam_res(payload)
+                    cam_folders = [
+                        p for p in sorted(f_loc.iterdir())
+                        if p.is_dir() and p.name != "sparse" and not p.name.startswith(".")
+                    ]
+                    if selected_set:
+                        cam_folders = [p for p in cam_folders if p.name in selected_set]
+                        if len(cam_folders) < 2:
+                            raise RuntimeError("Need at least two selected camera folders for Phase 2.")
 
-                    if detections is None or cam_res is None:
-                        emit("Detection artifact missing/incompatible, falling back to detection pass.")
-                        detections, cam_res = detect_datapoints_in_imfile(
-                            f_loc=Path(params["f_loc"]),
-                            calibration_target=target,
-                            caching=params["caching"],
-                            draw=False,
-                            n_lim=params["n_lim"],
-                        )
+                    detect_root = f_loc
+                    tmp_ctx: Optional[TemporaryDirectory] = None
+                    root_entries = list(f_loc.iterdir())
+                    allowed = {p.name for p in cam_folders}
+                    has_extra_entries = any(p.name not in allowed for p in root_entries)
+                    if has_extra_entries:
+                        tmp_ctx = TemporaryDirectory(prefix="pycamset_phase2_")
+                        detect_root = Path(tmp_ctx.name)
+                        emit("2a  Using filtered staging folder (selected camera subfolders only).")
+                        for cam in cam_folders:
+                            dst = detect_root / cam.name
+                            try:
+                                dst.symlink_to(cam, target_is_directory=True)
+                            except Exception:
+                                shutil.copytree(cam, dst)
 
-                    cams, _, per_im = run_initial_calibration(
-                        detection=detections,
-                        calibration_target=target,
-                        cam_res=cam_res,
-                        save=False,
-                        fixed_params=params["fixed_params"],
-                        return_poses_and_costs=True,
-                    )
-                    emit("2b  Initial calibration completed.")
+                    try:
+                        if det_pickle is not None and det_pickle.exists():
+                            emit(f"Using detections: {det_pickle}")
+                            payload = load_pickle(det_pickle)
+                            detections, cam_res = extract_detection_and_cam_res(payload)
+                            if selected_set:
+                                det_cam_names = list(getattr(detections, "cam_names", []) or [])
+                                if set(det_cam_names) != selected_set:
+                                    emit(
+                                        "Detection artifact camera set does not match selected cameras; "
+                                        "running fresh detection on selected subset."
+                                    )
+                                    detections = None
+                                    cam_res = None
 
-                    if params["high_distortion"]:
-                        emit("2c  High-distortion mode: re-running detection with initial intrinsics…")
-                        detections_hd, _ = detect_datapoints_in_imfile(
-                            f_loc=Path(params["f_loc"]),
-                            calibration_target=target,
-                            caching=False,
-                            draw=False,
-                            n_lim=params["n_lim"],
-                            camset=cams,
-                        )
+                        if detections is None or cam_res is None:
+                            emit("Detection artifact missing/incompatible, falling back to detection pass.")
+                            detections, cam_res = detect_datapoints_in_imfile(
+                                f_loc=detect_root,
+                                calibration_target=target,
+                                caching=params["caching"],
+                                draw=False,
+                                n_lim=params["n_lim"],
+                            )
+
                         cams, _, per_im = run_initial_calibration(
-                            detection=detections_hd,
+                            detection=detections,
                             calibration_target=target,
                             cam_res=cam_res,
                             save=False,
                             fixed_params=params["fixed_params"],
                             return_poses_and_costs=True,
                         )
-                        detections = detections_hd
-                        emit("2c  High-distortion refinement completed.")
+                        emit("2b  Initial calibration completed.")
+
+                        if params["high_distortion"]:
+                            emit("2c  High-distortion mode: re-running detection with initial intrinsics…")
+                            detections_hd, _ = detect_datapoints_in_imfile(
+                                f_loc=detect_root,
+                                calibration_target=target,
+                                caching=False,
+                                draw=False,
+                                n_lim=params["n_lim"],
+                                camset=cams,
+                            )
+                            cams, _, per_im = run_initial_calibration(
+                                detection=detections_hd,
+                                calibration_target=target,
+                                cam_res=cam_res,
+                                save=False,
+                                fixed_params=params["fixed_params"],
+                                return_poses_and_costs=True,
+                            )
+                            detections = detections_hd
+                            emit("2c  High-distortion refinement completed.")
+                    finally:
+                        if tmp_ctx is not None:
+                            tmp_ctx.cleanup()
 
                     camset_path = run_dir / (
                         "initial_cameras_high_distortion.camset"
@@ -686,6 +735,7 @@ class Phase2Tab(QWidget):
                 "image_folder": f_loc,
                 "phase2_run_id": run_id,
                 "initial_camset": camset_path,
+                "selected_cameras": ((chosen.get("params") or {}).get("selected_cameras") or []),
             }
         )
 
@@ -1117,6 +1167,7 @@ class Phase2DiagnosticsTab(QWidget):
                 "image_folder": f_loc,
                 "phase2_run_id": run_id,
                 "initial_camset": camset_path,
+                "selected_cameras": ((chosen.get("params") or {}).get("selected_cameras") or []),
             }
         )
         for i in range(self._notebook.count()):

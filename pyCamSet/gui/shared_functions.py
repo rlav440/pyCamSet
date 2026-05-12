@@ -410,7 +410,9 @@ CHARUCO_DETECTION_OPTION_METADATA: list[dict[str, Any]] = [
             "this is a count-versus-quality trade-off."
         ),
         "widget_type": "int",
-        "parser_type": "min_markers_int",
+        "parser_type": "int_range",
+        "min_value": 0,
+        "max_value": 2,
     },
     {
         "key": "DetectorParameters.cornerRefinementMethod",
@@ -586,6 +588,7 @@ CHARUCO_DETECTION_OPTION_METADATA: list[dict[str, Any]] = [
         ),
         "widget_type": "json_matrix",
         "parser_type": "optional_json_matrix_3x3",
+        "drop_if_none": True,
     },
     {
         "key": "CharucoParameters.distCoeffs",
@@ -603,6 +606,7 @@ CHARUCO_DETECTION_OPTION_METADATA: list[dict[str, Any]] = [
         ),
         "widget_type": "json_vector",
         "parser_type": "optional_json_vector",
+        "drop_if_none": True,
     },
 ]
 
@@ -633,15 +637,18 @@ def _parse_charuco_value(meta: dict[str, Any], raw_value: Any):
             raise ValueError(f"{key} must be one of {choices}.")
         return value
 
-    if parser in {"int", "positive_int", "min_markers_int"}:
+    if parser in {"int", "positive_int", "int_range"}:
         try:
             out = int(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{key} must be an integer.") from exc
-        if parser == "positive_int" and out < 1:
+        if parser == "positive_int" and out <= 0:
             raise ValueError(f"{key} must be >= 1.")
-        if parser == "min_markers_int" and (out < 0 or out > 2):
-            raise ValueError(f"{key} must be between 0 and 2.")
+        if parser == "int_range":
+            min_value = int(meta.get("min_value", out))
+            max_value = int(meta.get("max_value", out))
+            if out < min_value or out > max_value:
+                raise ValueError(f"{key} must be between {min_value} and {max_value}.")
         return out
 
     if parser in {"float", "positive_float", "non_negative_float"}:
@@ -717,9 +724,10 @@ def collect_charuco_detection_options(raw_options: dict[str, Any]) -> dict[str, 
         "CharucoParameters": {},
         "RefineParameters": {},
     }
+    meta_by_key = {meta["key"]: meta for meta in CHARUCO_DETECTION_OPTION_METADATA}
     for key, value in parsed_by_key.items():
         group, name = key.split(".", 1)
-        if value is None and name in {"cameraMatrix", "distCoeffs"}:
+        if value is None and meta_by_key.get(key, {}).get("drop_if_none", False):
             continue
         options[group][name] = value
     return options

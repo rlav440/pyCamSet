@@ -279,13 +279,14 @@ class TestExtractDetectionAndCamRes:
 
 class TestCharucoDetectionOptions:
     def test_tooltip_contains_required_fields(self):
-        meta = next(m for m in CHARUCO_DETECTION_OPTION_METADATA if m["key"] == "DetectorParameters.minMarkerPerimeterRate")
-        tip = build_charuco_option_tooltip(meta)
-        assert "Concept:" in tip
-        assert "Default:" in tip
-        assert "Range:" in tip
-        assert "Range source:" in tip
-        assert "Suggested value(s):" in tip
+        assert CHARUCO_DETECTION_OPTION_METADATA
+        for meta in CHARUCO_DETECTION_OPTION_METADATA:
+            tip = build_charuco_option_tooltip(meta)
+            assert "Concept:" in tip
+            assert "Default:" in tip
+            assert "Range:" in tip
+            assert "Range source:" in tip
+            assert "Suggested value(s):" in tip
 
     def test_collect_defaults_and_groups(self):
         opts = collect_charuco_detection_options({})

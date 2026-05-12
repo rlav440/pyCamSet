@@ -67,6 +67,10 @@ class ChArUco(AbstractTarget):
         except TypeError:
             # Backward compatibility with OpenCV builds that only expose
             # CharucoDetector(board, charucoParams).
+            logging.warning(
+                "OpenCV CharucoDetector constructor does not support DetectorParameters/RefineParameters; "
+                "falling back to CharucoParameters-only detector construction."
+            )
             self.board_detectors = aruco.CharucoDetector(self.board, self.detection_params)
         self.given_legacy_warning = False
 
@@ -82,12 +86,13 @@ class ChArUco(AbstractTarget):
     def _build_charuco_parameters(cls, detection_options: dict) -> aruco.CharucoParameters:
         params = aruco.CharucoParameters()
         params.tryRefineMarkers = True
-        for key, value in (detection_options.get("CharucoParameters", {}) or {}).items():
+        for key, value in detection_options.get("CharucoParameters", {}).items():
             if not hasattr(params, key):
                 continue
             if value is None:
                 continue
             if key in {"cameraMatrix", "distCoeffs"}:
+                # These fields must be numpy arrays for OpenCV's C++ bindings.
                 value = np.asarray(value, dtype=np.float64)
             setattr(params, key, value)
         return params
@@ -95,7 +100,7 @@ class ChArUco(AbstractTarget):
     @classmethod
     def _build_detector_parameters(cls, detection_options: dict) -> aruco.DetectorParameters:
         params = aruco.DetectorParameters()
-        for key, value in (detection_options.get("DetectorParameters", {}) or {}).items():
+        for key, value in detection_options.get("DetectorParameters", {}).items():
             if not hasattr(params, key):
                 continue
             if value is None:
@@ -108,7 +113,7 @@ class ChArUco(AbstractTarget):
     @staticmethod
     def _build_refine_parameters(detection_options: dict) -> aruco.RefineParameters:
         params = aruco.RefineParameters()
-        for key, value in (detection_options.get("RefineParameters", {}) or {}).items():
+        for key, value in detection_options.get("RefineParameters", {}).items():
             if not hasattr(params, key):
                 continue
             if value is None:

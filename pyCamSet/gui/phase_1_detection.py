@@ -95,6 +95,7 @@ except ImportError:
     _PYCAMSET_OK = False
 
 _TARGET_CHOICES = ["Ccube", "ChArUco"]
+_CHARUCO_BASED_TARGETS = {"Ccube", "ChArUco"}  # Both targets detect ChArUco corners in Phase 1.
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 
@@ -211,7 +212,11 @@ class Phase1Tab(QWidget):
         form_root = QVBoxLayout(form_widget)
         form_root.setContentsMargins(0, 0, 0, 0)
         form_root.setSpacing(4)
-        top_row.addWidget(form_widget, stretch=1)
+        form_scroll = QScrollArea()  # Keep long parameter forms usable when collapsible sections expand.
+        form_scroll.setWidgetResizable(True)  # Resize the inner form to the available width.
+        form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)  # Match the existing flat panel styling.
+        form_scroll.setWidget(form_widget)  # Make the whole left-side form scroll as one unit.
+        top_row.addWidget(form_scroll, stretch=1)  # Preserve the existing left/right split layout.
 
         side = QWidget()
         side.setFixedWidth(200)
@@ -370,7 +375,7 @@ class Phase1Tab(QWidget):
         form_root.addWidget(self._charuco_opts_section)
         self._charuco_option_widgets: dict[str, QWidget] = {}
 
-        charuco_note = QLabel("Applies only when Target type is ChArUco.")
+        charuco_note = QLabel("Applies to ChArUco and Ccube targets.")  # Both targets use ChArUco boards.
         charuco_note.setStyleSheet("color: gray; font-size: 10px;")
         self._charuco_opts_section.addRow(charuco_note)
 
@@ -487,7 +492,7 @@ class Phase1Tab(QWidget):
                 self._diagnostics_tab.refresh()
 
     def _on_target_type_changed(self, target_type: str) -> None:
-        is_charuco = (target_type == "ChArUco")
+        is_charuco = target_type in _CHARUCO_BASED_TARGETS  # Only ChArUco-based targets need this section.
         if hasattr(self, "_charuco_opts_section"):
             self._charuco_opts_section.setVisible(is_charuco)
 
@@ -537,7 +542,7 @@ class Phase1Tab(QWidget):
                 return None
 
         charuco_detection_options = None
-        if self._target_combo.currentText() == "ChArUco":
+        if self._target_combo.currentText() in _CHARUCO_BASED_TARGETS:  # Collect options for both targets.
             raw_charuco_values: dict[str, Any] = {}
             for key, widget in self._charuco_option_widgets.items():
                 if isinstance(widget, QComboBox):

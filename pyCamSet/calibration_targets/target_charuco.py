@@ -12,6 +12,10 @@ from cv2 import aruco
 from matplotlib import pyplot as plt
 
 from pyCamSet.calibration_targets.abstract_target import AbstractTarget
+from pyCamSet.calibration_targets.charuco_detection import (
+    build_charuco_detector_components,
+    construct_charuco_detector,
+)
 from pyCamSet.calibration_targets.target_detections import ImageDetection
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import downsample_valid
@@ -53,73 +57,19 @@ class ChArUco(AbstractTarget):
             self.board.setLegacyPattern(True)
         self.point_data = np.asarray(self.board.getChessboardCorners(), dtype=np.float64).squeeze()
 
-        self.detection_options = detection_options or {}
-        self.detection_params = self._build_charuco_parameters(self.detection_options)
-        self.detector_params = self._build_detector_parameters(self.detection_options)
-        self.refine_params = self._build_refine_parameters(self.detection_options)
-        try:
-            self.board_detectors = aruco.CharucoDetector(
-                self.board,
-                self.detection_params,
-                self.detector_params,
-                self.refine_params,
-            )
-        except TypeError:
-            # Backward compatibility with OpenCV builds that only expose
-            # CharucoDetector(board, charucoParams).
-            logging.warning(
-                "OpenCV CharucoDetector constructor does not support DetectorParameters/RefineParameters; "
-                "falling back to CharucoParameters-only detector construction."
-            )
-            self.board_detectors = aruco.CharucoDetector(self.board, self.detection_params)
+        self.detection_options = detection_options or {}  # Store the normalised detection overrides for reuse.
+        self.detection_params, self.detector_params, self.refine_params = build_charuco_detector_components(
+            self.detection_options
+        )  # Build the shared OpenCV parameter objects in one place.
+        self.board_detectors = construct_charuco_detector(
+            self.board,
+            self.detection_params,
+            self.detector_params,
+            self.refine_params,
+        )  # Create the board detector with the shared fallback logic.
         self.given_legacy_warning = False
 
         self._process_data()
-
-    @staticmethod
-    def _coerce_corner_refinement_method(value):
-        if isinstance(value, str):
-            return getattr(aruco, value, value)
-        return value
-
-    @classmethod
-    def _build_charuco_parameters(cls, detection_options: dict) -> aruco.CharucoParameters:
-        params = aruco.CharucoParameters()
-        params.tryRefineMarkers = True
-        for key, value in detection_options.get("CharucoParameters", {}).items():
-            if not hasattr(params, key):
-                continue
-            if value is None:
-                continue
-            if key in {"cameraMatrix", "distCoeffs"}:
-                # These fields must be numpy arrays for OpenCV's C++ bindings.
-                value = np.asarray(value, dtype=np.float64)
-            setattr(params, key, value)
-        return params
-
-    @classmethod
-    def _build_detector_parameters(cls, detection_options: dict) -> aruco.DetectorParameters:
-        params = aruco.DetectorParameters()
-        for key, value in detection_options.get("DetectorParameters", {}).items():
-            if not hasattr(params, key):
-                continue
-            if value is None:
-                continue
-            if key == "cornerRefinementMethod":
-                value = cls._coerce_corner_refinement_method(value)
-            setattr(params, key, value)
-        return params
-
-    @staticmethod
-    def _build_refine_parameters(detection_options: dict) -> aruco.RefineParameters:
-        params = aruco.RefineParameters()
-        for key, value in detection_options.get("RefineParameters", {}).items():
-            if not hasattr(params, key):
-                continue
-            if value is None:
-                continue
-            setattr(params, key, value)
-        return params
 
     def _board_size_mm(self) -> tuple[float, float]:
         n_x, n_y = self.board.getChessboardSize()

@@ -16,6 +16,8 @@ import sys
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import numpy as np
 import pytest
 
 
@@ -87,11 +89,16 @@ _make_qt_stub()
 from pyCamSet.gui.shared_functions import (  # noqa: E402
     CHARUCO_DETECTION_OPTION_METADATA,
     WorkspaceManager,
+    build_target,
     build_charuco_option_tooltip,
     collect_charuco_detection_options,
     extract_detection_and_cam_res,
     resolve_phase1_pickle_artifact,
     suppress_matplotlib_gui,
+)
+from pyCamSet.calibration_targets.charuco_detection import (  # noqa: E402
+    build_charuco_parameters,
+    construct_charuco_detector,
 )
 
 
@@ -323,6 +330,108 @@ class TestCharucoDetectionOptions:
         assert opts["DetectorParameters"]["cornerRefinementMethod"] == "CORNER_REFINE_SUBPIX"
         assert opts["CharucoParameters"]["cameraMatrix"][0][0] == 1000
         assert len(opts["CharucoParameters"]["distCoeffs"]) == 5
+
+
+class TestSharedCharucoDetectorHelpers:
+    def test_build_charuco_parameters_converts_camera_inputs(self):
+        params = build_charuco_parameters(
+            {
+                "CharucoParameters": {
+                    "cameraMatrix": [[1000, 0, 500], [0, 1000, 400], [0, 0, 1]],
+                    "distCoeffs": [0.1, -0.2, 0.0, 0.0, 0.0],
+                }
+            }
+        )
+        assert params.tryRefineMarkers is True
+        assert isinstance(params.cameraMatrix, np.ndarray)
+        assert params.cameraMatrix.shape == (3, 3)
+        assert isinstance(params.distCoeffs, np.ndarray)
+        assert params.distCoeffs.dtype == np.float64
+
+    def test_construct_charuco_detector_falls_back_for_legacy_opencv(self):
+        calls = []
+
+        def fake_ctor(*args):
+            calls.append(args)
+            if len(args) == 4:
+                raise TypeError("legacy signature")
+            return "legacy-detector"
+
+        with patch(
+            "pyCamSet.calibration_targets.charuco_detection.aruco.CharucoDetector",
+            side_effect=fake_ctor,
+        ):
+            result = construct_charuco_detector("board", "charuco", "detector", "refine")
+
+        assert result == "legacy-detector"
+        assert calls == [
+            ("board", "charuco", "detector", "refine"),
+            ("board", "charuco"),
+        ]
+
+
+class TestBuildTarget:
+    def test_build_target_passes_detection_options_to_ccube(self):
+        opts = collect_charuco_detection_options({})
+        with patch("pyCamSet.calibration_targets.target_Ccube.Ccube") as cube_cls:
+            cube_cls.return_value = "cube"
+            result = build_target("Ccube", 6, 30.0, charuco_detection_options=opts)
+        assert result == "cube"
+        cube_cls.assert_called_once_with(n_points=6, length=30.0, detection_options=opts)
+
+    def test_build_target_passes_detection_options_to_charuco(self):
+        opts = collect_charuco_detection_options({})
+        with patch("pyCamSet.calibration_targets.target_charuco.ChArUco") as charuco_cls:
+            charuco_cls.return_value = "charuco"
+            result = build_target("ChArUco", 6, 30.0, charuco_detection_options=opts)
+        assert result == "charuco"
+        charuco_cls.assert_called_once_with(
+            num_squares_x=6,
+            num_squares_y=6,
+            square_size=30.0,
+            detection_options=opts,
+        )
+
+    def test_charuco_target_uses_shared_detector_helpers(self):
+        opts = collect_charuco_detection_options({})
+        with patch(
+            "pyCamSet.calibration_targets.target_charuco.build_charuco_detector_components",
+            return_value=("cp", "dp", "rp"),
+        ) as build_components, patch(
+            "pyCamSet.calibration_targets.target_charuco.construct_charuco_detector",
+            return_value="detector",
+        ) as construct_detector:
+            from pyCamSet.calibration_targets.target_charuco import ChArUco
+
+            target = ChArUco(num_squares_x=5, num_squares_y=5, square_size=30, detection_options=opts)
+
+        build_components.assert_called_once_with(opts)
+        construct_detector.assert_called_once_with(target.board, "cp", "dp", "rp")
+        assert target.board_detectors == "detector"
+
+    def test_ccube_uses_shared_detector_helpers(self):
+        opts = collect_charuco_detection_options({})
+        construct_calls = []
+
+        class _FakeDetector:
+            def detectBoard(self, _image, markerCorners=None, markerIds=None):
+                return None, None, None, None
+
+        with patch(
+            "pyCamSet.calibration_targets.target_Ccube.build_charuco_detector_components",
+            return_value=("cp", "dp", "rp"),
+        ) as build_components, patch(
+            "pyCamSet.calibration_targets.target_Ccube.construct_charuco_detector",
+            side_effect=lambda board, cp, dp, rp: construct_calls.append((board, cp, dp, rp)) or _FakeDetector(),
+        ):
+            from pyCamSet.calibration_targets.target_Ccube import Ccube
+
+            target = Ccube(length=20, n_points=5, detection_options=opts)
+            target.find_in_image(np.zeros((64, 64), dtype=np.uint8))
+
+        build_components.assert_called_once_with(opts)
+        assert len(construct_calls) == 6
+        assert all(call[1:] == ("cp", "dp", "rp") for call in construct_calls)
 
 
 # ===========================================================================

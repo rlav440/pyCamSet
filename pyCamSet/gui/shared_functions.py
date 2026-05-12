@@ -744,7 +744,11 @@ def build_target(
     from pyCamSet.calibration_targets.target_charuco import ChArUco
 
     if target_type == "Ccube":
-        return Ccube(n_points=n_points, length=length)
+        return Ccube(
+            n_points=n_points,
+            length=length,
+            detection_options=charuco_detection_options,  # Ccube detection also runs through ChArUco boards.
+        )
     if target_type == "ChArUco":
         return ChArUco(
             num_squares_x=n_points,

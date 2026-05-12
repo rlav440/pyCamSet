@@ -13,6 +13,10 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 from pyCamSet.calibration_targets import AbstractTarget, ImageDetection, FaceToShape
+from pyCamSet.calibration_targets.charuco_detection import (
+    build_charuco_detector_components,
+    construct_charuco_detector,
+)
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform, downsample_valid
 
@@ -77,7 +81,8 @@ class Ccube(AbstractTarget):
                  draw_res=(1000, 1000),
                  border_fraction=0.1,
                  line_fraction=0.003,
-                 legacy = False,
+                 legacy=False,
+                 detection_options: dict | None = None,
                  ):
         super().__init__(inputs=locals())
         self.input_border_fraction = border_fraction
@@ -106,6 +111,10 @@ class Ccube(AbstractTarget):
             for a_dict in self.a_dicts][:6] #only need 6 of them!
         if legacy:
             [b.setLegacyPattern(True) for b in self.boards]
+        self.detection_options = detection_options or {}  # Store the shared ChArUco detector overrides.
+        self.detection_params, self.detector_params, self.refine_params = build_charuco_detector_components(
+            self.detection_options
+        )  # Build one shared parameter bundle for all six faces.
 
         self.n_points = n_points
         self.draw_res = draw_res
@@ -561,13 +570,16 @@ class Ccube(AbstractTarget):
 
         """
 
-        # params = aruco.DetectorParameters()
-        params = aruco.CharucoParameters()
-        params.tryRefineMarkers = True
-        # params.minMarkerPerimeterRate = 0.01
-        #params.adaptiveThreshConstant = 1 # for low light, but lowers accuracy
         if self.board_detectors is None:
-            self.board_detectors = [aruco.CharucoDetector(b, params) for b in self.boards]
+            self.board_detectors = [
+                construct_charuco_detector(
+                    board,
+                    self.detection_params,
+                    self.detector_params,
+                    self.refine_params,
+                )  # Reuse the shared constructor/fallback path for each face detector.
+                for board in self.boards
+            ]
 
 
         if draw:

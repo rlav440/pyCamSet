@@ -85,7 +85,10 @@ _make_qt_stub()
 
 # Now we can import the module under test
 from pyCamSet.gui.shared_functions import (  # noqa: E402
+    CHARUCO_DETECTION_OPTION_METADATA,
     WorkspaceManager,
+    build_charuco_option_tooltip,
+    collect_charuco_detection_options,
     extract_detection_and_cam_res,
     resolve_phase1_pickle_artifact,
     suppress_matplotlib_gui,
@@ -268,6 +271,58 @@ class TestExtractDetectionAndCamRes:
     def test_tuple_without_get_cam_list_raises(self):
         with pytest.raises(ValueError):
             extract_detection_and_cam_res((42, None))
+
+
+# ===========================================================================
+# ChArUco detection options metadata/parsing tests
+# ===========================================================================
+
+class TestCharucoDetectionOptions:
+    def test_tooltip_contains_required_fields(self):
+        assert CHARUCO_DETECTION_OPTION_METADATA
+        for meta in CHARUCO_DETECTION_OPTION_METADATA:
+            tip = build_charuco_option_tooltip(meta)
+            assert "Concept:" in tip
+            assert "Default:" in tip
+            assert "Range:" in tip
+            assert "Range source:" in tip
+            assert "Suggested value(s):" in tip
+
+    def test_collect_defaults_and_groups(self):
+        opts = collect_charuco_detection_options({})
+        assert "DetectorParameters" in opts
+        assert "CharucoParameters" in opts
+        assert "RefineParameters" in opts
+        assert opts["DetectorParameters"]["minMarkerPerimeterRate"] == 0.03
+        assert opts["CharucoParameters"]["minMarkers"] == 2
+        assert opts["RefineParameters"]["minRepDistance"] == 10.0
+        assert "cameraMatrix" not in opts["CharucoParameters"]
+        assert "distCoeffs" not in opts["CharucoParameters"]
+
+    def test_collect_rejects_bad_matrix_shape(self):
+        with pytest.raises(ValueError, match="3x3"):
+            collect_charuco_detection_options({"CharucoParameters.cameraMatrix": "[1,2,3]"})
+
+    def test_collect_rejects_adaptive_thresh_window_order(self):
+        with pytest.raises(ValueError, match="adaptiveThreshWinSizeMax"):
+            collect_charuco_detection_options(
+                {
+                    "DetectorParameters.adaptiveThreshWinSizeMin": "31",
+                    "DetectorParameters.adaptiveThreshWinSizeMax": "3",
+                }
+            )
+
+    def test_collect_accepts_enum_and_optional_json_inputs(self):
+        opts = collect_charuco_detection_options(
+            {
+                "DetectorParameters.cornerRefinementMethod": "CORNER_REFINE_SUBPIX",
+                "CharucoParameters.cameraMatrix": "[[1000,0,500],[0,1000,400],[0,0,1]]",
+                "CharucoParameters.distCoeffs": "[0.1,-0.2,0.0,0.0,0.0]",
+            }
+        )
+        assert opts["DetectorParameters"]["cornerRefinementMethod"] == "CORNER_REFINE_SUBPIX"
+        assert opts["CharucoParameters"]["cameraMatrix"][0][0] == 1000
+        assert len(opts["CharucoParameters"]["distCoeffs"]) == 5
 
 
 # ===========================================================================

@@ -272,7 +272,7 @@ class Phase1Tab(QWidget):
 
         # ── Detection options ──────────────────────────────────────────
         form_root.addWidget(make_separator())
-        form_root.addWidget(make_section_label("Detection Options"))
+        form_root.addWidget(make_section_label("pyCamSet Detection Options"))
 
         detect_form = QFormLayout()
         detect_form.setContentsMargins(0, 0, 0, 0)

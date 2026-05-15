@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -754,6 +755,7 @@ class Phase3DiagnosticsTab(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
+        self._threshold_worker = None  # PhaseWorker for threshold-based re-run
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
 
@@ -1001,24 +1003,442 @@ class Phase3DiagnosticsTab(QWidget):
             return
 
         arr = np.array(vals, dtype=float)
+        valid_mask = ~np.isnan(arr)
+        valid_arr = arr[valid_mask]
+
+        # MAD threshold: same rule as TemplateBundleHandler.find_and_exclude_transform_outliers
+        # out_thresh = 20; mad_thresh = median + 20 * MAD
+        if valid_arr.size > 0:
+            med_val = float(np.median(valid_arr))
+            mad_val = float(np.median(np.abs(valid_arr - med_val)))
+            mad_thresh = med_val + 20.0 * mad_val
+        else:
+            med_val = 0.0
+            mad_val = 0.0
+            mad_thresh = 0.0
+
+        # Initial user threshold: mean + 2σ (a sensible starting point)
+        if valid_arr.size > 0:
+            init_user_thresh = float(np.nanmean(valid_arr) + 2.0 * np.nanstd(valid_arr))
+            init_user_thresh = max(0.001, init_user_thresh)
+        else:
+            init_user_thresh = max(0.001, mad_thresh)
+
+        # Build figure
         fig = Figure(figsize=(9, 4.8), tight_layout=True)
         ax = fig.add_subplot(111)
         ax.bar(np.arange(arr.size), arr, color="#1f77b4", alpha=0.88)
-        ax.axhline(float(np.nanmedian(arr)) + 20.0, color="#d62728", linestyle="--", linewidth=1.1, label="median + 20")
+
+        # MAD threshold (backend rule, static)
+        ax.axhline(
+            mad_thresh, color="#d62728", linestyle="--", linewidth=1.1,
+            label=f"MAD threshold (median + 20·MAD = {mad_thresh:.2f} px)",
+        )
+        # User threshold (interactive)
+        user_hline = ax.axhline(
+            init_user_thresh, color="#ff7f0e", linestyle="-", linewidth=1.8,
+            label=f"User threshold ({init_user_thresh:.3f} px)", zorder=5,
+        )
+
+        _above_scatter = ax.scatter([], [], color="#ff7f0e", s=28, zorder=6,
+                                    label="Above threshold")
+
         ax.set_title(f"D3.4 Per-image initial reprojection error ({run.get('run_id', '?')})")
         ax.set_xlabel("Image index")
         ax.set_ylabel("Initial error (aggregated px)")
         ax.grid(axis="y", alpha=0.2)
         ax.legend(fontsize=8)
-        self._initial_layout.addWidget(
-            MatplotlibFigureCard(
-                f"D3.4 Per-image initial reprojection error ({run.get('run_id', '?')})",
-                fig,
-                FigureCanvasQTAgg,
-                parent=self._initial_widget,
-                min_height=360,
-            )
+
+        canvas = FigureCanvasQTAgg(fig)
+        canvas.setMinimumHeight(320)
+
+        # Helper: image indices whose value exceeds threshold
+        def _indices_above(thresh: float) -> list[int]:
+            return [i for i, v in enumerate(arr) if not np.isnan(v) and v > thresh]
+
+        # Controls row
+        ctrl = QWidget()
+        crow = QHBoxLayout(ctrl)
+        crow.setContentsMargins(4, 2, 4, 2)
+        crow.addWidget(QLabel("User threshold (px):"))
+
+        spin = QDoubleSpinBox()
+        spin.setRange(0.0, 1e8)
+        spin.setDecimals(3)
+        spin.setSingleStep(1.0)
+        spin.setValue(init_user_thresh)
+        spin.setFixedWidth(115)
+        crow.addWidget(spin)
+
+        stat_lbl = QLabel("")
+        crow.addWidget(stat_lbl, stretch=1)
+
+        n_sel = len(self._run_selector.get_selected())
+        create_btn = QPushButton("⊖  Create new run with images above threshold removed")
+        create_btn.setEnabled(n_sel == 1)
+        create_btn.setToolTip(
+            "Creates a new Phase 3 run excluding all images whose\n"
+            "D3.3 initial reprojection error exceeds the user threshold.\n"
+            "Select exactly one Phase 3 run to enable this action."
         )
+        crow.addWidget(create_btn)
+
+        def _update_threshold(v: float) -> None:
+            user_hline.set_ydata([v, v])
+            user_hline.set_label(f"User threshold ({v:.3f} px)")
+            ax.legend(fontsize=8)
+            canvas.draw_idle()
+            idxs = _indices_above(v)
+            stat_lbl.setText(f"  {len(idxs)} image(s) above threshold will be removed  ")
+            create_btn.setEnabled(len(self._run_selector.get_selected()) == 1)
+
+        spin.valueChanged.connect(_update_threshold)
+        _update_threshold(init_user_thresh)
+
+        # ── Drag-to-move threshold line ──────────────────────────────────
+        _drag = {"active": False}
+
+        def _on_press(event):
+            if event.inaxes is not ax or event.button != 1:
+                return
+            thresh_display = ax.transData.transform((0, spin.value()))[1]
+            if abs(event.y - thresh_display) < 5:
+                _drag["active"] = True
+
+        def _on_motion(event):
+            if event.inaxes is ax:
+                thresh_display = ax.transData.transform((0, spin.value()))[1]
+                if abs(event.y - thresh_display) < 5:
+                    canvas.setCursor(Qt.CursorShape.SizeVerCursor)
+                else:
+                    canvas.unsetCursor()
+            else:
+                canvas.unsetCursor()
+            if not _drag["active"] or event.inaxes is not ax:
+                return
+            new_val = max(spin.minimum(), float(event.ydata))
+            spin.blockSignals(True)
+            spin.setValue(new_val)
+            spin.blockSignals(False)
+            _update_threshold(new_val)
+
+        def _on_release(event):
+            _drag["active"] = False
+
+        canvas.mpl_connect("button_press_event", _on_press)
+        canvas.mpl_connect("motion_notify_event", _on_motion)
+        canvas.mpl_connect("button_release_event", _on_release)
+
+        def _on_create() -> None:
+            selected = self._run_selector.get_selected()
+            if len(selected) != 1:
+                QMessageBox.warning(
+                    self, "Selection", "Select exactly one Phase 3 run to create a new run."
+                )
+                return
+            src_run = next(
+                (r for r in selected if str(r.get("phase", "phase3")) == "phase3"),
+                None,
+            )
+            if src_run is None:
+                QMessageBox.warning(self, "Selection", "The selected run is not a Phase 3 run.")
+                return
+
+            thresh = spin.value()
+            idxs = _indices_above(thresh)
+            if not idxs:
+                QMessageBox.information(
+                    self, "Nothing to remove",
+                    "No images exceed the threshold. Lower threshold to exclude some images.",
+                )
+                return
+
+            idx_preview = str(idxs[:10]) + ("…" if len(idxs) > 10 else "")
+            reply = QMessageBox.question(
+                self, "Confirm — create new Phase 3 run",
+                f"User threshold: {thresh:.4f} px\n"
+                f"MAD threshold (backend): {mad_thresh:.4f} px\n"
+                f"Images to remove: {len(idxs)}   (indices: {idx_preview})\n\n"
+                "A new Phase 3 run will be created with those images excluded.\n"
+                "The source run will NOT be modified.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            create_btn.setEnabled(False)
+            old_txt = create_btn.text()
+            create_btn.setText("⟳  Running Phase 3…")
+            stat_lbl.setText("  Creating new run — please wait…  ")
+
+            def _restore() -> None:
+                create_btn.setText(old_txt)
+                create_btn.setEnabled(len(self._run_selector.get_selected()) == 1)
+
+            self._create_phase3_run_from_threshold(src_run, thresh, mad_thresh, idxs, _restore)
+
+        create_btn.clicked.connect(_on_create)
+
+        self._initial_layout.addWidget(ctrl)
+        self._initial_layout.addWidget(canvas)
+
+    def _create_phase3_run_from_threshold(
+        self,
+        source_run: dict,
+        threshold: float,
+        mad_threshold: float,
+        image_indices: list[int],
+        on_done_cb,
+    ) -> None:
+        """Run Phase 3 with globally filtered detections (by image index) in a background thread."""
+        ws = self._workspace_mgr.workspace_path
+        if ws is None:
+            QMessageBox.critical(self, "Workspace", "No active workspace.")
+            on_done_cb()
+            return
+
+        def work_fn(emit) -> dict:
+            try:
+                import dill as _pkl
+            except ImportError:
+                import pickle as _pkl
+
+            run_id = make_run_id()
+            run_dir = ws / "phase3_runs" / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            diagnostics: dict = {}
+
+            try:
+                src_artifacts = source_run.get("artifacts") or {}
+                src_inputs = source_run.get("inputs") or {}
+                src_params = source_run.get("params") or {}
+
+                # ── Resolve Phase 1 detection pickle ───────────────────
+                p1_pickle_str = src_artifacts.get("phase1_detection_pickle_used")
+                if p1_pickle_str and Path(p1_pickle_str).exists():
+                    p1_pickle = Path(p1_pickle_str)
+                else:
+                    p1_runs = self._workspace_mgr.load_runs("phase1")
+                    p1_run_id = src_inputs.get("phase1_run_id")
+                    p1_run = next((r for r in p1_runs if r.get("run_id") == p1_run_id), None)
+                    if p1_run is None and p1_runs:
+                        p1_run = p1_runs[-1]
+                    p1_pickle = resolve_phase1_pickle_artifact(p1_run, ws) if p1_run else None
+
+                if p1_pickle is None or not Path(p1_pickle).exists():
+                    raise RuntimeError("Could not resolve Phase 1 detected_datapoints.pickle.")
+
+                # ── Resolve Phase 2 initial camset ─────────────────────
+                camset_path_str = src_artifacts.get("phase2_initial_camset_used")
+                if not camset_path_str or not Path(camset_path_str).exists():
+                    p2_run_id = src_inputs.get("phase2_run_id")
+                    p2_runs = self._workspace_mgr.load_runs("phase2")
+                    p2_run = next((r for r in p2_runs if r.get("run_id") == p2_run_id), None)
+                    if p2_run is None and p2_runs:
+                        p2_run = p2_runs[-1]
+                    if p2_run:
+                        camset_path_str = (p2_run.get("artifacts") or {}).get("initial_camset")
+
+                if not camset_path_str or not Path(camset_path_str).exists():
+                    raise RuntimeError("Could not resolve Phase 2 initial camset.")
+
+                camset_path = Path(camset_path_str)
+
+                emit(f"Loading Phase 1 detections: {p1_pickle}")
+                payload = load_pickle(Path(p1_pickle))
+                detections = extract_detection(payload)
+                if detections is None:
+                    raise RuntimeError("Could not extract TargetDetection from Phase 1 pickle.")
+
+                # ── Filter detections (global by image index) ───────────
+                emit(f"Removing {len(image_indices)} image(s) via global_im_num filter…")
+                filtered_det = detections.delete_row(global_im_num=image_indices)
+                emit("Filtering complete.")
+
+                # ── Save filtered detection pickle ──────────────────────
+                filt_pickle_path = run_dir / "filtered_detected_datapoints.pickle"
+                with open(filt_pickle_path, "wb") as fh:
+                    _pkl.dump(filtered_det, fh)
+                emit(f"Saved filtered detections: {filt_pickle_path}")
+
+                # ── Load camset and run Phase 3 ─────────────────────────
+                emit(f"Loading Phase 2 camset: {camset_path}")
+                cams = load_CameraSet(camset_path)
+                target = build_target(
+                    src_params.get("target_type", "Ccube"),
+                    src_params.get("n_points", 6),
+                    src_params.get("length", 30.0),
+                )
+                problem_options = dict(src_params.get("problem_options") or {})
+                threads = src_params.get("threads", 1)
+
+                handler = TemplateBundleHandler(
+                    camset=cams,
+                    target=target,
+                    detection=filtered_det,
+                    fixed_params=src_params.get("fixed_params"),
+                    options=problem_options,
+                )
+
+                emit("Running Phase 3 bundle adjustment on filtered detections…")
+                stream = EmitStream(emit)
+                log_handler = EmitLogHandler(emit)
+                log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
+                root_logger = logging.getLogger()
+                root_logger.addHandler(log_handler)
+                try:
+                    with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream), suppress_matplotlib_gui():
+                        optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
+                            handler, threads=threads
+                        )
+                finally:
+                    root_logger.removeHandler(log_handler)
+
+                init_euclid = float(stats.get("initial_euclid", float("nan")))
+                final_euclid = float(stats.get("final_euclid", float("nan")))
+                emit(f"Initial Euclidean error: {init_euclid:.4f} px")
+                emit(f"Final Euclidean error: {final_euclid:.4f} px")
+                if not bool(stats.get("success", optimisation.success)):
+                    emit(f"Solver note: {stats.get('message', optimisation.message)}")
+
+                camset_out_path = run_dir / "optimised_cameras.camset"
+                out_cams.save(camset_out_path)
+
+                missing_before = np.array(
+                    getattr(handler, "missing_poses_before_outlier_rejection", []), dtype=bool
+                )
+                missing_after = np.array(
+                    getattr(
+                        handler,
+                        "missing_poses_after_outlier_rejection",
+                        handler.missing_poses if handler.missing_poses is not None else [],
+                    ),
+                    dtype=bool,
+                )
+                per_im_init = np.array(getattr(handler, "initial_per_im_error", []), dtype=float)
+
+                per_cam_err: dict = {}
+                try:
+                    dd = np.asarray(handler.get_detection_data(flatten=True))
+                    residual_xy = np.reshape(np.asarray(optimisation.fun, dtype=float), (-1, 2))
+                    residual_norm = np.linalg.norm(residual_xy, axis=1)
+                    if dd.ndim == 2 and dd.shape[1] >= 1:
+                        cam_idx = dd[:, 0].astype(int)
+                        if cam_idx.size != residual_norm.size:
+                            n = min(cam_idx.size, residual_norm.size)
+                            cam_idx = cam_idx[:n]
+                            residual_norm = residual_norm[:n]
+                        for idx, name in enumerate(handler.cam_names):
+                            mask = cam_idx == idx
+                            per_cam_err[name] = (
+                                float(np.mean(residual_norm[mask])) if np.any(mask) else float("nan")
+                            )
+                except Exception as _de:
+                    emit(f"Warning: D3.12 skipped: {_de}")
+
+                n_missing_before = int(np.sum(missing_before))
+                n_missing_after = int(np.sum(missing_after))
+                param_count = int(stats.get("param_count", 0))
+                obs_count = int(stats.get("observation_count", len(optimisation.fun) // 2))
+
+                diagnostics["D3.1_n_missing_poses"] = n_missing_before
+                diagnostics["D3.2_n_outlier_removed"] = int(max(0, n_missing_after - n_missing_before))
+                diagnostics["D3.3_per_image_initial_reprojection"] = per_im_init.tolist()
+                diagnostics["D3.4_initial_error_plot"] = "rendered in diagnostics tab"
+                diagnostics["D3.5_initial_euclid_px"] = init_euclid
+                diagnostics["D3.6_final_euclid_px"] = final_euclid
+                diagnostics["D3.7_error_reduction_ratio"] = (
+                    float(init_euclid / final_euclid) if final_euclid > 0 else float("inf")
+                )
+                diagnostics["D3.8_solver_status"] = {
+                    "status": int(stats.get("status", optimisation.status)),
+                    "message": str(stats.get("message", optimisation.message)),
+                    "success": bool(stats.get("success", optimisation.success)),
+                }
+                diagnostics["D3.9_nfev"] = int(stats.get("nfev", optimisation.nfev))
+                diagnostics["D3.10_parameter_observation_ratio"] = {
+                    "param_count": param_count,
+                    "observation_count": obs_count,
+                    "ratio": float(param_count / max(obs_count, 1)),
+                }
+                diagnostics["D3.11_residual_xy_scatter"] = "rendered in diagnostics tab"
+                diagnostics["D3.12_per_camera_mean_reprojection"] = per_cam_err
+                diagnostics["D3.13_extrinsic_pose_view"] = "rendered in diagnostics tab"
+
+                metadata = {
+                    "run_id": run_id,
+                    "phase": "phase3",
+                    "params": dict(src_params),
+                    "diagnostics": diagnostics,
+                    "error": None,
+                    "inputs": {
+                        "phase2_run_id": src_inputs.get("phase2_run_id"),
+                        "phase1_run_id": src_inputs.get("phase1_run_id"),
+                        "phase3_run_id": source_run.get("run_id"),
+                    },
+                    "artifacts": {
+                        "optimised_camset": str(camset_out_path),
+                        "phase2_initial_camset_used": str(camset_path),
+                        "phase1_detection_pickle_used": str(p1_pickle),
+                        "filtered_detection_pickle": str(filt_pickle_path),
+                    },
+                    "threshold_pruning": {
+                        "source_phase3_run_id": source_run.get("run_id"),
+                        "phase2_run_id": src_inputs.get("phase2_run_id"),
+                        "phase1_run_id": src_inputs.get("phase1_run_id"),
+                        "user_threshold_px": threshold,
+                        "mad_threshold_px": mad_threshold,
+                        "removed_global_image_indices": image_indices,
+                        "n_removed": len(image_indices),
+                        "removal_mode": "global via global_im_num",
+                    },
+                }
+                self._workspace_mgr.save_run("phase3", run_id, metadata)
+                emit(f"New Phase 3 run saved: {run_id}")
+                return metadata
+
+            except Exception as exc:
+                err = str(exc)
+                emit(f"ERROR: {err}")
+                metadata = {
+                    "run_id": run_id,
+                    "phase": "phase3",
+                    "diagnostics": diagnostics,
+                    "error": err,
+                }
+                self._workspace_mgr.save_run("phase3", run_id, metadata)
+                return metadata
+
+        self._threshold_worker = PhaseWorker(work_fn, parent=self)
+
+        # Connect line_ready to the Phase 3 settings tab terminal so output
+        # is visible when the user navigates back to that tab.
+        for _i in range(self._notebook.count()):
+            if self._notebook.tabText(_i) == TAB_PHASE3:
+                _settings_tab = self._notebook.widget(_i)
+                if hasattr(_settings_tab, "_terminal"):
+                    self._threshold_worker.line_ready.connect(_settings_tab._terminal.append_line)
+                break
+
+        def _on_finished(metadata: dict) -> None:
+            on_done_cb()
+            if metadata.get("error"):
+                QMessageBox.critical(
+                    self, "Phase 3 failed",
+                    f"New run encountered an error:\n{metadata['error']}"
+                )
+            else:
+                new_id = metadata.get("run_id", "?")
+                n_rem = (metadata.get("threshold_pruning") or {}).get("n_removed", len(image_indices))
+                QMessageBox.information(
+                    self, "New Phase 3 run created",
+                    f"Run ID: {new_id}\n"
+                    f"Removed {n_rem} image(s) with initial RPE > {threshold:.4f} px."
+                )
+            self.refresh()
+
+        self._threshold_worker.finished.connect(_on_finished)
+        self._threshold_worker.start()
 
     def _render_residuals(self, runs: list[dict]) -> None:
         while self._residual_layout.count():

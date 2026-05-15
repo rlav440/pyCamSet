@@ -418,7 +418,7 @@ class TemplateBundleHandler:
                 logging.info("Missing poses required removing detected data from the optimisation")
                 # delete any inds with missing pose numbers.
                 missing_poses = np.where(self.missing_poses)[0]
-                detection = self.detection.delete_row(im_num=missing_poses)
+                detection = self.detection.delete_row(global_im_num=missing_poses)
         if flatten:
             return detection.return_flattened_keys(dims).get_data()
         return detection.get_data()

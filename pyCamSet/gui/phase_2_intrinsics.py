@@ -22,6 +22,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -63,17 +64,128 @@ from pyCamSet.gui.shared_functions import (
 
 try:
     from pyCamSet.calibration.camera_calibrator import detect_datapoints_in_imfile, run_initial_calibration
+    from pyCamSet.calibration_targets.abstract_target import get_keys
     from pyCamSet.utils.saving import load_CameraSet, load_pickle
 
     _PYCAMSET_OK = True
 except ImportError:
     detect_datapoints_in_imfile = None
+    get_keys = None
     run_initial_calibration = None
     load_CameraSet = None
     load_pickle = None
     _PYCAMSET_OK = False
 
 _TARGET_CHOICES = ["Ccube", "ChArUco"]
+
+
+def _normalise_per_view_series(payload: object) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return per-view arrays as (indices, rms_px, n_points, has_detection, valid_pose)."""
+    if isinstance(payload, dict):
+        indices = np.asarray(payload.get("image_indices", []), dtype=float).reshape(-1)
+        rms = np.asarray(payload.get("rms_px", []), dtype=float).reshape(-1)
+        n_points = np.asarray(payload.get("n_points", []), dtype=float).reshape(-1)
+        has_detection = np.asarray(payload.get("has_detection", []), dtype=bool).reshape(-1)
+        valid_pose = np.asarray(payload.get("valid_pose", []), dtype=bool).reshape(-1)
+        if has_detection.size == 0 and indices.size:
+            has_detection = ~np.isnan(rms)
+        if valid_pose.size == 0 and indices.size:
+            valid_pose = ~np.isnan(rms)
+        return indices, rms, n_points, has_detection, valid_pose
+
+    rms = np.asarray(payload if payload is not None else [], dtype=float).reshape(-1)
+    indices = np.arange(rms.size, dtype=float)
+    valid = ~np.isnan(rms)
+    return indices, rms, np.full(rms.shape, np.nan, dtype=float), valid, valid
+
+
+def _compute_true_per_view_reprojection(detections, calibration_target, cams) -> tuple[dict[str, dict], dict[str, float]]:
+    """Compute true per-image RMS reprojection error for each camera/image index."""
+    if get_keys is None:
+        raise RuntimeError("pyCamSet detection helpers are unavailable.")
+
+    d26_per_view: dict[str, dict] = {}
+    d21_rms: dict[str, float] = {}
+    max_ims = int(detections.max_ims)
+
+    for cam_name in cams.get_names():
+        cam = cams[cam_name]
+        cam_detection = detections.get(cam=cam_name)
+        cam_has_any = cam_detection.has_data()
+
+        image_indices: list[int] = []
+        rms_px: list[float] = []
+        n_points: list[int] = []
+        has_detection: list[bool] = []
+        valid_pose: list[bool] = []
+
+        weighted_sq_sum = 0.0
+        total_points = 0
+
+        for im_idx in range(max_ims):
+            image_indices.append(im_idx)
+            if not cam_has_any:
+                rms_px.append(float("nan"))
+                n_points.append(0)
+                has_detection.append(False)
+                valid_pose.append(False)
+                continue
+
+            im_detect = cam_detection.get(global_im_num=im_idx)
+            data = im_detect.get_data()
+            if data is None or len(data) == 0:
+                rms_px.append(float("nan"))
+                n_points.append(0)
+                has_detection.append(False)
+                valid_pose.append(False)
+                continue
+
+            has_detection.append(True)
+            n_pts = int(data.shape[0])
+            n_points.append(n_pts)
+
+            try:
+                pose = calibration_target.target_pose_in_cam_image(im_detect, cam, mode="nan")
+            except Exception:
+                pose = np.ones((4, 4), dtype=float) * np.nan
+
+            pose_arr = np.asarray(pose, dtype=float)
+            if pose_arr.shape != (4, 4) or np.any(np.isnan(pose_arr)):
+                rms_px.append(float("nan"))
+                valid_pose.append(False)
+                continue
+
+            valid_pose.append(True)
+            keys = get_keys(data).astype(int)
+            object_points = np.asarray(calibration_target.point_data[tuple(keys.T)], dtype=np.float32).reshape(-1, 3)
+            image_points = np.asarray(data[:, -2:], dtype=np.float32).reshape(-1, 2)
+            rvec, _ = cv2.Rodrigues(pose_arr[:3, :3].astype(np.float64))
+            tvec = pose_arr[:3, 3].astype(np.float64)
+            projected, _ = cv2.projectPoints(
+                object_points,
+                rvec,
+                tvec,
+                np.asarray(cam.intrinsic, dtype=np.float64),
+                np.asarray(cam.distortion_coefs, dtype=np.float64).reshape(-1),
+            )
+            projected = projected.reshape(-1, 2).astype(np.float32)
+            sq_err = np.sum((projected - image_points) ** 2, axis=1)
+            rms = float(np.sqrt(np.mean(sq_err))) if sq_err.size else float("nan")
+            rms_px.append(rms)
+            if sq_err.size:
+                weighted_sq_sum += float(np.sum(sq_err))
+                total_points += int(sq_err.size)
+
+        d26_per_view[cam_name] = {
+            "image_indices": image_indices,
+            "rms_px": rms_px,
+            "n_points": n_points,
+            "has_detection": has_detection,
+            "valid_pose": valid_pose,
+        }
+        d21_rms[cam_name] = float(np.sqrt(weighted_sq_sum / total_points)) if total_points else float("nan")
+
+    return d26_per_view, d21_rms
 
 
 def _make_grid_image(width: int, height: int, step: int = 48) -> np.ndarray:
@@ -632,15 +744,11 @@ class Phase2Tab(QWidget):
                     d21_rms = {}
                     d22_intr = {}
                     d23_dst = {}
-                    d26_per_view = {}
-
-                    per_im_list = per_im if isinstance(per_im, list) else [per_im]
                     cam_names = list(cams.get_names())
 
-                    for cam_name, cam, per_view in zip(cam_names, cams, per_im_list):
-                        pv = np.array(per_view).reshape(-1).astype(float)
-                        d26_per_view[cam_name] = pv.tolist()
-                        d21_rms[cam_name] = float(np.sqrt(np.mean(np.square(pv)))) if pv.size else float("nan")
+                    d26_per_view, d21_rms = _compute_true_per_view_reprojection(detections, target, cams)
+
+                    for cam_name, cam in zip(cam_names, cams):
 
                         intr = np.array(cam.intrinsic)
                         d22_intr[cam_name] = {
@@ -661,7 +769,7 @@ class Phase2Tab(QWidget):
                     diagnostics["D2.3_distortion"] = d23_dst
                     diagnostics["D2.5_intrinsic_stddev"] = "not available in current pyCamSet API"
                     diagnostics["D2.6_per_view_reprojection"] = d26_per_view
-                    diagnostics["D2.7_per_view_error_plot"] = "rendered in diagnostics tab"
+                    diagnostics["D2.7_per_view_error_plot"] = "rendered in diagnostics tab (true per-image reprojection RMS)"
 
                     emit("Diagnostics computed (D2.1-D2.7).")
 
@@ -812,6 +920,7 @@ class Phase2DiagnosticsTab(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
+        self._threshold_worker = None  # PhaseWorker for threshold-based re-run
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
 
@@ -987,26 +1096,359 @@ class Phase2DiagnosticsTab(QWidget):
             self._per_view_layout.addWidget(QLabel("matplotlib not available."))
             return
 
+        # Compute initial threshold: mean + 2σ of all valid per-view RPE values
+        all_rpe: list[float] = []
+        for _cam, _vals in d26.items():
+            _, _arr, _, _, _ = _normalise_per_view_series(_vals)
+            all_rpe.extend(float(v) for v in _arr[~np.isnan(_arr)])
+        rpe_arr = np.array(all_rpe, dtype=float) if all_rpe else np.array([1.0])
+        init_thresh = float(np.nanmean(rpe_arr) + 2.0 * np.nanstd(rpe_arr))
+        init_thresh = max(0.001, init_thresh)
+
+        # Build figure
         fig = Figure(figsize=(9, 4.6), tight_layout=True)
         ax = fig.add_subplot(111)
         for cam, vals in d26.items():
-            arr = np.array(vals, dtype=float).reshape(-1)
-            ax.plot(np.arange(arr.size), arr, marker="o", linewidth=1.2, markersize=3, label=cam)
+            indices, arr, _, _, _ = _normalise_per_view_series(vals)
+            if arr.size == 0:
+                continue
+            ax.plot(indices, arr, marker="o", linewidth=1.2, markersize=3, label=cam)
 
-        ax.set_title(f"D2.6/D2.7 per-view reprojection error ({run.get('run_id', '?')})")
-        ax.set_xlabel("Image index")
+        hline = ax.axhline(
+            init_thresh, color="#d62728", linestyle="--", linewidth=1.5,
+            label=f"User threshold ({init_thresh:.3f} px)", zorder=5,
+        )
+        ax.set_title(f"D2.6/D2.7 per-image reprojection error ({run.get('run_id', '?')})")
+        ax.set_xlabel("Image / view index")
         ax.set_ylabel("RMS reprojection error (px)")
         ax.grid(alpha=0.25)
         ax.legend(fontsize=8)
-        self._per_view_layout.addWidget(
-            MatplotlibFigureCard(
-                f"D2.6/D2.7 per-view reprojection error ({run.get('run_id', '?')})",
-                fig,
-                FigureCanvasQTAgg,
-                parent=self._per_view_widget,
-                min_height=360,
-            )
+
+        canvas = FigureCanvasQTAgg(fig)
+        canvas.setMinimumHeight(320)
+
+        # Helper: (camera, image_index) pairs whose RPE exceeds threshold
+        def _pairs_above(thresh: float) -> list[tuple[str, int]]:
+            out: list[tuple[str, int]] = []
+            for _c, _v in d26.items():
+                _inds, _arr2, _, _, _ = _normalise_per_view_series(_v)
+                for _idx, _rpe in zip(_inds, _arr2):
+                    if not np.isnan(_rpe) and _rpe > thresh:
+                        out.append((_c, int(_idx)))
+            return out
+
+        # Controls row
+        ctrl = QWidget()
+        crow = QHBoxLayout(ctrl)
+        crow.setContentsMargins(4, 2, 4, 2)
+        crow.addWidget(QLabel("User threshold (px):"))
+
+        spin = QDoubleSpinBox()
+        spin.setRange(0.0, 100_000.0)
+        spin.setDecimals(3)
+        spin.setSingleStep(0.05)
+        spin.setValue(init_thresh)
+        spin.setFixedWidth(115)
+        crow.addWidget(spin)
+
+        stat_lbl = QLabel("")
+        crow.addWidget(stat_lbl, stretch=1)
+
+        n_sel = len(self._run_selector.get_selected())
+        create_btn = QPushButton("⊖  Create new run with points above threshold removed")
+        create_btn.setEnabled(n_sel == 1)
+        create_btn.setToolTip(
+            "Creates a new Phase 2 run with all (camera, image) pairs whose\n"
+            "D2.6 RPE exceeds the threshold removed from the detection artifact.\n"
+            "Select exactly one Phase 2 run to enable this action."
         )
+        crow.addWidget(create_btn)
+
+        def _update_threshold(v: float) -> None:
+            hline.set_ydata([v, v])
+            hline.set_label(f"User threshold ({v:.3f} px)")
+            ax.legend(fontsize=8)
+            canvas.draw_idle()
+            pairs = _pairs_above(v)
+            stat_lbl.setText(f"  {len(pairs)} (camera, image) pair(s) above threshold  ")
+            create_btn.setEnabled(len(self._run_selector.get_selected()) == 1)
+
+        spin.valueChanged.connect(_update_threshold)
+        _update_threshold(init_thresh)
+
+        # ── Drag-to-move threshold line ──────────────────────────────────
+        _drag = {"active": False}
+
+        def _on_press(event):
+            if event.inaxes is not ax or event.button != 1:
+                return
+            thresh_display = ax.transData.transform((0, spin.value()))[1]
+            if abs(event.y - thresh_display) < 5:
+                _drag["active"] = True
+
+        def _on_motion(event):
+            if event.inaxes is ax:
+                thresh_display = ax.transData.transform((0, spin.value()))[1]
+                if abs(event.y - thresh_display) < 5:
+                    canvas.setCursor(Qt.CursorShape.SizeVerCursor)
+                else:
+                    canvas.unsetCursor()
+            else:
+                canvas.unsetCursor()
+            if not _drag["active"] or event.inaxes is not ax:
+                return
+            new_val = max(spin.minimum(), float(event.ydata))
+            spin.blockSignals(True)
+            spin.setValue(new_val)
+            spin.blockSignals(False)
+            _update_threshold(new_val)
+
+        def _on_release(event):
+            _drag["active"] = False
+
+        canvas.mpl_connect("button_press_event", _on_press)
+        canvas.mpl_connect("motion_notify_event", _on_motion)
+        canvas.mpl_connect("button_release_event", _on_release)
+
+        def _on_create() -> None:
+            selected = self._run_selector.get_selected()
+            if len(selected) != 1:
+                QMessageBox.warning(
+                    self, "Selection", "Select exactly one Phase 2 run to create a new run."
+                )
+                return
+            src_run = selected[0]
+            thresh = spin.value()
+            pairs = _pairs_above(thresh)
+            if not pairs:
+                QMessageBox.information(
+                    self, "Nothing to remove",
+                    "No (camera, image) pairs exceed the threshold.\n"
+                    "Lower the threshold to remove some observations.",
+                )
+                return
+            cam_im_dict: dict[str, list[int]] = {}
+            for _c, _i in pairs:
+                cam_im_dict.setdefault(_c, []).append(_i)
+            summary = "\n".join(
+                f"  {c}: {len(v)} image(s)" for c, v in sorted(cam_im_dict.items())
+            )
+            reply = QMessageBox.question(
+                self, "Confirm — create new Phase 2 run",
+                f"Threshold: {thresh:.4f} px\n"
+                f"Total (camera, image) pairs to remove: {len(pairs)}\n{summary}\n\n"
+                "A new Phase 2 run will be created with those detections excluded.\n"
+                "The source run will NOT be modified.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            create_btn.setEnabled(False)
+            old_txt = create_btn.text()
+            create_btn.setText("⟳  Running Phase 2…")
+            stat_lbl.setText("  Creating new run — please wait…  ")
+
+            def _restore() -> None:
+                create_btn.setText(old_txt)
+                create_btn.setEnabled(len(self._run_selector.get_selected()) == 1)
+
+            self._create_phase2_run_from_threshold(src_run, thresh, pairs, cam_im_dict, _restore)
+
+        create_btn.clicked.connect(_on_create)
+
+        self._per_view_layout.addWidget(ctrl)
+        self._per_view_layout.addWidget(canvas)
+
+    def _create_phase2_run_from_threshold(
+        self,
+        source_run: dict,
+        threshold: float,
+        pairs: list[tuple[str, int]],
+        cam_im_dict: dict[str, list[int]],
+        on_done_cb,
+    ) -> None:
+        """Run Phase 2 with camera-specific filtered detections in a background thread."""
+        ws = self._workspace_mgr.workspace_path
+        if ws is None:
+            QMessageBox.critical(self, "Workspace", "No active workspace.")
+            on_done_cb()
+            return
+
+        def work_fn(emit) -> dict:
+            try:
+                import dill as _pkl
+            except ImportError:
+                import pickle as _pkl
+
+            run_id = make_run_id()
+            run_dir = ws / "phase2_runs" / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            diagnostics: dict = {}
+            error_msg: Optional[str] = None
+
+            try:
+                # ── Resolve Phase 1 detection pickle ───────────────────
+                source_pickle_str = (source_run.get("artifacts") or {}).get("phase1_detection_pickle")
+                if source_pickle_str and Path(source_pickle_str).exists():
+                    source_pickle = Path(source_pickle_str)
+                else:
+                    p1_runs = self._workspace_mgr.load_runs("phase1")
+                    p1_run_id = (source_run.get("inputs") or {}).get("phase1_run_id")
+                    p1_run = next((r for r in p1_runs if r.get("run_id") == p1_run_id), None)
+                    if p1_run is None and p1_runs:
+                        p1_run = p1_runs[-1]
+                    source_pickle = resolve_phase1_pickle_artifact(p1_run, ws) if p1_run else None
+
+                if source_pickle is None or not Path(source_pickle).exists():
+                    raise RuntimeError(
+                        "Could not resolve Phase 1 detected_datapoints.pickle for the source run."
+                    )
+
+                emit(f"Loading Phase 1 detections: {source_pickle}")
+                payload = load_pickle(Path(source_pickle))
+                detections, cam_res = extract_detection_and_cam_res(payload)
+
+                # ── Filter detections (per-camera) ──────────────────────
+                emit(f"Removing {len(pairs)} (camera, image) pair(s) via cam_im_num filter…")
+                filtered_det = detections.delete_row(cam_im_num=cam_im_dict)
+                emit("Filtering complete.")
+
+                # ── Save filtered detection pickle ──────────────────────
+                filt_pickle_path = run_dir / "filtered_detected_datapoints.pickle"
+                with open(filt_pickle_path, "wb") as fh:
+                    _pkl.dump((filtered_det, cam_res), fh)
+                emit(f"Saved filtered detections: {filt_pickle_path}")
+
+                # ── Rebuild target and run Phase 2 ──────────────────────
+                src_params = source_run.get("params") or {}
+                target = build_target(
+                    src_params.get("target_type", "Ccube"),
+                    src_params.get("n_points", 6),
+                    src_params.get("length", 30.0),
+                )
+                emit("Running Phase 2 initial calibration on filtered detections…")
+                stream = EmitStream(emit)
+                log_handler = EmitLogHandler(emit)
+                log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
+                root_logger = logging.getLogger()
+                root_logger.addHandler(log_handler)
+                try:
+                    with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+                        cams, _, per_im = run_initial_calibration(
+                            detection=filtered_det,
+                            calibration_target=target,
+                            cam_res=cam_res,
+                            save=False,
+                            fixed_params=src_params.get("fixed_params"),
+                            return_poses_and_costs=True,
+                        )
+                finally:
+                    root_logger.removeHandler(log_handler)
+                emit("Phase 2 calibration completed.")
+
+                camset_path = run_dir / "initial_cameras.camset"
+                cams.save(camset_path)
+
+                # ── Compute diagnostics ─────────────────────────────────
+                d26_per_view, d21_rms = _compute_true_per_view_reprojection(filtered_det, target, cams)
+                d22_intr: dict = {}
+                d23_dst: dict = {}
+                for cam_name, cam in zip(list(cams.get_names()), cams):
+                    intr = np.array(cam.intrinsic)
+                    d22_intr[cam_name] = {
+                        "fx": float(intr[0, 0]), "fy": float(intr[1, 1]),
+                        "cx": float(intr[0, 2]), "cy": float(intr[1, 2]),
+                        "res": np.array(cam.res).astype(float).tolist(),
+                    }
+                    dst = np.array(cam.distortion_coefs).reshape(-1)
+                    d23_dst[cam_name] = {
+                        "coeffs": dst.astype(float).tolist(),
+                        "l2_norm": float(np.linalg.norm(dst)),
+                    }
+
+                diagnostics = {
+                    "D2.1_per_camera_rms_reprojection": d21_rms,
+                    "D2.2_intrinsics": d22_intr,
+                    "D2.3_distortion": d23_dst,
+                    "D2.5_intrinsic_stddev": "not available in current pyCamSet API",
+                    "D2.6_per_view_reprojection": d26_per_view,
+                    "D2.7_per_view_error_plot": "rendered in diagnostics tab (true per-image reprojection RMS)",
+                }
+
+                # ── Build and save metadata ─────────────────────────────
+                src_params2 = source_run.get("params") or {}
+                metadata = {
+                    "run_id": run_id,
+                    "phase": "phase2",
+                    "params": dict(src_params2),
+                    "diagnostics": diagnostics,
+                    "error": None,
+                    "inputs": {
+                        "phase1_run_id": (source_run.get("inputs") or {}).get("phase1_run_id"),
+                        "phase2_run_id": source_run.get("run_id"),
+                    },
+                    "artifacts": {
+                        "initial_camset": str(camset_path),
+                        "phase1_detection_pickle": str(source_pickle),
+                        "filtered_detection_pickle": str(filt_pickle_path),
+                        "detection_source_override": str(filt_pickle_path),
+                    },
+                    "threshold_pruning": {
+                        "source_phase2_run_id": source_run.get("run_id"),
+                        "phase1_run_id": (source_run.get("inputs") or {}).get("phase1_run_id"),
+                        "threshold_px": threshold,
+                        "diagnostic_key": "D2.6_per_view_reprojection",
+                        "removed_pairs": {c: list(v) for c, v in cam_im_dict.items()},
+                        "n_removed_observations": len(pairs),
+                        "removal_mode": "camera-specific via cam_im_num",
+                    },
+                }
+                self._workspace_mgr.save_run("phase2", run_id, metadata)
+                emit(f"New Phase 2 run saved: {run_id}")
+                return metadata
+
+            except Exception as exc:
+                error_msg = str(exc)
+                emit(f"ERROR: {error_msg}")
+                metadata = {
+                    "run_id": run_id,
+                    "phase": "phase2",
+                    "diagnostics": diagnostics,
+                    "error": error_msg,
+                }
+                self._workspace_mgr.save_run("phase2", run_id, metadata)
+                return metadata
+
+        self._threshold_worker = PhaseWorker(work_fn, parent=self)
+
+        # Connect line_ready to the Phase 2 settings tab terminal so output
+        # is visible when the user navigates back to that tab.
+        for _i in range(self._notebook.count()):
+            if self._notebook.tabText(_i) == TAB_PHASE2:
+                _settings_tab = self._notebook.widget(_i)
+                if hasattr(_settings_tab, "_terminal"):
+                    self._threshold_worker.line_ready.connect(_settings_tab._terminal.append_line)
+                break
+
+        def _on_finished(metadata: dict) -> None:
+            on_done_cb()
+            if metadata.get("error"):
+                QMessageBox.critical(
+                    self, "Phase 2 failed",
+                    f"New run encountered an error:\n{metadata['error']}"
+                )
+            else:
+                new_id = metadata.get("run_id", "?")
+                n_rem = (metadata.get("threshold_pruning") or {}).get("n_removed_observations", len(pairs))
+                QMessageBox.information(
+                    self, "New Phase 2 run created",
+                    f"Run ID: {new_id}\n"
+                    f"Removed {n_rem} (camera, image) pair(s) with RPE > {threshold:.4f} px."
+                )
+            self.refresh()
+
+        self._threshold_worker.finished.connect(_on_finished)
+        self._threshold_worker.start()
 
     def _load_camset_cached(self, camset_path: Path) -> tuple[Optional[object], Optional[str], Optional[str]]:
         key = str(camset_path)

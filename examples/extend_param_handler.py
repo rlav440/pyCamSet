@@ -72,7 +72,7 @@ class TwoTargetCalibrator(TemplateBundleHandler):
                 logging.info("Missing poses required removing detected data from the optimisation")
                 # delete any inds with missing pose numbers.
                 missing_poses = np.where(self.extra_missing)[0]
-                detection = self.extra_detection.delete_row(im_num=missing_poses)
+                detection = self.extra_detection.delete_row(global_im_num=missing_poses)
 
         data1 = detection.return_flattened_keys(dims).get_data() + [0,0, self.len0, 0, 0]
         

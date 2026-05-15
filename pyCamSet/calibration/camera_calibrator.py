@@ -203,8 +203,8 @@ def outlier_rejection(results, params) -> tuple[TargetDetection | None, bool]:
     detection = params.get_detection_data()
     # plot this as a boxplot
     d_list = [[] for _ in range(params.detection.max_ims)]
-    for im_num, errs in zip(detection[:, 1], results):
-        d_list[int(im_num)].append(errs)
+    for global_im_num, errs in zip(detection[:, 1], results):
+        d_list[int(global_im_num)].append(errs)
 
     per_im_outliers = mad_outlier_detection([np.mean(datum) for datum in d_list if datum],
                                             draw=False,
@@ -224,7 +224,7 @@ def outlier_rejection(results, params) -> tuple[TargetDetection | None, bool]:
         return None, False
     logging.info("deleting datum associated with the above outliers")
     data = params.detection
-    return data.delete_row(im_num=per_im_outliers), True
+    return data.delete_row(global_im_num=per_im_outliers), True
 
 def run_stereo_calibration(
     cams: CameraSet,

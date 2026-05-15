@@ -495,7 +495,7 @@ class AbstractTarget(ABC):
 
         
         max_err = np.argmax(err_list)
-        min_err = np.argmax(err_list)
+        min_err = np.argmin(err_list)
         if (err := err_list[max_err].squeeze()) > 5:
             logging.warning(f"Initial error of {err: .2f} found for a pose detection.")
 

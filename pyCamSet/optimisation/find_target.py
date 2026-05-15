@@ -26,7 +26,7 @@ def find_target_pose_at_timestep(
     detection = TargetDetection(cam_names=cameras.get_names())
     for cam_name, image in images.values():
         datum = target.find_in_image(image, camera=cameras[cam_name])
-        detection.add_detection(detection=datum, cam_name=cam_name, im_num=0)
+        detection.add_detection(detection=datum, cam_name=cam_name, global_im_num=0)
 
     fp = {
         c.name:{"ext":c.extrinsic,"int":c.intrinsic,"dst":c.distortion_coefs} 
@@ -59,9 +59,9 @@ def find_target_poses(
 
     detection = TargetDetection(cam_names=cameras.get_names())
     for cam_name, image_list in image_seq.values():
-        for id_im, im in image_list: 
+        for global_im_num, im in image_list:
             datum = target.find_in_image(im, camera=cameras[cam_name])
-            detection.add_detection(detection=datum, cam_name=cam_name, im_num=id_im)
+            detection.add_detection(detection=datum, cam_name=cam_name, global_im_num=global_im_num)
 
     fp = {
         c.name:{"ext":c.extrinsic,"int":c.intrinsic,"dst":c.distortion_coefs} 

@@ -248,7 +248,7 @@ def visualise_calibration(
     plt.show()
 
     #err_buff = copy.copy(euclidean_err)
-    to_reconstruct = detection.sort(['key', 'im_num']).get_data()
+    to_reconstruct = detection.sort(['key', 'global_im_num']).get_data()
     ## Triangulation of points in world space
     reconstructed, reconstructed_subset,  where_mask, _ = cams.multi_cam_triangulate(to_reconstruct, return_used=True)
     error_subset = np.array([np.mean(euclidean_err[datum]) for datum in where_mask])
@@ -382,7 +382,7 @@ def visualise_calibration_open3d(
         detection = param_handler.get_detection()
         cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
 
-        to_reconstruct = detection.sort(['key', 'im_num']).get_data()
+        to_reconstruct = detection.sort(['key', 'global_im_num']).get_data()
         reconstructed, reconstructed_subset, where_mask, _ = cams.multi_cam_triangulate(
             to_reconstruct, return_used=True
         )
@@ -532,7 +532,7 @@ def render_calibration_pyvista_png(
         detection = param_handler.get_detection()
         cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
 
-        to_reconstruct = detection.sort(['key', 'im_num']).get_data()
+        to_reconstruct = detection.sort(['key', 'global_im_num']).get_data()
         reconstructed, reconstructed_subset, where_mask, _ = cams.multi_cam_triangulate(
             to_reconstruct, return_used=True
         )

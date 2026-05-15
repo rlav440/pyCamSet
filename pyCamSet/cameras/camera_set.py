@@ -725,7 +725,7 @@ class CameraSet:
             raise ValueError("No calibration history was found")
 
         detection = self.calibration_handler.get_detection()
-        to_reconstruct = detection.sort(['key', 'im_num']).get_data()
+        to_reconstruct = detection.sort(['key', 'global_im_num']).get_data()
         _, poses = self.calibration_handler.get_camset(self.calibration_params, return_pose=True)
 
         ## Triangulation of points in world space

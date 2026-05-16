@@ -441,7 +441,7 @@ class OptimisationTab(QWidget):
 
     def _update_target_visibility(self, target_type: str) -> None:
         is_ccube = target_type == "Ccube"
-        self._rows_label.setText("n_points:" if is_ccube else "Rows (num_squares_y):")
+        self._rows_label.setText("Points (n_points):" if is_ccube else "Rows (num_squares_y):")
         self._rows_spin.setRange(2, 50)
         self._cols_label.setVisible(not is_ccube)
         self._cols_spin.setVisible(not is_ccube)

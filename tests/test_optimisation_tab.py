@@ -539,6 +539,8 @@ def _fake_phase3(rpe: float):
 
 
 class _FakeCamset:
+    """Minimal camset stand-in that writes artefacts without calibration dependencies."""
+
     def __init__(self, label: str):
         self.label = label
 

@@ -254,7 +254,7 @@ class OptimisationTab(QWidget):
         form.addRow("Dataset path:", wrap1)
 
         self._outdir_edit = QLineEdit()
-        self._outdir_edit.setPlaceholderText("(defaults to <dataset>/optimisation_runs)")
+        self._outdir_edit.setPlaceholderText("(defaults to <dataset>/.pycamset_workspace/optimisation_runs)")
         browse_out = QPushButton("Browse…")
         browse_out.clicked.connect(lambda: self._browse_into(self._outdir_edit))
         row2 = QHBoxLayout()

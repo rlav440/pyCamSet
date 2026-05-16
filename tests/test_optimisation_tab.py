@@ -61,6 +61,7 @@ from pyCamSet.optimisation.optimisation_worker import (
 from pyCamSet.optimisation.optimisation_promotion import promote_retained_trial
 from pyCamSet.calibration_targets.target_Ccube import Ccube
 from pyCamSet.calibration_targets.target_charuco import ChArUco
+from pyCamSet.utils.general_utils import get_subfolder_names
 
 
 @pytest.fixture(scope="module")
@@ -529,7 +530,7 @@ def test_write_study_summary_lists_successes(tmp_path: Path):
 
 def test_default_output_dir_under_floc():
     result = default_output_dir("/tmp/data", "study_abc")
-    assert str(result).endswith("optimisation_runs/study_abc")
+    assert str(result).endswith(".pycamset_workspace/optimisation_runs/study_abc")
 
 
 def test_make_study_id_format():
@@ -558,6 +559,10 @@ def test_validate_run_settings_missing_path(tmp_path: Path):
 
 
 def test_validate_run_settings_clean(tmp_path: Path):
+    for cam in ("cam0", "cam1"):
+        cam_dir = tmp_path / cam
+        cam_dir.mkdir(parents=True, exist_ok=True)
+        (cam_dir / "img_0001.png").write_bytes(b"ok")
     target = {"target_type": "ChArUco", "num_squares_x": 5, "num_squares_y": 5, "square_size": 30.0}
     errors = validate_run_settings(
         f_loc=tmp_path,
@@ -571,7 +576,71 @@ def test_validate_run_settings_clean(tmp_path: Path):
     assert errors == []
 
 
+def test_camera_folder_discovery_ignores_non_camera_root_entries(tmp_path: Path):
+    (tmp_path / "cam0").mkdir()
+    (tmp_path / "cam1").mkdir()
+    (tmp_path / "cam0" / "im_0001.jpg").write_bytes(b"ok")
+    (tmp_path / "cam1" / "im_0001.jpg").write_bytes(b"ok")
+    (tmp_path / ".pycamset_workspace").mkdir()
+    (tmp_path / ".pycamset_workspace" / "optimisation_runs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "optimisation_runs").mkdir()
+    (tmp_path / "optimisation_runs" / "study_001").mkdir()
+    (tmp_path / "notes.txt").write_text("ignore me")
+    (tmp_path / "detected_datapoints.pickle").write_bytes(b"ignore me")
+    (tmp_path / "empty_folder").mkdir()
+    (tmp_path / "metadata_only").mkdir()
+    (tmp_path / "metadata_only" / "config.json").write_text("{}")
+
+    folders = get_subfolder_names(tmp_path, return_full_path=True)
+    assert [folder.name for folder in folders] == ["cam0", "cam1"]
+
+
+def test_validate_run_settings_ignores_workspace_and_output_folders(tmp_path: Path):
+    (tmp_path / "cam0").mkdir()
+    (tmp_path / "cam1").mkdir()
+    (tmp_path / "cam0" / "frame_0001.png").write_bytes(b"ok")
+    (tmp_path / "cam1" / "frame_0001.png").write_bytes(b"ok")
+    (tmp_path / ".pycamset_workspace").mkdir()
+    (tmp_path / "optimisation_runs").mkdir()
+    (tmp_path / "readme.txt").write_text("notes")
+    target = {"target_type": "ChArUco", "num_squares_x": 5, "num_squares_y": 5, "square_size": 30.0}
+
+    errors = validate_run_settings(
+        f_loc=tmp_path,
+        n_trials=10,
+        target_rpe=1.0,
+        max_nfev_phase3=100,
+        max_nfev_phase4=100,
+        retain_successes=5,
+        target_settings=target,
+    )
+    assert errors == []
+
+
+def test_validate_run_settings_rejects_dirs_without_supported_images(tmp_path: Path):
+    (tmp_path / "cam0").mkdir()
+    (tmp_path / "cam1").mkdir()
+    (tmp_path / "cam0" / "frame_0001.png").write_bytes(b"ok")
+    (tmp_path / "cam1" / "config.json").write_text("{}")
+    target = {"target_type": "ChArUco", "num_squares_x": 5, "num_squares_y": 5, "square_size": 30.0}
+
+    errors = validate_run_settings(
+        f_loc=tmp_path,
+        n_trials=10,
+        target_rpe=1.0,
+        max_nfev_phase3=100,
+        max_nfev_phase4=100,
+        retain_successes=5,
+        target_settings=target,
+    )
+    assert any("at least two camera folders" in e for e in errors)
+
+
 def test_validate_run_settings_accepts_ccube(tmp_path: Path):
+    for cam in ("cam0", "cam1"):
+        cam_dir = tmp_path / cam
+        cam_dir.mkdir(parents=True, exist_ok=True)
+        (cam_dir / "img_0001.png").write_bytes(b"ok")
     target = {"target_type": "Ccube", "n_points": 6, "length": 40.0, "border_fraction": 0.1}
     errors = validate_run_settings(
         f_loc=tmp_path,
@@ -714,6 +783,10 @@ def _make_config(
     mode: str = "full",
     trial_gating: TrialGatingSettings | None = None,
 ) -> RunConfig:
+    for cam in ("cam0", "cam1"):
+        cam_dir = tmp_path / cam
+        cam_dir.mkdir(parents=True, exist_ok=True)
+        (cam_dir / "img_0001.png").write_bytes(b"ok")
     return RunConfig(
         f_loc=tmp_path,
         mode=mode,

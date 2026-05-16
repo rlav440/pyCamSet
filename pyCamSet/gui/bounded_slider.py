@@ -55,6 +55,7 @@ class BoundedSliderRow(QWidget):
 
     valueChanged = Signal(str, object)
     optimiseChanged = Signal(str, bool)
+    boundsChanged = Signal(str, object, object)
 
     def __init__(self, entry: dict[str, Any], parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -132,6 +133,10 @@ class BoundedSliderRow(QWidget):
         if self._slider is not None:
             self._slider.valueChanged.connect(self._on_slider_changed)
         self._optimise.toggled.connect(self._on_optimise_toggled)
+        if self._lower_spin is not None:
+            self._lower_spin.valueChanged.connect(self._on_bounds_changed)
+        if self._upper_spin is not None:
+            self._upper_spin.valueChanged.connect(self._on_bounds_changed)
 
     # ------------------------------------------------------------------
 
@@ -226,6 +231,11 @@ class BoundedSliderRow(QWidget):
         if self._upper_spin is not None:
             self._upper_spin.setEnabled(checked)
         self.optimiseChanged.emit(self._key, checked)
+
+    def _on_bounds_changed(self, _value) -> None:
+        if self._lower_spin is None or self._upper_spin is None:
+            return
+        self.boundsChanged.emit(self._key, self._lower_spin.value(), self._upper_spin.value())
 
 
 __all__ = ["BoundedSliderRow"]

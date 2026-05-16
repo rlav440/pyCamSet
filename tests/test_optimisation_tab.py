@@ -27,6 +27,11 @@ from pyCamSet.optimisation.charuco_detector_metadata import (
     validate_all_rows,
     validate_parameter_row,
 )
+from pyCamSet.optimisation.charuco_detection_profiles import (
+    CHARUCO_DETECTION_PROFILES,
+    get_charuco_detection_profile,
+    make_profile_tooltip,
+)
 from pyCamSet.optimisation.optimisation_study import (
     FAILURE_SCORE,
     MAX_SUCCESSES_HARD_CAP,
@@ -872,6 +877,68 @@ def test_trial_gating_manual_override_switches_to_custom(tmp_path: Path, qapp):
     assert tab._trial_gating_profile_combo.currentText() == "Custom"
     assert config.trial_gating.profile_name == "Custom"
     assert config.trial_gating.min_image_coverage == pytest.approx(0.33)
+
+
+def test_detection_profile_selection_populates_bounds_without_auto_checking(tmp_path: Path, qapp):
+    tab = _make_tab(tmp_path, qapp)
+    tab._detection_profile_combo.setCurrentText("Low-Contrast / Dim")
+    profile = get_charuco_detection_profile("Low-Contrast / Dim")
+    min_markers_row = tab._param_rows["minMarkers"]
+    adapt_const_row = tab._param_rows["adaptiveThreshConstant"]
+
+    assert min_markers_row.bounds() == (
+        profile["lower_bounds"]["minMarkers"],
+        profile["upper_bounds"]["minMarkers"],
+    )
+    assert adapt_const_row.bounds() == (
+        profile["lower_bounds"]["adaptiveThreshConstant"],
+        profile["upper_bounds"]["adaptiveThreshConstant"],
+    )
+    assert all(not row.optimise_enabled() for row in tab._param_rows.values())
+
+
+def test_unchecked_rows_ignore_profile_bounds_in_collected_config(tmp_path: Path, qapp):
+    tab = _make_tab(tmp_path, qapp)
+    tab._detection_profile_combo.setCurrentText("Small / Distant Board")
+    rows = {row.key: row for row in tab._collect_parameter_rows()}
+    adaptive = rows["adaptiveThreshConstant"]
+
+    assert adaptive.optimise is False
+    assert adaptive.lower is None
+    assert adaptive.upper is None
+
+
+def test_checked_rows_use_currently_displayed_bounds_in_collected_config(tmp_path: Path, qapp):
+    tab = _make_tab(tmp_path, qapp)
+    tab._detection_profile_combo.setCurrentText("Close / Large Board")
+    row_widget = tab._param_rows["adaptiveThreshConstant"]
+    row_widget.set_optimise(True)
+    row_widget.set_bounds(6.5, 14.0)
+    rows = {row.key: row for row in tab._collect_parameter_rows()}
+    adaptive = rows["adaptiveThreshConstant"]
+
+    assert adaptive.optimise is True
+    assert adaptive.lower == pytest.approx(6.5)
+    assert adaptive.upper == pytest.approx(14.0)
+
+
+def test_detection_profile_manual_bound_edit_switches_selector_to_custom(tmp_path: Path, qapp):
+    tab = _make_tab(tmp_path, qapp)
+    tab._detection_profile_combo.setCurrentText("Balanced")
+    row_widget = tab._param_rows["adaptiveThreshConstant"]
+    row_widget._lower_spin.setValue(2.5)
+
+    assert tab._detection_profile_combo.currentText() == "Custom"
+
+
+def test_detection_profile_info_lists_recommended_parameters():
+    labels = {entry["key"]: entry.get("label", entry["key"]) for entry in CHARUCO_PARAMETER_METADATA}
+    for name, profile in CHARUCO_DETECTION_PROFILES.items():
+        assert profile["recommended_keys"], f"{name} should list recommended parameters"
+        tooltip = make_profile_tooltip(name, labels)
+        assert "Recommended parameters to check for optimisation:" in tooltip
+        first_key = profile["recommended_keys"][0]
+        assert labels.get(first_key, first_key) in tooltip
 
 
 def test_run_trial_full_phase3_success(tmp_path: Path):

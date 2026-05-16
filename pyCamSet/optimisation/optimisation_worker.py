@@ -1,5 +1,8 @@
-"""
-Headless backend worker for the Optimisation tab.
+"""Purpose: Headless backend worker for the Optimisation tab.
+
+Status: Active optimisation orchestration used by the GUI and tests.
+
+Future: Keep GUI-specific promotion and target widgets outside this module.
 
 This module orchestrates one trial of the §27 execution contract:
 
@@ -75,7 +78,7 @@ class ParameterRowConfig:
 
 @dataclass
 class TargetSettings:
-    """ChArUco target definition reused for every trial."""
+    """Calibration target definition for ChArUco and Ccube trials."""
 
     target_type: str = "ChArUco"
     num_squares_x: int = 5
@@ -83,6 +86,9 @@ class TargetSettings:
     square_size: float = 30.0  # mm
     marker_fraction: float = 0.8
     a_dict: int = 0  # cv2.aruco.DICT_4X4_1000 numerically; resolved by the GUI
+    n_points: int = 6
+    length: float = 30.0  # mm
+    border_fraction: float = 0.1
     legacy: bool = False
 
     def as_dict(self) -> dict[str, Any]:
@@ -93,6 +99,9 @@ class TargetSettings:
             "square_size": self.square_size,
             "marker_fraction": self.marker_fraction,
             "a_dict": self.a_dict,
+            "n_points": self.n_points,
+            "length": self.length,
+            "border_fraction": self.border_fraction,
             "legacy": self.legacy,
         }
 
@@ -214,17 +223,30 @@ def default_detection_fn(
     Caching is disabled because each trial uses different detector settings.
     """
     from pyCamSet.calibration.camera_calibrator import detect_datapoints_in_imfile
-    from pyCamSet.calibration_targets.target_charuco import ChArUco
+    if target_settings.target_type == "Ccube":
+        from pyCamSet.calibration_targets.target_Ccube import Ccube
 
-    target = ChArUco(
-        num_squares_x=target_settings.num_squares_x,
-        num_squares_y=target_settings.num_squares_y,
-        square_size=target_settings.square_size,
-        marker_fraction=target_settings.marker_fraction,
-        a_dict=target_settings.a_dict,
-        legacy=target_settings.legacy,
-        detection_options=detection_options,
-    )
+        target = Ccube(
+            n_points=target_settings.n_points,
+            length=target_settings.length,
+            # Ccube names the dictionary field aruco_dict; ChArUco names it a_dict.
+            aruco_dict=target_settings.a_dict,
+            border_fraction=target_settings.border_fraction,
+            legacy=target_settings.legacy,
+            detection_options=detection_options,
+        )
+    else:
+        from pyCamSet.calibration_targets.target_charuco import ChArUco
+
+        target = ChArUco(
+            num_squares_x=target_settings.num_squares_x,
+            num_squares_y=target_settings.num_squares_y,
+            square_size=target_settings.square_size,
+            marker_fraction=target_settings.marker_fraction,
+            a_dict=target_settings.a_dict,
+            legacy=target_settings.legacy,
+            detection_options=detection_options,
+        )
     detections, cam_res = detect_datapoints_in_imfile(
         f_loc=f_loc,
         calibration_target=target,
@@ -624,22 +646,39 @@ class OptimisationStudy:
             if not result.successful:
                 return  # §13: per-success metadata
             camset_path = None
+            detection_pickle_path = None
+            phase3_camset_path = None
+            phase4_camset_path = None
             phase4_camset = payload.get("phase4", {}).get("camset") if "phase4" in payload else None
             phase3_camset = payload.get("phase3", {}).get("camset") if "phase3" in payload else None
             saved_camset = phase4_camset if result.success_stage == "phase4" else phase3_camset
             try:
                 from pyCamSet.optimisation.optimisation_study import trial_subdir_name
+                from pyCamSet.utils.saving import save_pickle
                 trial_dir = output_dir / trial_subdir_name(result)
                 trial_dir.mkdir(parents=True, exist_ok=True)
+                detection_payload = payload.get("detection", {})
+                detection_dict = detection_payload if isinstance(detection_payload, dict) else {}
+                has_detections = "detections" in detection_dict and detection_dict["detections"] is not None
+                if has_detections:
+                    detections = detection_dict["detections"]
+                    detection_pickle_path = trial_dir / "detected_datapoints.pickle"
+                    save_pickle(
+                        (detections, detection_dict.get("cam_res"))
+                        if detection_dict.get("cam_res") is not None
+                        else detections,
+                        detection_pickle_path,
+                    )
+                if phase3_camset is not None and hasattr(phase3_camset, "save"):
+                    phase3_camset_path = trial_dir / "camset_phase3.json"
+                    phase3_camset.save(str(phase3_camset_path))
+                if phase4_camset is not None and hasattr(phase4_camset, "save"):
+                    phase4_camset_path = trial_dir / "camset_phase4.json"
+                    phase4_camset.save(str(phase4_camset_path))
                 if saved_camset is not None and hasattr(saved_camset, "save"):
-                    camset_path = trial_dir / f"camset_{result.success_stage}.json"
-                    try:
-                        saved_camset.save(str(camset_path))
-                    except Exception as exc:  # pragma: no cover - depends on backend
-                        _LOG.warning("Failed to save camset for trial %d: %r", result.trial_number, exc)
-                        camset_path = None
+                    camset_path = phase4_camset_path if result.success_stage == "phase4" else phase3_camset_path
             except Exception as exc:  # pragma: no cover
-                _LOG.warning("Could not prepare camset path: %r", exc)
+                _LOG.warning("Could not prepare optimisation trial artefacts: %r", exc)
             write_trial_metadata(
                 output_dir,
                 result,
@@ -650,6 +689,17 @@ class OptimisationStudy:
                 sampler_name=cfg.sampler_name,
                 seed=cfg.seed,
                 camset_path=camset_path,
+                extra={
+                    "artifacts": {
+                        "detected_datapoints_pickle": str(detection_pickle_path) if detection_pickle_path else None,
+                        "phase3_camset": str(phase3_camset_path) if phase3_camset_path else None,
+                        "phase4_camset": str(phase4_camset_path) if phase4_camset_path else None,
+                    },
+                    "phase_sources": {
+                        "phase2_run_id": payload.get("phase3", {}).get("source_phase2_run_id"),
+                        "phase2_initial_camset": payload.get("phase3", {}).get("source_phase2_camset"),
+                    },
+                },
             )
 
         return _write

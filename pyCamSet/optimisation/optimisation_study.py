@@ -1,5 +1,8 @@
-"""
-Headless data model for the Optimisation tab.
+"""Purpose: Headless data model for the Optimisation tab.
+
+Status: Active scoring, retention, and metadata support for optimisation studies.
+
+Future: Keep persisted metadata backwards-compatible for promoted retained runs.
 
 This module is intentionally GUI-free and Optuna-free so it can be unit-tested
 without a display or the optional ``optuna`` dependency.  It implements the
@@ -393,18 +396,25 @@ def validate_run_settings(
     if not isinstance(retain_successes, int) or not (1 <= retain_successes <= MAX_SUCCESSES_HARD_CAP):
         errors.append(f"Retain successes must be an integer in [1, {MAX_SUCCESSES_HARD_CAP}].")
 
-    # Target validation: just check the required ChArUco fields are present and sane.
+    # Target validation: check fields needed by the selected target type.
     if target_settings is None or not isinstance(target_settings, dict):
         errors.append("Target settings are missing.")
         return errors
-    if target_settings.get("target_type", "ChArUco") == "ChArUco":
-        for required in ("num_squares_x", "num_squares_y", "square_size"):
-            value = target_settings.get(required)
-            try:
-                if value is None or float(value) <= 0:
-                    errors.append(f"Target field '{required}' must be > 0.")
-            except (TypeError, ValueError):
-                errors.append(f"Target field '{required}' must be numeric.")
+    target_type = target_settings.get("target_type", "ChArUco")
+    required_fields = (
+        ("num_squares_x", "num_squares_y", "square_size")
+        if target_type == "ChArUco"
+        else ("n_points", "length", "border_fraction")
+    )
+    for required in required_fields:
+        value = target_settings.get(required)
+        try:
+            if value is None or float(value) <= 0:
+                errors.append(f"Target field '{required}' must be > 0.")
+        except (TypeError, ValueError):
+            errors.append(f"Target field '{required}' must be numeric.")
+    if target_type not in {"ChArUco", "Ccube"}:
+        errors.append(f"Unknown target type: {target_type!r}.")
     return errors
 
 

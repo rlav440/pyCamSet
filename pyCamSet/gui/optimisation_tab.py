@@ -1,5 +1,8 @@
-"""
-Optimisation tab (PySide6) — Optuna-driven ChArUco detector parameter sweep.
+"""Purpose: PySide6 Optimisation tab for detector sweeps and retained-run promotion.
+
+Status: Active GUI shell for fast/full optimisation studies.
+
+Future: Move any remaining backend orchestration into optimisation service helpers.
 
 The tab implements the user-facing parts of the Optimisation Tab Specification:
 
@@ -20,6 +23,7 @@ still created but the "Start" button is disabled with an explanatory tooltip.
 from __future__ import annotations
 
 import logging
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -58,7 +62,13 @@ from pyCamSet.optimisation.charuco_detector_metadata import (
 )
 from pyCamSet.optimisation.optimisation_study import (
     MAX_SUCCESSES_HARD_CAP,
+    TrialResult,
     clamp_retain_count,
+)
+from pyCamSet.optimisation.optimisation_promotion import (
+    latest_phase2_context,
+    make_phase_callables,
+    promote_retained_trial,
 )
 from pyCamSet.optimisation.optimisation_worker import (
     CalibrationControls,
@@ -81,6 +91,9 @@ except Exception:  # pragma: no cover - module always importable
 
 
 _LOG = logging.getLogger(__name__)
+_TARGET_CHOICES = ("ChArUco", "Ccube")
+_MIN_BOARD_DIMENSION = 2
+_MAX_BOARD_DIMENSION = 50
 
 
 # ---------------------------------------------------------------------------
@@ -92,13 +105,22 @@ class _StudyWorker(QObject):
     """QObject moved to a QThread that drives one :class:`OptimisationStudy` run."""
 
     progress = Signal(object)  # StudyProgress
-    finished = Signal(int, int)  # (n_successes, n_completed)
+    finished = Signal(object, int)  # (retention, n_completed)
     failed = Signal(str)
 
-    def __init__(self, config: RunConfig, cancel_token: CancelToken) -> None:
+    def __init__(
+        self,
+        config: RunConfig,
+        cancel_token: CancelToken,
+        *,
+        phase3_fn=None,
+        phase4_fn=None,
+    ) -> None:
         super().__init__()
         self._config = config
         self._cancel_token = cancel_token
+        self._phase3_fn = phase3_fn
+        self._phase4_fn = phase4_fn
 
     def run(self) -> None:
         try:
@@ -110,24 +132,25 @@ class _StudyWorker(QObject):
                 retention = run_optuna_study(
                     config=self._config,
                     detection_fn=default_detection_fn,
-                    phase3_fn=None,  # phase3/4 wiring depends on workspace context
-                    phase4_fn=None,
+                    phase3_fn=self._phase3_fn,
+                    phase4_fn=self._phase4_fn,
                     cancel_token=self._cancel_token,
                     progress_cb=_progress_cb,
                 )
-                n_done = len(retention) + 0  # successes retained is a lower bound
-                self.finished.emit(len(retention), n_done)
+                self.finished.emit(retention, getattr(retention, "n_completed", self._config.n_trials))
             else:
                 # Fallback: zero-sample sweep (fixed values only).  Useful for
                 # sanity-checking the worker plumbing when optuna is missing.
                 study = OptimisationStudy(
                     self._config,
                     sampler=lambda i, rows: {},
+                    phase3_fn=self._phase3_fn,
+                    phase4_fn=self._phase4_fn,
                     cancel_token=self._cancel_token,
                     progress_cb=_progress_cb,
                 )
                 retention = study.run()
-                self.finished.emit(len(retention), len(study.results))
+                self.finished.emit(retention, len(study.results))
         except Exception as exc:  # pragma: no cover - surfaced to GUI
             _LOG.exception("Optimisation study failed")
             self.failed.emit(str(exc))
@@ -159,6 +182,7 @@ class OptimisationTab(QWidget):
         self._thread: Optional[QThread] = None
         self._worker: Optional[_StudyWorker] = None
         self._param_rows: dict[str, BoundedSliderRow] = {}
+        self._retained_results: list[TrialResult] = []
 
         self._build_ui()
         self._update_optuna_status()
@@ -244,31 +268,44 @@ class OptimisationTab(QWidget):
         form = QFormLayout(gb)
 
         self._target_type_combo = QComboBox()
-        self._target_type_combo.addItem("ChArUco")
+        self._target_type_combo.addItems(list(_TARGET_CHOICES))
+        self._target_type_combo.currentTextChanged.connect(self._update_target_visibility)
         form.addRow("Target type:", self._target_type_combo)
 
+        self._rows_label = QLabel("Rows (num_squares_y):")
         self._rows_spin = QSpinBox()
         self._rows_spin.setRange(2, 50)
         self._rows_spin.setValue(7)
-        form.addRow("Rows (num_squares_y):", self._rows_spin)
+        form.addRow(self._rows_label, self._rows_spin)
 
+        self._cols_label = QLabel("Cols (num_squares_x):")
         self._cols_spin = QSpinBox()
         self._cols_spin.setRange(2, 50)
         self._cols_spin.setValue(7)
-        form.addRow("Cols (num_squares_x):", self._cols_spin)
+        form.addRow(self._cols_label, self._cols_spin)
 
+        self._square_label = QLabel("Square length (mm):")
         self._square_spin = QDoubleSpinBox()
         self._square_spin.setRange(0.1, 1000.0)
         self._square_spin.setDecimals(3)
         self._square_spin.setValue(30.0)
-        form.addRow("Square length (mm):", self._square_spin)
+        form.addRow(self._square_label, self._square_spin)
 
+        self._marker_label = QLabel("Marker fraction:")
         self._marker_spin = QDoubleSpinBox()
         self._marker_spin.setRange(0.1, 1.0)
         self._marker_spin.setDecimals(3)
         self._marker_spin.setSingleStep(0.05)
         self._marker_spin.setValue(0.8)
-        form.addRow("Marker fraction:", self._marker_spin)
+        form.addRow(self._marker_label, self._marker_spin)
+
+        self._border_label = QLabel("Border fraction:")
+        self._border_spin = QDoubleSpinBox()
+        self._border_spin.setRange(0.001, 0.9)
+        self._border_spin.setDecimals(3)
+        self._border_spin.setSingleStep(0.01)
+        self._border_spin.setValue(0.1)
+        form.addRow(self._border_label, self._border_spin)
 
         self._aruco_combo = QComboBox()
         self._aruco_combo.addItems([
@@ -281,6 +318,7 @@ class OptimisationTab(QWidget):
 
         self._legacy_cb = QCheckBox("Legacy pattern")
         form.addRow("", self._legacy_cb)
+        self._update_target_visibility(self._target_type_combo.currentText())
         return gb
 
     def _build_mode_section(self) -> QWidget:
@@ -374,11 +412,11 @@ class OptimisationTab(QWidget):
         live_wrap.setLayout(live)
         v.addWidget(live_wrap)
 
-        self._results_table = QTableWidget(0, 9)
+        self._results_table = QTableWidget(0, 10)
         self._results_table.setHorizontalHeaderLabels([
             "rank", "trial", "stage", "score",
             "phase3 RPE", "phase4 RPE",
-            "image cov", "cam cov", "multicam cov",
+            "image cov", "cam cov", "multicam cov", "Save",
         ])
         self._results_table.horizontalHeader().setStretchLastSection(True)
         v.addWidget(self._results_table)
@@ -403,6 +441,18 @@ class OptimisationTab(QWidget):
             self._optuna_status.setToolTip(
                 "Install with `pip install optuna` to enable full Optimisation tab features."
             )
+
+    def _update_target_visibility(self, target_type: str) -> None:
+        is_ccube = target_type == "Ccube"
+        self._rows_label.setText("Points (n_points):" if is_ccube else "Rows (num_squares_y):")
+        self._rows_spin.setRange(_MIN_BOARD_DIMENSION, _MAX_BOARD_DIMENSION)
+        self._cols_label.setVisible(not is_ccube)
+        self._cols_spin.setVisible(not is_ccube)
+        self._square_label.setText("Length (mm):" if is_ccube else "Square length (mm):")
+        self._marker_label.setVisible(not is_ccube)
+        self._marker_spin.setVisible(not is_ccube)
+        self._border_label.setVisible(is_ccube)
+        self._border_spin.setVisible(is_ccube)
 
     def _collect_parameter_rows(self) -> list[ParameterRowConfig]:
         rows: list[ParameterRowConfig] = []
@@ -433,6 +483,9 @@ class OptimisationTab(QWidget):
             square_size=float(self._square_spin.value()),
             marker_fraction=float(self._marker_spin.value()),
             a_dict=a_dict_value,
+            n_points=int(self._rows_spin.value()),
+            length=float(self._square_spin.value()),
+            border_fraction=float(self._border_spin.value()),
             legacy=self._legacy_cb.isChecked(),
         )
 
@@ -464,6 +517,12 @@ class OptimisationTab(QWidget):
             output_dir=Path(out) if out else None,
         )
 
+    def _sync_workspace_from_floc(self, f_loc: Path) -> None:
+        if f_loc.exists() and f_loc.is_dir():
+            ws_path = f_loc / ".pycamset_workspace"
+            if self._workspace_mgr.workspace_path != ws_path:
+                self._workspace_mgr.set_workspace_path(ws_path, ensure=True)
+
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
@@ -486,14 +545,29 @@ class OptimisationTab(QWidget):
             QMessageBox.warning(self, "Optimisation", "Cannot start:\n• " + "\n• ".join(errors))
             return
 
+        self._sync_workspace_from_floc(config.f_loc)
+        phase3_fn = None
+        phase4_fn = None
+        if config.mode == "full":
+            context = latest_phase2_context(self._workspace_mgr)
+            if context is None:
+                QMessageBox.warning(
+                    self,
+                    "Optimisation",
+                    "Full mode requires an existing Phase 2 run with an initial camset in the workspace.",
+                )
+                return
+            phase3_fn, phase4_fn = make_phase_callables(context)
+
         self._results_table.setRowCount(0)
+        self._retained_results = []
         self._progress.setRange(0, config.n_trials)
         self._progress.setValue(0)
         self._start_btn.setEnabled(False)
         self._cancel_btn.setEnabled(True)
 
         self._cancel_token = cancel_token
-        self._worker = _StudyWorker(config, cancel_token)
+        self._worker = _StudyWorker(config, cancel_token, phase3_fn=phase3_fn, phase4_fn=phase4_fn)
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -525,11 +599,62 @@ class OptimisationTab(QWidget):
             self._live_best_rpe.setText("Best RPE: –")
         self._live_successes.setText(f"Successes: {p.n_successes}")
 
-    def _on_finished(self, n_successes: int, n_completed: int) -> None:
+    def _on_finished(self, retention, n_completed: int) -> None:
+        self._populate_results_table(retention.ranked())
         QMessageBox.information(
             self,
             "Optimisation",
-            f"Run finished. Retained {n_successes} successful trial(s); {n_completed} completed.",
+            f"Run finished. Retained {len(retention)} successful trial(s); {n_completed} completed.",
+        )
+
+    def _populate_results_table(self, results: list[TrialResult]) -> None:
+        self._retained_results = list(results)
+        self._results_table.setRowCount(len(results))
+        for rank, result in enumerate(results, start=1):
+            row = rank - 1
+            values = [
+                rank,
+                result.trial_number,
+                result.success_stage or "–",
+                result.score,
+                result.phase3_rpe,
+                result.phase4_rpe,
+                result.image_coverage,
+                result.camera_coverage,
+                result.multicam_image_coverage,
+            ]
+            for col, value in enumerate(values):
+                text = "–" if value is None else (f"{value:.4f}" if isinstance(value, float) else str(value))
+                self._results_table.setItem(row, col, QTableWidgetItem(text))
+            btn = QPushButton("Save")
+            btn.setEnabled(bool(result.saved_metadata_path))
+            btn.clicked.connect(partial(self._save_retained_result, row))
+            self._results_table.setCellWidget(row, 9, btn)
+
+    def _save_retained_result(self, row: int, _checked: bool = False) -> None:
+        if row < 0 or row >= len(self._retained_results):
+            return
+        result = self._retained_results[row]
+        if not result.saved_metadata_path:
+            QMessageBox.warning(self, "Optimisation", "This retained run has no saved metadata to promote.")
+            return
+        reply = QMessageBox.question(
+            self,
+            "Promote retained run",
+            "Promote this retained optimisation run into the normal phase outputs?",
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            promoted = promote_retained_trial(self._workspace_mgr, result.saved_metadata_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Optimisation", f"Could not promote retained run: {exc}")
+            return
+        _LOG.info("Promoted optimisation trial %s into workspace runs: %s", result.trial_number, promoted)
+        QMessageBox.information(
+            self,
+            "Optimisation",
+            "Promoted retained run: " + ", ".join(f"{phase}={run_id}" for phase, run_id in promoted.items()),
         )
 
     def _on_failed(self, message: str) -> None:

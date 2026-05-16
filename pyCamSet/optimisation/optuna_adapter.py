@@ -1,5 +1,8 @@
-"""
-Optional Optuna integration for the Optimisation tab.
+"""Purpose: Optional Optuna integration for the Optimisation tab.
+
+Status: Active adapter that keeps Optuna optional at import time.
+
+Future: Keep the public surface small so the headless worker remains testable.
 
 ``optuna`` is an *optional* dependency.  Importing this module never raises;
 callers should consult :data:`OPTUNA_AVAILABLE` and, if it is ``False``, fall
@@ -201,6 +204,7 @@ def run_optuna_study(
             )
 
     driver._finished_at = time.time()  # noqa: SLF001
+    driver.retention.n_completed = completed  # type: ignore[attr-defined]
     if write_metadata:
         from pyCamSet.optimisation.optimisation_study import write_study_summary
         write_study_summary(

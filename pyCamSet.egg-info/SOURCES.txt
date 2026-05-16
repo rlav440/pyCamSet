@@ -12,6 +12,7 @@ pyCamSet/calibration/__init__.py
 pyCamSet/calibration/camera_calibrator.py
 pyCamSet/calibration_targets/__init__.py
 pyCamSet/calibration_targets/abstract_target.py
+pyCamSet/calibration_targets/charuco_detection.py
 pyCamSet/calibration_targets/create_Ccube.py
 pyCamSet/calibration_targets/create_charuco.py
 pyCamSet/calibration_targets/net_maker.py
@@ -45,12 +46,6 @@ pyCamSet/optimisation/optimisation_handling.py
 pyCamSet/optimisation/standard_bundle_handler.py
 pyCamSet/optimisation/template_handler.py
 pyCamSet/optimisation/template_functions/__init__.py
-pyCamSet/optimisation/template_functions/jac_projection_extrinsic3D_rigidTform3d_free_point.py
-pyCamSet/optimisation/template_functions/jac_projection_extrinsic3D_template_points.py
-pyCamSet/optimisation/template_functions/loss_projection_extrinsic3D_rigidTform3d_free_point.py
-pyCamSet/optimisation/template_functions/loss_projection_extrinsic3D_template_points.py
-pyCamSet/optimisation/template_functions/matflow_jac_projection_extrinsic3D_rigidTform3d_free_point.py
-pyCamSet/optimisation/template_functions/matflow_jac_projection_extrinsic3D_template_points.py
 pyCamSet/reconstruction/__init__.py
 pyCamSet/reconstruction/acmmp_utils.py
 pyCamSet/reconstruction/reconstruction_utils.py
@@ -58,4 +53,3 @@ pyCamSet/utils/__init__.py
 pyCamSet/utils/general_utils.py
 pyCamSet/utils/saving.py
 pyCamSet/utils/visualisation.py
-tests/test_gui_shared.py

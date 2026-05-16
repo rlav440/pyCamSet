@@ -9,20 +9,6 @@ License: "Apache-2.0"
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 License-File: LICENSE
-Requires-Dist: numpy
-Requires-Dist: pyvista
-Requires-Dist: scipy
-Requires-Dist: matplotlib
-Requires-Dist: opencv-python
-Requires-Dist: tqdm
-Requires-Dist: numba
-Requires-Dist: natsort
-Requires-Dist: coloredlogs
-Requires-Dist: blosc
-Requires-Dist: uniplot
-Requires-Dist: scikit-learn
-Requires-Dist: dill
-Requires-Dist: PySide6
 
 
 # pyCamSet

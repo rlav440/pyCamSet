@@ -133,7 +133,7 @@ class _StudyWorker(QObject):
                     cancel_token=self._cancel_token,
                     progress_cb=_progress_cb,
                 )
-                self.finished.emit(retention, self._config.n_trials)
+                self.finished.emit(retention, getattr(retention, "n_completed", self._config.n_trials))
             else:
                 # Fallback: zero-sample sweep (fixed values only).  Useful for
                 # sanity-checking the worker plumbing when optuna is missing.

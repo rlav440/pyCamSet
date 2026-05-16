@@ -52,7 +52,20 @@ from pyCamSet.optimisation.optimisation_worker import (
     run_trial,
 )
 from pyCamSet.optimisation.optimisation_promotion import promote_retained_trial
-from pyCamSet.gui.shared_functions import WorkspaceManager
+
+
+class _WorkspaceManager:
+    def __init__(self, workspace_path: Path):
+        self.workspace_path = workspace_path
+        for phase in ("phase1", "phase2", "phase3", "phase4"):
+            (self.workspace_path / f"{phase}_runs").mkdir(parents=True, exist_ok=True)
+
+    def save_run(self, phase: str, run_id: str, metadata: dict) -> Path:
+        run_dir = self.workspace_path / f"{phase}_runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        path = run_dir / "metadata.json"
+        path.write_text(json.dumps(metadata, indent=2, default=str))
+        return path
 
 
 # ---------------------------------------------------------------------------
@@ -796,7 +809,7 @@ def _write_retained_metadata(tmp_path: Path, stage: str) -> Path:
 
 def test_promote_retained_phase3_writes_only_phases_1_and_3(tmp_path: Path):
     workspace = tmp_path / "workspace"
-    mgr = WorkspaceManager(workspace)
+    mgr = _WorkspaceManager(workspace)
     promoted = promote_retained_trial(mgr, _write_retained_metadata(tmp_path, "phase3"))
     assert set(promoted) == {"phase1", "phase3"}
     assert (workspace / "phase1_runs" / promoted["phase1"] / "detected_datapoints.pickle").exists()
@@ -806,7 +819,7 @@ def test_promote_retained_phase3_writes_only_phases_1_and_3(tmp_path: Path):
 
 def test_promote_retained_phase4_writes_phases_1_3_and_4(tmp_path: Path):
     workspace = tmp_path / "workspace"
-    mgr = WorkspaceManager(workspace)
+    mgr = _WorkspaceManager(workspace)
     promoted = promote_retained_trial(mgr, _write_retained_metadata(tmp_path, "phase4"))
     assert set(promoted) == {"phase1", "phase3", "phase4"}
     assert (workspace / "phase4_runs" / promoted["phase4"] / "self_calibrated_cameras.camset").exists()

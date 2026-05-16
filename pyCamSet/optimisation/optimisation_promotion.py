@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from pyCamSet.gui.shared_functions import WorkspaceManager, make_run_id
+if TYPE_CHECKING:
+    from pyCamSet.gui.shared_functions import WorkspaceManager
 
 
 @dataclass(frozen=True)
@@ -132,7 +135,7 @@ def promote_retained_trial(workspace_mgr: WorkspaceManager, metadata_path: str |
     artifacts = extra.get("artifacts") or {}  # Pull paths for detection and camset files.
     promoted: dict[str, str] = {}  # Track the workspace run ids for caller feedback.
 
-    phase1_run_id = f"optimisation_phase1_{make_run_id()}"  # Use a distinct normal phase 1 run id.
+    phase1_run_id = f"optimisation_phase1_{_make_run_id()}"  # Use a distinct normal phase 1 run id.
     phase1_pickle = _copy_artifact(  # Copy detections into the normal phase 1 run directory.
         workspace_mgr,
         "phase1",
@@ -160,7 +163,7 @@ def promote_retained_trial(workspace_mgr: WorkspaceManager, metadata_path: str |
     )
     promoted["phase1"] = phase1_run_id  # Record the promoted phase 1 id.
 
-    phase3_run_id = f"optimisation_phase3_{make_run_id()}"  # Use a distinct normal phase 3 run id.
+    phase3_run_id = f"optimisation_phase3_{_make_run_id()}"  # Use a distinct normal phase 3 run id.
     phase3_camset = _copy_artifact(  # Copy the retained phase 3 camera set.
         workspace_mgr,
         "phase3",
@@ -195,7 +198,7 @@ def promote_retained_trial(workspace_mgr: WorkspaceManager, metadata_path: str |
     promoted["phase3"] = phase3_run_id  # Record the promoted phase 3 id.
 
     if stage == "phase4":  # Only phase 4 successes should create phase 4 outputs.
-        phase4_run_id = f"optimisation_phase4_{make_run_id()}"  # Use a distinct normal phase 4 run id.
+        phase4_run_id = f"optimisation_phase4_{_make_run_id()}"  # Use a distinct normal phase 4 run id.
         phase4_camset = _copy_artifact(  # Copy the retained phase 4 camera set.
             workspace_mgr,
             "phase4",
@@ -255,7 +258,7 @@ def _copy_artifact(
     """Copy one retained-trial artefact into a workspace phase-run directory."""
     if workspace_mgr.workspace_path is None:  # Keep type-checkers and callers honest.
         raise RuntimeError("Workspace path is not set.")
-    phase_dir = workspace_mgr._phase_run_dirs(phase)[0]  # Reuse WorkspaceManager's phase directory naming.
+    phase_dir = f"{phase}_runs"  # Reuse the repository's standard phase directory naming.
     run_dir = workspace_mgr.workspace_path / phase_dir / run_id  # Compute the normal run directory.
     run_dir.mkdir(parents=True, exist_ok=True)  # Ensure the destination exists before copying.
     dest = run_dir / filename  # Use the standard artefact name for that phase.
@@ -270,6 +273,12 @@ def _copy_artifact(
         return dest
     shutil.copy2(src, dest)  # Copy bytes rather than reserialising unknown backend objects.
     return dest
+
+
+def _make_run_id() -> str:
+    """Return a compact run id without importing Qt-backed GUI helpers."""
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.localtime())  # Match existing timestamp-style ids.
+    return f"{stamp}_{uuid.uuid4().hex[:8]}"  # Add entropy so repeated saves do not collide.
 
 
 __all__ = [

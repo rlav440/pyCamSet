@@ -269,7 +269,21 @@ def get_charuco_detection_profile(name: str) -> dict[str, Any]:
 
 
 def make_profile_tooltip(name: str, key_to_label: dict[str, str]) -> str:
-    """Render one profile's hover/help text."""
+    """Render one profile's hover/help text.
+
+    Parameters
+    ----------
+    name:
+        Profile name selected in the GUI dropdown.
+    key_to_label:
+        Mapping from detector-parameter keys to user-facing row labels.
+
+    Returns
+    -------
+    str
+        Tooltip text containing a one-line profile purpose and the profile's
+        recommended parameters to check for optimisation.
+    """
     # Treat Custom as a special selector state with no auto recommendations.
     if name == "Custom":
         return (

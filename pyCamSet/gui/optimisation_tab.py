@@ -457,7 +457,7 @@ class OptimisationTab(QWidget):
         gb = QGroupBox()
         v = QVBoxLayout(gb)
         # Keep a stable key->label map for profile hover/help text.
-        key_to_label = {entry["key"]: entry.get("label", entry["key"]) for entry in CHARUCO_PARAMETER_METADATA}
+        key_to_label = self._parameter_key_to_label_map()
         # Add a profile selector so users can pre-fill bounds quickly.
         self._detection_profile_combo = QComboBox()
         # Use the fixed display ordering defined in the profile module.
@@ -703,6 +703,10 @@ class OptimisationTab(QWidget):
             output_dir=Path(out) if out else None,
         )
 
+    def _parameter_key_to_label_map(self) -> dict[str, str]:
+        """Return a stable key->label mapping for detector parameter UI text."""
+        return {entry["key"]: entry.get("label", entry["key"]) for entry in CHARUCO_PARAMETER_METADATA}
+
     def _on_detection_profile_changed(self, profile_name: str) -> None:
         # Ignore recursive signal traffic while profile bounds are being copied in.
         if self._applying_detection_profile:
@@ -717,7 +721,7 @@ class OptimisationTab(QWidget):
         # Resolve profile payload once to keep copies deterministic.
         profile = get_charuco_detection_profile(profile_name)
         # Prepare labels for hover/help text formatting.
-        key_to_label = {entry["key"]: entry.get("label", entry["key"]) for entry in CHARUCO_PARAMETER_METADATA}
+        key_to_label = self._parameter_key_to_label_map()
         # Block recursive state flips while bounds are applied row by row.
         self._applying_detection_profile = True
         try:
@@ -749,7 +753,7 @@ class OptimisationTab(QWidget):
         try:
             # Update only the selector label and its hover/help text.
             self._detection_profile_combo.setCurrentText("Custom")
-            key_to_label = {entry["key"]: entry.get("label", entry["key"]) for entry in CHARUCO_PARAMETER_METADATA}
+            key_to_label = self._parameter_key_to_label_map()
             self._detection_profile_combo.setToolTip(make_profile_tooltip("Custom", key_to_label))
         finally:
             # Re-enable normal selector handling after the state flip.

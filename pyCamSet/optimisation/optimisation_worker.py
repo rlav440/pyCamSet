@@ -278,6 +278,24 @@ def _bundle_options(max_nfev: int, outliers: str) -> dict[str, Any]:
     }
 
 
+def _require_detection_payload_fields(
+    detection_payload: DetectionResult,
+    *,
+    require_cam_res: bool,
+) -> tuple[Any, Any, Any]:
+    """Extract the shared trial artefacts needed by phases 2/3/4."""
+    detections = detection_payload.get("detections")
+    target = detection_payload.get("target")
+    cam_res = detection_payload.get("cam_res")
+    if detections is None:
+        raise RuntimeError("Calibration phases require trial detections from phase 1.")
+    if target is None:
+        raise RuntimeError("Calibration phases require the trial calibration target instance.")
+    if require_cam_res and cam_res is None:
+        raise RuntimeError("Phase 2 requires camera resolutions from the detection pass.")
+    return detections, target, cam_res
+
+
 def default_phase2_fn(
     detection_payload: DetectionResult,
     *,
@@ -286,15 +304,10 @@ def default_phase2_fn(
     """Run a fresh phase-2 initial calibration from one trial's detections."""
     from pyCamSet.calibration.camera_calibrator import run_initial_calibration
 
-    detections = detection_payload.get("detections")
-    target = detection_payload.get("target")
-    cam_res = detection_payload.get("cam_res")
-    if detections is None:
-        raise RuntimeError("Phase 2 requires trial detections from phase 1.")
-    if target is None:
-        raise RuntimeError("Phase 2 requires the trial calibration target instance.")
-    if cam_res is None:
-        raise RuntimeError("Phase 2 requires camera resolutions from the detection pass.")
+    detections, target, cam_res = _require_detection_payload_fields(
+        detection_payload,
+        require_cam_res=True,
+    )
     cams = run_initial_calibration(
         detection=detections,
         calibration_target=target,
@@ -316,14 +329,12 @@ def default_phase3_fn(
     from pyCamSet.optimisation.template_handler import TemplateBundleHandler
 
     cams = phase2_payload.get("camset")
-    detections = detection_payload.get("detections")
-    target = detection_payload.get("target")
+    detections, target, _cam_res = _require_detection_payload_fields(
+        detection_payload,
+        require_cam_res=False,
+    )
     if cams is None:
         raise RuntimeError("Phase 3 requires the fresh phase-2 camset.")
-    if detections is None:
-        raise RuntimeError("Phase 3 requires trial detections from phase 1.")
-    if target is None:
-        raise RuntimeError("Phase 3 requires the trial calibration target instance.")
     handler = TemplateBundleHandler(
         camset=cams,
         target=target,
@@ -355,14 +366,12 @@ def default_phase4_fn(
     from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
 
     phase3_cams = phase3_payload.get("camset")
-    detections = detection_payload.get("detections")
-    target = detection_payload.get("target")
+    detections, target, _cam_res = _require_detection_payload_fields(
+        detection_payload,
+        require_cam_res=False,
+    )
     if phase3_cams is None:
         raise RuntimeError("Phase 4 requires the fresh phase-3 camset.")
-    if detections is None:
-        raise RuntimeError("Phase 4 requires trial detections from phase 1.")
-    if target is None:
-        raise RuntimeError("Phase 4 requires the trial calibration target instance.")
     handler = SelfBundleHandler(
         camset=phase3_cams,
         target=target,
@@ -788,6 +797,7 @@ class OptimisationStudy:
                         "phase2_initial_camset": (
                             str(phase2_camset_path)
                             if phase2_camset_path is not None
+                            # Keep the legacy fallback so older retained metadata can still be promoted.
                             else payload.get("phase3", {}).get("source_phase2_camset")
                         ),
                     },

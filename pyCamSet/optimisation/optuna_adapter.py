@@ -90,9 +90,9 @@ def build_optuna_sampler_callable(
 ) -> Callable[[int, list[ParameterRowConfig]], dict[str, Any]]:
     """Return a sampler callable suitable for ``OptimisationStudy(sampler=...)``.
 
-    The callable spawns a fresh Optuna trial inside *study* and reports
-    completion via ``study.tell``.  Score reporting is handled out of band by
-    the caller (see :func:`run_optuna_study`).
+    The callable spawns a fresh Optuna trial inside *study* and returns one
+    sampled override dict per worker trial.  Values may be ints, floats, or
+    discrete categorical codes such as ``cornerRefinementMethod``.
 
     Note: most users should prefer :func:`run_optuna_study`, which owns the
     full ask/tell cycle.

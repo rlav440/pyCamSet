@@ -49,6 +49,7 @@ from pyCamSet.optimisation.optimisation_worker import (
     RunConfig,
     TargetSettings,
     build_effective_settings,
+    default_phase2_fn,
     detection_options_from_settings,
     run_trial,
 )
@@ -794,6 +795,11 @@ def test_run_trial_fast_mode_skips_calibration(tmp_path: Path):
     assert not called["phase3"]
     assert result.valid
     assert result.success_stage is None
+
+
+def test_default_phase2_fn_requires_cam_res():
+    with pytest.raises(RuntimeError, match="camera resolutions"):
+        default_phase2_fn({"detections": object(), "target": object()}, controls=CalibrationControls())
 
 
 def test_optimisation_study_runs_to_completion_with_stub_sampler(tmp_path: Path):

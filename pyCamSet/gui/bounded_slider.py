@@ -74,7 +74,11 @@ class BoundedSliderRow(QWidget):
             self._fixed_combo.setFixedWidth(170)
             for choice in self._choices:
                 self._fixed_combo.addItem(str(choice["label"]), choice["value"])
-            default_index = max(0, self._fixed_combo.findData(entry["default"]))
+            default_index = self._fixed_combo.findData(entry["default"])
+            if default_index < 0:
+                raise ValueError(
+                    f"Choice metadata for {self._key!r} is missing default value {entry['default']!r}."
+                )
             self._fixed_combo.setCurrentIndex(default_index)
         else:
             self._fixed_spin = _make_spin(entry)

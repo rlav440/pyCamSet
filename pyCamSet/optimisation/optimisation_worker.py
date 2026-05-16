@@ -229,7 +229,7 @@ def default_detection_fn(
         target = Ccube(
             n_points=target_settings.n_points,
             length=target_settings.length,
-            # Ccube's public constructor uses aruco_dict, while ChArUco uses a_dict.
+            # Ccube names the dictionary field aruco_dict; ChArUco names it a_dict.
             aruco_dict=target_settings.a_dict,
             border_fraction=target_settings.border_fraction,
             legacy=target_settings.legacy,

@@ -76,7 +76,10 @@ def make_phase_callables(context: OptimisationPhaseContext):
         detections = detection_payload["detections"]  # Use the trial-specific detections.
         target = detection_payload.get("target")  # Use the exact target used during detection.
         if target is None:  # Full mode cannot safely rebuild arbitrary target instances here.
-            raise RuntimeError("Detection payload is missing the calibration target.")
+            raise RuntimeError(
+                "Detection payload is missing the calibration target. "
+                "Ensure detection_fn includes the target in its return payload."
+            )
         handler = TemplateBundleHandler(  # Invoke the same handler used by the Phase 3 GUI tab.
             camset=cams,
             target=target,
@@ -138,7 +141,7 @@ def promote_retained_trial(workspace_mgr: WorkspaceManager, metadata_path: str |
     metadata = json.loads(metadata_file.read_text())  # Load the structured optimisation metadata.
     stage = (metadata.get("identity") or {}).get("success_stage")  # Decide which phases to promote.
     if stage not in {"phase3", "phase4"}:  # Only successful retained trials have enough artefacts.
-        raise RuntimeError("Only successful phase3/phase4 trials can be promoted.")
+        raise RuntimeError(f"Only successful phase3/phase4 trials can be promoted. Found success_stage: {stage!r}.")
     extra = metadata.get("extra") or {}  # Read optional artefact data written by the worker.
     artifacts = extra.get("artifacts") or {}  # Pull paths for detection and camset files.
     promoted: dict[str, str] = {}  # Track the workspace run ids for caller feedback.

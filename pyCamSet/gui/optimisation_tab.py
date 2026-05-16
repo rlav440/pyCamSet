@@ -92,6 +92,8 @@ except Exception:  # pragma: no cover - module always importable
 
 _LOG = logging.getLogger(__name__)
 _TARGET_CHOICES = ("ChArUco", "Ccube")
+_MIN_BOARD_DIMENSION = 2
+_MAX_BOARD_DIMENSION = 50
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +445,7 @@ class OptimisationTab(QWidget):
     def _update_target_visibility(self, target_type: str) -> None:
         is_ccube = target_type == "Ccube"
         self._rows_label.setText("Points (n_points):" if is_ccube else "Rows (num_squares_y):")
-        self._rows_spin.setRange(2, 50)  # Keep one safe shared range for board rows and Ccube points.
+        self._rows_spin.setRange(_MIN_BOARD_DIMENSION, _MAX_BOARD_DIMENSION)
         self._cols_label.setVisible(not is_ccube)
         self._cols_spin.setVisible(not is_ccube)
         self._square_label.setText("Length (mm):" if is_ccube else "Square length (mm):")

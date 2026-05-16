@@ -32,6 +32,9 @@ DEFAULT_OPTIONS = {
     'ref_cam':0,
     'ref_pose':0,
     'outliers':'ask',
+    'interactive': True,
+    'draw': True,
+    'backend_safe': False,
     'max_nfev':100,
 }
 class TemplateBundlePrimitive:
@@ -263,7 +266,12 @@ class TemplateBundleHandler:
         cyclic_outlier_detection = True
         num_loops = 0
         logging.info("Begining outlier detection")
-        user_in = self.problem_opts['outliers']
+        interactive = bool(self.problem_opts.get("interactive", True))
+        user_in = str(self.problem_opts.get('outliers', 'ask')).strip().lower()
+        if not interactive and user_in == "ask":
+            # Backend optimisation runs must never block on stdin.
+            user_in = "y"
+            logging.info("Non-interactive mode: treating outlier mode 'ask' as 'y'.")
         while cyclic_outlier_detection and num_loops < 10:
             not_missing = np.where(~np.array(self.missing_poses))[0]
             # mloc = np.mean(poses[not_missing, :3, -1], axis=0)
@@ -272,12 +280,12 @@ class TemplateBundleHandler:
                 # [np.linalg.norm(p[:3,3] - mloc) for p in poses[not_missing]],
                 mloc[not_missing],
                 out_thresh=20,
-                draw= not user_in == 'n'
+                draw=interactive and user_in != 'n'
             )
-            outlier_inds = not_missing[condensed_outlier_inds]
             
             if condensed_outlier_inds is not None:
-                while not (user_in == 'y' or user_in == 'n'):
+                outlier_inds = not_missing[condensed_outlier_inds]
+                while interactive and not (user_in == 'y' or user_in == 'n'):
                     print(f"Outliers detected in iteration {num_loops}.")
                     user_in = input("Do you wish to remove these outlier poses: \n y/n: ")
                 if user_in == 'y':
@@ -326,7 +334,10 @@ class TemplateBundleHandler:
         param_array = []
 
         cam_poses, target_poses, per_im_error = estimate_camera_relative_poses(
-            detection=self.detection, cams=self.camset, calibration_target=self.target
+            detection=self.detection,
+            cams=self.camset,
+            calibration_target=self.target,
+            draw_diagnostics=bool(self.problem_opts.get("interactive", True)),
         )
 
         self.initial_per_im_error = np.array(per_im_error, dtype=float)
@@ -491,6 +502,7 @@ def estimate_camera_relative_poses(
         cams:CameraSet, ref_cam: int = 0, ref_pose: int = 0,
         max_bad_cams_iter = 10,
         prior_poses_and_costs: Optional[tuple[np.ndarray, np.ndarray]] = None,
+        draw_diagnostics: bool = True,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Given camera estimates, performs a single camera centric pose estimate.
@@ -764,7 +776,8 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
         init_per_im_reproj_err_1 = np.array(im_costs_1)
 
         logging.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
-        uplot([init_per_im_reproj_err_0, init_per_im_reproj_err_1], height=10, title="Per image initial reproj error", color=['blue', 'red'])
+        if draw_diagnostics:
+            uplot([init_per_im_reproj_err_0, init_per_im_reproj_err_1], height=10, title="Per image initial reproj error", color=['blue', 'red'])
 
     else:
         lookups =  [(dd[:,1] == i) for i in range(detection.max_ims)]
@@ -774,7 +787,8 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
         init_per_im_reproj_err = np.array(im_costs)
 
         logging.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
-        uplot(init_per_im_reproj_err, height=10, title="Per image initial reproj error", color=['blue', 'red'])
+        if draw_diagnostics:
+            uplot(init_per_im_reproj_err, height=10, title="Per image initial reproj error", color=['blue', 'red'])
     lookups = [(dd[:,1] == i) for i in range(detection.max_ims)]
     im_costs = [np.sum(costs[l]) if v else np.nan for l,v in zip(lookups, viable_nodes[len(cams):])]
     init_per_im_reproj_err = np.array(im_costs)

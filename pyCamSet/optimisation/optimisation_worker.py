@@ -277,6 +277,12 @@ def _bundle_options(max_nfev: int, outliers: str) -> dict[str, Any]:
         "ref_cam": 0,
         "ref_pose": 0,
         "outliers": outlier_mode,
+        # Optimisation worker always runs in a background/backend context.
+        "interactive": False,
+        # Explicitly suppress plotting-capable helper draw paths.
+        "draw": False,
+        # Marker flag for backend-safe helper behaviour.
+        "backend_safe": True,
         "max_nfev": int(max_nfev),
     }
 

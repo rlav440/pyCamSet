@@ -53,12 +53,14 @@ from pyCamSet.optimisation.optimisation_worker import (
     ParameterRowConfig,
     RunConfig,
     TargetSettings,
+    _bundle_options,
     build_effective_settings,
     default_phase2_fn,
     detection_options_from_settings,
     run_trial,
 )
 from pyCamSet.optimisation.optimisation_promotion import promote_retained_trial
+from pyCamSet.optimisation.template_handler import TemplateBundleHandler
 from pyCamSet.calibration_targets.target_Ccube import Ccube
 from pyCamSet.calibration_targets.target_charuco import ChArUco
 from pyCamSet.utils.general_utils import get_subfolder_names
@@ -816,6 +818,37 @@ def _make_tab(tmp_path: Path, qapp) -> OptimisationTab:
     )
     tab._floc_edit.setText(str(tmp_path))
     return tab
+
+
+def test_bundle_options_are_backend_non_interactive():
+    opts = _bundle_options(25, "ask")
+    assert opts["outliers"] == "y"
+    assert opts["interactive"] is False
+    assert opts["draw"] is False
+    assert opts["backend_safe"] is True
+    assert opts["max_nfev"] == 25
+
+
+def test_outlier_detection_non_interactive_never_draws_or_prompts(monkeypatch):
+    seen: dict[str, object] = {}
+
+    def _fake_mad(data, out_thresh=3, draw=True):
+        seen["draw"] = draw
+        return np.array([0], dtype=int)
+
+    def _forbid_input(*_a, **_k):
+        raise AssertionError("stdin prompt should not be used in non-interactive optimisation mode")
+
+    monkeypatch.setattr("pyCamSet.optimisation.template_handler.gu.mad_outlier_detection", _fake_mad)
+    monkeypatch.setattr("builtins.input", _forbid_input)
+
+    dummy = type("DummyHandler", (), {})()
+    dummy.problem_opts = {"outliers": "ask", "interactive": False}
+    dummy.missing_poses = np.array([False, False, False], dtype=bool)
+
+    TemplateBundleHandler.find_and_exclude_transform_outliers(dummy, np.array([10.0, 1.0, 1.0]))
+    assert seen["draw"] is False
+    assert bool(dummy.missing_poses[0]) is True
 
 
 def test_trial_gating_profile_selection_populates_fields(tmp_path: Path, qapp):

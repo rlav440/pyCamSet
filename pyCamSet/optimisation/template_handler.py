@@ -274,6 +274,9 @@ class TemplateBundleHandler:
             logging.info("Non-interactive mode: treating outlier mode 'ask' as 'y'.")
         while cyclic_outlier_detection and num_loops < 10:
             not_missing = np.where(~np.array(self.missing_poses))[0]
+            if not_missing.size == 0:
+                logging.info("No remaining poses available for outlier detection.")
+                break
             # mloc = np.mean(poses[not_missing, :3, -1], axis=0)
             mloc = per_im_error
             condensed_outlier_inds = gu.mad_outlier_detection(

@@ -61,7 +61,7 @@ def make_phase_callables(context: OptimisationPhaseContext):
     from pyCamSet.utils.saving import load_CameraSet
 
     def _options(max_nfev: int, outliers: str) -> dict[str, Any]:
-        outlier_mode = "y" if outliers == "ask" else (outliers or "n")  # GUI cannot prompt in a worker.
+        outlier_mode = "y" if outliers == "ask" else (outliers or "n")  # Resolve ask to yes in worker.
         return {  # Mirror the existing phase-tab defaults.
             "verbosity": 0,
             "fixed_pose": 0,

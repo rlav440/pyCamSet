@@ -54,7 +54,7 @@ from pyCamSet.optimisation.optimisation_worker import (
 from pyCamSet.optimisation.optimisation_promotion import promote_retained_trial
 
 
-class _WorkspaceManager:
+class _TestWorkspaceManager:
     def __init__(self, workspace_path: Path):
         self.workspace_path = workspace_path
         for phase in ("phase1", "phase2", "phase3", "phase4"):
@@ -811,7 +811,7 @@ def _write_retained_metadata(tmp_path: Path, success_stage: str) -> Path:
 
 def test_promote_retained_phase3_writes_only_phases_1_and_3(tmp_path: Path):
     workspace = tmp_path / "workspace"
-    mgr = _WorkspaceManager(workspace)
+    mgr = _TestWorkspaceManager(workspace)
     promoted = promote_retained_trial(mgr, _write_retained_metadata(tmp_path, "phase3"))
     assert set(promoted) == {"phase1", "phase3"}
     assert (workspace / "phase1_runs" / promoted["phase1"] / "detected_datapoints.pickle").exists()
@@ -821,7 +821,7 @@ def test_promote_retained_phase3_writes_only_phases_1_and_3(tmp_path: Path):
 
 def test_promote_retained_phase4_writes_phases_1_3_and_4(tmp_path: Path):
     workspace = tmp_path / "workspace"
-    mgr = _WorkspaceManager(workspace)
+    mgr = _TestWorkspaceManager(workspace)
     promoted = promote_retained_trial(mgr, _write_retained_metadata(tmp_path, "phase4"))
     assert set(promoted) == {"phase1", "phase3", "phase4"}
     assert (workspace / "phase4_runs" / promoted["phase4"] / "self_calibrated_cameras.camset").exists()

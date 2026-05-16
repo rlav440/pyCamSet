@@ -776,28 +776,28 @@ def test_detection_options_grouping_round_trip():
     assert grouped["DetectorParameters"]["adaptiveThreshConstant"] == pytest.approx(11.0)
 
 
-def _write_retained_metadata(tmp_path: Path, stage: str) -> Path:
-    trial_dir = tmp_path / f"trial_{stage}"
+def _write_retained_metadata(tmp_path: Path, success_stage: str) -> Path:
+    trial_dir = tmp_path / f"trial_{success_stage}"
     trial_dir.mkdir()
     detection = trial_dir / "detected_datapoints.pickle"
     phase3 = trial_dir / "camset_phase3.json"
     phase4 = trial_dir / "camset_phase4.json"
     detection.write_bytes(b"detections")
     phase3.write_text("phase3")
-    if stage == "phase4":
+    if success_stage == "phase4":
         phase4.write_text("phase4")
     metadata = {
-        "identity": {"success_stage": stage, "trial_number": 3},
+        "identity": {"success_stage": success_stage, "trial_number": 3},
         "paths": {"f_loc": str(tmp_path), "trial_dir": str(trial_dir)},
         "target": {"target_type": "Ccube", "n_points": 6, "length": 40.0},
         "detector_settings": {"effective": {"minMarkers": 2}},
         "calibration_controls": {"outliers": "n", "max_nfev_phase3": 10, "max_nfev_phase4": 10},
-        "metrics": {"phase3_rpe": 0.4, "phase4_rpe": 0.7 if stage == "phase4" else None},
+        "metrics": {"phase3_rpe": 0.4, "phase4_rpe": 0.7 if success_stage == "phase4" else None},
         "extra": {
             "artifacts": {
                 "detected_datapoints_pickle": str(detection),
                 "phase3_camset": str(phase3),
-                "phase4_camset": str(phase4) if stage == "phase4" else None,
+                "phase4_camset": str(phase4) if success_stage == "phase4" else None,
             },
             "phase_sources": {"phase2_run_id": "p2", "phase2_initial_camset": "/tmp/p2.camset"},
         },

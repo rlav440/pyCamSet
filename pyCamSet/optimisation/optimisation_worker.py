@@ -78,7 +78,7 @@ class ParameterRowConfig:
 
 @dataclass
 class TargetSettings:
-    """Calibration target definition reused for every trial."""
+    """Calibration target definition for ChArUco and Ccube trials."""
 
     target_type: str = "ChArUco"
     num_squares_x: int = 5

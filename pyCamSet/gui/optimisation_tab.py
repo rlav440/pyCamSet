@@ -23,6 +23,7 @@ still created but the "Start" button is disabled with an explanatory tooltip.
 from __future__ import annotations
 
 import logging
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -624,10 +625,10 @@ class OptimisationTab(QWidget):
                 self._results_table.setItem(row, col, QTableWidgetItem(text))
             btn = QPushButton("Save")
             btn.setEnabled(bool(result.saved_metadata_path))
-            btn.clicked.connect(lambda _checked=False, idx=row: self._save_retained_result(idx))
+            btn.clicked.connect(partial(self._save_retained_result, row))
             self._results_table.setCellWidget(row, 9, btn)
 
-    def _save_retained_result(self, row: int) -> None:
+    def _save_retained_result(self, row: int, _checked: bool = False) -> None:
         if row < 0 or row >= len(self._retained_results):
             return
         result = self._retained_results[row]

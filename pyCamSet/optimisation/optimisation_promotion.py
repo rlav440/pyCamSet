@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pyCamSet.gui.shared_functions import WorkspaceManager
 
+_RUN_ID_TIMESTAMP_FORMAT = "%Y%m%dT%H%M%S"
+
 
 @dataclass(frozen=True)
 class OptimisationPhaseContext:
@@ -277,7 +279,7 @@ def _copy_artifact(
 
 def _make_run_id() -> str:
     """Return a compact run id without importing Qt-backed GUI helpers."""
-    stamp = time.strftime("%Y%m%dT%H%M%S", time.localtime())  # Match existing timestamp-style ids.
+    stamp = time.strftime(_RUN_ID_TIMESTAMP_FORMAT, time.localtime())  # Match existing timestamp-style ids.
     return f"{stamp}_{uuid.uuid4().hex[:8]}"  # Add entropy so repeated saves do not collide.
 
 

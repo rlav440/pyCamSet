@@ -265,7 +265,7 @@ class TemplateBundleHandler:
             raise ValueError("missing poses should be initialised before calling this function")
         cyclic_outlier_detection = True
         num_loops = 0
-        logging.info("Begining outlier detection")
+        logging.info("Beginning outlier detection")
         interactive = bool(self.problem_opts.get("interactive", True))
         user_in = str(self.problem_opts.get('outliers', 'ask')).strip().lower()
         if not interactive and user_in == "ask":

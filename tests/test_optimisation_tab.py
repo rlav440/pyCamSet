@@ -820,7 +820,7 @@ def _make_tab(tmp_path: Path, qapp) -> OptimisationTab:
     return tab
 
 
-def test_bundle_options_are_backend_non_interactive():
+def test_bundle_options_create_non_interactive_settings():
     opts = _bundle_options(25, "ask")
     assert opts["outliers"] == "y"
     assert opts["interactive"] is False

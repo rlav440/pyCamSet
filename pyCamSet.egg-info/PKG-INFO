@@ -8,7 +8,6 @@ Author-email: r.laven@auckland.ac.nz
 License: "Apache-2.0"
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
-Provides-Extra: optimisation
 License-File: LICENSE
 
 

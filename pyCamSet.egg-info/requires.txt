@@ -13,6 +13,3 @@ scikit-learn
 scipy
 tqdm
 uniplot
-
-[optimisation]
-optuna

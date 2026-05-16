@@ -26,11 +26,9 @@ pyCamSet/cameras/camera_set.py
 pyCamSet/gui/__init__.py
 pyCamSet/gui/__main__.py
 pyCamSet/gui/assess_calibration.py
-pyCamSet/gui/bounded_slider.py
 pyCamSet/gui/create_target.py
 pyCamSet/gui/export_calibration_tab.py
 pyCamSet/gui/main_window.py
-pyCamSet/gui/optimisation_tab.py
 pyCamSet/gui/phase_0_input.py
 pyCamSet/gui/phase_1_detection.py
 pyCamSet/gui/phase_2_intrinsics.py
@@ -39,17 +37,12 @@ pyCamSet/gui/phase_4_self_calibration.py
 pyCamSet/gui/shared_functions.py
 pyCamSet/optimisation/__init__.py
 pyCamSet/optimisation/abstract_function_blocks.py
-pyCamSet/optimisation/charuco_detector_metadata.py
 pyCamSet/optimisation/compiled_helpers.py
 pyCamSet/optimisation/find_target.py
 pyCamSet/optimisation/free_point_handler.py
 pyCamSet/optimisation/function_block_implementations.py
 pyCamSet/optimisation/matmul_map.py
 pyCamSet/optimisation/optimisation_handling.py
-pyCamSet/optimisation/optimisation_promotion.py
-pyCamSet/optimisation/optimisation_study.py
-pyCamSet/optimisation/optimisation_worker.py
-pyCamSet/optimisation/optuna_adapter.py
 pyCamSet/optimisation/standard_bundle_handler.py
 pyCamSet/optimisation/template_handler.py
 pyCamSet/optimisation/template_functions/__init__.py
@@ -60,4 +53,3 @@ pyCamSet/utils/__init__.py
 pyCamSet/utils/general_utils.py
 pyCamSet/utils/saving.py
 pyCamSet/utils/visualisation.py
-tests/test_optimisation_tab.py

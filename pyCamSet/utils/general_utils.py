@@ -166,7 +166,7 @@ def _is_candidate_camera_folder(path: Path) -> bool:
         return False
     if path.name in _IGNORED_CAMERA_ROOT_FOLDERS:  # Ignore known generated non-camera folders.
         return False
-    if not glob_ims(path):  # Ignore folders that contain no supported image files.
+    if not glob_ims_local(path):  # Ignore folders that contain no supported image files.
         return False
     return True
 
@@ -231,7 +231,7 @@ def get_subfolder_names(f_loc: Path, return_full_path = False) -> list[Path] | l
         return []
     # Gather direct children from the dataset root so camera ordering is stable.
     detected_sub_folders = [p for p in f_loc.iterdir() if _is_candidate_camera_folder(p)]
-    detected_sub_folders= natsorted(detected_sub_folders)
+    detected_sub_folders = natsorted(detected_sub_folders)
     if return_full_path:
         return detected_sub_folders
 

@@ -259,7 +259,6 @@ def default_detection_fn(
         "detections": detections,
         "cam_res": cam_res,
         "target": target,
-        "f_loc": f_loc,
         "n_cameras_with_detections": int((features.sum(axis=0) > 0).sum()),
         "n_valid_images": int((features.sum(axis=1) > 0).sum()),
         "warnings": [],

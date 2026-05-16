@@ -559,7 +559,7 @@ def _fake_detection_fn(point_count: int = 100):
         return {
             "features_per_im_per_cam": arr,
             "detections": object(),
-            "cam_res": [(1920, 1080)] * arr.shape[1],
+            "cam_res": [(1920, 1080) for _ in range(arr.shape[1])],
             "target": target,
             "warnings": [],
         }

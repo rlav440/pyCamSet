@@ -65,10 +65,15 @@ def suggest_for_row(trial: Any, row: ParameterRowConfig) -> Optional[Any]:
 
     Returns ``None`` when *row* is not optimised; otherwise an int or float.
     """
-    if not row.optimise or row.lower is None or row.upper is None:
+    if not row.optimise:
         return None
     entry = metadata_by_key().get(row.key)
     if entry is None:
+        return None
+    choices = [choice["value"] for choice in entry.get("choices", [])]
+    if choices:
+        return trial.suggest_categorical(row.key, choices)
+    if row.lower is None or row.upper is None:
         return None
     lo = coerce_value(entry, row.lower)
     hi = coerce_value(entry, row.upper)
@@ -82,7 +87,7 @@ def suggest_for_row(trial: Any, row: ParameterRowConfig) -> Optional[Any]:
 def build_optuna_sampler_callable(
     *,
     study: Any,
-) -> Callable[[int, list[ParameterRowConfig]], dict[str, float]]:
+) -> Callable[[int, list[ParameterRowConfig]], dict[str, Any]]:
     """Return a sampler callable suitable for ``OptimisationStudy(sampler=...)``.
 
     The callable spawns a fresh Optuna trial inside *study* and reports
@@ -95,10 +100,10 @@ def build_optuna_sampler_callable(
     require_optuna()
     state: dict[str, Any] = {"trial": None, "params": {}}
 
-    def _sampler(trial_number: int, rows: list[ParameterRowConfig]) -> dict[str, float]:
+    def _sampler(trial_number: int, rows: list[ParameterRowConfig]) -> dict[str, Any]:
         trial = study.ask()
         state["trial"] = trial
-        sampled: dict[str, float] = {}
+        sampled: dict[str, Any] = {}
         for row in rows:
             value = suggest_for_row(trial, row)
             if value is not None:
@@ -114,6 +119,7 @@ def run_optuna_study(
     *,
     config: Any,  # RunConfig — typed loosely to avoid a circular import
     detection_fn,
+    phase2_fn=None,
     phase3_fn=None,
     phase4_fn=None,
     cancel_token=None,
@@ -141,6 +147,7 @@ def run_optuna_study(
         config,
         sampler=lambda i, rows: {},  # placeholder; real sampling inside the loop
         detection_fn=detection_fn,
+        phase2_fn=phase2_fn,
         phase3_fn=phase3_fn,
         phase4_fn=phase4_fn,
         cancel_token=cancel_token,
@@ -166,7 +173,7 @@ def run_optuna_study(
         if driver.cancel_token.is_cancelled():
             break
         trial = study.ask()
-        sampled: dict[str, float] = {}
+        sampled: dict[str, Any] = {}
         for row in config.parameter_rows:
             value = suggest_for_row(trial, row)
             if value is not None:
@@ -178,6 +185,7 @@ def run_optuna_study(
             sampled=sampled,
             baseline_point_count=driver.baseline_point_count,
             detection_fn=detection_fn,
+            phase2_fn=phase2_fn,
             phase3_fn=phase3_fn,
             phase4_fn=phase4_fn,
             metadata_writer=writer,

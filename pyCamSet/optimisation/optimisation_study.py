@@ -157,7 +157,7 @@ def compute_coverage_metrics(
     multicam_image = used.sum(axis=1) >= 2
 
     point_count = int(arr.sum())
-    if baseline_point_count and baseline_point_count > 0:
+    if baseline_point_count is not None and baseline_point_count > 0:
         point_ratio = float(point_count) / float(baseline_point_count)
     else:
         point_ratio = 0.0

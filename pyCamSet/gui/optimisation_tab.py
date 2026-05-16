@@ -447,7 +447,10 @@ class OptimisationTab(QWidget):
 
     def _collect_config(self) -> RunConfig:
         seed_text = self._seed_edit.text().strip()
-        seed = int(seed_text) if seed_text.isdigit() else None
+        try:
+            seed = int(seed_text) if seed_text else None
+        except ValueError:
+            seed = None
         out = self._outdir_edit.text().strip()
         return RunConfig(
             f_loc=Path(self._floc_edit.text().strip()),

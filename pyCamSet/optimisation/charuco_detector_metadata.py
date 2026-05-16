@@ -197,7 +197,7 @@ CHARUCO_PARAMETER_METADATA: list[dict[str, Any]] = [
         "group": "DetectorParameters",
         "dtype": "float",
         "default": 0.1,
-        "min": 1e-4,
+        "min": 0.0001,
         "max": 1.0,
         "step": 0.005,
         "decimals": 4,

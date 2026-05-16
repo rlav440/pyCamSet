@@ -832,7 +832,7 @@ def test_bundle_options_are_backend_non_interactive():
 def test_outlier_detection_non_interactive_never_draws_or_prompts(monkeypatch):
     seen: dict[str, object] = {}
 
-    def _fake_mad(data, out_thresh=3, draw=True):
+    def _fake_mad(error_data, out_thresh=3, draw=True):
         seen["draw"] = draw
         return np.array([0], dtype=int)
 

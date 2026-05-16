@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyCamSet.gui.shared_functions import WorkspaceManager
+    from pyCamSet.optimisation.optimisation_worker import CalibrationControls
 
 _RUN_ID_TIMESTAMP_FORMAT = "%Y%m%dT%H%M%S"
 
@@ -70,7 +71,7 @@ def make_phase_callables(context: OptimisationPhaseContext):
             "max_nfev": int(max_nfev),
         }
 
-    def _phase3(detection_payload: dict[str, Any], *, controls) -> dict[str, Any]:
+    def _phase3(detection_payload: dict[str, Any], *, controls: "CalibrationControls") -> dict[str, Any]:
         cams = load_CameraSet(context.phase2_initial_camset)  # Load the phase 2 initial camset.
         detections = detection_payload["detections"]  # Use the trial-specific detections.
         target = detection_payload.get("target")  # Use the exact target used during detection.
@@ -97,7 +98,12 @@ def make_phase_callables(context: OptimisationPhaseContext):
             "source_phase2_camset": str(context.phase2_initial_camset),
         }
 
-    def _phase4(detection_payload: dict[str, Any], phase3_payload: dict[str, Any], *, controls) -> dict[str, Any]:
+    def _phase4(
+        detection_payload: dict[str, Any],
+        phase3_payload: dict[str, Any],
+        *,
+        controls: "CalibrationControls",
+    ) -> dict[str, Any]:
         phase3_cams = phase3_payload.get("camset")  # Phase 4 starts from the phase 3 camera set.
         if phase3_cams is None:  # Avoid silently fabricating a phase 4 source.
             raise RuntimeError("Phase 3 payload is missing a camset.")

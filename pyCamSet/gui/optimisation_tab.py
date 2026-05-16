@@ -91,6 +91,7 @@ except Exception:  # pragma: no cover - module always importable
 
 
 _LOG = logging.getLogger(__name__)
+_TARGET_CHOICES = ("ChArUco", "Ccube")
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +266,7 @@ class OptimisationTab(QWidget):
         form = QFormLayout(gb)
 
         self._target_type_combo = QComboBox()
-        self._target_type_combo.addItems(["ChArUco", "Ccube"])
+        self._target_type_combo.addItems(list(_TARGET_CHOICES))
         self._target_type_combo.currentTextChanged.connect(self._update_target_visibility)
         form.addRow("Target type:", self._target_type_combo)
 

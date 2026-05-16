@@ -658,8 +658,9 @@ class OptimisationStudy:
                 trial_dir.mkdir(parents=True, exist_ok=True)
                 detection_payload = payload.get("detection", {})
                 detection_dict = detection_payload if isinstance(detection_payload, dict) else {}
-                detections = detection_dict.get("detections")
-                if detections is not None:
+                has_detections = "detections" in detection_dict and detection_dict["detections"] is not None
+                if has_detections:
+                    detections = detection_dict["detections"]
                     detection_pickle_path = trial_dir / "detected_datapoints.pickle"
                     save_pickle(
                         (detections, detection_dict.get("cam_res"))

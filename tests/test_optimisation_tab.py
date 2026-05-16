@@ -791,7 +791,7 @@ def _write_retained_metadata(tmp_path: Path, success_stage: str) -> Path:
     metadata = {
         "identity": {"success_stage": success_stage, "trial_number": 3},
         "paths": {"f_loc": str(tmp_path), "trial_dir": str(trial_dir)},
-        "target": {"target_type": "Ccube", "n_points": 6, "length": 40.0},
+        "target": {"target_type": "Ccube", "n_points": 6, "length": 40.0, "border_fraction": 0.1},
         "detector_settings": {"effective": {"minMarkers": 2}},
         "calibration_controls": {"outliers": "n", "max_nfev_phase3": 10, "max_nfev_phase4": 10},
         "metrics": {"phase3_rpe": 0.4, "phase4_rpe": 0.7 if success_stage == "phase4" else None},

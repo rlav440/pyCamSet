@@ -60,6 +60,11 @@ from pyCamSet.gui.shared_functions import (
 from pyCamSet.optimisation.charuco_detector_metadata import (
     CHARUCO_PARAMETER_METADATA,
 )
+from pyCamSet.optimisation.charuco_detection_profiles import (
+    CHARUCO_DETECTION_PROFILE_NAMES,
+    get_charuco_detection_profile,
+    make_profile_tooltip,
+)
 from pyCamSet.optimisation.optimisation_study import (
     MAX_SUCCESSES_HARD_CAP,
     TRIAL_GATING_PROFILE_NAMES,
@@ -183,6 +188,7 @@ class OptimisationTab(QWidget):
         self._param_rows: dict[str, BoundedSliderRow] = {}
         self._retained_results: list[TrialResult] = []
         self._applying_trial_gating_profile = False
+        self._applying_detection_profile = False
 
         self._build_ui()
         self._update_optuna_status()
@@ -450,10 +456,34 @@ class OptimisationTab(QWidget):
     def _build_detector_section(self) -> QWidget:
         gb = QGroupBox()
         v = QVBoxLayout(gb)
+        # Keep a stable key->label map for profile hover/help text.
+        key_to_label = self._parameter_key_to_label_map()
+        # Add a profile selector so users can pre-fill bounds quickly.
+        self._detection_profile_combo = QComboBox()
+        # Use the fixed display ordering defined in the profile module.
+        self._detection_profile_combo.addItems(list(CHARUCO_DETECTION_PROFILE_NAMES))
+        # Re-apply profile bounds whenever the selected profile changes.
+        self._detection_profile_combo.currentTextChanged.connect(self._on_detection_profile_changed)
+        # Attach per-item and combo-level hover text in the existing tooltip pattern.
+        for idx in range(self._detection_profile_combo.count()):
+            profile_name = self._detection_profile_combo.itemText(idx)
+            tooltip = make_profile_tooltip(profile_name, key_to_label)
+            self._detection_profile_combo.setItemData(idx, tooltip, Qt.ItemDataRole.ToolTipRole)
+        self._detection_profile_combo.setToolTip(make_profile_tooltip("Balanced", key_to_label))
+        form = QFormLayout()
+        form.addRow("Detection Profile:", self._detection_profile_combo)
+        form_wrap = QWidget()
+        form_wrap.setLayout(form)
+        v.addWidget(form_wrap)
+        # Build one editable parameter row for each metadata entry.
         for entry in CHARUCO_PARAMETER_METADATA:
             row = BoundedSliderRow(entry)
+            # Watch bound edits so manual changes can flip the selector to Custom.
+            row.boundsChanged.connect(self._on_detection_profile_bounds_changed)
             self._param_rows[entry["key"]] = row
             v.addWidget(row)
+        # Populate initial bounds from the default profile on first load.
+        self._apply_detection_profile("Balanced")
         return gb
 
     def _build_results_section(self) -> QWidget:
@@ -672,6 +702,62 @@ class OptimisationTab(QWidget):
             trial_gating=self._collect_trial_gating(),
             output_dir=Path(out) if out else None,
         )
+
+    def _parameter_key_to_label_map(self) -> dict[str, str]:
+        """Return a stable key->label mapping for detector parameter UI text."""
+        return {entry["key"]: entry.get("label", entry["key"]) for entry in CHARUCO_PARAMETER_METADATA}
+
+    def _on_detection_profile_changed(self, profile_name: str) -> None:
+        # Ignore recursive signal traffic while profile bounds are being copied in.
+        if self._applying_detection_profile:
+            return
+        # Keep the current bounds untouched when the selector is set to Custom.
+        if profile_name == "Custom":
+            return
+        # Copy the selected profile's lower/upper bounds into supported rows.
+        self._apply_detection_profile(profile_name)
+
+    def _apply_detection_profile(self, profile_name: str) -> None:
+        # Resolve profile payload once to keep copies deterministic.
+        profile = get_charuco_detection_profile(profile_name)
+        # Prepare labels for hover/help text formatting.
+        key_to_label = self._parameter_key_to_label_map()
+        # Block recursive state flips while bounds are applied row by row.
+        self._applying_detection_profile = True
+        try:
+            # Keep the selector text aligned with the applied profile.
+            self._detection_profile_combo.setCurrentText(profile_name)
+            # Keep combo hover text aligned with the active profile.
+            self._detection_profile_combo.setToolTip(make_profile_tooltip(profile_name, key_to_label))
+            # Copy only lower/upper bound values into each supported row.
+            for key, row in self._param_rows.items():
+                lower = profile["lower_bounds"].get(key)
+                upper = profile["upper_bounds"].get(key)
+                # Skip rows that are not explicitly covered by this profile.
+                if lower is None or upper is None:
+                    continue
+                row.set_bounds(lower, upper)
+        finally:
+            # Re-enable normal profile-change handling after copy finishes.
+            self._applying_detection_profile = False
+
+    def _on_detection_profile_bounds_changed(self, _key: str, _lower, _upper) -> None:
+        # Ignore bound signals emitted while a profile is being applied.
+        if self._applying_detection_profile:
+            return
+        # Keep current selector text when already in Custom mode.
+        if self._detection_profile_combo.currentText() == "Custom":
+            return
+        # Switch selector state to Custom while preserving edited bounds.
+        self._applying_detection_profile = True
+        try:
+            # Update only the selector label and its hover/help text.
+            self._detection_profile_combo.setCurrentText("Custom")
+            key_to_label = self._parameter_key_to_label_map()
+            self._detection_profile_combo.setToolTip(make_profile_tooltip("Custom", key_to_label))
+        finally:
+            # Re-enable normal selector handling after the state flip.
+            self._applying_detection_profile = False
 
     def _sync_workspace_from_floc(self, f_loc: Path) -> None:
         if f_loc.exists() and f_loc.is_dir():

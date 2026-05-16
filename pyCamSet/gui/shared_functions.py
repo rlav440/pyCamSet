@@ -68,6 +68,7 @@ TAB_PHASE3 = "Phase 3 - Bundle Adjustment"
 TAB_PHASE3_DIAG = "Phase 3 Diagnostics"
 TAB_PHASE4 = "Phase 4 - Self-Calibration"
 TAB_PHASE4_DIAG = "Phase 4 Diagnostics"
+TAB_OPTIMISATION = "Optimisation"
 TAB_CREATE_TARGET = "Create Target"
 TAB_PRINT_TARGET = TAB_CREATE_TARGET
 TAB_EXPORT_CALIBRATION = "Export Calibration"

@@ -58,6 +58,37 @@ FAST_IMAGE_COVERAGE_MIN: float = 0.50
 FAST_CAMERA_COVERAGE_MIN: float = 0.60
 FAST_MULTICAM_COVERAGE_MIN: float = 0.40
 
+# Trial-gating profile names exposed by the GUI and metadata.
+TRIAL_GATING_PROFILE_NAMES: tuple[str, ...] = ("Custom", "Strict", "Moderate", "Flexible")
+
+# Preset values used when the user selects a named gating profile.
+_TRIAL_GATING_PRESETS: dict[str, dict[str, float]] = {
+    "Strict": {
+        "min_cameras_with_detections": 2,
+        "min_valid_images": 5,
+        "min_image_coverage": 0.70,
+        "min_camera_coverage": 0.90,
+        "min_multicam_image_coverage": 0.60,
+        "min_point_ratio": 0.80,
+    },
+    "Moderate": {
+        "min_cameras_with_detections": 2,
+        "min_valid_images": 3,
+        "min_image_coverage": 0.50,
+        "min_camera_coverage": 0.75,
+        "min_multicam_image_coverage": 0.40,
+        "min_point_ratio": 0.60,
+    },
+    "Flexible": {
+        "min_cameras_with_detections": 2,
+        "min_valid_images": 2,
+        "min_image_coverage": 0.25,
+        "min_camera_coverage": 0.50,
+        "min_multicam_image_coverage": 0.20,
+        "min_point_ratio": 0.30,
+    },
+}
+
 # Stage offsets used by the full-mode objective (§10.1).
 STAGE_OFFSET_PHASE3: float = 0.00
 STAGE_OFFSET_PHASE4: float = 0.25
@@ -103,6 +134,7 @@ class TrialResult:
     score: float = FAILURE_SCORE
 
     failure_reason: Optional[str] = None
+    failure_stage: Optional[str] = None
     warnings: list[str] = field(default_factory=list)
     saved_metadata_path: Optional[str] = None
 
@@ -112,6 +144,61 @@ class TrialResult:
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+# ---------------------------------------------------------------------------
+# Trial gating (§9)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TrialGatingSettings:
+    """Editable early-stage gating thresholds used before later optimisation stages."""
+
+    profile_name: str = "Moderate"
+    min_cameras_with_detections: int = 2
+    min_valid_images: int = 3
+    min_image_coverage: float = 0.50
+    min_camera_coverage: float = 0.75
+    min_multicam_image_coverage: float = 0.40
+    min_point_ratio: float = 0.60
+
+    def as_dict(self) -> dict[str, float | int | str]:
+        return {
+            "profile_name": self.profile_name,
+            "min_cameras_with_detections": self.min_cameras_with_detections,
+            "min_valid_images": self.min_valid_images,
+            "min_image_coverage": self.min_image_coverage,
+            "min_camera_coverage": self.min_camera_coverage,
+            "min_multicam_image_coverage": self.min_multicam_image_coverage,
+            "min_point_ratio": self.min_point_ratio,
+        }
+
+    def validate(self) -> list[str]:
+        errors: list[str] = []
+        if self.profile_name not in TRIAL_GATING_PROFILE_NAMES:
+            errors.append(f"Unknown trial gating profile: {self.profile_name!r}.")
+        if int(self.min_cameras_with_detections) < 2:
+            errors.append("Trial gating requires at least 2 cameras with detections.")
+        if int(self.min_valid_images) < 1:
+            errors.append("Trial gating requires at least 1 valid image/pose.")
+        for label, value in (
+            ("minimum image coverage", self.min_image_coverage),
+            ("minimum camera coverage", self.min_camera_coverage),
+            ("minimum multicam image coverage", self.min_multicam_image_coverage),
+        ):
+            if not 0.0 <= float(value) <= 1.0:
+                errors.append(f"Trial gating {label} must be within [0.0, 1.0].")
+        if float(self.min_point_ratio) < 0.0:
+            errors.append("Trial gating minimum point ratio must be >= 0.0.")
+        return errors
+
+
+def make_trial_gating_settings(profile_name: str = "Moderate") -> TrialGatingSettings:
+    """Return a named preset as a concrete :class:`TrialGatingSettings` value."""
+    selected = "Moderate" if profile_name == "Custom" else profile_name
+    values = _TRIAL_GATING_PRESETS.get(selected, _TRIAL_GATING_PRESETS["Moderate"])
+    return TrialGatingSettings(profile_name=profile_name, **values)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +272,12 @@ def compute_coverage_metrics(
 class ValidityVerdict:
     valid: bool
     reason: Optional[str] = None
+    category: Optional[str] = None
+
+
+def _format_threshold_reason(label: str, value: float, minimum: float) -> str:
+    """Return a compact user-facing threshold failure message."""
+    return f"{label} {value:.3f} is below the trial-gating minimum of {minimum:.3f}"
 
 
 def assess_validity(
@@ -192,17 +285,73 @@ def assess_validity(
     *,
     n_cameras_with_detections: int,
     n_valid_images: int,
+    trial_gating: Optional[TrialGatingSettings] = None,
     final_rpe: Optional[float] = None,
 ) -> ValidityVerdict:
     """Apply the §9 validity rules."""
+    gating = trial_gating or make_trial_gating_settings()
     if coverage.get("point_count", 0) <= 0:
-        return ValidityVerdict(False, "no usable detections")
-    if n_cameras_with_detections < 2:
-        return ValidityVerdict(False, "fewer than 2 cameras contributed detections")
-    if n_valid_images < 3:
-        return ValidityVerdict(False, "fewer than 3 valid poses/images")
+        return ValidityVerdict(False, "no usable detections", "detection")
+    if n_cameras_with_detections < gating.min_cameras_with_detections:
+        return ValidityVerdict(
+            False,
+            (
+                f"{n_cameras_with_detections} cameras contributed detections, "
+                f"below the trial-gating minimum of {gating.min_cameras_with_detections}"
+            ),
+            "gating",
+        )
+    if n_valid_images < gating.min_valid_images:
+        return ValidityVerdict(
+            False,
+            (
+                f"{n_valid_images} valid poses/images were found, "
+                f"below the trial-gating minimum of {gating.min_valid_images}"
+            ),
+            "gating",
+        )
+    if coverage.get("image_coverage", 0.0) < gating.min_image_coverage:
+        return ValidityVerdict(
+            False,
+            _format_threshold_reason(
+                "image coverage",
+                float(coverage.get("image_coverage", 0.0)),
+                float(gating.min_image_coverage),
+            ),
+            "gating",
+        )
+    if coverage.get("camera_coverage", 0.0) < gating.min_camera_coverage:
+        return ValidityVerdict(
+            False,
+            _format_threshold_reason(
+                "camera coverage",
+                float(coverage.get("camera_coverage", 0.0)),
+                float(gating.min_camera_coverage),
+            ),
+            "gating",
+        )
+    if coverage.get("multicam_image_coverage", 0.0) < gating.min_multicam_image_coverage:
+        return ValidityVerdict(
+            False,
+            _format_threshold_reason(
+                "multicam image coverage",
+                float(coverage.get("multicam_image_coverage", 0.0)),
+                float(gating.min_multicam_image_coverage),
+            ),
+            "gating",
+        )
+    if coverage.get("point_ratio", 0.0) < gating.min_point_ratio:
+        return ValidityVerdict(
+            False,
+            _format_threshold_reason(
+                "point ratio",
+                float(coverage.get("point_ratio", 0.0)),
+                float(gating.min_point_ratio),
+            ),
+            "gating",
+        )
     if final_rpe is not None and (math.isnan(final_rpe) or math.isinf(final_rpe)):
-        return ValidityVerdict(False, "optimisation returned NaN/inf RPE")
+        return ValidityVerdict(False, "optimisation returned NaN/inf RPE", "gating")
     return ValidityVerdict(True)
 
 
@@ -374,6 +523,7 @@ def validate_run_settings(
     max_nfev_phase4: int,
     retain_successes: int,
     target_settings: dict[str, Any],
+    trial_gating: Optional[dict[str, Any]] = None,
 ) -> list[str]:
     """Validate global run settings (§16.2).  Returns a list of error messages."""
     errors: list[str] = []
@@ -415,6 +565,13 @@ def validate_run_settings(
             errors.append(f"Target field '{required}' must be numeric.")
     if target_type not in {"ChArUco", "Ccube"}:
         errors.append(f"Unknown target type: {target_type!r}.")
+    if trial_gating is not None:
+        try:
+            gating = TrialGatingSettings(**trial_gating)
+        except TypeError as exc:
+            errors.append(f"Trial gating settings are invalid: {exc}")
+        else:
+            errors.extend(gating.validate())
     return errors
 
 
@@ -451,6 +608,7 @@ def write_trial_metadata(
     f_loc: Path | str,
     target_settings: dict[str, Any],
     calibration_controls: dict[str, Any],
+    trial_gating: dict[str, Any],
     sampler_name: Optional[str] = None,
     seed: Optional[int] = None,
     camset_path: Optional[Path | str] = None,
@@ -478,6 +636,7 @@ def write_trial_metadata(
             "camset_path": str(camset_path) if camset_path else None,
         },
         "target": dict(target_settings),
+        "trial_gating": dict(trial_gating),
         "detector_settings": {
             "effective": dict(result.effective_detector_settings),
             "fixed": dict(result.fixed_detector_settings),
@@ -542,6 +701,8 @@ def write_study_summary(
     n_trials_completed: int,
     n_trials_requested: int,
     mode: str,
+    trial_gating: Optional[dict[str, Any]] = None,
+    outcome_counts: Optional[dict[str, int]] = None,
     sampler_name: Optional[str] = None,
     seed: Optional[int] = None,
 ) -> Path:
@@ -562,6 +723,8 @@ def write_study_summary(
         "n_trials_requested": n_trials_requested,
         "n_successes_retained": len(retention),
         "max_successes": retention.max_successes,
+        "trial_gating": dict(trial_gating or {}),
+        "trial_outcomes": dict(outcome_counts or {}),
         "sampler": sampler_name,
         "seed": seed,
         "successes": [
@@ -592,7 +755,10 @@ __all__ = [
     "FAILURE_SCORE",
     "MAX_SUCCESSES_HARD_CAP",
     "TrialResult",
+    "TrialGatingSettings",
+    "TRIAL_GATING_PROFILE_NAMES",
     "ValidityVerdict",
+    "make_trial_gating_settings",
     "compute_coverage_metrics",
     "assess_validity",
     "compute_full_score",

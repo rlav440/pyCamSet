@@ -62,8 +62,11 @@ from pyCamSet.optimisation.charuco_detector_metadata import (
 )
 from pyCamSet.optimisation.optimisation_study import (
     MAX_SUCCESSES_HARD_CAP,
+    TRIAL_GATING_PROFILE_NAMES,
+    TrialGatingSettings,
     TrialResult,
     clamp_retain_count,
+    make_trial_gating_settings,
 )
 from pyCamSet.optimisation.optimisation_promotion import promote_retained_trial
 from pyCamSet.optimisation.optimisation_worker import (
@@ -179,6 +182,7 @@ class OptimisationTab(QWidget):
         self._worker: Optional[_StudyWorker] = None
         self._param_rows: dict[str, BoundedSliderRow] = {}
         self._retained_results: list[TrialResult] = []
+        self._applying_trial_gating_profile = False
 
         self._build_ui()
         self._update_optuna_status()
@@ -209,6 +213,9 @@ class OptimisationTab(QWidget):
 
         layout.addWidget(make_section_label("Calibration Controls"))
         layout.addWidget(self._build_controls_section())
+
+        layout.addWidget(make_section_label("Trial Gating"))
+        layout.addWidget(self._build_trial_gating_section())
 
         layout.addWidget(make_section_label("ChArUco Detection Options"))
         layout.addWidget(self._build_detector_section())
@@ -371,6 +378,75 @@ class OptimisationTab(QWidget):
         form.addRow("Retain successes:", self._retain_spin)
         return gb
 
+    def _build_trial_gating_section(self) -> QWidget:
+        gb = QGroupBox()
+        form = QFormLayout(gb)
+
+        # Let the user start from a named preset before editing values manually.
+        self._trial_gating_profile_combo = QComboBox()
+        # Keep the dropdown aligned with the requested preset names.
+        self._trial_gating_profile_combo.addItems(list(TRIAL_GATING_PROFILE_NAMES))
+        # Re-apply the chosen preset whenever the selection changes.
+        self._trial_gating_profile_combo.currentTextChanged.connect(self._on_trial_gating_profile_changed)
+        form.addRow("Profile:", self._trial_gating_profile_combo)
+
+        # Expose the minimum number of cameras that must contribute detections.
+        self._min_gating_cameras_spin = QSpinBox()
+        # Keep the backend-safe lower bound of two cameras.
+        self._min_gating_cameras_spin.setRange(2, 1000)
+        form.addRow("Minimum cameras with detections:", self._min_gating_cameras_spin)
+
+        # Expose the minimum number of valid poses/images.
+        self._min_gating_images_spin = QSpinBox()
+        # Leave room for both strict and flexible presets.
+        self._min_gating_images_spin.setRange(1, 10000)
+        form.addRow("Minimum valid images / poses:", self._min_gating_images_spin)
+
+        # Expose the image-coverage threshold as a simple fraction.
+        self._min_image_coverage_spin = self._make_fraction_spin()
+        form.addRow("Minimum image coverage:", self._min_image_coverage_spin)
+
+        # Expose the camera-coverage threshold as a simple fraction.
+        self._min_camera_coverage_spin = self._make_fraction_spin()
+        form.addRow("Minimum camera coverage:", self._min_camera_coverage_spin)
+
+        # Expose the multi-camera image-coverage threshold as a simple fraction.
+        self._min_multicam_coverage_spin = self._make_fraction_spin()
+        form.addRow("Minimum multicam image coverage:", self._min_multicam_coverage_spin)
+
+        # Expose the point-ratio threshold as a user-editable numeric value.
+        self._min_point_ratio_spin = QDoubleSpinBox()
+        # Allow values above 1.0 because trials can exceed the baseline point count.
+        self._min_point_ratio_spin.setRange(0.0, 10.0)
+        # Keep enough precision for small manual adjustments.
+        self._min_point_ratio_spin.setDecimals(3)
+        # Match the other fractional controls' edit step.
+        self._min_point_ratio_spin.setSingleStep(0.05)
+        form.addRow("Minimum point ratio:", self._min_point_ratio_spin)
+
+        # Flip the preset selector to Custom whenever the user edits a threshold.
+        for widget in (
+            self._min_gating_cameras_spin,
+            self._min_gating_images_spin,
+            self._min_image_coverage_spin,
+            self._min_camera_coverage_spin,
+            self._min_multicam_coverage_spin,
+            self._min_point_ratio_spin,
+        ):
+            # Watch each threshold widget for manual changes.
+            widget.valueChanged.connect(self._on_trial_gating_field_changed)
+
+        # Populate the fields with a predictable default preset on first load.
+        self._apply_trial_gating_profile("Moderate")
+        return gb
+
+    def _make_fraction_spin(self) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(0.0, 1.0)
+        spin.setDecimals(3)
+        spin.setSingleStep(0.05)
+        return spin
+
     def _build_detector_section(self) -> QWidget:
         gb = QGroupBox()
         v = QVBoxLayout(gb)
@@ -407,6 +483,28 @@ class OptimisationTab(QWidget):
         live_wrap = QWidget()
         live_wrap.setLayout(live)
         v.addWidget(live_wrap)
+
+        self._latest_failure_reason = QLabel("Latest trial failure: –")
+        self._latest_failure_reason.setWordWrap(True)
+        v.addWidget(self._latest_failure_reason)
+
+        counts_wrap = QWidget()
+        counts_form = QFormLayout(counts_wrap)
+        self._rejected_detection_count = QLabel("0")
+        self._rejected_gating_count = QLabel("0")
+        self._failed_phase2_count = QLabel("0")
+        self._failed_phase3_count = QLabel("0")
+        self._failed_phase4_count = QLabel("0")
+        self._succeeded_phase3_count = QLabel("0")
+        self._succeeded_phase4_count = QLabel("0")
+        counts_form.addRow("Rejected at detection:", self._rejected_detection_count)
+        counts_form.addRow("Rejected by gating:", self._rejected_gating_count)
+        counts_form.addRow("Failed in phase 2:", self._failed_phase2_count)
+        counts_form.addRow("Failed in phase 3:", self._failed_phase3_count)
+        counts_form.addRow("Failed in phase 4:", self._failed_phase4_count)
+        counts_form.addRow("Succeeded in phase 3:", self._succeeded_phase3_count)
+        counts_form.addRow("Succeeded in phase 4:", self._succeeded_phase4_count)
+        v.addWidget(counts_wrap)
 
         self._results_table = QTableWidget(0, 10)
         self._results_table.setHorizontalHeaderLabels([
@@ -494,6 +592,67 @@ class OptimisationTab(QWidget):
             retain_successes=clamp_retain_count(self._retain_spin.value()),
         )
 
+    def _collect_trial_gating(self) -> TrialGatingSettings:
+        return TrialGatingSettings(
+            profile_name=self._trial_gating_profile_combo.currentText(),
+            min_cameras_with_detections=int(self._min_gating_cameras_spin.value()),
+            min_valid_images=int(self._min_gating_images_spin.value()),
+            min_image_coverage=float(self._min_image_coverage_spin.value()),
+            min_camera_coverage=float(self._min_camera_coverage_spin.value()),
+            min_multicam_image_coverage=float(self._min_multicam_coverage_spin.value()),
+            min_point_ratio=float(self._min_point_ratio_spin.value()),
+        )
+
+    def _on_trial_gating_profile_changed(self, profile_name: str) -> None:
+        # Ignore recursive signal traffic while a preset is being copied into the fields.
+        if self._applying_trial_gating_profile:
+            return
+        # Leave the current field values untouched when the user selects Custom.
+        if profile_name == "Custom":
+            return
+        # Copy the selected preset values into the editable threshold widgets.
+        self._apply_trial_gating_profile(profile_name)
+
+    def _apply_trial_gating_profile(self, profile_name: str) -> None:
+        # Resolve the preset name into a concrete settings object.
+        settings = make_trial_gating_settings(profile_name)
+        # Suppress Custom flip-backs while the preset values are being applied.
+        self._applying_trial_gating_profile = True
+        try:
+            # Keep the dropdown text aligned with the applied preset.
+            self._trial_gating_profile_combo.setCurrentText(profile_name)
+            # Copy the camera threshold into the UI.
+            self._min_gating_cameras_spin.setValue(settings.min_cameras_with_detections)
+            # Copy the image/pose threshold into the UI.
+            self._min_gating_images_spin.setValue(settings.min_valid_images)
+            # Copy the image coverage threshold into the UI.
+            self._min_image_coverage_spin.setValue(settings.min_image_coverage)
+            # Copy the camera coverage threshold into the UI.
+            self._min_camera_coverage_spin.setValue(settings.min_camera_coverage)
+            # Copy the multicam coverage threshold into the UI.
+            self._min_multicam_coverage_spin.setValue(settings.min_multicam_image_coverage)
+            # Copy the point-ratio threshold into the UI.
+            self._min_point_ratio_spin.setValue(settings.min_point_ratio)
+        finally:
+            # Re-enable normal field-change handling after the preset copy finishes.
+            self._applying_trial_gating_profile = False
+
+    def _on_trial_gating_field_changed(self, _value) -> None:
+        # Ignore signal traffic caused by applying a preset programmatically.
+        if self._applying_trial_gating_profile:
+            return
+        # Keep the selector unchanged if it is already showing Custom.
+        if self._trial_gating_profile_combo.currentText() == "Custom":
+            return
+        # Switch the selector to Custom while preserving the edited field values.
+        self._applying_trial_gating_profile = True
+        try:
+            # Update only the profile name so the manual edits remain visible.
+            self._trial_gating_profile_combo.setCurrentText("Custom")
+        finally:
+            # Re-enable normal preset handling after the combo update.
+            self._applying_trial_gating_profile = False
+
     def _collect_config(self) -> RunConfig:
         seed_text = self._seed_edit.text().strip()
         try:
@@ -510,6 +669,7 @@ class OptimisationTab(QWidget):
             parameter_rows=self._collect_parameter_rows(),
             target=self._collect_target(),
             controls=self._collect_controls(),
+            trial_gating=self._collect_trial_gating(),
             output_dir=Path(out) if out else None,
         )
 
@@ -546,6 +706,14 @@ class OptimisationTab(QWidget):
         self._retained_results = []
         self._progress.setRange(0, config.n_trials)
         self._progress.setValue(0)
+        self._latest_failure_reason.setText("Latest trial failure: –")
+        self._rejected_detection_count.setText("0")
+        self._rejected_gating_count.setText("0")
+        self._failed_phase2_count.setText("0")
+        self._failed_phase3_count.setText("0")
+        self._failed_phase4_count.setText("0")
+        self._succeeded_phase3_count.setText("0")
+        self._succeeded_phase4_count.setText("0")
         self._start_btn.setEnabled(False)
         self._cancel_btn.setEnabled(True)
 
@@ -581,6 +749,16 @@ class OptimisationTab(QWidget):
         else:
             self._live_best_rpe.setText("Best RPE: –")
         self._live_successes.setText(f"Successes: {p.n_successes}")
+        self._latest_failure_reason.setText(
+            f"Latest trial failure: {p.latest_failure_reason or '–'}"
+        )
+        self._rejected_detection_count.setText(str(p.rejected_at_detection))
+        self._rejected_gating_count.setText(str(p.rejected_by_gating))
+        self._failed_phase2_count.setText(str(p.failed_phase2))
+        self._failed_phase3_count.setText(str(p.failed_phase3))
+        self._failed_phase4_count.setText(str(p.failed_phase4))
+        self._succeeded_phase3_count.setText(str(p.succeeded_phase3))
+        self._succeeded_phase4_count.setText(str(p.succeeded_phase4))
 
     def _on_finished(self, retention, n_completed: int) -> None:
         self._populate_results_table(retention.ranked())

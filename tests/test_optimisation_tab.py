@@ -1,6 +1,12 @@
-"""Unit tests for the headless optimisation data model and worker."""
+"""Purpose: Unit tests for the headless optimisation data model and worker.
+
+Status: Active regression coverage for the Optimisation tab follow-up work.
+
+Future: Add GUI-level Qt tests when the project test environment includes pytest-qt.
+"""
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -45,6 +51,8 @@ from pyCamSet.optimisation.optimisation_worker import (
     detection_options_from_settings,
     run_trial,
 )
+from pyCamSet.optimisation.optimisation_promotion import promote_retained_trial
+from pyCamSet.gui.shared_functions import WorkspaceManager
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +436,20 @@ def test_validate_run_settings_clean(tmp_path: Path):
     assert errors == []
 
 
+def test_validate_run_settings_accepts_ccube(tmp_path: Path):
+    target = {"target_type": "Ccube", "n_points": 6, "length": 40.0, "border_fraction": 0.1}
+    errors = validate_run_settings(
+        f_loc=tmp_path,
+        n_trials=10,
+        target_rpe=1.0,
+        max_nfev_phase3=100,
+        max_nfev_phase4=100,
+        retain_successes=5,
+        target_settings=target,
+    )
+    assert errors == []
+
+
 def test_validate_run_settings_bad_target(tmp_path: Path):
     errors = validate_run_settings(
         f_loc=tmp_path,
@@ -503,9 +525,29 @@ def _fake_phase3(rpe: float):
     return _fn
 
 
+class _FakeCamset:
+    def __init__(self, label: str):
+        self.label = label
+
+    def save(self, path):
+        Path(path).write_text(self.label)
+
+
 def _fake_phase4(rpe: float):
     def _fn(detection_payload, phase3, *, controls):
         return {"rpe": rpe, "camset": None}
+    return _fn
+
+
+def _fake_phase3_camset(rpe: float, label: str = "phase3"):
+    def _fn(detection_payload, *, controls):
+        return {"rpe": rpe, "camset": _FakeCamset(label)}
+    return _fn
+
+
+def _fake_phase4_camset(rpe: float, label: str = "phase4"):
+    def _fn(detection_payload, phase3, *, controls):
+        return {"rpe": rpe, "camset": _FakeCamset(label)}
     return _fn
 
 
@@ -580,6 +622,24 @@ def test_run_trial_full_phase4_failure_marks_unsuccessful(tmp_path: Path):
     assert result.score < FAILURE_SCORE  # valid-but-unsuccessful keeps ranking info
 
 
+def test_run_trial_full_payload_preserves_detection_and_phase_outputs(tmp_path: Path):
+    config = _make_config(tmp_path)
+    result, payload = run_trial(
+        0,
+        config.parameter_rows,
+        config=config,
+        sampled=None,
+        baseline_point_count=80,
+        detection_fn=_fake_detection_fn(80),
+        phase3_fn=_fake_phase3_camset(2.0),
+        phase4_fn=_fake_phase4_camset(0.7),
+    )
+    assert result.success_stage == "phase4"
+    assert "detection" in payload
+    assert payload["phase3"]["camset"].label == "phase3"
+    assert payload["phase4"]["camset"].label == "phase4"
+
+
 def test_run_trial_invalid_detection_marks_failure(tmp_path: Path):
     config = _make_config(tmp_path)
     # one camera only, two valid images => fails validity (n_cams<2)
@@ -643,6 +703,23 @@ def test_optimisation_study_runs_to_completion_with_stub_sampler(tmp_path: Path)
     assert (study.config.resolved_output_dir(study.study_id) / "study_summary.json").exists()
 
 
+def test_optimisation_study_success_metadata_contains_promotion_artifacts(tmp_path: Path):
+    config = _make_config(tmp_path)
+    study = OptimisationStudy(
+        config,
+        sampler=lambda i, rows: {},
+        detection_fn=_fake_detection_fn(80),
+        phase3_fn=_fake_phase3_camset(0.4),
+    )
+    ret = study.run()
+    result = ret.ranked()[0]
+    metadata = json.loads(Path(result.saved_metadata_path).read_text())
+    artifacts = metadata["extra"]["artifacts"]
+    assert Path(artifacts["detected_datapoints_pickle"]).exists()
+    assert Path(artifacts["phase3_camset"]).exists()
+    assert artifacts["phase4_camset"] is None
+
+
 def test_optimisation_study_respects_cancel(tmp_path: Path):
     config = _make_config(tmp_path)
     from pyCamSet.optimisation.optimisation_worker import CancelToken
@@ -684,6 +761,55 @@ def test_detection_options_grouping_round_trip():
     )
     grouped = detection_options_from_settings(settings)
     assert grouped["DetectorParameters"]["adaptiveThreshConstant"] == pytest.approx(11.0)
+
+
+def _write_retained_metadata(tmp_path: Path, stage: str) -> Path:
+    trial_dir = tmp_path / f"trial_{stage}"
+    trial_dir.mkdir()
+    detection = trial_dir / "detected_datapoints.pickle"
+    phase3 = trial_dir / "camset_phase3.json"
+    phase4 = trial_dir / "camset_phase4.json"
+    detection.write_bytes(b"detections")
+    phase3.write_text("phase3")
+    if stage == "phase4":
+        phase4.write_text("phase4")
+    metadata = {
+        "identity": {"success_stage": stage, "trial_number": 3},
+        "paths": {"f_loc": str(tmp_path), "trial_dir": str(trial_dir)},
+        "target": {"target_type": "Ccube", "n_points": 6, "length": 40.0},
+        "detector_settings": {"effective": {"minMarkers": 2}},
+        "calibration_controls": {"outliers": "n", "max_nfev_phase3": 10, "max_nfev_phase4": 10},
+        "metrics": {"phase3_rpe": 0.4, "phase4_rpe": 0.7 if stage == "phase4" else None},
+        "extra": {
+            "artifacts": {
+                "detected_datapoints_pickle": str(detection),
+                "phase3_camset": str(phase3),
+                "phase4_camset": str(phase4) if stage == "phase4" else None,
+            },
+            "phase_sources": {"phase2_run_id": "p2", "phase2_initial_camset": "/tmp/p2.camset"},
+        },
+    }
+    path = trial_dir / "metadata.json"
+    path.write_text(json.dumps(metadata))
+    return path
+
+
+def test_promote_retained_phase3_writes_only_phases_1_and_3(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    mgr = WorkspaceManager(workspace)
+    promoted = promote_retained_trial(mgr, _write_retained_metadata(tmp_path, "phase3"))
+    assert set(promoted) == {"phase1", "phase3"}
+    assert (workspace / "phase1_runs" / promoted["phase1"] / "detected_datapoints.pickle").exists()
+    assert (workspace / "phase3_runs" / promoted["phase3"] / "optimised_cameras.camset").exists()
+    assert not any((workspace / "phase4_runs").iterdir())
+
+
+def test_promote_retained_phase4_writes_phases_1_3_and_4(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    mgr = WorkspaceManager(workspace)
+    promoted = promote_retained_trial(mgr, _write_retained_metadata(tmp_path, "phase4"))
+    assert set(promoted) == {"phase1", "phase3", "phase4"}
+    assert (workspace / "phase4_runs" / promoted["phase4"] / "self_calibrated_cameras.camset").exists()
 
 
 # ---------------------------------------------------------------------------

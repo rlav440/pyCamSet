@@ -41,6 +41,7 @@ from pyCamSet.optimisation.optimisation_study import (
     write_study_summary,
     write_trial_metadata,
 )
+from pyCamSet.optimisation.optuna_adapter import suggest_for_row
 from pyCamSet.optimisation.optimisation_worker import (
     CalibrationControls,
     OptimisationStudy,
@@ -48,10 +49,13 @@ from pyCamSet.optimisation.optimisation_worker import (
     RunConfig,
     TargetSettings,
     build_effective_settings,
+    default_phase2_fn,
     detection_options_from_settings,
     run_trial,
 )
 from pyCamSet.optimisation.optimisation_promotion import promote_retained_trial
+from pyCamSet.calibration_targets.target_Ccube import Ccube
+from pyCamSet.calibration_targets.target_charuco import ChArUco
 
 
 class _FakeWorkspaceManager:
@@ -85,6 +89,18 @@ def test_metadata_groups_are_known():
         assert entry["group"] in allowed
         assert entry["dtype"] in {"int", "float"}
         assert entry["min"] <= entry["default"] <= entry["max"]
+
+
+def test_corner_refinement_metadata_is_discrete_choice():
+    entry = metadata_by_key()["cornerRefinementMethod"]
+    assert [choice["value"] for choice in entry["choices"]] == [0, 1, 2, 3]
+    assert [choice["label"] for choice in entry["choices"]] == [
+        "NONE",
+        "REFINE_SUBPIX",
+        "REFINE_CONTOUR",
+        "REFINE_APRILTAG",
+    ]
+    assert entry["default"] == 0
 
 
 def test_coerce_value_and_clamp():
@@ -137,6 +153,12 @@ def test_validate_parameter_row_rejects_out_of_range_fixed():
     entry = metadata_by_key()["minMarkers"]  # max=4
     errors = validate_parameter_row(entry, fixed_value=99, optimise=False)
     assert any("outside allowed bounds" in e for e in errors)
+
+
+def test_validate_parameter_row_allows_choice_optimisation_without_bounds():
+    entry = metadata_by_key()["cornerRefinementMethod"]
+    errors = validate_parameter_row(entry, fixed_value=1, optimise=True)
+    assert errors == []
 
 
 def test_validate_all_rows_unknown_key():
@@ -505,6 +527,18 @@ def test_build_effective_settings_clamps_to_metadata_bounds():
     assert settings["minMarkers"] == 4
 
 
+def test_build_effective_settings_uses_fixed_corner_refinement_code():
+    rows = [ParameterRowConfig(key="cornerRefinementMethod", fixed=2, optimise=False)]
+    settings = build_effective_settings(rows)
+    assert settings["cornerRefinementMethod"] == 2
+
+
+def test_build_effective_settings_uses_sampled_corner_refinement_code():
+    rows = [ParameterRowConfig(key="cornerRefinementMethod", fixed=0, optimise=True)]
+    settings = build_effective_settings(rows, sampled={"cornerRefinementMethod": 3})
+    assert settings["cornerRefinementMethod"] == 3
+
+
 # ---------------------------------------------------------------------------
 # run_trial / OptimisationStudy with injected fakes
 # ---------------------------------------------------------------------------
@@ -526,14 +560,23 @@ def _fake_detection_fn(point_count: int = 100):
         return {
             "features_per_im_per_cam": arr,
             "detections": object(),
+            "cam_res": [(1920, 1080) for _ in range(arr.shape[1])],
+            "target": target,
             "warnings": [],
         }
 
     return _fn
 
 
-def _fake_phase3(rpe: float):
+def _fake_phase2(label: str = "phase2"):
     def _fn(detection_payload, *, controls):
+        return {"camset": _FakeCamset(label)}
+
+    return _fn
+
+
+def _fake_phase3(rpe: float):
+    def _fn(detection_payload, phase2_payload, *, controls):
         return {"rpe": rpe, "camset": None}
     return _fn
 
@@ -555,7 +598,7 @@ def _fake_phase4(rpe: float):
 
 
 def _fake_phase3_camset(rpe: float, label: str = "phase3"):
-    def _fn(detection_payload, *, controls):
+    def _fn(detection_payload, phase2_payload, *, controls):
         return {"rpe": rpe, "camset": _FakeCamset(label)}
     return _fn
 
@@ -594,6 +637,7 @@ def test_run_trial_full_phase3_success(tmp_path: Path):
         sampled=None,
         baseline_point_count=80,
         detection_fn=_fake_detection_fn(80),
+        phase2_fn=_fake_phase2(),
         phase3_fn=_fake_phase3(0.4),
     )
     assert result.valid
@@ -611,6 +655,7 @@ def test_run_trial_full_phase4_runs_when_phase3_above_threshold(tmp_path: Path):
         sampled=None,
         baseline_point_count=80,
         detection_fn=_fake_detection_fn(80),
+        phase2_fn=_fake_phase2(),
         phase3_fn=_fake_phase3(2.0),
         phase4_fn=_fake_phase4(0.7),
     )
@@ -628,6 +673,7 @@ def test_run_trial_full_phase4_failure_marks_unsuccessful(tmp_path: Path):
         sampled=None,
         baseline_point_count=80,
         detection_fn=_fake_detection_fn(80),
+        phase2_fn=_fake_phase2(),
         phase3_fn=_fake_phase3(2.0),
         phase4_fn=_fake_phase4(3.0),
     )
@@ -646,13 +692,57 @@ def test_run_trial_full_payload_preserves_detection_and_phase_outputs(tmp_path: 
         sampled=None,
         baseline_point_count=80,
         detection_fn=_fake_detection_fn(80),
+        phase2_fn=_fake_phase2("phase2"),
         phase3_fn=_fake_phase3_camset(2.0),
         phase4_fn=_fake_phase4_camset(0.7),
     )
     assert result.success_stage == "phase4"
     assert "detection" in payload
+    assert payload["phase2"]["camset"].label == "phase2"
     assert payload["phase3"]["camset"].label == "phase3"
     assert payload["phase4"]["camset"].label == "phase4"
+
+
+def test_run_trial_full_pipeline_uses_fresh_phase_chain(tmp_path: Path):
+    config = _make_config(tmp_path)
+    trace: dict[str, str] = {}
+
+    def _phase2(detection_payload, *, controls):
+        trace["phase2_detections"] = "seen" if detection_payload["detections"] is not None else "missing"
+        return {"camset": _FakeCamset("fresh-phase2"), "origin": "fresh-phase2"}
+
+    def _phase3(detection_payload, phase2_payload, *, controls):
+        trace["phase3_source"] = phase2_payload["origin"]
+        return {
+            "rpe": 2.0,
+            "camset": _FakeCamset("fresh-phase3"),
+            "origin": phase2_payload["origin"],
+        }
+
+    def _phase4(detection_payload, phase3_payload, *, controls):
+        trace["phase4_source"] = phase3_payload["origin"]
+        return {"rpe": 0.8, "camset": _FakeCamset("fresh-phase4")}
+
+    result, payload = run_trial(
+        0,
+        config.parameter_rows,
+        config=config,
+        sampled=None,
+        baseline_point_count=80,
+        detection_fn=_fake_detection_fn(80),
+        phase2_fn=_phase2,
+        phase3_fn=_phase3,
+        phase4_fn=_phase4,
+    )
+
+    assert result.success_stage == "phase4"
+    assert trace == {
+        "phase2_detections": "seen",
+        "phase3_source": "fresh-phase2",
+        "phase4_source": "fresh-phase2",
+    }
+    assert payload["phase2"]["origin"] == "fresh-phase2"
+    assert payload["phase3"]["origin"] == "fresh-phase2"
 
 
 def test_run_trial_invalid_detection_marks_failure(tmp_path: Path):
@@ -664,6 +754,8 @@ def test_run_trial_invalid_detection_marks_failure(tmp_path: Path):
         return {
             "features_per_im_per_cam": arr,
             "detections": None,
+            "target": target,
+            "cam_res": [(1920, 1080)],
             "n_cameras_with_detections": 1,
             "n_valid_images": 3,
         }
@@ -675,6 +767,7 @@ def test_run_trial_invalid_detection_marks_failure(tmp_path: Path):
         sampled=None,
         baseline_point_count=30,
         detection_fn=_det,
+        phase2_fn=_fake_phase2(),
         phase3_fn=_fake_phase3(0.4),
     )
     assert not result.valid
@@ -704,12 +797,18 @@ def test_run_trial_fast_mode_skips_calibration(tmp_path: Path):
     assert result.success_stage is None
 
 
+def test_default_phase2_fn_requires_cam_res():
+    with pytest.raises(RuntimeError, match="camera resolutions"):
+        default_phase2_fn({"detections": object(), "target": object()}, controls=CalibrationControls())
+
+
 def test_optimisation_study_runs_to_completion_with_stub_sampler(tmp_path: Path):
     config = _make_config(tmp_path)
     study = OptimisationStudy(
         config,
         sampler=lambda i, rows: {},
         detection_fn=_fake_detection_fn(80),
+        phase2_fn=_fake_phase2(),
         phase3_fn=_fake_phase3(0.4),
     )
     ret = study.run()
@@ -724,6 +823,7 @@ def test_optimisation_study_success_metadata_contains_promotion_artifacts(tmp_pa
         config,
         sampler=lambda i, rows: {},
         detection_fn=_fake_detection_fn(80),
+        phase2_fn=_fake_phase2(),
         phase3_fn=_fake_phase3_camset(0.4),
     )
     ret = study.run()
@@ -731,6 +831,7 @@ def test_optimisation_study_success_metadata_contains_promotion_artifacts(tmp_pa
     metadata = json.loads(Path(result.saved_metadata_path).read_text())
     artifacts = metadata["extra"]["artifacts"]
     assert Path(artifacts["detected_datapoints_pickle"]).exists()
+    assert Path(artifacts["phase2_initial_camset"]).exists()
     assert Path(artifacts["phase3_camset"]).exists()
     assert artifacts["phase4_camset"] is None
 
@@ -752,6 +853,7 @@ def test_optimisation_study_respects_cancel(tmp_path: Path):
         config,
         sampler=lambda i, rows: {},
         detection_fn=_fake_detection_fn(80),
+        phase2_fn=_fake_phase2(),
         phase3_fn=_fake_phase3(0.4),
         cancel_token=token,
         progress_cb=_cb,
@@ -778,13 +880,42 @@ def test_detection_options_grouping_round_trip():
     assert grouped["DetectorParameters"]["adaptiveThreshConstant"] == pytest.approx(11.0)
 
 
+def test_detection_options_include_corner_refinement_method():
+    settings = build_effective_settings(
+        [ParameterRowConfig(key="cornerRefinementMethod", fixed=3, optimise=False)]
+    )
+    grouped = detection_options_from_settings(settings)
+    assert grouped["DetectorParameters"]["cornerRefinementMethod"] == 3
+
+
+def test_optuna_suggest_for_corner_refinement_uses_categorical_choices():
+    class _Trial:
+        def suggest_categorical(self, key, choices):
+            assert key == "cornerRefinementMethod"
+            assert list(choices) == [0, 1, 2, 3]
+            return 2
+
+    row = ParameterRowConfig(key="cornerRefinementMethod", fixed=0, optimise=True)
+    assert suggest_for_row(_Trial(), row) == 2
+
+
+def test_corner_refinement_method_reaches_charuco_and_ccube_detectors():
+    options = assemble_detection_options({"cornerRefinementMethod": 3})
+    charuco = ChArUco(5, 5, 30.0, detection_options=options)
+    ccube = Ccube(n_points=6, length=40.0, detection_options=options)
+    assert int(charuco.detector_params.cornerRefinementMethod) == 3
+    assert int(ccube.detector_params.cornerRefinementMethod) == 3
+
+
 def _write_retained_metadata(tmp_path: Path, success_stage: str) -> Path:
     trial_dir = tmp_path / f"trial_{success_stage}"
     trial_dir.mkdir()
     detection = trial_dir / "detected_datapoints.pickle"
+    phase2 = trial_dir / "camset_phase2.json"
     phase3 = trial_dir / "camset_phase3.json"
     phase4 = trial_dir / "camset_phase4.json"
     detection.write_bytes(b"detections")
+    phase2.write_text("phase2")
     phase3.write_text("phase3")
     if success_stage == "phase4":
         phase4.write_text("phase4")
@@ -798,10 +929,11 @@ def _write_retained_metadata(tmp_path: Path, success_stage: str) -> Path:
         "extra": {
             "artifacts": {
                 "detected_datapoints_pickle": str(detection),
+                "phase2_initial_camset": str(phase2),
                 "phase3_camset": str(phase3),
                 "phase4_camset": str(phase4) if success_stage == "phase4" else None,
             },
-            "phase_sources": {"phase2_run_id": "p2", "phase2_initial_camset": "/tmp/p2.camset"},
+            "phase_sources": {"phase2_run_id": None, "phase2_initial_camset": str(phase2)},
         },
     }
     path = trial_dir / "metadata.json"
@@ -809,21 +941,22 @@ def _write_retained_metadata(tmp_path: Path, success_stage: str) -> Path:
     return path
 
 
-def test_promote_retained_phase3_writes_only_phases_1_and_3(tmp_path: Path):
+def test_promote_retained_phase3_writes_phases_1_2_and_3(tmp_path: Path):
     workspace = tmp_path / "workspace"
     mgr = _FakeWorkspaceManager(workspace)
     promoted = promote_retained_trial(mgr, _write_retained_metadata(tmp_path, "phase3"))
-    assert set(promoted) == {"phase1", "phase3"}
+    assert set(promoted) == {"phase1", "phase2", "phase3"}
     assert (workspace / "phase1_runs" / promoted["phase1"] / "detected_datapoints.pickle").exists()
+    assert (workspace / "phase2_runs" / promoted["phase2"] / "initial_cameras.camset").exists()
     assert (workspace / "phase3_runs" / promoted["phase3"] / "optimised_cameras.camset").exists()
     assert not any((workspace / "phase4_runs").iterdir())
 
 
-def test_promote_retained_phase4_writes_phases_1_3_and_4(tmp_path: Path):
+def test_promote_retained_phase4_writes_phases_1_2_3_and_4(tmp_path: Path):
     workspace = tmp_path / "workspace"
     mgr = _FakeWorkspaceManager(workspace)
     promoted = promote_retained_trial(mgr, _write_retained_metadata(tmp_path, "phase4"))
-    assert set(promoted) == {"phase1", "phase3", "phase4"}
+    assert set(promoted) == {"phase1", "phase2", "phase3", "phase4"}
     assert (workspace / "phase4_runs" / promoted["phase4"] / "self_calibrated_cameras.camset").exists()
 
 

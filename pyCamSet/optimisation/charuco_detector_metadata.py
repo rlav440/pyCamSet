@@ -1,31 +1,8 @@
-"""
-Metadata table describing ChArUco detector parameters exposed to the
-Optimisation tab.
+"""Purpose: Define the Optimisation tab's shared detector-parameter metadata.
 
-This module is the single source of truth used by both the GUI
-(`pyCamSet.gui.optimisation_tab`) and the headless trial runner
-(`pyCamSet.optimisation.optimisation_worker`).  It mirrors the calibria-style
-metadata approach: each entry describes one parameter that a user can either
-fix to a value or expose to Optuna sampling.
+Status: Active source of truth for GUI rows, validation, sampling, and detector-option assembly.
 
-Only numeric parameters (``int`` / ``float``) are optimisable in v1, per the
-Optimisation Tab Specification §4.5.  Boolean, categorical, enum and JSON-like
-parameters are not exposed for sampling here.
-
-Conventions
------------
-- ``key`` matches the attribute name on the OpenCV parameter object exactly.
-- ``group`` is the OpenCV parameter-object group (one of
-  ``"CharucoParameters"``, ``"DetectorParameters"``, ``"RefineParameters"``)
-  used by :func:`pyCamSet.calibration_targets.charuco_detection._group_options`.
-- ``min`` / ``max`` are absolute hard bounds.  Per-trial search bounds chosen
-  by the user must lie inside this interval (§16.1).
-- ``default`` is OpenCV's effective default and is used as the fixed value
-  shown initially in the GUI and used for the §18 baseline detection run.
-- ``step`` and ``decimals`` are GUI hints; the backend uses ``dtype`` for
-  Optuna ``suggest_int`` vs ``suggest_float`` selection.
-
-This module is intentionally GUI-free and safe to import in headless tests.
+Future: Keep targeted support for discrete detector enums minimal unless the UI needs more categorical fields.
 """
 from __future__ import annotations
 
@@ -35,6 +12,15 @@ from typing import Any, Iterable
 # ---------------------------------------------------------------------------
 # Metadata records
 # ---------------------------------------------------------------------------
+
+_CORNER_REFINEMENT_CHOICES = [
+    {"label": "NONE", "value": 0},
+    {"label": "REFINE_SUBPIX", "value": 1},
+    {"label": "REFINE_CONTOUR", "value": 2},
+    {"label": "REFINE_APRILTAG", "value": 3},
+]
+"""Discrete OpenCV corner-refinement methods exposed in the Optimisation tab."""
+
 
 CHARUCO_PARAMETER_METADATA: list[dict[str, Any]] = [
     # ---- aruco.DetectorParameters --------------------------------------
@@ -170,6 +156,21 @@ CHARUCO_PARAMETER_METADATA: list[dict[str, Any]] = [
         "concept": "Minimum distance between any two markers, relative to perimeter.",
     },
     {
+        "key": "cornerRefinementMethod",
+        "label": "Corner Refinement Method",
+        "group": "DetectorParameters",
+        "dtype": "int",
+        "default": 0,
+        "min": 0,
+        "max": 3,
+        "step": 1,
+        "choices": list(_CORNER_REFINEMENT_CHOICES),
+        "concept": (
+            "Discrete OpenCV marker-corner refinement mode applied before "
+            "shared ChArUco/Ccube corner interpolation."
+        ),
+    },
+    {
         "key": "cornerRefinementWinSize",
         "label": "Corner Refinement Win Size",
         "group": "DetectorParameters",
@@ -234,7 +235,7 @@ CHARUCO_PARAMETER_METADATA: list[dict[str, Any]] = [
         ),
     },
 ]
-"""Source-of-truth list of optimisable numeric ChArUco detector parameters.
+"""Source-of-truth list of Optimisation-tab detector parameters.
 
 See module docstring for conventions.  Iteration order is the recommended row
 order for the GUI.
@@ -327,6 +328,7 @@ def validate_parameter_row(
     """
     errors: list[str] = []
     label = entry.get("label", entry["key"])
+    choice_values = {coerce_value(entry, choice["value"]) for choice in entry.get("choices", [])}
     try:
         fv = coerce_value(entry, fixed_value)
     except (TypeError, ValueError):
@@ -338,8 +340,14 @@ def validate_parameter_row(
         errors.append(
             f"{label}: fixed value {fv} is outside allowed bounds [{abs_lo}, {abs_hi}]."
         )
+    if choice_values and fv not in choice_values:
+        errors.append(
+            f"{label}: fixed value {fv} is not one of the allowed choices {sorted(choice_values)}."
+        )
 
     if optimise:
+        if choice_values:
+            return errors
         if lower is None or upper is None:
             errors.append(f"{label}: lower and upper bounds must be provided when optimising.")
             return errors

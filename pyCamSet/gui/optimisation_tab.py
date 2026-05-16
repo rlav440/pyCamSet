@@ -65,11 +65,7 @@ from pyCamSet.optimisation.optimisation_study import (
     TrialResult,
     clamp_retain_count,
 )
-from pyCamSet.optimisation.optimisation_promotion import (
-    latest_phase2_context,
-    make_phase_callables,
-    promote_retained_trial,
-)
+from pyCamSet.optimisation.optimisation_promotion import promote_retained_trial
 from pyCamSet.optimisation.optimisation_worker import (
     CalibrationControls,
     CancelToken,
@@ -546,19 +542,6 @@ class OptimisationTab(QWidget):
             return
 
         self._sync_workspace_from_floc(config.f_loc)
-        phase3_fn = None
-        phase4_fn = None
-        if config.mode == "full":
-            context = latest_phase2_context(self._workspace_mgr)
-            if context is None:
-                QMessageBox.warning(
-                    self,
-                    "Optimisation",
-                    "Full mode requires an existing Phase 2 run with an initial camset in the workspace.",
-                )
-                return
-            phase3_fn, phase4_fn = make_phase_callables(context)
-
         self._results_table.setRowCount(0)
         self._retained_results = []
         self._progress.setRange(0, config.n_trials)
@@ -567,7 +550,7 @@ class OptimisationTab(QWidget):
         self._cancel_btn.setEnabled(True)
 
         self._cancel_token = cancel_token
-        self._worker = _StudyWorker(config, cancel_token, phase3_fn=phase3_fn, phase4_fn=phase4_fn)
+        self._worker = _StudyWorker(config, cancel_token)
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)

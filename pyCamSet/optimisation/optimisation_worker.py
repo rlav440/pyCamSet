@@ -7,7 +7,8 @@ Future: Keep GUI-specific promotion and target widgets outside this module.
 This module orchestrates one trial of the §27 execution contract:
 
 - builds the effective detector settings (fixed + Optuna-sampled overrides),
-- runs detection on the dataset (or invokes the injected detection callable),
+- runs phase 1 detection on the dataset (or invokes the injected detection callable),
+- runs phase 2 initial calibration from that trial's detections,
 - runs phase 3 bundle adjustment and optionally phase 4 self-calibration,
 - computes the §10 objective,
 - writes per-success metadata via :mod:`pyCamSet.optimisation.optimisation_study`.
@@ -17,7 +18,7 @@ The worker exposes a synchronous, callable Python API (``run_trial``) and an
 ``pyCamSet.gui.optimisation_tab`` and runs this driver inside a ``QThread``.
 
 Heavy operations are injected as callables (``detection_fn``,
-``phase3_fn``, ``phase4_fn``) so the worker can be unit-tested without image
+``phase2_fn``, ``phase3_fn``, ``phase4_fn``) so the worker can be unit-tested without image
 fixtures or scipy ``least_squares`` calls.  The default callables wrap the
 existing pyCamSet entry points.
 """
@@ -154,7 +155,7 @@ class RunConfig:
 def build_effective_settings(
     rows: list[ParameterRowConfig],
     *,
-    sampled: Optional[dict[str, float]] = None,
+    sampled: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Merge fixed and sampled values into a flat ``{key: value}`` dict.
 
@@ -264,21 +265,94 @@ def default_detection_fn(
     }
 
 
-def default_phase3_fn(
+def _bundle_options(max_nfev: int, outliers: str) -> dict[str, Any]:
+    """Build backend bundle-adjustment options aligned with the GUI phases."""
+    outlier_mode = "y" if outliers == "ask" else (outliers or "n")
+    return {
+        "verbosity": 0,
+        "fixed_pose": 0,
+        "ref_cam": 0,
+        "ref_pose": 0,
+        "outliers": outlier_mode,
+        "max_nfev": int(max_nfev),
+    }
+
+
+def _require_detection_payload_fields(
+    detection_payload: DetectionResult,
+    *,
+    require_cam_res: bool,
+) -> tuple[Any, Any, Any]:
+    """Extract the shared trial artefacts needed by phases 2/3/4."""
+    detections = detection_payload.get("detections")
+    target = detection_payload.get("target")
+    cam_res = detection_payload.get("cam_res")
+    if detections is None:
+        raise RuntimeError("Calibration phases require trial detections from phase 1.")
+    if target is None:
+        raise RuntimeError("Calibration phases require the trial calibration target instance.")
+    if require_cam_res and cam_res is None:
+        raise RuntimeError("Phase 2 requires camera resolutions from the detection pass.")
+    return detections, target, cam_res
+
+
+def default_phase2_fn(
     detection_payload: DetectionResult,
     *,
     controls: CalibrationControls,
 ) -> dict[str, Any]:
-    """Run a phase-3 bundle adjustment and return ``{'rpe', 'camset'}``.
+    """Run a fresh phase-2 initial calibration from one trial's detections."""
+    from pyCamSet.calibration.camera_calibrator import run_initial_calibration
 
-    The function delegates to existing pyCamSet plumbing.  GUI callers
-    typically prefer to drive phase 3 themselves and pass a pre-built
-    callable; this default exists so the worker is functional end-to-end.
-    """
-    raise NotImplementedError(
-        "default_phase3_fn requires a CameraSet and intrinsics from earlier "
-        "phases; supply a phase3_fn callable from the GUI/phase pipeline."
+    detections, target, cam_res = _require_detection_payload_fields(
+        detection_payload,
+        require_cam_res=True,
     )
+    cams = run_initial_calibration(
+        detection=detections,
+        calibration_target=target,
+        cam_res=cam_res,
+        save=False,
+        fixed_params=None,
+    )
+    return {"camset": cams}
+
+
+def default_phase3_fn(
+    detection_payload: DetectionResult,
+    phase2_payload: dict[str, Any],
+    *,
+    controls: CalibrationControls,
+) -> dict[str, Any]:
+    """Run phase 3 from this trial's fresh phase-2 initial calibration."""
+    from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment_with_stats
+    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+
+    cams = phase2_payload.get("camset")
+    detections, target, _cam_res = _require_detection_payload_fields(
+        detection_payload,
+        require_cam_res=False,
+    )
+    if cams is None:
+        raise RuntimeError("Phase 3 requires the fresh phase-2 camset.")
+    handler = TemplateBundleHandler(
+        camset=cams,
+        target=target,
+        detection=detections,
+        fixed_params=None,
+        options=_bundle_options(controls.max_nfev_phase3, controls.outliers),
+    )
+    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
+        handler,
+        threads=1,
+    )
+    final_rpe = float(stats.get("final_euclid", float("nan")))
+    return {
+        "rpe": final_rpe,
+        "camset": out_cams,
+        "optimisation": optimisation,
+        "stats": dict(stats),
+    }
 
 
 def default_phase4_fn(
@@ -288,10 +362,35 @@ def default_phase4_fn(
     controls: CalibrationControls,
 ) -> dict[str, Any]:
     """Run a phase-4 self-calibration starting from the phase-3 camset."""
-    raise NotImplementedError(
-        "default_phase4_fn requires the phase-3 camset; supply a phase4_fn "
-        "callable from the GUI/phase pipeline."
+    from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment_with_stats
+    from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
+
+    phase3_cams = phase3_payload.get("camset")
+    detections, target, _cam_res = _require_detection_payload_fields(
+        detection_payload,
+        require_cam_res=False,
     )
+    if phase3_cams is None:
+        raise RuntimeError("Phase 4 requires the fresh phase-3 camset.")
+    handler = SelfBundleHandler(
+        camset=phase3_cams,
+        target=target,
+        detection=detections,
+        fixed_params=None,
+        options=_bundle_options(controls.max_nfev_phase4, controls.outliers),
+    )
+    handler.set_from_templated_camset(phase3_cams)
+    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
+        handler,
+        threads=1,
+    )
+    final_rpe = float(stats.get("final_euclid", float("nan")))
+    return {
+        "rpe": final_rpe,
+        "camset": out_cams,
+        "optimisation": optimisation,
+        "stats": dict(stats),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -345,9 +444,10 @@ def run_trial(
     rows: list[ParameterRowConfig],
     *,
     config: RunConfig,
-    sampled: Optional[dict[str, float]] = None,
+    sampled: Optional[dict[str, Any]] = None,
     baseline_point_count: Optional[int],
     detection_fn: Callable[[Path, dict, TargetSettings], DetectionResult],
+    phase2_fn: Optional[Callable[..., dict[str, Any]]] = None,
     phase3_fn: Optional[Callable[..., dict[str, Any]]] = None,
     phase4_fn: Optional[Callable[..., dict[str, Any]]] = None,
     metadata_writer: Optional[Callable[[TrialResult, dict[str, Any]], None]] = None,
@@ -424,16 +524,23 @@ def run_trial(
             metadata_writer(result, payload)
         return result, payload
 
-    # ---- Stage B: phase 3 ---------------------------------------------------
-    if phase3_fn is None:
-        result.failure_reason = "phase3_fn not configured for full mode"
+    # ---- Stage B: phase 2 ---------------------------------------------------
+    phase2_runner = phase2_fn or default_phase2_fn
+    try:
+        phase2 = phase2_runner(detection_payload, controls=config.controls)
+    except Exception as exc:
+        result.failure_reason = f"phase2_fn raised: {exc!r}"
         result.score = FAILURE_SCORE
         if metadata_writer is not None:
             metadata_writer(result, payload)
         return result, payload
+    payload["phase2"] = phase2
+
+    # ---- Stage C: phase 3 ---------------------------------------------------
+    phase3_runner = phase3_fn or default_phase3_fn
 
     try:
-        phase3 = phase3_fn(detection_payload, controls=config.controls)
+        phase3 = phase3_runner(detection_payload, phase2, controls=config.controls)
     except Exception as exc:
         result.failure_reason = f"phase3_fn raised: {exc!r}"
         result.score = FAILURE_SCORE
@@ -471,29 +578,11 @@ def run_trial(
             metadata_writer(result, payload)
         return result, payload
 
-    # ---- Stage C: phase 4 ---------------------------------------------------
-    if phase4_fn is None:
-        # Phase 4 unavailable — record phase 3 RPE but trial is unsuccessful.
-        score, final_rpe = compute_full_score(
-            valid=True,
-            success_stage=None,
-            phase3_rpe=phase3_rpe,
-            phase4_rpe=None,
-            image_coverage=result.image_coverage,
-            camera_coverage=result.camera_coverage,
-            multicam_image_coverage=result.multicam_image_coverage,
-            point_ratio=result.point_ratio,
-        )
-        result.score = score
-        result.final_rpe = final_rpe
-        result.failure_reason = "phase 3 RPE above threshold and phase4_fn unavailable"
-        if metadata_writer is not None:
-            metadata_writer(result, payload)
-        return result, payload
-
+    # ---- Stage D: phase 4 ---------------------------------------------------
     result.self_calibration_run = True
+    phase4_runner = phase4_fn or default_phase4_fn
     try:
-        phase4 = phase4_fn(detection_payload, phase3, controls=config.controls)
+        phase4 = phase4_runner(detection_payload, phase3, controls=config.controls)
     except Exception as exc:
         result.failure_reason = f"phase4_fn raised: {exc!r}"
         result.score = FAILURE_SCORE
@@ -567,8 +656,9 @@ class OptimisationStudy:
         self,
         config: RunConfig,
         *,
-        sampler: Callable[[int, list[ParameterRowConfig]], dict[str, float]],
+        sampler: Callable[[int, list[ParameterRowConfig]], dict[str, Any]],
         detection_fn: Callable[..., DetectionResult] = default_detection_fn,
+        phase2_fn: Optional[Callable[..., dict[str, Any]]] = None,
         phase3_fn: Optional[Callable[..., dict[str, Any]]] = None,
         phase4_fn: Optional[Callable[..., dict[str, Any]]] = None,
         cancel_token: Optional[CancelToken] = None,
@@ -578,6 +668,7 @@ class OptimisationStudy:
         self.config = config
         self.sampler = sampler
         self.detection_fn = detection_fn
+        self.phase2_fn = phase2_fn
         self.phase3_fn = phase3_fn
         self.phase4_fn = phase4_fn
         self.cancel_token = cancel_token or CancelToken()
@@ -647,8 +738,10 @@ class OptimisationStudy:
                 return  # §13: per-success metadata
             camset_path = None
             detection_pickle_path = None
+            phase2_camset_path = None
             phase3_camset_path = None
             phase4_camset_path = None
+            phase2_camset = payload.get("phase2", {}).get("camset") if "phase2" in payload else None
             phase4_camset = payload.get("phase4", {}).get("camset") if "phase4" in payload else None
             phase3_camset = payload.get("phase3", {}).get("camset") if "phase3" in payload else None
             saved_camset = phase4_camset if result.success_stage == "phase4" else phase3_camset
@@ -669,6 +762,9 @@ class OptimisationStudy:
                         else detections,
                         detection_pickle_path,
                     )
+                if phase2_camset is not None and hasattr(phase2_camset, "save"):
+                    phase2_camset_path = trial_dir / "camset_phase2.json"
+                    phase2_camset.save(str(phase2_camset_path))
                 if phase3_camset is not None and hasattr(phase3_camset, "save"):
                     phase3_camset_path = trial_dir / "camset_phase3.json"
                     phase3_camset.save(str(phase3_camset_path))
@@ -692,12 +788,18 @@ class OptimisationStudy:
                 extra={
                     "artifacts": {
                         "detected_datapoints_pickle": str(detection_pickle_path) if detection_pickle_path else None,
+                        "phase2_initial_camset": str(phase2_camset_path) if phase2_camset_path else None,
                         "phase3_camset": str(phase3_camset_path) if phase3_camset_path else None,
                         "phase4_camset": str(phase4_camset_path) if phase4_camset_path else None,
                     },
                     "phase_sources": {
                         "phase2_run_id": payload.get("phase3", {}).get("source_phase2_run_id"),
-                        "phase2_initial_camset": payload.get("phase3", {}).get("source_phase2_camset"),
+                        "phase2_initial_camset": (
+                            str(phase2_camset_path)
+                            if phase2_camset_path is not None
+                            # Keep the legacy fallback so older retained metadata can still be promoted.
+                            else payload.get("phase3", {}).get("source_phase2_camset")
+                        ),
                     },
                 },
             )
@@ -733,6 +835,7 @@ class OptimisationStudy:
                 sampled=sampled,
                 baseline_point_count=self.baseline_point_count,
                 detection_fn=self.detection_fn,
+                phase2_fn=self.phase2_fn,
                 phase3_fn=self.phase3_fn,
                 phase4_fn=self.phase4_fn,
                 metadata_writer=writer,
@@ -787,4 +890,7 @@ __all__ = [
     "fixed_settings_only",
     "detection_options_from_settings",
     "default_detection_fn",
+    "default_phase2_fn",
+    "default_phase3_fn",
+    "default_phase4_fn",
 ]

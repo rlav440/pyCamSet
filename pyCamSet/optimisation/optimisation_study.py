@@ -33,6 +33,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from pyCamSet.utils.general_utils import get_subfolder_names
+
 
 # ---------------------------------------------------------------------------
 # Constants from the spec
@@ -534,6 +536,12 @@ def validate_run_settings(
         errors.append(f"Dataset path does not exist: {p}")
     elif not p.is_dir():
         errors.append(f"Dataset path is not a directory: {p}")
+    else:
+        camera_folders = get_subfolder_names(p, return_full_path=True)
+        if len(camera_folders) < 2:
+            errors.append(
+                "Dataset path must contain at least two camera folders with supported image files."
+            )
 
     if not isinstance(n_trials, int) or n_trials <= 0:
         errors.append("Number of trials must be a positive integer.")
@@ -587,8 +595,8 @@ def make_study_id() -> str:
 
 
 def default_output_dir(f_loc: Path | str, study_id: Optional[str] = None) -> Path:
-    """Return the spec's recommended output directory (§4.1, §13.1)."""
-    base = Path(f_loc) / "optimisation_runs"
+    """Return the default optimisation output directory under the workspace path."""
+    base = Path(f_loc) / ".pycamset_workspace" / "optimisation_runs"
     if study_id:
         return base / study_id
     return base

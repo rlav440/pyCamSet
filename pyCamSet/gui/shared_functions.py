@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pyCamSet.utils.general_utils import get_subfolder_names
 
 # ---------------------------------------------------------------------------
 # Tab-name constants (shared across modules)
@@ -1164,17 +1165,8 @@ _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 
 def get_camera_subfolders(root: Path) -> list[Path]:
-    """Return valid camera subfolders (ignores sparse, dot-folders, and files)."""
-    root = Path(root)
-    if not root.exists() or not root.is_dir():
-        return []
-    return sorted(
-        [
-            p for p in root.iterdir()
-            if p.is_dir() and p.name != "sparse" and not p.name.startswith(".")
-        ],
-        key=lambda p: p.name.lower(),
-    )
+    """Return valid camera subfolders using the shared dataset-folder filtering rules."""
+    return list(get_subfolder_names(Path(root), return_full_path=True))
 
 
 def count_images_in_folder(folder: Path) -> int:

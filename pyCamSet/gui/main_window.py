@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from pyCamSet.gui.shared_functions import (
     TAB_EXPORT_CALIBRATION,
     TAB_CREATE_TARGET,
+    TAB_OPTIMISATION,
     TAB_PHASE0,
     TAB_PHASE1,
     TAB_PHASE1_DIAG,
@@ -101,6 +102,7 @@ class PyCamSetApp(QMainWindow):
         from pyCamSet.gui.phase_2_intrinsics import Phase2DiagnosticsTab, Phase2Tab
         from pyCamSet.gui.phase_3_bundle_adjustment import Phase3DiagnosticsTab, Phase3Tab
         from pyCamSet.gui.phase_4_self_calibration import Phase4DiagnosticsTab, Phase4Tab
+        from pyCamSet.gui.optimisation_tab import OptimisationTab
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -214,6 +216,14 @@ class PyCamSetApp(QMainWindow):
             workspace_mgr=ws,
         )
         self._notebook.addTab(self.export_calibration_tab, TAB_EXPORT_CALIBRATION)
+
+        self.optimisation_tab = OptimisationTab(
+            notebook=self._notebook,
+            info_cb=self._info_cb,
+            terminal_cb=self._terminal_cb,
+            workspace_mgr=ws,
+        )
+        self._notebook.addTab(self.optimisation_tab, TAB_OPTIMISATION)
 
         # Cross-tab wiring
         self.phase1_tab.set_diagnostics_tab(self.phase1_diag_tab)

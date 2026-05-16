@@ -158,7 +158,7 @@ def run_optuna_study(
     if errors:
         raise ValueError("Run configuration invalid: " + "; ".join(errors))
 
-    if config.mode == "full" and driver.baseline_point_count is None:
+    if driver.baseline_point_count is None:
         driver.compute_baseline()
 
     output_dir = config.resolved_output_dir(driver.study_id)
@@ -192,6 +192,9 @@ def run_optuna_study(
         )
         driver.results.append(result)
         driver.retention.consider(result)
+        driver.outcome_counts.observe(result)
+        if result.failure_reason:
+            driver.latest_failure_reason = result.failure_reason
         completed += 1
         study.tell(trial, result.score)
         if progress_cb is not None:
@@ -207,6 +210,14 @@ def run_optuna_study(
                     best_phase4_rpe=best.phase4_rpe if best else None,
                     n_successes=len(driver.retention),
                     elapsed_sec=time.time() - started,
+                    latest_failure_reason=driver.latest_failure_reason,
+                    rejected_at_detection=driver.outcome_counts.rejected_at_detection,
+                    rejected_by_gating=driver.outcome_counts.rejected_by_gating,
+                    failed_phase2=driver.outcome_counts.failed_phase2,
+                    failed_phase3=driver.outcome_counts.failed_phase3,
+                    failed_phase4=driver.outcome_counts.failed_phase4,
+                    succeeded_phase3=driver.outcome_counts.succeeded_phase3,
+                    succeeded_phase4=driver.outcome_counts.succeeded_phase4,
                     last_result=result,
                 )
             )
@@ -224,6 +235,8 @@ def run_optuna_study(
             n_trials_completed=completed,
             n_trials_requested=config.n_trials,
             mode=config.mode,
+            trial_gating=config.trial_gating.as_dict(),
+            outcome_counts=driver.outcome_counts.as_dict(),
             sampler_name=config.sampler_name,
             seed=config.seed,
         )

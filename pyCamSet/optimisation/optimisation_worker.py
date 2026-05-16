@@ -46,12 +46,14 @@ from pyCamSet.optimisation.charuco_detector_metadata import (
 from pyCamSet.optimisation.optimisation_study import (
     FAILURE_SCORE,
     SuccessRetention,
+    TrialGatingSettings,
     TrialResult,
     assess_validity,
     compute_coverage_metrics,
     compute_fast_score,
     compute_full_score,
     default_output_dir,
+    make_trial_gating_settings,
     make_study_id,
     validate_run_settings,
     write_study_summary,
@@ -139,6 +141,7 @@ class RunConfig:
     parameter_rows: list[ParameterRowConfig] = field(default_factory=list)
     target: TargetSettings = field(default_factory=TargetSettings)
     controls: CalibrationControls = field(default_factory=CalibrationControls)
+    trial_gating: TrialGatingSettings = field(default_factory=make_trial_gating_settings)
     output_dir: Optional[Path] = None  # derived from f_loc when None
 
     def resolved_output_dir(self, study_id: str) -> Path:
@@ -439,6 +442,57 @@ def _compute_metrics(
     return coverage, n_cams, n_imgs
 
 
+@dataclass
+class TrialOutcomeCounts:
+    """Running counts for trial exits shown in the GUI progress area."""
+
+    rejected_at_detection: int = 0
+    rejected_by_gating: int = 0
+    failed_phase2: int = 0
+    failed_phase3: int = 0
+    failed_phase4: int = 0
+    succeeded_phase3: int = 0
+    succeeded_phase4: int = 0
+
+    def observe(self, result: TrialResult) -> None:
+        # Count successful phase-3 exits first so they are not mistaken for failures.
+        if result.success_stage == "phase3":
+            self.succeeded_phase3 += 1
+            return
+        # Count successful phase-4 exits next for the same reason.
+        if result.success_stage == "phase4":
+            self.succeeded_phase4 += 1
+            return
+        # Map the recorded failure stage onto the visible progress counters.
+        if result.failure_stage == "detection":
+            self.rejected_at_detection += 1
+            return
+        # Threshold-driven rejections are grouped under trial gating.
+        if result.failure_stage == "gating":
+            self.rejected_by_gating += 1
+            return
+        # Phase-specific failures increment their matching stage counters.
+        if result.failure_stage == "phase2":
+            self.failed_phase2 += 1
+            return
+        if result.failure_stage == "phase3":
+            self.failed_phase3 += 1
+            return
+        if result.failure_stage == "phase4":
+            self.failed_phase4 += 1
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "rejected_at_detection": self.rejected_at_detection,
+            "rejected_by_gating": self.rejected_by_gating,
+            "failed_phase2": self.failed_phase2,
+            "failed_phase3": self.failed_phase3,
+            "failed_phase4": self.failed_phase4,
+            "succeeded_phase3": self.succeeded_phase3,
+            "succeeded_phase4": self.succeeded_phase4,
+        }
+
+
 def run_trial(
     trial_number: int,
     rows: list[ParameterRowConfig],
@@ -485,6 +539,7 @@ def run_trial(
         detection_payload = detection_fn(Path(config.f_loc), grouped, config.target)
     except Exception as exc:  # pragma: no cover - defensive; tests inject fakes
         result.failure_reason = f"detection_fn raised: {exc!r}"
+        result.failure_stage = "detection"
         result.score = FAILURE_SCORE
         if metadata_writer is not None:
             metadata_writer(result, payload)
@@ -502,10 +557,12 @@ def run_trial(
         coverage,
         n_cameras_with_detections=n_cams,
         n_valid_images=n_imgs,
+        trial_gating=config.trial_gating,
     )
     result.valid = verdict.valid
     if not verdict.valid:
         result.failure_reason = verdict.reason
+        result.failure_stage = verdict.category
         result.score = FAILURE_SCORE
         if metadata_writer is not None:
             metadata_writer(result, payload)
@@ -530,6 +587,7 @@ def run_trial(
         phase2 = phase2_runner(detection_payload, controls=config.controls)
     except Exception as exc:
         result.failure_reason = f"phase2_fn raised: {exc!r}"
+        result.failure_stage = "phase2"
         result.score = FAILURE_SCORE
         if metadata_writer is not None:
             metadata_writer(result, payload)
@@ -543,6 +601,7 @@ def run_trial(
         phase3 = phase3_runner(detection_payload, phase2, controls=config.controls)
     except Exception as exc:
         result.failure_reason = f"phase3_fn raised: {exc!r}"
+        result.failure_stage = "phase3"
         result.score = FAILURE_SCORE
         if metadata_writer is not None:
             metadata_writer(result, payload)
@@ -554,6 +613,7 @@ def run_trial(
     if phase3_rpe is None or math.isnan(phase3_rpe) or math.isinf(phase3_rpe):
         result.valid = False
         result.failure_reason = "phase 3 returned NaN/inf or no RPE"
+        result.failure_stage = "phase3"
         result.score = FAILURE_SCORE
         if metadata_writer is not None:
             metadata_writer(result, payload)
@@ -585,6 +645,7 @@ def run_trial(
         phase4 = phase4_runner(detection_payload, phase3, controls=config.controls)
     except Exception as exc:
         result.failure_reason = f"phase4_fn raised: {exc!r}"
+        result.failure_stage = "phase4"
         result.score = FAILURE_SCORE
         result.valid = False
         if metadata_writer is not None:
@@ -597,6 +658,7 @@ def run_trial(
     if phase4_rpe is None or math.isnan(phase4_rpe) or math.isinf(phase4_rpe):
         result.valid = False
         result.failure_reason = "phase 4 returned NaN/inf or no RPE"
+        result.failure_stage = "phase4"
         result.score = FAILURE_SCORE
         if metadata_writer is not None:
             metadata_writer(result, payload)
@@ -605,6 +667,11 @@ def run_trial(
     if phase4_rpe <= config.controls.target_rpe:
         result.success_stage = "phase4"
         result.successful = True
+    else:
+        result.failure_stage = "phase4"
+        result.failure_reason = (
+            f"phase 4 RPE {phase4_rpe:.3f} exceeded the target of {config.controls.target_rpe:.3f}"
+        )
 
     score, final_rpe = compute_full_score(
         valid=True,
@@ -640,6 +707,14 @@ class StudyProgress:
     best_phase4_rpe: Optional[float]
     n_successes: int
     elapsed_sec: float
+    latest_failure_reason: Optional[str]
+    rejected_at_detection: int
+    rejected_by_gating: int
+    failed_phase2: int
+    failed_phase3: int
+    failed_phase4: int
+    succeeded_phase3: int
+    succeeded_phase4: int
     last_result: TrialResult
 
 
@@ -679,6 +754,8 @@ class OptimisationStudy:
         self.retention = SuccessRetention(config.controls.retain_successes)
         self.results: list[TrialResult] = []
         self.baseline_point_count: Optional[int] = None
+        self.outcome_counts = TrialOutcomeCounts()
+        self.latest_failure_reason: Optional[str] = None
         self._started_at: Optional[float] = None
         self._finished_at: Optional[float] = None
 
@@ -694,6 +771,7 @@ class OptimisationStudy:
             max_nfev_phase4=self.config.controls.max_nfev_phase4,
             retain_successes=self.config.controls.retain_successes,
             target_settings=self.config.target.as_dict(),
+            trial_gating=self.config.trial_gating.as_dict(),
         )
         errors.extend(
             validate_all_rows(
@@ -782,6 +860,7 @@ class OptimisationStudy:
                 f_loc=cfg.f_loc,
                 target_settings=cfg.target.as_dict(),
                 calibration_controls=cfg.controls.as_dict(),
+                trial_gating=cfg.trial_gating.as_dict(),
                 sampler_name=cfg.sampler_name,
                 seed=cfg.seed,
                 camset_path=camset_path,
@@ -819,7 +898,7 @@ class OptimisationStudy:
         output_dir.mkdir(parents=True, exist_ok=True)
         writer = self._metadata_writer_for(output_dir)
 
-        if self.config.mode == "full" and self.baseline_point_count is None:
+        if self.baseline_point_count is None:
             self.compute_baseline()
 
         completed = 0
@@ -842,6 +921,9 @@ class OptimisationStudy:
             )
             self.results.append(result)
             self.retention.consider(result)
+            self.outcome_counts.observe(result)
+            if result.failure_reason:
+                self.latest_failure_reason = result.failure_reason
             completed += 1
 
             if self.progress_cb is not None:
@@ -856,6 +938,14 @@ class OptimisationStudy:
                         best_phase4_rpe=best.phase4_rpe if best else None,
                         n_successes=len(self.retention),
                         elapsed_sec=time.time() - self._started_at,
+                        latest_failure_reason=self.latest_failure_reason,
+                        rejected_at_detection=self.outcome_counts.rejected_at_detection,
+                        rejected_by_gating=self.outcome_counts.rejected_by_gating,
+                        failed_phase2=self.outcome_counts.failed_phase2,
+                        failed_phase3=self.outcome_counts.failed_phase3,
+                        failed_phase4=self.outcome_counts.failed_phase4,
+                        succeeded_phase3=self.outcome_counts.succeeded_phase3,
+                        succeeded_phase4=self.outcome_counts.succeeded_phase4,
                         last_result=result,
                     )
                 )
@@ -871,6 +961,8 @@ class OptimisationStudy:
                 n_trials_completed=completed,
                 n_trials_requested=self.config.n_trials,
                 mode=self.config.mode,
+                trial_gating=self.config.trial_gating.as_dict(),
+                outcome_counts=self.outcome_counts.as_dict(),
                 sampler_name=self.config.sampler_name,
                 seed=self.config.seed,
             )
@@ -884,6 +976,7 @@ __all__ = [
     "RunConfig",
     "CancelToken",
     "StudyProgress",
+    "TrialOutcomeCounts",
     "OptimisationStudy",
     "run_trial",
     "build_effective_settings",

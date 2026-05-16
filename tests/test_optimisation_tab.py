@@ -12,7 +12,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PySide6.QtWidgets import QApplication, QCheckBox, QWidget
 
+from pyCamSet.gui.optimisation_tab import OptimisationTab
+from pyCamSet.gui.shared_functions import WorkspaceManager
 from pyCamSet.optimisation.charuco_detector_metadata import (
     CHARUCO_PARAMETER_METADATA,
     assemble_detection_options,
@@ -28,6 +31,7 @@ from pyCamSet.optimisation.optimisation_study import (
     FAILURE_SCORE,
     MAX_SUCCESSES_HARD_CAP,
     SuccessRetention,
+    TrialGatingSettings,
     TrialResult,
     assess_validity,
     clamp_retain_count,
@@ -35,6 +39,7 @@ from pyCamSet.optimisation.optimisation_study import (
     compute_fast_score,
     compute_full_score,
     default_output_dir,
+    make_trial_gating_settings,
     make_study_id,
     trial_subdir_name,
     validate_run_settings,
@@ -56,6 +61,14 @@ from pyCamSet.optimisation.optimisation_worker import (
 from pyCamSet.optimisation.optimisation_promotion import promote_retained_trial
 from pyCamSet.calibration_targets.target_Ccube import Ccube
 from pyCamSet.calibration_targets.target_charuco import ChArUco
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
 
 
 class _FakeWorkspaceManager:
@@ -199,25 +212,61 @@ def test_coverage_metrics_no_baseline_yields_zero_ratio():
 
 
 # ---------------------------------------------------------------------------
+# Trial gating
+# ---------------------------------------------------------------------------
+
+
+def test_trial_gating_profile_defaults():
+    strict = make_trial_gating_settings("Strict")
+    moderate = make_trial_gating_settings("Moderate")
+    flexible = make_trial_gating_settings("Flexible")
+
+    assert strict.min_valid_images == 5
+    assert strict.min_camera_coverage == pytest.approx(0.90)
+    assert moderate.min_image_coverage == pytest.approx(0.50)
+    assert flexible.min_valid_images == 2
+    assert flexible.min_point_ratio == pytest.approx(0.30)
+
+
+# ---------------------------------------------------------------------------
 # Validity
 # ---------------------------------------------------------------------------
 
 
 def test_validity_requires_two_cameras():
-    cov = {"point_count": 10}
+    cov = {
+        "point_count": 10,
+        "image_coverage": 1.0,
+        "camera_coverage": 1.0,
+        "multicam_image_coverage": 1.0,
+        "point_ratio": 1.0,
+    }
     verdict = assess_validity(cov, n_cameras_with_detections=1, n_valid_images=5)
     assert not verdict.valid
-    assert "2 cameras" in verdict.reason
+    assert "below the trial-gating minimum" in (verdict.reason or "")
+    assert verdict.category == "gating"
 
 
 def test_validity_requires_three_images():
-    cov = {"point_count": 10}
+    cov = {
+        "point_count": 10,
+        "image_coverage": 1.0,
+        "camera_coverage": 1.0,
+        "multicam_image_coverage": 1.0,
+        "point_ratio": 1.0,
+    }
     verdict = assess_validity(cov, n_cameras_with_detections=2, n_valid_images=2)
     assert not verdict.valid
 
 
 def test_validity_rejects_nan_rpe():
-    cov = {"point_count": 10}
+    cov = {
+        "point_count": 10,
+        "image_coverage": 1.0,
+        "camera_coverage": 1.0,
+        "multicam_image_coverage": 1.0,
+        "point_ratio": 1.0,
+    }
     verdict = assess_validity(
         cov, n_cameras_with_detections=2, n_valid_images=4, final_rpe=float("nan")
     )
@@ -225,9 +274,57 @@ def test_validity_rejects_nan_rpe():
 
 
 def test_validity_passes_normal_case():
-    cov = {"point_count": 10}
+    cov = {
+        "point_count": 10,
+        "image_coverage": 1.0,
+        "camera_coverage": 1.0,
+        "multicam_image_coverage": 1.0,
+        "point_ratio": 1.0,
+    }
     verdict = assess_validity(cov, n_cameras_with_detections=3, n_valid_images=10, final_rpe=0.5)
     assert verdict.valid
+
+
+def test_validity_uses_trial_gating_thresholds():
+    cov = {
+        "point_count": 10,
+        "image_coverage": 0.40,
+        "camera_coverage": 1.0,
+        "multicam_image_coverage": 1.0,
+        "point_ratio": 1.0,
+    }
+    verdict = assess_validity(
+        cov,
+        n_cameras_with_detections=3,
+        n_valid_images=10,
+        trial_gating=make_trial_gating_settings("Moderate"),
+    )
+    assert not verdict.valid
+    assert "image coverage" in (verdict.reason or "")
+
+
+def test_flexible_trial_gating_admits_case_strict_rejects():
+    cov = {
+        "point_count": 10,
+        "image_coverage": 0.35,
+        "camera_coverage": 0.60,
+        "multicam_image_coverage": 0.25,
+        "point_ratio": 0.40,
+    }
+    strict = assess_validity(
+        cov,
+        n_cameras_with_detections=2,
+        n_valid_images=2,
+        trial_gating=make_trial_gating_settings("Strict"),
+    )
+    flexible = assess_validity(
+        cov,
+        n_cameras_with_detections=2,
+        n_valid_images=2,
+        trial_gating=make_trial_gating_settings("Flexible"),
+    )
+    assert not strict.valid
+    assert flexible.valid
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +492,7 @@ def test_write_trial_metadata_creates_json(tmp_path: Path):
         f_loc="/tmp/data",
         target_settings={"target_type": "ChArUco", "num_squares_x": 5, "num_squares_y": 5, "square_size": 30.0},
         calibration_controls={"target_rpe": 1.0, "outliers": "n", "max_nfev_phase3": 100, "max_nfev_phase4": 100, "retain_successes": 20},
+        trial_gating=make_trial_gating_settings("Moderate").as_dict(),
     )
     assert path.exists()
     text = path.read_text()
@@ -417,6 +515,8 @@ def test_write_study_summary_lists_successes(tmp_path: Path):
         n_trials_completed=2,
         n_trials_requested=10,
         mode="full",
+        trial_gating=make_trial_gating_settings("Moderate").as_dict(),
+        outcome_counts={"succeeded_phase3": 2},
         sampler_name="TPESampler",
         seed=42,
     )
@@ -609,7 +709,11 @@ def _fake_phase4_camset(rpe: float, label: str = "phase4"):
     return _fn
 
 
-def _make_config(tmp_path: Path, mode: str = "full") -> RunConfig:
+def _make_config(
+    tmp_path: Path,
+    mode: str = "full",
+    trial_gating: TrialGatingSettings | None = None,
+) -> RunConfig:
     return RunConfig(
         f_loc=tmp_path,
         mode=mode,
@@ -625,7 +729,41 @@ def _make_config(tmp_path: Path, mode: str = "full") -> RunConfig:
             target_rpe=1.0,
             retain_successes=5,
         ),
+        trial_gating=trial_gating or make_trial_gating_settings("Moderate"),
     )
+
+
+def _make_tab(tmp_path: Path, qapp) -> OptimisationTab:
+    mgr = WorkspaceManager(tmp_path / ".pycamset_workspace")
+    tab = OptimisationTab(
+        notebook=QWidget(),
+        info_cb=QCheckBox(),
+        terminal_cb=QCheckBox(),
+        workspace_mgr=mgr,
+    )
+    tab._floc_edit.setText(str(tmp_path))
+    return tab
+
+
+def test_trial_gating_profile_selection_populates_fields(tmp_path: Path, qapp):
+    tab = _make_tab(tmp_path, qapp)
+    tab._trial_gating_profile_combo.setCurrentText("Strict")
+    config = tab._collect_config()
+
+    assert config.trial_gating.profile_name == "Strict"
+    assert config.trial_gating.min_valid_images == 5
+    assert config.trial_gating.min_camera_coverage == pytest.approx(0.90)
+
+
+def test_trial_gating_manual_override_switches_to_custom(tmp_path: Path, qapp):
+    tab = _make_tab(tmp_path, qapp)
+    tab._trial_gating_profile_combo.setCurrentText("Moderate")
+    tab._min_image_coverage_spin.setValue(0.33)
+    config = tab._collect_config()
+
+    assert tab._trial_gating_profile_combo.currentText() == "Custom"
+    assert config.trial_gating.profile_name == "Custom"
+    assert config.trial_gating.min_image_coverage == pytest.approx(0.33)
 
 
 def test_run_trial_full_phase3_success(tmp_path: Path):
@@ -680,6 +818,8 @@ def test_run_trial_full_phase4_failure_marks_unsuccessful(tmp_path: Path):
     assert result.self_calibration_run is True
     assert result.success_stage is None
     assert not result.successful
+    assert result.failure_stage == "phase4"
+    assert "exceeded the target" in (result.failure_reason or "")
     assert result.score < FAILURE_SCORE  # valid-but-unsuccessful keeps ranking info
 
 
@@ -772,7 +912,44 @@ def test_run_trial_invalid_detection_marks_failure(tmp_path: Path):
     )
     assert not result.valid
     assert result.score == FAILURE_SCORE
-    assert "2 cameras" in (result.failure_reason or "")
+    assert result.failure_stage == "gating"
+    assert "below the trial-gating minimum" in (result.failure_reason or "")
+
+
+def test_run_trial_gating_blocks_progression_before_phase2(tmp_path: Path):
+    config = _make_config(
+        tmp_path,
+        trial_gating=TrialGatingSettings(
+            profile_name="Custom",
+            min_cameras_with_detections=2,
+            min_valid_images=2,
+            min_image_coverage=0.0,
+            min_camera_coverage=0.0,
+            min_multicam_image_coverage=0.0,
+            min_point_ratio=0.80,
+        ),
+    )
+    phase2_called = {"value": False}
+
+    def _phase2(detection_payload, *, controls):
+        phase2_called["value"] = True
+        return {"camset": _FakeCamset("phase2")}
+
+    result, _payload = run_trial(
+        0,
+        config.parameter_rows,
+        config=config,
+        sampled=None,
+        baseline_point_count=80,
+        detection_fn=_fake_detection_fn(40),
+        phase2_fn=_phase2,
+        phase3_fn=_fake_phase3(0.4),
+    )
+
+    assert not phase2_called["value"]
+    assert not result.valid
+    assert result.failure_stage == "gating"
+    assert "point ratio" in (result.failure_reason or "")
 
 
 def test_run_trial_fast_mode_skips_calibration(tmp_path: Path):
@@ -830,10 +1007,82 @@ def test_optimisation_study_success_metadata_contains_promotion_artifacts(tmp_pa
     result = ret.ranked()[0]
     metadata = json.loads(Path(result.saved_metadata_path).read_text())
     artifacts = metadata["extra"]["artifacts"]
+    assert metadata["trial_gating"]["profile_name"] == "Moderate"
     assert Path(artifacts["detected_datapoints_pickle"]).exists()
     assert Path(artifacts["phase2_initial_camset"]).exists()
     assert Path(artifacts["phase3_camset"]).exists()
     assert artifacts["phase4_camset"] is None
+
+
+def test_optimisation_study_progress_tracks_failure_counts(tmp_path: Path):
+    config = _make_config(tmp_path)
+    config.n_trials = 7
+    progress = []
+    call_state = {"trial": -1}
+
+    def _detection(f_loc, options, target):
+        call_state["trial"] += 1
+        trial_number = call_state["trial"]
+        if trial_number == 0:
+            return {
+                "features_per_im_per_cam": np.zeros((0, 0)),
+                "detections": None,
+                "target": target,
+                "cam_res": [],
+                "n_cameras_with_detections": 0,
+                "n_valid_images": 0,
+            }
+        if trial_number == 1:
+            return {
+                "features_per_im_per_cam": np.array([[10, 10], [0, 0]]),
+                "detections": object(),
+                "target": target,
+                "cam_res": [(1920, 1080), (1920, 1080)],
+                "n_cameras_with_detections": 2,
+                "n_valid_images": 1,
+            }
+        return _fake_detection_fn(80)(f_loc, options, target)
+
+    def _phase2(detection_payload, *, controls):
+        if call_state["trial"] == 2:
+            raise RuntimeError("phase2 boom")
+        return {"camset": _FakeCamset("phase2")}
+
+    def _phase3(detection_payload, phase2_payload, *, controls):
+        if call_state["trial"] == 3:
+            return {"rpe": float("nan"), "camset": None}
+        if call_state["trial"] == 4:
+            return {"rpe": 2.0, "camset": None}
+        if call_state["trial"] == 5:
+            return {"rpe": 0.4, "camset": None}
+        return {"rpe": 2.0, "camset": None}
+
+    def _phase4(detection_payload, phase3_payload, *, controls):
+        if call_state["trial"] == 4:
+            return {"rpe": 3.0, "camset": None}
+        return {"rpe": 0.7, "camset": None}
+
+    study = OptimisationStudy(
+        config,
+        sampler=lambda i, rows: {},
+        detection_fn=_detection,
+        phase2_fn=_phase2,
+        phase3_fn=_phase3,
+        phase4_fn=_phase4,
+        progress_cb=progress.append,
+    )
+    study.baseline_point_count = 80
+    study.run()
+    last = progress[-1]
+
+    assert last.rejected_at_detection == 1
+    assert last.rejected_by_gating == 1
+    assert last.failed_phase2 == 1
+    assert last.failed_phase3 == 1
+    assert last.failed_phase4 == 1
+    assert last.succeeded_phase3 == 1
+    assert last.succeeded_phase4 == 1
+    assert "phase 4 RPE" in (last.latest_failure_reason or "")
 
 
 def test_optimisation_study_respects_cancel(tmp_path: Path):

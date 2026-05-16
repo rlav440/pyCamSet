@@ -831,6 +831,8 @@ def test_bundle_options_are_backend_non_interactive():
 
 def test_outlier_detection_non_interactive_never_draws_or_prompts(monkeypatch):
     seen: dict[str, object] = {}
+    class _DummyHandler:
+        pass
 
     def _fake_mad(error_data, out_thresh=3, draw=True):
         seen["draw"] = draw
@@ -842,7 +844,7 @@ def test_outlier_detection_non_interactive_never_draws_or_prompts(monkeypatch):
     monkeypatch.setattr("pyCamSet.optimisation.template_handler.gu.mad_outlier_detection", _fake_mad)
     monkeypatch.setattr("builtins.input", _forbid_input)
 
-    dummy = type("DummyHandler", (), {})()
+    dummy = _DummyHandler()
     dummy.problem_opts = {"outliers": "ask", "interactive": False}
     dummy.missing_poses = np.array([False, False, False], dtype=bool)
 

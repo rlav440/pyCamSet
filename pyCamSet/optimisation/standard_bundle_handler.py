@@ -9,9 +9,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.sparse import csr_array
-# --- BEGIN point-regularization-prior (opt-in, default disabled) ---
-from scipy.sparse import vstack as sparse_vstack
-# --- END point-regularization-prior ---
 import pyvista as pv
 from itertools import combinations
 
@@ -133,21 +130,9 @@ class SelfBundleHandler(TemplateBundleHandler):
                  camset: CameraSet, target: AbstractTarget, detection: TargetDetection,
                  fixed_params: dict|None = None,
                  options: dict | None = None,
-                 missing_poses: list | None =None,
-                 # --- BEGIN point-regularization-prior (opt-in, default disabled) ---
-                 regularize_free_points: bool = False,
-                 # WARNING: 1e-4 (0.1mm) is an UNVALIDATED placeholder, not a safe default to
-                 # enable with. Measured on two real datasets: it made geometric consistency
-                 # WORSE than leaving the prior off entirely (equidistance-deviation growth
-                 # 1.28x-4.31x vs no-prior baselines). Only much tighter values (~2e-5m) showed
-                 # a real improvement, and only on a well-conditioned (low phase3 bad-points-rate)
-                 # dataset -- on a poorly-conditioned one it hurt at every sigma tested. Tune
-                 # point_sigma per-dataset (validate with the geometric-consistency check) before
-                 # enabling in production; do not assume this default is safe.
-                 point_sigma: float = 1e-4,
-                 # --- END point-regularization-prior ---
+                 missing_poses: list | None =None
                  ):
-        super().__init__(camset, target, detection, fixed_params, options, missing_poses)
+        super().__init__(camset, target, detection, fixed_params, options, missing_poses) 
 
         self.flat_point_data = np.copy(self.point_data.reshape((-1)))
 
@@ -186,35 +171,7 @@ class SelfBundleHandler(TemplateBundleHandler):
         for idf, vf in enumerate(self.visible_feature_mask): #fix all unseen features to shrink the optimisation
             if not vf:
                 self.feat_unfixed[3*idf:3*idf + 3] = False
-
-
-        # --- BEGIN point-regularization-prior (opt-in, default disabled) ---
-        # Optional soft Gaussian prior pulling each FREE target-corner point back toward its
-        # nominal (as-designed) board geometry. Mirrors the existing "pull toward reference"
-        # pattern already used for camera extrinsics in camera_lockbox.py
-        # (see append_lockbox_residuals/append_lockbox_jacobian there): residual
-        # (current_point - nominal_point) / point_sigma, with matching diagonal 1/point_sigma
-        # jacobian rows. With no such term, SelfBundleHandler currently has zero mechanism
-        # pulling free points back toward known target geometry (only 7 DOF are fixed, purely
-        # to break rotation/translation/scale gauge symmetry) -- see
-        # project_marker_registration_full_dataset_fix.md, "PHASE3->PHASE4 REGRESSION".
-        #
-        # When regularize_free_points is False (the default), self.regularize_free_points is
-        # simply never read by make_loss_fun/make_loss_jac's hot paths below, so behaviour and
-        # numerics are byte-for-byte identical to the pre-existing implementation.
-        self.regularize_free_points = bool(regularize_free_points)
-        if self.regularize_free_points:
-            # Only validated when actually enabled, so a stale/unused default can never raise
-            # for callers who leave the feature off.
-            if not np.isfinite(point_sigma) or point_sigma <= 0:
-                raise ValueError(f"point_sigma must be finite and positive; got {point_sigma!r}")
-        self.point_sigma = float(point_sigma)
-        # Nominal 3D positions of exactly the points left free in this optimisation, in the same
-        # flattened order as self.flat_point_data/self.feat_unfixed. Captured now, before any
-        # optimisation step overwrites the free entries of self.flat_point_data in place (it is
-        # the same array object as self.bundlePrimitive.bundle_pts below).
-        self._free_point_nominal = self.flat_point_data[self.feat_unfixed].copy()
-        # --- END point-regularization-prior ---
+        
 
         superBundlePrimitive = self.bundlePrimitive
 
@@ -239,22 +196,10 @@ class SelfBundleHandler(TemplateBundleHandler):
         target_shape = self.target.point_data.shape
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
         temp_loss = self.op_fun.make_full_loss_fn(dd, threads)
-        # --- BEGIN point-regularization-prior (opt-in, default disabled) ---
-        pose_end = self.bundlePrimitive.pose_end
-        bdpt_end = self.bundlePrimitive.bdpt_end
-        # --- END point-regularization-prior ---
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
-            base_residuals = temp_loss(param_str).flatten()
-            # --- BEGIN point-regularization-prior (opt-in, default disabled) ---
-            if self.regularize_free_points:
-                free_point_residuals = (
-                    params[pose_end:bdpt_end] - self._free_point_nominal
-                ) / self.point_sigma
-                return np.concatenate((base_residuals, free_point_residuals))
-            # --- END point-regularization-prior ---
-            return base_residuals
+            return temp_loss(param_str).flatten()
         return loss_fun
 
     def make_loss_jac(self, threads): 
@@ -277,30 +222,11 @@ class SelfBundleHandler(TemplateBundleHandler):
         )
 
         temp_loss = self.op_fun.make_jacobean(dd, threads, unfixed_params=mask)
-        # --- BEGIN point-regularization-prior (opt-in, default disabled) ---
-        pose_end = self.bundlePrimitive.pose_end
-        bdpt_end = self.bundlePrimitive.bdpt_end
-        n_free_pts = bdpt_end - pose_end
-        # --- END point-regularization-prior ---
         def jac_fn(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
             d, c, rp = temp_loss(param_str)
-            base_jacobian = csr_array((d,c,rp), shape=(2*dd.shape[0], params.shape[0]))
-            # --- BEGIN point-regularization-prior (opt-in, default disabled) ---
-            if self.regularize_free_points:
-                # Diagonal rows: one per free target-corner point, mirroring
-                # camera_lockbox.py's append_lockbox_jacobian diagonal-rows block.
-                row_idx = np.arange(n_free_pts, dtype=int)
-                col_idx = np.arange(pose_end, bdpt_end, dtype=int)
-                data = np.full(n_free_pts, 1.0 / self.point_sigma, dtype=float)
-                prior_rows = csr_array(
-                    (data, (row_idx, col_idx)),
-                    shape=(n_free_pts, params.shape[0]),
-                )
-                return sparse_vstack((base_jacobian, prior_rows), format="csr")
-            # --- END point-regularization-prior ---
-            return base_jacobian
+            return csr_array((d,c,rp), shape=(2*dd.shape[0], params.shape[0]))
         return jac_fn
 
     def get_bundle_adjustment_inputs(self, x, make_points=False) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:

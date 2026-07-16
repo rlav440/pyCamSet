@@ -84,6 +84,7 @@ def run_bundle_adjustment(param_handler: th.TemplateBundleHandler,
         # param_handler.check_params(init_params)
 
     # bundle_jac = lambda x: approx_fprime(x, loss_fn)
+    bounds = param_handler.get_lockbox_bounds(len(init_params))
     start = time.time()
     optimisation = least_squares(
         loss_fn,
@@ -96,6 +97,7 @@ def run_bundle_adjustment(param_handler: th.TemplateBundleHandler,
         # loss = "cauchy"
         x_scale='jac',
         xtol=1e-4,
+        bounds=bounds,
     )
     end = time.time()
 
@@ -122,11 +124,22 @@ def get_bundle_adjustment_stats(
     init_params: np.ndarray,
     init_err: np.ndarray,
     elapsed_sec: float,
+    param_handler: "th.TemplateBundleHandler | None" = None,
 ) -> dict:
-    """Build a compact diagnostics dictionary for a completed bundle-adjustment run."""
+    """Build a compact diagnostics dictionary for a completed bundle-adjustment run.
+
+    :param param_handler: optional handler for the run. When provided and it exposes
+        the per-pose diagnostic attributes populated during ``calc_initial_params``/
+        ``find_and_exclude_transform_outliers`` (``initial_per_im_error``,
+        ``missing_poses_before_outlier_rejection``, ``missing_poses_after_outlier_rejection``),
+        the returned dict is additionally populated with per-pose breakdowns. This is
+        purely additive: if the attributes are absent (e.g. an older/alternate handler
+        or a code path that never called ``calc_initial_params``), the corresponding
+        keys are simply omitted and the rest of the stats dict is unaffected.
+    """
     init_euclid = float(np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1)))
     final_euclid = float(np.mean(np.linalg.norm(np.reshape(optimisation.fun, (-1, 2)), axis=1)))
-    return {
+    stats = {
         "initial_euclid": init_euclid,
         "final_euclid": final_euclid,
         "param_count": int(len(init_params)),
@@ -138,6 +151,35 @@ def get_bundle_adjustment_stats(
         "nfev": int(optimisation.nfev),
     }
 
+    if param_handler is not None:
+        # These attributes are indexed by "global_im_num" (a pose/image index shared
+        # across all cameras in the rig, see TargetDetection) rather than by a single
+        # (camera, pose) pair, so there is no individual camera name to resolve them
+        # to here -- the raw pose index is used as the identifier, per the fallback
+        # noted in the calling convention.
+        per_pose_error = getattr(param_handler, "initial_per_im_error", None)
+        missing_before = getattr(param_handler, "missing_poses_before_outlier_rejection", None)
+        missing_after = getattr(param_handler, "missing_poses_after_outlier_rejection", None)
+
+        if per_pose_error is not None:
+            per_pose_error_arr = np.asarray(per_pose_error, dtype=float)
+            stats["per_pose_initial_error_px"] = [
+                {"pose": int(i), "initial_error_px": float(v)}
+                for i, v in enumerate(per_pose_error_arr)
+            ]
+
+        if missing_before is not None:
+            stats["outlier_poses_before_rejection"] = [
+                int(i) for i in np.where(np.asarray(missing_before))[0]
+            ]
+
+        if missing_after is not None:
+            stats["outlier_poses_after_rejection"] = [
+                int(i) for i in np.where(np.asarray(missing_after))[0]
+            ]
+
+    return stats
+
 
 def run_bundle_adjustment_with_stats(
     param_handler: th.TemplateBundleHandler,
@@ -147,6 +189,7 @@ def run_bundle_adjustment_with_stats(
     loss_fn, bundle_jac, init_params = make_optimisation_function(param_handler, threads)
     init_err = loss_fn(init_params)
 
+    bounds = param_handler.get_lockbox_bounds(len(init_params))
     start = time.time()
     optimisation = least_squares(
         loss_fn,
@@ -155,11 +198,14 @@ def run_bundle_adjustment_with_stats(
         jac=bundle_jac if bundle_jac is not None else "2-point",
         max_nfev=param_handler.problem_opts["max_nfev"],
         x_scale='jac',
-        xtol=1e-4,
+        xtol=param_handler.problem_opts.get("xtol", 1e-4),
+        loss=param_handler.problem_opts.get("loss", "linear"),
+        f_scale=param_handler.problem_opts.get("f_scale", 1.0),
+        bounds=bounds,
     )
     elapsed = time.time() - start
 
     camset = param_handler.get_camset(optimisation.x)
     camset.set_calibration_history(optimisation, param_handler)
-    stats = get_bundle_adjustment_stats(optimisation, init_params, init_err, elapsed)
+    stats = get_bundle_adjustment_stats(optimisation, init_params, init_err, elapsed, param_handler=param_handler)
     return optimisation, camset, stats

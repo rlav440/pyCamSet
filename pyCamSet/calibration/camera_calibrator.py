@@ -37,6 +37,7 @@ def calibrate_cameras(
     threads=None,
     problem_options: dict|None = None,
     initial_cams: CameraSet | None= None,
+    min_detections_per_board: int = 12,
     ) -> CameraSet:
     """
     This function coordinates the calibration process, from detection to outputing a final camset.
@@ -49,6 +50,8 @@ def calibrate_cameras(
     :param n_lim: the maximum number of images to use for detection
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
     :param high_distortion: Implements an iterative scheme for high distortion cameras.
+    :param min_detections_per_board: Minimum number of detected corners required
+        for a board observation to contribute to the initial per-camera calibration.
     """
 
     if isinstance(f_loc, str):
@@ -80,7 +83,8 @@ def calibrate_cameras(
             camera_res,
             save=save,
             save_loc=save_loc / ('initial_cameras' + string_tail),
-            fixed_params=fixed_params
+            fixed_params=fixed_params,
+            min_detections_per_board=min_detections_per_board,
         )
 
 
@@ -100,6 +104,7 @@ def calibrate_cameras(
                 camera_res,
                 save=save,
                 save_loc=save_loc / ('initial_cameras_high_distortion' + string_tail),
+                min_detections_per_board=min_detections_per_board,
                 )
 
             initial_cams.draw_camera_distortions()
@@ -133,7 +138,8 @@ def run_initial_calibration(detection: TargetDetection,
                             save=True, save_loc: Path = Path('initial_estimate.camset'),
                             ref_cam: int|str = 0,
                             fixed_params: dict|None = None,
-                            return_poses_and_costs=False) -> CameraSet | tuple[CameraSet, np.ndarray, np.ndarray]:
+                            return_poses_and_costs=False,
+                            min_detections_per_board: int = 12) -> CameraSet | tuple[CameraSet, np.ndarray, np.ndarray]:
     """
     For all of the cameras, runs the calibration method provided by an abstract target.
     The default is an opencv calibration but may be overwritten.
@@ -143,6 +149,8 @@ def run_initial_calibration(detection: TargetDetection,
     :param save: should the result be saved
     :param save_loc: where should the result be saved
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
+    :param min_detections_per_board: Minimum number of detected corners required
+        for a board observation to contribute to the initial per-camera calibration.
     :return: the camera set with the initial calibration
     """
 
@@ -151,8 +159,10 @@ def run_initial_calibration(detection: TargetDetection,
         cams = load_CameraSet(save_loc)
         if return_poses_and_costs is False:
             return cams
-        poses = np.load(save_loc.parent/'calib_pose_data.npy')
-        per_im = np.load(save_loc.parent/'calib_im_data.npy')
+        pose_path = save_loc.parent/'calib_pose_data.npy'
+        per_im_path = save_loc.parent/'calib_im_data.npy'
+        poses = np.load(pose_path) if pose_path.exists() else np.array([], dtype=float)
+        per_im = np.load(per_im_path) if per_im_path.exists() else np.array([], dtype=float)
         return cams, poses, per_im
 
     # define the input structure to the
@@ -164,18 +174,36 @@ def run_initial_calibration(detection: TargetDetection,
     # create a lambda based on the inputs
 
     logging.info("Pulling calibration method from target")
-    work_fn = lambda datum: calibration_target.initial_calibration(
-            cam_name=datum[0],
-            detection=datum[1],
-            res=datum[2],
-            pose_im=pose_im,
-            fixed_params=fixed_params,
-            return_poses=True,
-        )
     cam_names = detection.cam_names
     cam_detections = detection.get_cam_list()
     work_data = zip(cam_names, cam_detections, cam_res)
-    raw_calibration, poses, per_im = map(list, zip(*[work_fn(datum) for datum in work_data]))
+    if return_poses_and_costs:
+        work_fn = lambda datum: calibration_target.initial_calibration(
+                cam_name=datum[0],
+                detection=datum[1],
+                res=datum[2],
+                pose_im=pose_im,
+                fixed_params=fixed_params,
+                return_poses=True,
+                min_detections_per_board=min_detections_per_board,
+            )
+        results = [work_fn(datum) for datum in work_data]
+        raw_calibration = [res[0] for res in results]
+        poses = np.asarray([res[1] for res in results], dtype=object)
+        per_im = np.asarray([res[2] for res in results], dtype=object)
+    else:
+        work_fn = lambda datum: calibration_target.initial_calibration(
+                cam_name=datum[0],
+                detection=datum[1],
+                res=datum[2],
+                pose_im=pose_im,
+                fixed_params=fixed_params,
+                return_poses=False,
+                min_detections_per_board=min_detections_per_board,
+            )
+        raw_calibration = [work_fn(datum) for datum in work_data]
+        poses = []
+        per_im = []
     cam_dict = {cam_name: cam for cam_name, cam in zip(cam_names, raw_calibration)}
     cams = CameraSet(camera_dict=cam_dict)
 

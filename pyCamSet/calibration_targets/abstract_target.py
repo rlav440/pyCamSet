@@ -320,7 +320,9 @@ class AbstractTarget(ABC):
 
     def initial_calibration(self, cam_name, detection: TargetDetection,
                             res: list, pose_im: int=0,
-                            fixed_params: dict|None =None, return_poses=False) -> Camera | tuple[Camera, np.ndarray, np.ndarray]:
+                            fixed_params: dict|None =None,
+                            return_poses=False,
+                            min_detections_per_board: int = 12) -> Camera | tuple[Camera, np.ndarray, np.ndarray]:
         """
         Takes a single camera's detections, and performs an initial
         calibration on them.
@@ -334,6 +336,8 @@ class AbstractTarget(ABC):
         :param pose_im: The image in which the Target's pose sets the coordinate system
         :param fixed_params: A dict containing any fixed params of the camera to calibrate
             accepted options are "ext", "int", and "dst" respectively.
+        :param min_detections_per_board: Minimum number of detected corners required
+            for a board observation to contribute to the initial OpenCV calibration.
         :return: A camera object.
         """
 
@@ -363,13 +367,20 @@ class AbstractTarget(ABC):
 
             for board in boards[mask]:
                 key_mask = np.squeeze(keys[:, :-1] == board)
-                if np.sum(key_mask) >= 6:
-                    if np.sum(key_mask) < 12:
-                        logging.warning("Trying to calibrate with a small number of detections on a board.")
+                num_detections = np.sum(key_mask)
+                if num_detections >= min_detections_per_board:
+                    if num_detections < 12:
+                        logging.warning(
+                            f"Trying to calibrate with {num_detections} detections on a board. <12 may be an issue."
+                        )
                     board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')
                     board_im = data[key_mask, -2:][None, ...].astype('float32')
                     object_points.append(board_obj)
                     image_points.append(board_im)
+                else:
+                    logging.warning(
+                        f"Trying to calibrate with <{min_detections_per_board} detections ({num_detections}) on a board. Dropping."
+                    )
 
         start = time.time()
         ic = cv2.calibrateCameraExtended(
@@ -406,8 +417,8 @@ class AbstractTarget(ABC):
         if not return_poses:
             return init_cam
 
-        poses = [make_4x4h_tform(rot, tran) for rot, tran in zip(ic[3], ic[4])]
-        per_im_reproj = ic[-1]
+        poses = np.stack([make_4x4h_tform(rot, tran) for rot, tran in zip(ic[3], ic[4])]).astype(float)
+        per_im_reproj = np.asarray(ic[-1], dtype=float)
         return init_cam, poses, per_im_reproj
 
     def target_pose_in_cam_image(
@@ -497,10 +508,10 @@ class AbstractTarget(ABC):
         max_err = np.argmax(err_list)
         min_err = np.argmin(err_list)
         if (err := err_list[max_err].squeeze()) > 5:
-            logging.warning(f"Initial error of {err: .2f} found for a pose detection.")
+            logging.warning(f"Initial error of {err: .2f} found for a pose detection (camera={cam.name}, pose={n_im[0]}).")
 
         if (err := err_list[max_err].squeeze()) > 20:
-            logging.warning(f"Past 10 pixel error for failed detection - counting detection as a failure ")
+            logging.warning(f"Past 20 pixel error for failed detection - counting detection as a failure (camera={cam.name}, pose={n_im[0]}) ")
             if mode == "nan":
                 if give_error:
                     return np.ones((4,4)) * np.nan, np.nan

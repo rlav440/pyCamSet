@@ -37,6 +37,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -70,6 +71,7 @@ from pyCamSet.gui.shared_functions import (
     build_charuco_option_tooltip,
     build_target,
     collect_charuco_detection_options,
+    copy_file,
     count_images_in_folder,
     get_camera_subfolders,
     make_blue_button,
@@ -79,6 +81,7 @@ from pyCamSet.gui.shared_functions import (
     make_scrollable_tab,
     make_section_label,
     make_separator,
+    path_exists,
     render_predecessor_chain_section,
 )
 
@@ -104,6 +107,8 @@ def _build_target(
     n_points: int,
     length: float,
     charuco_detection_options: dict[str, dict[str, Any]] | None = None,
+    border_fraction: float = 0.1,
+    marker_fraction: float = 0.8,
 ):
     """Construct the calibration target object from existing pyCamSet classes."""
     if not _PYCAMSET_OK:
@@ -113,6 +118,8 @@ def _build_target(
         n_points,
         length,
         charuco_detection_options=charuco_detection_options,
+        border_fraction=border_fraction,
+        marker_fraction=marker_fraction,
     )
 
 
@@ -287,6 +294,22 @@ class Phase1Tab(QWidget):
             "1% error here propagates directly into reconstructed distances."
         )
         target_sect.addRow("Length / square size (mm):", self._length_edit)
+
+        self._border_label = QLabel("Border fraction (Ccube):")
+        self._border_spin = QDoubleSpinBox()
+        self._border_spin.setRange(0.0, 0.9)
+        self._border_spin.setDecimals(3)
+        self._border_spin.setSingleStep(0.01)
+        self._border_spin.setValue(0.1)
+        target_sect.addRow(self._border_label, self._border_spin)
+
+        self._marker_label = QLabel("Marker fraction (ChArUco):")
+        self._marker_spin = QDoubleSpinBox()
+        self._marker_spin.setRange(0.1, 1.0)
+        self._marker_spin.setDecimals(3)
+        self._marker_spin.setSingleStep(0.05)
+        self._marker_spin.setValue(0.8)
+        target_sect.addRow(self._marker_label, self._marker_spin)
 
         # ── Detection options ──────────────────────────────────────────
         form_root.addWidget(make_separator())
@@ -495,6 +518,11 @@ class Phase1Tab(QWidget):
         is_charuco = target_type in _CHARUCO_BASED_TARGETS  # Only ChArUco-based targets need this section.
         if hasattr(self, "_charuco_opts_section"):
             self._charuco_opts_section.setVisible(is_charuco)
+        is_ccube = target_type == "Ccube"
+        self._border_label.setVisible(is_ccube)
+        self._border_spin.setVisible(is_ccube)
+        self._marker_label.setVisible(not is_ccube)
+        self._marker_spin.setVisible(not is_ccube)
 
     def _collect_params(self) -> Optional[dict]:
         floc = self._floc_edit.text().strip()
@@ -572,6 +600,8 @@ class Phase1Tab(QWidget):
             "target_type": self._target_combo.currentText(),
             "n_points": self._npts_spin.value(),
             "length": length,
+            "border_fraction": self._border_spin.value(),
+            "marker_fraction": self._marker_spin.value(),
             "selected_cameras": selected_cameras,
         }
 
@@ -632,6 +662,8 @@ class Phase1Tab(QWidget):
                         params["n_points"],
                         params["length"],
                         charuco_detection_options=params.get("charuco_detection_options"),
+                        border_fraction=params.get("border_fraction", 0.1),
+                        marker_fraction=params.get("marker_fraction", 0.8),
                     )
 
                     detect_root = f_loc
@@ -663,14 +695,14 @@ class Phase1Tab(QWidget):
                         if detect_root != f_loc:
                             for artifact_name in ("detected_datapoints.pickle",):
                                 src = detect_root / artifact_name
-                                if src.exists():
+                                if path_exists(src):
                                     dst = f_loc / artifact_name
-                                    shutil.copy2(src, dst)
+                                    copy_file(src, dst)
                                     if artifact_name == "detected_datapoints.pickle":
                                         det_pickle_src = dst
                         else:
                             cand = f_loc / "detected_datapoints.pickle"
-                            if cand.exists():
+                            if path_exists(cand):
                                 det_pickle_src = cand
 
                     finally:
@@ -816,17 +848,21 @@ class Phase1Tab(QWidget):
 
             if det_pickle_src is None:
                 cand = Path(params["f_loc"]) / "detected_datapoints.pickle"
-                if cand.exists():
+                if path_exists(cand):
                     det_pickle_src = cand
 
-            if det_pickle_src is not None and det_pickle_src.exists():
+            if det_pickle_src is not None and path_exists(det_pickle_src):
                 try:
-                    shutil.copy2(det_pickle_src, run_pickle)
+                    copy_file(det_pickle_src, run_pickle)
                     metadata.setdefault("artifacts", {})["detected_datapoints_pickle"] = str(run_pickle)
                     self._workspace_mgr.save_run("phase1", run_id, metadata)
                     emit(f"Artifact saved: {run_pickle}")
                 except Exception as copy_exc:
-                    emit(f"Warning: could not save run-local pickle: {copy_exc}")
+                    err_msg = f"Could not save run-local detected_datapoints.pickle: {copy_exc}"
+                    metadata["error"] = err_msg
+                    self._workspace_mgr.save_run("phase1", run_id, metadata)
+                    emit(f"ERROR: {err_msg}")
+                    return metadata
 
             emit(f"Run saved: {run_id}")
             return metadata
@@ -1325,7 +1361,7 @@ class Phase1DiagnosticsTab(QWidget):
         chosen = None
         for run in reversed(runs):
             p = self._resolve_pickle_path_for_run(run)
-            if p is not None and p.exists():
+            if p is not None and path_exists(p):
                 chosen = run
                 break
         if chosen is not None:
@@ -1341,7 +1377,7 @@ class Phase1DiagnosticsTab(QWidget):
         chosen = None
         for run in reversed(runs):
             p = self._resolve_pickle_path_for_run(run)
-            if p is not None and p.exists():
+            if p is not None and path_exists(p):
                 chosen = run
                 break
 
@@ -1369,7 +1405,7 @@ class Phase1DiagnosticsTab(QWidget):
 
         floc = Path(chosen["params"]["f_loc"])
         det_path = self._resolve_pickle_path_for_run(chosen)
-        if det_path is None or not det_path.exists():
+        if det_path is None or not path_exists(det_path):
             if show_errors:
                 QMessageBox.warning(self, "No detections file", "No pickle found for this run.")
             return
@@ -1528,7 +1564,7 @@ class Phase1DiagnosticsTab(QWidget):
         ws = self._workspace_mgr.workspace_path
         if run_id and ws is not None:
             p = ws / "phase1_runs" / run_id / "detected_datapoints.pickle"
-            if p.exists():
+            if path_exists(p):
                 return p
 
         f_loc = run.get("params", {}).get("f_loc")

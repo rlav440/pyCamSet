@@ -1,0 +1,22 @@
+{
+  "best_p3_label": "A1",
+  "best_p3_run_id": "20260701_220246_73cc87",
+  "best_p3_config": {
+    "rotation_half_width": 0.3,
+    "rotation_sigma": 0.05,
+    "center_sigma": 0.3,
+    "translation_half_width": 0.1,
+    "translation_sigma": 0.01
+  },
+  "best_p3_cam4_rpe": 9.887768227790197,
+  "best_p3_mean_rpe": 8.101377952219492,
+  "best_p4_label": "C-soft_l1",
+  "best_p4_run_id": "20260702_101145_ca6b90",
+  "best_p4_mean_rpe": 2.475573608233511,
+  "best_p4_cam4_rpe": 1.874480934186129,
+  "best_p4_max_rpe": 3.6406538054928856,
+  "best_p4_displacement_mm": 0.8198134689947408,
+  "best_p4_scale": 0.9269879837883831,
+  "best_p4_free_pts": 125,
+  "stretch_goal_achieved": false
+}

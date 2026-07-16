@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
+    as_io_path,
     IMAGE_FOLDER_SCHEMATIC,
     TAB_PHASE3,
     TAB_PHASE4,
@@ -56,8 +58,12 @@ from pyCamSet.gui.shared_functions import (
     make_scrollable_tab,
     make_section_label,
     make_separator,
+    ensure_directory,
     render_predecessor_chain_section,
     resolve_phase1_pickle_artifact,
+    resolve_phase2_camset_artifact,
+    resolve_phase3_camset_artifact,
+    path_exists,
     suppress_matplotlib_gui,
 )
 from pyCamSet.gui.assess_calibration import (
@@ -67,14 +73,17 @@ from pyCamSet.gui.assess_calibration import (
     merge_phase3_phase4_runs,
     select_latest_visualisation_run,
 )
+from pyCamSet.gui.phase_3_lockbox_editor import Phase3LockboxEditor
 
 try:
+    from pyCamSet.optimisation.camera_lockbox import CameraLockboxConfig
     from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment_with_stats
     from pyCamSet.optimisation.template_handler import TemplateBundleHandler
     from pyCamSet.utils.saving import load_CameraSet, load_pickle
 
     _PYCAMSET_OK = True
 except ImportError:
+    CameraLockboxConfig = None
     run_bundle_adjustment_with_stats = None
     TemplateBundleHandler = None
     load_CameraSet = None
@@ -101,6 +110,9 @@ class Phase3Tab(QWidget):
         self._worker: Optional[PhaseWorker] = None
         self._preferred_phase2_run_id: Optional[str] = None
         self._preferred_phase2_camset_path: Optional[str] = None
+        self._edited_lockbox_camset_path: Optional[str] = None
+        self._edited_lockbox_metadata_path: Optional[str] = None
+        self._lockbox_edit_summary: str = "Using original source"
         self._build_ui(terminal_cb)
 
     def set_diagnostics_tab(self, tab: "Phase3DiagnosticsTab") -> None:
@@ -141,7 +153,22 @@ class Phase3Tab(QWidget):
         floc_row.addWidget(floc_btn)
         paths_sect.addRow("Image folder (f_loc):", floc_row)
 
-        self._src_lbl = QLabel("Inputs: latest Phase 2 + linked Phase 1")
+        src_row = QHBoxLayout()
+        self._phase2_run_combo = QComboBox()
+        self._phase2_run_combo.setToolTip(
+            "Concept: Phase 2 initial-camera run used as input to Phase 3 bundle adjustment.\n"
+            "Default: Auto (handoff selection from Phase 2, else latest run)."
+        )
+        self._phase2_run_combo.currentIndexChanged.connect(self._on_phase2_source_changed)
+        src_refresh_btn = QPushButton("Refresh")
+        src_refresh_btn.setFixedWidth(70)
+        src_refresh_btn.setToolTip("Reload available Phase 2 runs from workspace.")
+        src_refresh_btn.clicked.connect(self._refresh_phase2_sources)
+        src_row.addWidget(self._phase2_run_combo)
+        src_row.addWidget(src_refresh_btn)
+        paths_sect.addRow("Phase 2 run:", src_row)
+
+        self._src_lbl = QLabel("Inputs: auto Phase 2 + linked Phase 1")
         self._src_lbl.setWordWrap(True)
         self._src_lbl.setStyleSheet("color: #666;")
         paths_sect.addRow("Input runs:", self._src_lbl)
@@ -181,6 +208,25 @@ class Phase3Tab(QWidget):
             "Guidance: must exactly match the value used in Phase 1."
         )
         target_sect.addRow("Length / square size (mm):", self._length_edit)
+
+        self._border_label = QLabel("Border fraction (Ccube):")
+        self._border_spin = QDoubleSpinBox()
+        self._border_spin.setRange(0.0, 0.9)
+        self._border_spin.setDecimals(3)
+        self._border_spin.setSingleStep(0.01)
+        self._border_spin.setValue(0.1)
+        target_sect.addRow(self._border_label, self._border_spin)
+
+        self._marker_label = QLabel("Marker fraction (ChArUco):")
+        self._marker_spin = QDoubleSpinBox()
+        self._marker_spin.setRange(0.1, 1.0)
+        self._marker_spin.setDecimals(3)
+        self._marker_spin.setSingleStep(0.05)
+        self._marker_spin.setValue(0.8)
+        target_sect.addRow(self._marker_label, self._marker_spin)
+
+        self._target_combo.currentTextChanged.connect(self._on_target_type_changed)
+        self._on_target_type_changed(self._target_combo.currentText())
 
         # ── Bundle Adjustment Options ──────────────────────────────────
         form_root.addWidget(make_separator())
@@ -231,6 +277,7 @@ class Phase3Tab(QWidget):
         opts_form.addRow("verbosity:", self._verbosity_spin)
 
         self._outliers_combo = QComboBox()
+        self._outliers_combo.setObjectName("outliers_combo")
         self._outliers_combo.addItems(["y", "n", "ask"])
         self._outliers_combo.setCurrentText("n")
         self._outliers_combo.setToolTip(
@@ -290,8 +337,130 @@ class Phase3Tab(QWidget):
         )
         opts_form.addRow("Fixed params (JSON):", self._fp_edit)
 
-        # ── Action buttons ─────────────────────────────────────────────
+        # ── Camera Lockbox Priors ──────────────────────────────────────
         form_root.addWidget(make_separator())
+        lockbox_sect = CollapsibleSection("Camera Lockbox Prior (optional)", expanded=False)
+        form_root.addWidget(lockbox_sect)
+
+        self._lockbox_enabled_cb = QCheckBox("Enable Phase 3 extrinsic lockbox")
+        self._lockbox_enabled_cb.setChecked(False)
+        self._lockbox_enabled_cb.setToolTip(
+            "Constrain free camera extrinsics to a bounded Gaussian prior from a previous camset.\n"
+            "This applies only to Phase 3 Rodrigues+translation extrinsic parameters."
+        )
+        self._lockbox_enabled_cb.toggled.connect(self._set_lockbox_controls_enabled)
+        lockbox_sect.addRow("Enable:", self._lockbox_enabled_cb)
+
+        source_row = QHBoxLayout()
+        self._lockbox_source_edit = QLineEdit()
+        self._lockbox_source_edit.setPlaceholderText("Original source camset (.camset)")
+        self._lockbox_source_edit.setToolTip(
+            "Original source camset. This input is immutable; edited lockbox copies are saved separately."
+        )
+        self._lockbox_source_edit.textChanged.connect(self._reset_edited_lockbox_copy)
+        source_btn = QPushButton("Browse…")
+        source_btn.setFixedWidth(70)
+        source_btn.clicked.connect(self._browse_lockbox_source)
+        source_row.addWidget(self._lockbox_source_edit)
+        source_row.addWidget(source_btn)
+        self._lockbox_source_btn = source_btn
+        lockbox_sect.addRow("Source camset:", source_row)
+
+        editor_row = QHBoxLayout()
+        self._lockbox_view_source_btn = QPushButton("View Source")
+        self._lockbox_view_source_btn.setToolTip("Inspect the immutable original source camset without editing it.")
+        self._lockbox_view_source_btn.clicked.connect(self._view_lockbox_source)
+        self._lockbox_edit_btn = QPushButton("Edit Lockbox Prior…")
+        self._lockbox_edit_btn.setToolTip("Create an edited lockbox copy; the original source camset is never overwritten.")
+        self._lockbox_edit_btn.clicked.connect(self._open_lockbox_editor)
+        self._lockbox_reset_btn = QPushButton("Reset Edited Copy")
+        self._lockbox_reset_btn.setToolTip("Discard the saved edited-copy selection and use the original source camset.")
+        self._lockbox_reset_btn.clicked.connect(self._reset_edited_lockbox_copy)
+        editor_row.addWidget(self._lockbox_view_source_btn)
+        editor_row.addWidget(self._lockbox_edit_btn)
+        editor_row.addWidget(self._lockbox_reset_btn)
+        lockbox_sect.addRow("Editor:", editor_row)
+
+        self._lockbox_status_lbl = QLabel("Using original source")
+        self._lockbox_status_lbl.setWordWrap(True)
+        self._lockbox_status_lbl.setStyleSheet("color: #666;")
+        lockbox_sect.addRow("Status:", self._lockbox_status_lbl)
+
+        lockbox_banner = QLabel("Editing lockbox prior centres only. Original source camset will not be modified.")
+        lockbox_banner.setWordWrap(True)
+        lockbox_banner.setStyleSheet("font-weight: bold; color: #9a5b00;")
+        lockbox_sect.addRow("Guardrail:", lockbox_banner)
+
+        self._lockbox_warm_start_cb = QCheckBox("Warm-start constrained extrinsics from source camset")
+        self._lockbox_warm_start_cb.setChecked(True)
+        self._lockbox_warm_start_cb.setToolTip(
+            "When enabled, Phase 3 starts bounded extrinsics at the prior centre.\n"
+            "When disabled, the source camset still supplies bounds and soft priors."
+        )
+        lockbox_sect.addRow("Warm start:", self._lockbox_warm_start_cb)
+
+        self._lockbox_rotation_half_spin = QDoubleSpinBox()
+        self._lockbox_rotation_half_spin.setRange(1e-9, 10.0)
+        self._lockbox_rotation_half_spin.setDecimals(6)
+        self._lockbox_rotation_half_spin.setValue(0.1)
+        self._lockbox_rotation_half_spin.setSingleStep(0.01)
+        self._lockbox_rotation_half_spin.setToolTip("Hard Rodrigues half-width in radians.")
+        lockbox_sect.addRow("Rotation half-width (rad):", self._lockbox_rotation_half_spin)
+
+        self._lockbox_translation_half_spin = QDoubleSpinBox()
+        self._lockbox_translation_half_spin.setRange(1e-9, 1e6)
+        self._lockbox_translation_half_spin.setDecimals(6)
+        self._lockbox_translation_half_spin.setValue(0.1)
+        self._lockbox_translation_half_spin.setSingleStep(0.01)
+        self._lockbox_translation_half_spin.setToolTip("Hard translation half-width in camera-set length units.")
+        lockbox_sect.addRow("Translation half-width:", self._lockbox_translation_half_spin)
+
+        self._lockbox_rotation_sigma_spin = QDoubleSpinBox()
+        self._lockbox_rotation_sigma_spin.setRange(1e-9, 10.0)
+        self._lockbox_rotation_sigma_spin.setDecimals(6)
+        self._lockbox_rotation_sigma_spin.setValue(0.05)
+        self._lockbox_rotation_sigma_spin.setSingleStep(0.005)
+        self._lockbox_rotation_sigma_spin.setToolTip("Gaussian prior sigma for Rodrigues parameters.")
+        lockbox_sect.addRow("Rotation sigma (rad):", self._lockbox_rotation_sigma_spin)
+
+        self._lockbox_translation_sigma_spin = QDoubleSpinBox()
+        self._lockbox_translation_sigma_spin.setRange(1e-9, 1e6)
+        self._lockbox_translation_sigma_spin.setDecimals(6)
+        self._lockbox_translation_sigma_spin.setValue(0.01)
+        self._lockbox_translation_sigma_spin.setSingleStep(0.005)
+        self._lockbox_translation_sigma_spin.setToolTip("Gaussian prior sigma for translation parameters.")
+        lockbox_sect.addRow("Translation sigma:", self._lockbox_translation_sigma_spin)
+
+        self._lockbox_center_sigma_spin = QDoubleSpinBox()
+        self._lockbox_center_sigma_spin.setRange(0.0, 1e6)
+        self._lockbox_center_sigma_spin.setDecimals(6)
+        self._lockbox_center_sigma_spin.setValue(0.0)
+        self._lockbox_center_sigma_spin.setSingleStep(0.005)
+        self._lockbox_center_sigma_spin.setToolTip(
+            "Gaussian sigma for world-space camera center C = −R^T @ t (camset length units).\n"
+            "0 = disabled. When enabled, adds a soft prior directly on the 3D camera position,\n"
+            "preventing large world-space drifts caused by Rodrigues near-π amplification.\n"
+            "Recommended: ~0.02–0.05 (roughly the max tolerable camera center shift)."
+        )
+        lockbox_sect.addRow("Center position sigma:", self._lockbox_center_sigma_spin)
+
+        self._lockbox_controls = [
+            self._lockbox_source_edit,
+            self._lockbox_source_btn,
+            self._lockbox_view_source_btn,
+            self._lockbox_edit_btn,
+            self._lockbox_reset_btn,
+            self._lockbox_warm_start_cb,
+            self._lockbox_rotation_half_spin,
+            self._lockbox_translation_half_spin,
+            self._lockbox_rotation_sigma_spin,
+            self._lockbox_translation_sigma_spin,
+            self._lockbox_center_sigma_spin,
+        ]
+        self._set_lockbox_controls_enabled(False)
+
+        # ── Action buttons ─────────────────────────────────────────────
+
         btn_row = QHBoxLayout()
         run_btn = make_blue_button("▶  Run Phase 3", self._run_phase3)
         run_btn.setToolTip("Run template bundle adjustment.")
@@ -308,10 +477,127 @@ class Phase3Tab(QWidget):
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
 
+        self._refresh_phase2_sources()
+
     def _browse_floc(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select image folder")
         if path:
             self._floc_edit.setText(path)
+
+    def _browse_lockbox_source(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select original source camset",
+            "",
+            "Camera Sets (*.camset *.json);;All Files (*)",
+        )
+        if path:
+            self._lockbox_source_edit.setText(path)
+
+    def _set_lockbox_controls_enabled(self, enabled: bool) -> None:
+        for widget in getattr(self, "_lockbox_controls", []):
+            widget.setEnabled(bool(enabled))
+
+    def _reset_edited_lockbox_copy(self, *_args) -> None:
+        self._edited_lockbox_camset_path = None
+        self._edited_lockbox_metadata_path = None
+        self._lockbox_edit_summary = "Using original source"
+        if hasattr(self, "_lockbox_status_lbl"):
+            self._lockbox_status_lbl.setText(self._lockbox_edit_summary)
+
+    def _view_lockbox_source(self) -> None:
+        source_path = self._lockbox_source_edit.text().strip()
+        if not source_path:
+            QMessageBox.information(self, "Original source camset", "Choose an original source camset first.")
+            return
+        if not path_exists(source_path):
+            QMessageBox.critical(self, "Original source camset", f"Source camset does not exist: {source_path}")
+            return
+        try:
+            cams = load_CameraSet(as_io_path(source_path))
+            names = cams.get_names()
+        except Exception as exc:
+            QMessageBox.critical(self, "Original source camset", f"Could not load source camset:\n{exc}")
+            return
+        QMessageBox.information(
+            self,
+            "Original source camset",
+            "Immutable original source camset loaded successfully.\n"
+            f"Path: {source_path}\n"
+            f"Cameras ({len(names)}): {', '.join(map(str, names))}",
+        )
+
+    def _open_lockbox_editor(self) -> None:
+        source_path = self._lockbox_source_edit.text().strip()
+        if not source_path:
+            QMessageBox.information(self, "Lockbox editor", "Choose an original source camset first.")
+            return
+        if not path_exists(source_path):
+            QMessageBox.critical(self, "Lockbox editor", f"Original source camset does not exist: {source_path}")
+            return
+        if self._workspace_mgr.workspace_path is None:
+            self._sync_workspace_from_floc(self._floc_edit.text().strip())
+        if self._workspace_mgr.workspace_path is None:
+            QMessageBox.critical(self, "Lockbox editor", "Could not initialise a workspace-local lockbox_priors folder.")
+            return
+        active_names: list[str] = []
+        phase2_run = self._load_phase2_run()
+        if phase2_run is not None:
+            camset_path = resolve_phase2_camset_artifact(phase2_run, self._workspace_mgr.workspace_path)
+            if camset_path is not None and path_exists(str(camset_path)):
+                try:
+                    active_names = list(load_CameraSet(as_io_path(str(camset_path))).get_names())
+                except Exception:
+                    active_names = []
+        try:
+            target = build_target(
+                self._target_combo.currentText(),
+                self._npts_spin.value(),
+                float(self._length_edit.text().strip()),
+                border_fraction=self._border_spin.value(),
+                marker_fraction=self._marker_spin.value(),
+            )
+        except Exception:
+            target = None
+        fixed_params = None
+        if self._fp_edit.text().strip():
+            try:
+                fixed_params = json.loads(self._fp_edit.text().strip())
+            except json.JSONDecodeError:
+                fixed_params = None
+        dialog = Phase3LockboxEditor(
+            source_camset_path=source_path,
+            workspace_path=self._workspace_mgr.workspace_path,
+            target=target,
+            active_camera_names=active_names,
+            fixed_params=fixed_params,
+            lockbox_params={
+                "enabled": bool(self._lockbox_enabled_cb.isChecked()),
+                "rotation_half_width": float(self._lockbox_rotation_half_spin.value()),
+                "translation_half_width": float(self._lockbox_translation_half_spin.value()),
+                "rotation_sigma": float(self._lockbox_rotation_sigma_spin.value()),
+                "translation_sigma": float(self._lockbox_translation_sigma_spin.value()),
+            },
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.result is None:
+            return
+        self._edited_lockbox_camset_path = dialog.result.edited_source_camset
+        self._edited_lockbox_metadata_path = dialog.result.metadata_path
+        self._lockbox_edit_summary = (
+            "Using edited lockbox copy: "
+            f"{dialog.result.edited_count} cameras edited, max shift {dialog.result.max_shift:.6g}"
+        )
+        self._lockbox_status_lbl.setText(self._lockbox_edit_summary)
+        self._lockbox_enabled_cb.setChecked(True)
+
+    def set_lockbox_source_camset_path(self, path: str) -> None:
+        self._lockbox_source_edit.setText(path)
+        if path:
+            self._lockbox_enabled_cb.setChecked(True)
+
+    def set_lockbox_source_path(self, path: str) -> None:
+        self.set_lockbox_source_camset_path(path)
 
     def set_image_folder(self, path: str) -> None:
         self._floc_edit.setText(path)
@@ -328,6 +614,14 @@ class Phase3Tab(QWidget):
             self._workspace_mgr.set_workspace_path(ws_path, ensure=True)
             if self._diagnostics_tab is not None:
                 self._diagnostics_tab.refresh()
+        self._refresh_phase2_sources()
+
+    def _on_target_type_changed(self, target_type: str) -> None:
+        is_ccube = target_type == "Ccube"
+        self._border_label.setVisible(is_ccube)
+        self._border_spin.setVisible(is_ccube)
+        self._marker_label.setVisible(not is_ccube)
+        self._marker_spin.setVisible(not is_ccube)
 
     def _collect_params(self) -> Optional[dict]:
         floc = self._floc_edit.text().strip()
@@ -363,6 +657,21 @@ class Phase3Tab(QWidget):
         else:
             outlier_mode = "n"
 
+        lockbox_enabled = self._lockbox_enabled_cb.isChecked()
+        original_lockbox_source_path = self._lockbox_source_edit.text().strip()
+        edited_lockbox_source_path = self._edited_lockbox_camset_path
+        effective_lockbox_source_path = edited_lockbox_source_path or original_lockbox_source_path
+        if lockbox_enabled:
+            if not original_lockbox_source_path:
+                QMessageBox.critical(self, "Validation Error", "Original source camset is required when lockbox is enabled.")
+                return None
+            if not path_exists(original_lockbox_source_path):
+                QMessageBox.critical(self, "Validation Error", f"Original source camset does not exist: {original_lockbox_source_path}")
+                return None
+            if not effective_lockbox_source_path or not path_exists(effective_lockbox_source_path):
+                QMessageBox.critical(self, "Validation Error", f"Effective lockbox source does not exist: {effective_lockbox_source_path}")
+                return None
+
         return {
             "f_loc": floc,
             "threads": threads,
@@ -370,6 +679,22 @@ class Phase3Tab(QWidget):
             "target_type": self._target_combo.currentText(),
             "n_points": self._npts_spin.value(),
             "length": length,
+            "border_fraction": self._border_spin.value(),
+            "marker_fraction": self._marker_spin.value(),
+            "lockbox": {
+                "enabled": bool(lockbox_enabled),
+                "original_source_camset": original_lockbox_source_path if lockbox_enabled else None,
+                "edited_source_camset": edited_lockbox_source_path if lockbox_enabled else None,
+                "edited_source_metadata": self._edited_lockbox_metadata_path if lockbox_enabled else None,
+                "source_camset": effective_lockbox_source_path if lockbox_enabled else None,
+                "warm_start": bool(self._lockbox_warm_start_cb.isChecked()),
+                "rotation_half_width": float(self._lockbox_rotation_half_spin.value()),
+                "translation_half_width": float(self._lockbox_translation_half_spin.value()),
+                "rotation_sigma": float(self._lockbox_rotation_sigma_spin.value()),
+                "translation_sigma": float(self._lockbox_translation_sigma_spin.value()),
+                "center_sigma": float(self._lockbox_center_sigma_spin.value()),
+                "implementation_mode": "extrinsic_parameter_mvp",
+            },
             "problem_options": {
                 "verbosity": int(self._verbosity_spin.value()),
                 "fixed_pose": fixed_pose,
@@ -382,6 +707,11 @@ class Phase3Tab(QWidget):
 
     def set_phase2_run_id(self, run_id: str) -> None:
         self._preferred_phase2_run_id = (run_id or "").strip() or None
+        self._refresh_phase2_sources()
+        if self._preferred_phase2_run_id:
+            idx = self._phase2_run_combo.findData(self._preferred_phase2_run_id)
+            if idx >= 0:
+                self._phase2_run_combo.setCurrentIndex(idx)
 
     def set_selected_phase2_run_id(self, run_id: str) -> None:
         self.set_phase2_run_id(run_id)
@@ -391,33 +721,93 @@ class Phase3Tab(QWidget):
 
     def set_phase2_camset_path(self, path: str) -> None:
         self._preferred_phase2_camset_path = (path or "").strip() or None
+        self._update_source_label()
 
     def set_camset_path(self, path: str) -> None:
         self.set_phase2_camset_path(path)
+
+    def _resolve_handoff_phase2_run_id(self, runs: list[dict]) -> Optional[str]:
+        ws = self._workspace_mgr.workspace_path
+        if ws is None:
+            return None
+        handoff = ws / "handoff.json"
+        if not handoff.exists():
+            return None
+        try:
+            payload = json.loads(handoff.read_text())
+            if payload.get("phase") == "phase2" and payload.get("runs"):
+                wanted = payload["runs"][0].get("run_id")
+                if wanted and any(run.get("run_id") == wanted for run in runs):
+                    return str(wanted)
+        except Exception:
+            pass
+        return None
+
+    def _refresh_phase2_sources(self) -> None:
+        if not hasattr(self, "_phase2_run_combo"):
+            return
+        runs = self._workspace_mgr.load_runs("phase2")
+        keep = self._phase2_run_combo.currentData()
+        self._phase2_run_combo.blockSignals(True)
+        self._phase2_run_combo.clear()
+        self._phase2_run_combo.addItem("Auto (handoff else latest)", None)
+        for run in runs:
+            rid = run.get("run_id", "unknown")
+            self._phase2_run_combo.addItem(str(rid), str(rid))
+
+        preferred = self._preferred_phase2_run_id
+        if preferred is not None:
+            idx = self._phase2_run_combo.findData(preferred)
+            self._phase2_run_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        elif keep is not None:
+            idx = self._phase2_run_combo.findData(keep)
+            self._phase2_run_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        else:
+            self._phase2_run_combo.setCurrentIndex(0)
+        self._phase2_run_combo.blockSignals(False)
+        self._update_source_label()
+
+    def _on_phase2_source_changed(self) -> None:
+        selected = self._phase2_run_combo.currentData() if hasattr(self, "_phase2_run_combo") else None
+        self._preferred_phase2_run_id = str(selected) if selected else None
+        self._update_source_label()
+
+    def _update_source_label(self) -> None:
+        if not hasattr(self, "_src_lbl"):
+            return
+        runs = self._workspace_mgr.load_runs("phase2")
+        if not runs:
+            self._src_lbl.setText("Inputs: auto (no Phase 2 run found)")
+            return
+        run = self._load_phase2_run()
+        if run is None:
+            self._src_lbl.setText("Inputs: auto (no Phase 2 run found)")
+            return
+        rid = run.get("run_id", "unknown")
+        phase1_id = (run.get("inputs") or {}).get("phase1_run_id", "?")
+        ws = self._workspace_mgr.workspace_path
+        resolved = resolve_phase2_camset_artifact(run, ws) if ws is not None else None
+        p = str(resolved) if resolved is not None else (run.get("artifacts") or {}).get("initial_camset")
+        mode = "selected" if self._preferred_phase2_run_id else "auto"
+        self._src_lbl.setText(f"Inputs: {mode} Phase 2 {rid} + linked Phase 1 {phase1_id} -> {p or 'missing camset artifact'}")
 
     def _load_phase2_run(self) -> Optional[dict]:
         runs = self._workspace_mgr.load_runs("phase2")
         if not runs:
             return None
 
-        if self._preferred_phase2_run_id:
-            for r in runs:
-                if r.get("run_id") == self._preferred_phase2_run_id:
-                    return r
+        selected = self._phase2_run_combo.currentData() if hasattr(self, "_phase2_run_combo") else None
+        wanted_id = str(selected) if selected else self._preferred_phase2_run_id
+        if wanted_id:
+            for run in runs:
+                if run.get("run_id") == wanted_id:
+                    return run
 
-        ws = self._workspace_mgr.workspace_path
-        if ws is not None:
-            handoff = ws / "handoff.json"
-            if handoff.exists():
-                try:
-                    payload = json.loads(handoff.read_text())
-                    if payload.get("phase") == "phase2" and payload.get("runs"):
-                        wanted = payload["runs"][0].get("run_id")
-                        for r in runs:
-                            if r.get("run_id") == wanted:
-                                return r
-                except Exception:
-                    pass
+        wanted_id = self._resolve_handoff_phase2_run_id(runs)
+        if wanted_id:
+            for run in runs:
+                if run.get("run_id") == wanted_id:
+                    return run
         return runs[-1]
 
     def _load_phase1_run_for_phase2(self, phase2_run: dict) -> Optional[dict]:
@@ -485,9 +875,11 @@ class Phase3Tab(QWidget):
 
             run_id = make_run_id()
             run_dir = ws_path / "phase3_runs" / run_id
-            run_dir.mkdir(parents=True, exist_ok=True)
+            ensure_directory(run_dir)
 
             diagnostics: dict = {}
+            camset_path: Optional[str] = None
+            p1_pickle: Optional[Path] = None
 
             stream = EmitStream(emit)
             log_handler = EmitLogHandler(emit)
@@ -499,18 +891,23 @@ class Phase3Tab(QWidget):
                 with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream), suppress_matplotlib_gui():
                     emit("Phase 3 running in non-interactive plotting mode (thread-safe).")
 
-                    camset_path = self._preferred_phase2_camset_path or phase2_run.get("artifacts", {}).get("initial_camset")
+                    camset_path = self._preferred_phase2_camset_path
+                    if camset_path and not path_exists(camset_path):
+                        camset_path = None
+                    if not camset_path:
+                        camset_resolved = resolve_phase2_camset_artifact(phase2_run, ws_path)
+                        camset_path = str(camset_resolved) if camset_resolved is not None else None
                     if not camset_path:
                         raise RuntimeError("Phase 2 run is missing initial_camset artifact.")
-                    if not Path(camset_path).exists():
+                    if not path_exists(camset_path):
                         raise RuntimeError(f"Phase 2 camset path does not exist: {camset_path}")
 
                     p1_pickle = resolve_phase1_pickle_artifact(phase1_run, ws_path)
                     if not p1_pickle:
                         raise RuntimeError("Could not resolve Phase 1 detected_datapoints.pickle artifact.")
 
-                    cams = load_CameraSet(Path(camset_path))
-                    payload = load_pickle(Path(p1_pickle))
+                    cams = load_CameraSet(as_io_path(camset_path))
+                    payload = load_pickle(as_io_path(p1_pickle))
                     detections = extract_detection(payload)
                     if detections is None:
                         raise RuntimeError("Could not extract TargetDetection from Phase 1 pickle.")
@@ -531,13 +928,47 @@ class Phase3Tab(QWidget):
                                 "Re-run Phase 1/2 with the same selected cameras."
                             )
 
-                    target = build_target(params["target_type"], params["n_points"], params["length"])
+                    target = build_target(
+                        params["target_type"],
+                        params["n_points"],
+                        params["length"],
+                        border_fraction=params.get("border_fraction", 0.1),
+                        marker_fraction=params.get("marker_fraction", 0.8),
+                    )
+                    lockbox_params = dict(params.get("lockbox") or {})
+                    lockbox_config = CameraLockboxConfig(
+                        enabled=bool(lockbox_params.get("enabled", False)),
+                        rotation_half_width=float(lockbox_params.get("rotation_half_width", 0.1)),
+                        translation_half_width=float(lockbox_params.get("translation_half_width", 0.1)),
+                        rotation_sigma=float(lockbox_params.get("rotation_sigma", 0.05)),
+                        translation_sigma=float(lockbox_params.get("translation_sigma", 0.01)),
+                        center_sigma=float(lockbox_params.get("center_sigma", 0.0)),
+                    )
+                    lockbox_source_camset = None
+                    lockbox_source_path = lockbox_params.get("source_camset")
+                    if lockbox_config.enabled:
+                        if not lockbox_source_path:
+                            raise RuntimeError("Lockbox is enabled but no effective lockbox source path was provided.")
+                        emit(f"Loading effective lockbox source camset: {lockbox_source_path}")
+                        if lockbox_params.get("original_source_camset") and lockbox_params.get("edited_source_camset"):
+                            emit(f"Original source camset: {lockbox_params.get('original_source_camset')}")
+                            emit(f"Edited lockbox copy: {lockbox_params.get('edited_source_camset')}")
+                        lockbox_source_camset = load_CameraSet(as_io_path(lockbox_source_path))
+                        if set(lockbox_source_camset.get_names()) != set(cams.get_names()):
+                            raise RuntimeError(
+                                "Effective lockbox source camera names do not match the active Phase 2 camset. "
+                                "This would break TemplateBundleHandler."
+                            )
+
                     handler = TemplateBundleHandler(
                         camset=cams,
                         target=target,
                         detection=detections,
                         fixed_params=params["fixed_params"],
                         options=params["problem_options"],
+                        lockbox_config=lockbox_config,
+                        lockbox_source_camset=lockbox_source_camset,
+                        lockbox_warm_start=bool(lockbox_params.get("warm_start", True)),
                     )
                     optimisation, out_cams, stats = run_bundle_adjustment_with_stats(  # type: ignore[arg-type]
                         handler,
@@ -660,6 +1091,10 @@ class Phase3Tab(QWidget):
                         "phase2_run_id": phase2_run.get("run_id"),
                         "phase1_run_id": phase1_run.get("run_id"),
                     },
+                    "artifacts": {
+                        "phase2_initial_camset_used": str(camset_path) if camset_path else None,
+                        "phase1_detection_pickle_used": str(p1_pickle) if p1_pickle is not None else None,
+                    },
                 }
                 self._workspace_mgr.save_run("phase3", run_id, metadata)
                 return metadata
@@ -691,7 +1126,9 @@ class Phase3Tab(QWidget):
         chosen = runs[-1]
         f_loc = (chosen.get("params") or {}).get("f_loc")
         run_id = chosen.get("run_id")
-        camset_path = (chosen.get("artifacts") or {}).get("optimised_camset")
+        ws = self._workspace_mgr.workspace_path
+        camset_resolved = resolve_phase3_camset_artifact(chosen, ws) if ws is not None else None
+        camset_path = str(camset_resolved) if camset_resolved is not None else (chosen.get("artifacts") or {}).get("optimised_camset")
 
         self._workspace_mgr.write_handoff(
             {
@@ -821,7 +1258,7 @@ class Phase3DiagnosticsTab(QWidget):
         visual_btn_row.addWidget(self._pyvista_cb)
         self._open3d_cb = QCheckBox("Open3D")
         self._open3d_cb.setChecked(False)
-        self._open3d_cb.setToolTip("Use Open3D backend (renders embedded in GUI).")
+        self._open3d_cb.setToolTip("Use Open3D backend (opens a separate interactive window).")
         visual_btn_row.addWidget(self._open3d_cb)
         # Enforce mutual exclusivity via QButtonGroup.
         self._backend_group = QButtonGroup(self)
@@ -838,6 +1275,14 @@ class Phase3DiagnosticsTab(QWidget):
         visual_btn_row.addWidget(self._save_png_btn)
         visual_btn_row.addStretch()
         visual_layout.addLayout(visual_btn_row)
+        # Shows which run/phase the most recent Assess Calibration click actually
+        # resolved to -- lets a user comparing PyVista vs. Open3D (or comparing this
+        # tab against Phase 4's own Assess Calibration tab) immediately see whether
+        # they are looking at two different camsets/runs on purpose, rather than
+        # mistaking a run-selection mismatch for a rendering disagreement.
+        self._current_run_label = QLabel("")
+        self._current_run_label.setStyleSheet("color: #888; font-style: italic;")
+        visual_layout.addWidget(self._current_run_label)
         self._open3d_output = QLabel("")
         self._open3d_output.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._open3d_output.setMinimumHeight(400)
@@ -896,7 +1341,9 @@ class Phase3DiagnosticsTab(QWidget):
             if chosen is not None:
                 f_loc = (chosen.get("params") or {}).get("f_loc")
                 run_id = chosen.get("run_id")
-                camset_path = (chosen.get("artifacts") or {}).get("optimised_camset")
+                ws = self._workspace_mgr.workspace_path
+                camset_resolved = resolve_phase3_camset_artifact(chosen, ws) if ws is not None else None
+                camset_path = str(camset_resolved) if camset_resolved is not None else (chosen.get("artifacts") or {}).get("optimised_camset")
                 if f_loc and hasattr(phase4_tab, "set_image_folder"):
                     phase4_tab.set_image_folder(str(f_loc))
                 if run_id and hasattr(phase4_tab, "set_phase3_run_id"):
@@ -1205,7 +1652,7 @@ class Phase3DiagnosticsTab(QWidget):
 
             run_id = make_run_id()
             run_dir = ws / "phase3_runs" / run_id
-            run_dir.mkdir(parents=True, exist_ok=True)
+            ensure_directory(run_dir)
             diagnostics: dict = {}
 
             try:
@@ -1215,7 +1662,7 @@ class Phase3DiagnosticsTab(QWidget):
 
                 # ── Resolve Phase 1 detection pickle ───────────────────
                 p1_pickle_str = src_artifacts.get("phase1_detection_pickle_used")
-                if p1_pickle_str and Path(p1_pickle_str).exists():
+                if p1_pickle_str and path_exists(p1_pickle_str):
                     p1_pickle = Path(p1_pickle_str)
                 else:
                     p1_runs = self._workspace_mgr.load_runs("phase1")
@@ -1225,12 +1672,12 @@ class Phase3DiagnosticsTab(QWidget):
                         p1_run = p1_runs[-1]
                     p1_pickle = resolve_phase1_pickle_artifact(p1_run, ws) if p1_run else None
 
-                if p1_pickle is None or not Path(p1_pickle).exists():
+                if p1_pickle is None or not path_exists(p1_pickle):
                     raise RuntimeError("Could not resolve Phase 1 detected_datapoints.pickle.")
 
                 # ── Resolve Phase 2 initial camset ─────────────────────
                 camset_path_str = src_artifacts.get("phase2_initial_camset_used")
-                if not camset_path_str or not Path(camset_path_str).exists():
+                if not camset_path_str or not path_exists(camset_path_str):
                     p2_run_id = src_inputs.get("phase2_run_id")
                     p2_runs = self._workspace_mgr.load_runs("phase2")
                     p2_run = next((r for r in p2_runs if r.get("run_id") == p2_run_id), None)
@@ -1239,13 +1686,13 @@ class Phase3DiagnosticsTab(QWidget):
                     if p2_run:
                         camset_path_str = (p2_run.get("artifacts") or {}).get("initial_camset")
 
-                if not camset_path_str or not Path(camset_path_str).exists():
+                if not camset_path_str or not path_exists(camset_path_str):
                     raise RuntimeError("Could not resolve Phase 2 initial camset.")
 
                 camset_path = Path(camset_path_str)
 
                 emit(f"Loading Phase 1 detections: {p1_pickle}")
-                payload = load_pickle(Path(p1_pickle))
+                payload = load_pickle(as_io_path(p1_pickle))
                 detections = extract_detection(payload)
                 if detections is None:
                     raise RuntimeError("Could not extract TargetDetection from Phase 1 pickle.")
@@ -1263,14 +1710,40 @@ class Phase3DiagnosticsTab(QWidget):
 
                 # ── Load camset and run Phase 3 ─────────────────────────
                 emit(f"Loading Phase 2 camset: {camset_path}")
-                cams = load_CameraSet(camset_path)
+                cams = load_CameraSet(as_io_path(camset_path))
                 target = build_target(
                     src_params.get("target_type", "Ccube"),
                     src_params.get("n_points", 6),
                     src_params.get("length", 30.0),
+                    border_fraction=src_params.get("border_fraction", 0.1),
+                    marker_fraction=src_params.get("marker_fraction", 0.8),
                 )
                 problem_options = dict(src_params.get("problem_options") or {})
                 threads = src_params.get("threads", 1)
+                lockbox_params = dict(src_params.get("lockbox") or {})
+                lockbox_config = CameraLockboxConfig(
+                    enabled=bool(lockbox_params.get("enabled", False)),
+                    rotation_half_width=float(lockbox_params.get("rotation_half_width", 0.1)),
+                    translation_half_width=float(lockbox_params.get("translation_half_width", 0.1)),
+                    rotation_sigma=float(lockbox_params.get("rotation_sigma", 0.05)),
+                    translation_sigma=float(lockbox_params.get("translation_sigma", 0.01)),
+                    center_sigma=float(lockbox_params.get("center_sigma", 0.0)),
+                )
+                lockbox_source_camset = None
+                lockbox_source_path = lockbox_params.get("source_camset")
+                if lockbox_config.enabled:
+                    if not lockbox_source_path:
+                        raise RuntimeError("Lockbox is enabled but no effective lockbox source path was provided.")
+                    emit(f"Loading effective lockbox source camset: {lockbox_source_path}")
+                    if lockbox_params.get("original_source_camset") and lockbox_params.get("edited_source_camset"):
+                        emit(f"Original source camset: {lockbox_params.get('original_source_camset')}")
+                        emit(f"Edited lockbox copy: {lockbox_params.get('edited_source_camset')}")
+                    lockbox_source_camset = load_CameraSet(as_io_path(lockbox_source_path))
+                    if set(lockbox_source_camset.get_names()) != set(cams.get_names()):
+                        raise RuntimeError(
+                            "Effective lockbox source camera names do not match the active Phase 2 camset. "
+                            "This would break TemplateBundleHandler."
+                        )
 
                 handler = TemplateBundleHandler(
                     camset=cams,
@@ -1278,9 +1751,11 @@ class Phase3DiagnosticsTab(QWidget):
                     detection=filtered_det,
                     fixed_params=src_params.get("fixed_params"),
                     options=problem_options,
+                    lockbox_config=lockbox_config,
+                    lockbox_source_camset=lockbox_source_camset,
+                    lockbox_warm_start=bool(lockbox_params.get("warm_start", True)),
                 )
 
-                emit("Running Phase 3 bundle adjustment on filtered detections…")
                 stream = EmitStream(emit)
                 log_handler = EmitLogHandler(emit)
                 log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
@@ -1403,8 +1878,14 @@ class Phase3DiagnosticsTab(QWidget):
                 metadata = {
                     "run_id": run_id,
                     "phase": "phase3",
+                    "params": dict(src_params),
                     "diagnostics": diagnostics,
                     "error": err,
+                    "inputs": {
+                        "phase2_run_id": (source_run.get("inputs") or {}).get("phase2_run_id"),
+                        "phase1_run_id": (source_run.get("inputs") or {}).get("phase1_run_id"),
+                        "phase3_run_id": source_run.get("run_id"),
+                    },
                 }
                 self._workspace_mgr.save_run("phase3", run_id, metadata)
                 return metadata
@@ -1558,7 +2039,11 @@ class Phase3DiagnosticsTab(QWidget):
 
     def _on_backend_changed(self, btn) -> None:
         """Handle backend selector toggle — update Open3D output visibility."""
-        self._open3d_output.setVisible(self._open3d_cb.isChecked())
+        if self._open3d_cb.isChecked():
+            self._open3d_output.setText("Click Assess Calibration to open an interactive Open3D window.")
+            self._open3d_output.setVisible(True)
+        else:
+            self._open3d_output.setVisible(False)
 
     def _on_pyvista_toggled(self, state: int) -> None:
         # Kept for backwards compatibility; QButtonGroup handles exclusivity.
@@ -1575,8 +2060,14 @@ class Phase3DiagnosticsTab(QWidget):
             if self._info_cb.isChecked():
                 QMessageBox.information(self, "Select run", "Select at least one run first.")
             return
+        self._current_run_label.setText(
+            f"Currently showing: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}"
+        )
         if self._open3d_cb.isChecked():
-            ok, msg = launch_visualise_calibration_open3d_for_run(chosen, self._open3d_output)
+            # Pass output_widget=None so visualise_calibration_open3d opens a
+            # separate native Open3D window instead of attempting offscreen
+            # rendering (which fails on Windows due to missing EGL support).
+            ok, msg = launch_visualise_calibration_open3d_for_run(chosen, output_widget=None)
         else:
             ok, msg = launch_visualise_calibration_for_run(chosen)
         if not ok:
@@ -1589,11 +2080,12 @@ class Phase3DiagnosticsTab(QWidget):
         if not path:
             return
         if self._open3d_cb.isChecked():
-            pm = self._open3d_output.pixmap()
-            if pm and not pm.isNull():
-                pm.save(path, "PNG")
-            else:
-                QMessageBox.warning(self, "Save PNG", "No Open3D image rendered yet.")
+            # Open3D opens a separate native window — no embedded pixmap to save.
+            QMessageBox.information(
+                self, "Save PNG",
+                "PNG export is not available with the Open3D backend.\n"
+                "Switch to the PyVista backend to save a PNG export.",
+            )
         else:
             # PyVista: offscreen render to PNG.
             selected = self._run_selector.get_selected()
@@ -1601,6 +2093,9 @@ class Phase3DiagnosticsTab(QWidget):
             if chosen is None:
                 QMessageBox.warning(self, "Save PNG", "Select at least one run first.")
                 return
+            self._current_run_label.setText(
+                f"Currently showing: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}"
+            )
             from pathlib import Path
             ok, msg = launch_save_pyvista_png_for_run(chosen, Path(path))
             if ok:

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -34,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
+    as_io_path,
     IMAGE_FOLDER_SCHEMATIC,
     TAB_PHASE4,
     CollapsibleSection,
@@ -49,7 +51,10 @@ from pyCamSet.gui.shared_functions import (
     make_run_id,
     make_section_label,
     make_separator,
+    ensure_directory,
+    path_exists,
     render_predecessor_chain_section,
+    resolve_phase3_camset_artifact,
 )
 from pyCamSet.gui.assess_calibration import (
     launch_visualise_calibration_for_run,
@@ -241,7 +246,44 @@ class Phase4Tab(QWidget):
         )
         opts_form.addRow("verbosity:", self._verbosity_spin)
 
+        self._loss_combo = QComboBox()
+        self._loss_combo.addItems(["linear", "soft_l1", "huber", "cauchy", "arctan"])
+        self._loss_combo.setCurrentText("soft_l1")
+        self._loss_combo.setFixedWidth(110)
+        self._loss_combo.setToolTip(
+            "Concept: scipy least_squares robust loss function -- downweights large\n"
+            "residuals (e.g. outlier target points/poses) instead of letting them\n"
+            "dominate the sum-of-squares cost.\n\n"
+            "Default: soft_l1 (matches this project's validated D1 Phase 4 recipe;\n"
+            "see run_dataset1_phase1_to_phase4_headless.py P4_PROBLEM_OPTIONS)\n"
+            "Choices: linear (scipy default, no robustness), soft_l1, huber, cauchy, arctan\n"
+            "Guidance: soft_l1 is the validated choice for self-calibration.  cauchy/arctan\n"
+            "are more aggressive at suppressing outliers but can also suppress real signal."
+        )
+        opts_form.addRow("loss:", self._loss_combo)
+
+        self._f_scale_spin = QDoubleSpinBox()
+        # Minimum kept representable at 4 decimals (1e-6 would silently round to 0.0,
+        # which would make the widget accept 0 despite scipy requiring f_scale > 0).
+        self._f_scale_spin.setRange(0.0001, 1e6)
+        self._f_scale_spin.setDecimals(4)
+        self._f_scale_spin.setSingleStep(0.1)
+        self._f_scale_spin.setValue(1.0)
+        self._f_scale_spin.setFixedWidth(110)
+        self._f_scale_spin.setToolTip(
+            "Concept: soft threshold (in px) separating inlier from outlier residuals\n"
+            "for the soft_l1/huber/cauchy/arctan loss functions.  Has no effect when\n"
+            "loss=linear.\n\n"
+            "Default: 1.0 (matches this project's validated D1 Phase 4 recipe)\n"
+            "Range: > 0\n"
+            "Guidance: leave at 1.0 unless residuals are known to be scaled differently."
+        )
+        opts_form.addRow("f_scale:", self._f_scale_spin)
+        self._loss_combo.currentTextChanged.connect(self._on_loss_changed)
+        self._on_loss_changed(self._loss_combo.currentText())
+
         self._outliers_combo = QComboBox()
+        self._outliers_combo.setObjectName("outliers_combo")
         self._outliers_combo.addItems(["n", "y"])
         self._outliers_combo.setCurrentText("n")
         self._outliers_combo.setToolTip(
@@ -307,6 +349,11 @@ class Phase4Tab(QWidget):
         root.addWidget(self._terminal)
 
         self._refresh_phase3_sources()
+
+    def _on_loss_changed(self, loss_name: str) -> None:
+        # f_scale only affects soft_l1/huber/cauchy/arctan; grey it out for linear
+        # (scipy's default) so it's clear the value is a no-op in that mode.
+        self._f_scale_spin.setEnabled(loss_name != "linear")
 
     def _browse_floc(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select image folder")
@@ -388,7 +435,7 @@ class Phase4Tab(QWidget):
         override = self._phase3_camset_edit.text().strip()
         if override:
             p = Path(override)
-            self._source_lbl.setText(f"Source: override camset ({'exists' if p.exists() else 'missing'})")
+            self._source_lbl.setText(f"Source: override camset ({'exists' if path_exists(p) else 'missing'})")
             return
 
         run = self._load_phase3_run()
@@ -397,7 +444,9 @@ class Phase4Tab(QWidget):
             return
 
         rid = run.get("run_id", "unknown")
-        p = (run.get("artifacts") or {}).get("optimised_camset")
+        ws = self._workspace_mgr.workspace_path
+        resolved = resolve_phase3_camset_artifact(run, ws) if ws is not None else None
+        p = str(resolved) if resolved is not None else (run.get("artifacts") or {}).get("optimised_camset")
         self._source_lbl.setText(f"Source: run {rid} -> {p or 'missing camset artifact'}")
 
     def _collect_params(self) -> Optional[dict]:
@@ -423,6 +472,16 @@ class Phase4Tab(QWidget):
                 QMessageBox.critical(self, "Validation Error", f"Fixed params JSON: {exc}")
                 return None
 
+        raw_outlier_mode = (self._outliers_combo.currentText() or "").strip().lower()
+        if raw_outlier_mode in {"y", "yes", "true", "1", "on", "enabled"}:
+            outlier_mode = "y"
+        elif raw_outlier_mode in {"n", "no", "false", "0", "off", "none", "disabled"}:
+            outlier_mode = "n"
+        elif raw_outlier_mode == "ask":
+            outlier_mode = "y"  # GUI worker cannot do stdin prompts safely
+        else:
+            outlier_mode = "n"
+
         return {
             "f_loc": floc,
             "threads": threads,
@@ -432,8 +491,10 @@ class Phase4Tab(QWidget):
                 "fixed_pose": fixed_pose,
                 "ref_cam": ref_cam,
                 "ref_pose": ref_pose,
-                "outliers": (self._outliers_combo.currentText() or "n").strip().lower(),
+                "outliers": outlier_mode,
                 "max_nfev": int(self._max_nfev_spin.value()),
+                "loss": self._loss_combo.currentText(),
+                "f_scale": float(self._f_scale_spin.value()),
             },
         }
 
@@ -441,20 +502,19 @@ class Phase4Tab(QWidget):
         override = self._phase3_camset_edit.text().strip()
         if override:
             p = Path(override)
-            return p if p.exists() else None
+            return p if path_exists(p) else None
 
         if self._preferred_phase3_camset_path:
             p = Path(self._preferred_phase3_camset_path)
-            if p.exists():
+            if path_exists(p):
                 return p
 
         if phase3_run is None:
             return None
-        p = (phase3_run.get("artifacts") or {}).get("optimised_camset")
-        if not p:
+        ws = self._workspace_mgr.workspace_path
+        if ws is None:
             return None
-        pp = Path(p)
-        return pp if pp.exists() else None
+        return resolve_phase3_camset_artifact(phase3_run, ws)
 
     def _run_phase4(self) -> None:
         params = self._collect_params()
@@ -495,9 +555,10 @@ class Phase4Tab(QWidget):
             ws_path = self._workspace_mgr.workspace_path
             assert ws_path is not None
 
-            run_id = f"self-calib_{make_run_id()}"
+            # Keep run ids compact to reduce path length pressure on Windows.
+            run_id = make_run_id()
             run_dir = ws_path / "phase4_runs" / run_id
-            run_dir.mkdir(parents=True, exist_ok=True)
+            ensure_directory(run_dir)
             diagnostics: dict = {}
 
             stream = EmitStream(emit)
@@ -508,7 +569,7 @@ class Phase4Tab(QWidget):
 
             try:
                 with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
-                    prev_cams = load_CameraSet(phase3_camset)
+                    prev_cams = load_CameraSet(as_io_path(phase3_camset))
                     selected = list(params.get("selected_cameras") or [])
                     if selected:
                         camset_names = set(prev_cams.get_names())
@@ -540,7 +601,8 @@ class Phase4Tab(QWidget):
                     d44 = float(p3_final - final_euclid) if np.isfinite(p3_final) else float("nan")
                     emit(f"D4.4  Improvement vs Phase 3 final error: {d44:.4f} px")
 
-                    out_path = run_dir / f"{run_id}.camset"
+                    # Use a fixed short filename so long source folders do not exceed MAX_PATH.
+                    out_path = run_dir / "self_calibrated_cameras.camset"
                     out_cams.save(out_path)
 
                     visible = np.array(getattr(handler, "visible_feature_mask", []), dtype=bool)
@@ -597,6 +659,7 @@ class Phase4Tab(QWidget):
                         "inputs": {"phase3_run_id": phase3_run.get("run_id") if phase3_run else None},
                         "artifacts": {
                             "self_calibrated_camset": str(out_path),
+                            "optimised_camset": str(out_path),
                             "phase3_camset_used": str(phase3_camset),
                         },
                     }
@@ -613,6 +676,9 @@ class Phase4Tab(QWidget):
                     "diagnostics": diagnostics,
                     "error": msg,
                     "inputs": {"phase3_run_id": phase3_run.get("run_id") if phase3_run else None},
+                    "artifacts": {
+                        "phase3_camset_used": str(phase3_camset),
+                    },
                 }
                 self._workspace_mgr.save_run("phase4", run_id, metadata)
                 return metadata
@@ -711,7 +777,7 @@ class Phase4DiagnosticsTab(QWidget):
         visual_btn_row.addWidget(self._pyvista_cb)
         self._open3d_cb = QCheckBox("Open3D")
         self._open3d_cb.setChecked(False)
-        self._open3d_cb.setToolTip("Use Open3D backend (renders embedded in GUI).")
+        self._open3d_cb.setToolTip("Use Open3D backend (opens a separate interactive window).")
         visual_btn_row.addWidget(self._open3d_cb)
         # Enforce mutual exclusivity via QButtonGroup.
         self._backend_group = QButtonGroup(self)
@@ -728,6 +794,14 @@ class Phase4DiagnosticsTab(QWidget):
         visual_btn_row.addWidget(self._save_png_btn)
         visual_btn_row.addStretch()
         visual_layout.addLayout(visual_btn_row)
+        # Shows which run/phase the most recent Assess Calibration click actually
+        # resolved to -- lets a user comparing PyVista vs. Open3D (or comparing this
+        # tab against Phase 3's own Assess Calibration tab) immediately see whether
+        # they are looking at two different camsets/runs on purpose, rather than
+        # mistaking a run-selection mismatch for a rendering disagreement.
+        self._current_run_label = QLabel("")
+        self._current_run_label.setStyleSheet("color: #888; font-style: italic;")
+        visual_layout.addWidget(self._current_run_label)
         self._open3d_output = QLabel("")
         self._open3d_output.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._open3d_output.setMinimumHeight(400)
@@ -810,7 +884,11 @@ class Phase4DiagnosticsTab(QWidget):
 
     def _on_backend_changed(self, btn) -> None:
         """Handle backend selector toggle — update Open3D output visibility."""
-        self._open3d_output.setVisible(self._open3d_cb.isChecked())
+        if self._open3d_cb.isChecked():
+            self._open3d_output.setText("Click Assess Calibration to open an interactive Open3D window.")
+            self._open3d_output.setVisible(True)
+        else:
+            self._open3d_output.setVisible(False)
 
     def _on_pyvista_toggled(self, state: int) -> None:
         # Kept for backwards compatibility; QButtonGroup handles exclusivity.
@@ -827,8 +905,14 @@ class Phase4DiagnosticsTab(QWidget):
             if self._info_cb.isChecked():
                 QMessageBox.information(self, "Select run", "Select at least one run first.")
             return
+        self._current_run_label.setText(
+            f"Currently showing: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}"
+        )
         if self._open3d_cb.isChecked():
-            ok, msg = launch_visualise_calibration_open3d_for_run(chosen, self._open3d_output)
+            # Pass output_widget=None so visualise_calibration_open3d opens a
+            # separate native Open3D window instead of attempting offscreen
+            # rendering (which fails on Windows due to missing EGL support).
+            ok, msg = launch_visualise_calibration_open3d_for_run(chosen, output_widget=None)
         else:
             ok, msg = launch_visualise_calibration_for_run(chosen)
         if not ok:
@@ -841,11 +925,12 @@ class Phase4DiagnosticsTab(QWidget):
         if not path:
             return
         if self._open3d_cb.isChecked():
-            pm = self._open3d_output.pixmap()
-            if pm and not pm.isNull():
-                pm.save(path, "PNG")
-            else:
-                QMessageBox.warning(self, "Save PNG", "No Open3D image rendered yet.")
+            # Open3D opens a separate native window — no embedded pixmap to save.
+            QMessageBox.information(
+                self, "Save PNG",
+                "PNG export is not available with the Open3D backend.\n"
+                "Switch to the PyVista backend to save a PNG export.",
+            )
         else:
             # PyVista: offscreen render to PNG.
             selected = self._run_selector.get_selected()
@@ -853,6 +938,9 @@ class Phase4DiagnosticsTab(QWidget):
             if chosen is None:
                 QMessageBox.warning(self, "Save PNG", "Select at least one run first.")
                 return
+            self._current_run_label.setText(
+                f"Currently showing: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}"
+            )
             from pathlib import Path
             ok, msg = launch_save_pyvista_png_for_run(chosen, Path(path))
             if ok:

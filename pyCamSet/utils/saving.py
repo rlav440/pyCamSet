@@ -2,6 +2,8 @@ from __future__ import annotations
 import base64
 import logging
 import json
+import os
+import ntpath
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import blosc
@@ -16,6 +18,22 @@ from copy import copy
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pyCamSet.cameras import CameraSet
+
+
+def _normalise_windows_open_path(path: Path | str) -> str:
+    """
+    Return a path string suitable for open() on Windows long paths.
+    """
+    p_str = os.fspath(path)
+    if os.name != "nt" or not ntpath.isabs(p_str) or p_str.startswith("\\\\?\\"):
+        return p_str
+
+    # Python can open >260 char paths when prefixed with \\?\ on Windows.
+    if len(p_str) >= 248:
+        if p_str.startswith("\\\\"):
+            return "\\\\?\\UNC\\" + p_str[2:]
+        return "\\\\?\\" + p_str
+    return p_str
 
 def save_pickle(dic, filename):
     """
@@ -143,7 +161,9 @@ def save_camset(
     except AttributeError:
         pass
 
-    with open(f_name, 'w') as f:
+    save_path = Path(f_name)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(_normalise_windows_open_path(save_path), 'w') as f:
         json.dump(save_dict, fp=f, indent=4)
 
     return
@@ -157,7 +177,7 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
     :return: A camera set object.
     """
 
-    with open(f_loc) as f:
+    with open(_normalise_windows_open_path(f_loc)) as f:
         saved_structure = json.load(fp=f)
 
     # make the camerasets

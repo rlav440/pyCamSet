@@ -30,7 +30,9 @@ import copy
 import io
 import json
 import logging
+import os
 import re
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -310,6 +312,28 @@ def make_run_id() -> str:
     """
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{ts}_{uuid.uuid4().hex[:6]}"
+
+
+def _run_recency_key(data: dict, meta_path_io: str) -> float:
+    """Return a sortable recency value (epoch seconds) for a loaded run.
+
+    Prefers the explicit ``created_at`` ISO-timestamp field (set by
+    ``WorkspaceManager.save_run`` since 2026-07-14); falls back to the
+    ``metadata.json`` file's own mtime for runs saved before that field
+    existed or written by a producer that doesn't set it (e.g. a headless
+    script) -- this fallback means every already-existing run on disk gets a
+    sensible recency value with no migration step required.
+    """
+    created_at = data.get("created_at")
+    if created_at:
+        try:
+            return datetime.fromisoformat(str(created_at)).timestamp()
+        except (ValueError, TypeError):
+            pass
+    try:
+        return os.path.getmtime(meta_path_io)
+    except OSError:
+        return 0.0
 
 
 CHARUCO_DETECTION_OPTION_METADATA: list[dict[str, Any]] = [
@@ -740,6 +764,8 @@ def build_target(
     n_points: int,
     length: float,
     charuco_detection_options: dict[str, dict[str, Any]] | None = None,
+    border_fraction: float = 0.1,
+    marker_fraction: float = 0.8,
 ):
     """Construct a calibration target from canonical GUI options."""
     from pyCamSet.calibration_targets.target_Ccube import Ccube
@@ -749,6 +775,7 @@ def build_target(
         return Ccube(
             n_points=n_points,
             length=length,
+            border_fraction=border_fraction,
             detection_options=charuco_detection_options,  # Ccube detection also runs through ChArUco boards.
         )
     if target_type == "ChArUco":
@@ -756,6 +783,7 @@ def build_target(
             num_squares_x=n_points,
             num_squares_y=n_points,
             square_size=length,
+            marker_fraction=marker_fraction,
             detection_options=charuco_detection_options,
         )
     raise ValueError(f"Unknown target type: {target_type!r}")
@@ -908,7 +936,8 @@ class WorkspaceManager:
             "phase3_runs",
             "phase4_runs",
         ):
-            (self.workspace_path / sub).mkdir(parents=True, exist_ok=True)
+            run_root = self.workspace_path / sub
+            os.makedirs(_as_windows_extended_path(run_root), exist_ok=True)
 
     def save_run(self, phase: str, run_id: str, metadata: dict) -> Path:
         """Persist metadata to <workspace>/<phase>_runs/<run_id>/metadata.json."""
@@ -916,35 +945,66 @@ class WorkspaceManager:
             raise RuntimeError("Workspace path is not set.")
         phase_dir = self._phase_run_dirs(phase)[0]
         run_dir = self.workspace_path / phase_dir / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
+        os.makedirs(_as_windows_extended_path(run_dir), exist_ok=True)
         meta_path = run_dir / "metadata.json"
-        with open(meta_path, "w") as fh:
+        # Record an explicit creation timestamp (2026-07-14 fix) so recency can be
+        # determined reliably -- see load_runs()/_run_recency_key()'s docstrings for
+        # why a plain lexicographic sort of run_id is not safe for this (different run
+        # producers, e.g. this GUI vs. a headless script, mint run_id in different,
+        # mutually-incompatible string formats). setdefault so a caller that already
+        # supplied its own created_at (e.g. re-saving/migrating) is not overridden.
+        metadata = dict(metadata)
+        metadata.setdefault("created_at", datetime.now().isoformat())
+        with open(_as_windows_extended_path(meta_path), "w") as fh:
             json.dump(metadata, fh, indent=2, default=str)
         return meta_path
 
     def load_runs(self, phase: str) -> list[dict]:
-        """Return all saved runs for phase sorted oldest-first."""
+        """Return all saved runs for phase sorted oldest-first (by true recency).
+
+        Recency is resolved via ``_run_recency_key`` rather than a plain
+        lexicographic sort of ``run_id``: different run producers mint run_id in
+        different, mutually-incompatible string formats (e.g. this GUI's own
+        ``make_run_id()`` produces ``YYYYMMDD_HHMMSS_hex``, while a headless
+        script observed producing runs in the same workspace used
+        ``phase3_YYYYMMDD_HHMMSS``). ASCII digits sort before letters, so any
+        letter-prefixed run_id previously sorted after every digit-prefixed one
+        regardless of actual timestamp -- silently breaking every "most recent"
+        computation built on top of this list (e.g. RunSelectorWidget's
+        pre-selection and select_latest_visualisation_run()).
+        """
         if self.workspace_path is None:
             return []
 
-        results: list[dict] = []
+        entries: list[tuple[float, dict]] = []
         for phase_dir in self._phase_run_dirs(phase):
             runs_dir = self.workspace_path / phase_dir
-            if not runs_dir.exists():
+            runs_dir_io = _as_windows_extended_path(runs_dir)
+            if not os.path.exists(runs_dir_io):
                 continue
-            for run_dir in sorted(runs_dir.iterdir()):
+            run_names = sorted(os.listdir(runs_dir_io))
+            for run_name in run_names:
+                run_dir = runs_dir / run_name
                 meta_path = run_dir / "metadata.json"
-                if meta_path.exists():
+                meta_path_io = _as_windows_extended_path(meta_path)
+                if os.path.exists(meta_path_io):
                     try:
-                        with open(meta_path) as fh:
+                        with open(meta_path_io) as fh:
                             data = json.load(fh)
-                        data.setdefault("run_id", run_dir.name)
-                        results.append(data)
+                        data.setdefault("run_id", run_name)
+                        # Cache the resolved recency value on the in-memory dict (leading
+                        # underscore -- not written back to disk by save_run, since every
+                        # save_run call site builds a fresh metadata dict rather than
+                        # round-tripping a previously-loaded run) so callers that merge
+                        # multiple load_runs() results (e.g. merge_phase3_phase4_runs)
+                        # can sort across lists without recomputing file mtimes.
+                        data["_recency_ts"] = _run_recency_key(data, meta_path_io)
+                        entries.append((data["_recency_ts"], data))
                     except (json.JSONDecodeError, OSError):
                         pass
 
-        results.sort(key=lambda d: str(d.get("run_id", "")))
-        return results
+        entries.sort(key=lambda pair: pair[0])
+        return [data for _, data in entries]
 
     def build_predecessor_chain(self, run: dict) -> list[dict]:
         """Return deep copies of all predecessor runs for *run*, oldest-first.
@@ -1005,7 +1065,8 @@ class WorkspaceManager:
         """Write payload to <workspace>/handoff.json."""
         if self.workspace_path is None:
             raise RuntimeError("Workspace path is not set.")
-        with open(self.workspace_path / "handoff.json", "w") as fh:
+        handoff_path = self.workspace_path / "handoff.json"
+        with open(_as_windows_extended_path(handoff_path), "w") as fh:
             json.dump(payload, fh, indent=2, default=str)
 
 
@@ -1164,6 +1225,46 @@ IMAGE_FOLDER_SCHEMATIC = (
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 
+def _as_windows_extended_path(path: Path | str) -> str:
+    """Return a Windows extended-length path for robust filesystem I/O on long paths."""
+    raw = str(path)
+    if os.name != "nt":
+        return raw
+    abs_raw = os.path.abspath(raw)
+    if abs_raw.startswith("\\\\?\\"):
+        return abs_raw
+    if abs_raw.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + abs_raw[2:]
+    return "\\\\?\\" + abs_raw
+
+
+def path_exists(path: Path | str) -> bool:
+    """Cross-platform existence check that handles Windows long paths."""
+    if os.name != "nt":
+        return Path(path).exists()
+    return os.path.exists(_as_windows_extended_path(path))
+
+
+def copy_file(src: Path | str, dst: Path | str) -> None:
+    """Copy file metadata+contents with Windows long-path support."""
+    if os.name != "nt":
+        shutil.copy2(Path(src), Path(dst))
+        return
+    shutil.copy2(_as_windows_extended_path(src), _as_windows_extended_path(dst))
+
+
+def ensure_directory(path: Path | str) -> None:
+    """Create a directory tree with Windows long-path support."""
+    os.makedirs(_as_windows_extended_path(path), exist_ok=True)
+
+
+def as_io_path(path: Path | str) -> Path:
+    """Return a filesystem path suitable for direct I/O calls."""
+    if os.name != "nt":
+        return Path(path)
+    return Path(_as_windows_extended_path(path))
+
+
 def get_camera_subfolders(root: Path) -> list[Path]:
     """Return valid camera subfolders using the shared dataset-folder filtering rules."""
     return list(get_subfolder_names(Path(root), return_full_path=True))
@@ -1188,21 +1289,59 @@ def resolve_phase1_pickle_artifact(phase1_run: dict, ws_path: Path) -> Optional[
     Raises
     ------
     RuntimeError
-        If neither location yields an existing file.  The caller should prompt
-        the user to re-run Phase 1 rather than falling back to a legacy f_loc
-        path (which would silently use stale data).
+        If neither location yields an existing file.
     """
     artifacts = phase1_run.get("artifacts") or {}
     artifact_path = artifacts.get("detected_datapoints_pickle")
     if artifact_path:
         p = Path(artifact_path)
-        if p.exists():
+        if path_exists(p):
             return p
 
     run_id = phase1_run.get("run_id")
     if run_id:
         p = ws_path / "phase1_runs" / str(run_id) / "detected_datapoints.pickle"
-        if p.exists():
+        if path_exists(p):
+            return p
+
+    return None
+
+
+def resolve_phase2_camset_artifact(phase2_run: dict, ws_path: Path) -> Optional[Path]:
+    """Resolve the initial Phase 2 camset path for a run."""
+    artifacts = phase2_run.get("artifacts") or {}
+    artifact_path = artifacts.get("initial_camset")
+    if artifact_path:
+        p = Path(artifact_path)
+        if path_exists(p):
+            return p
+
+    run_id = phase2_run.get("run_id")
+    if run_id:
+        run_dir = ws_path / "phase2_runs" / str(run_id)
+        for name in ("initial_cameras_high_distortion.camset", "initial_cameras.camset"):
+            p = run_dir / name
+            if path_exists(p):
+                return p
+
+    return None
+
+
+def resolve_phase3_camset_artifact(phase3_run: dict, ws_path: Path) -> Optional[Path]:
+    """Resolve the optimised Phase 3 camset path for a run."""
+    artifacts = phase3_run.get("artifacts") or {}
+    for key in ("optimised_camset", "self_calibrated_camset"):
+        artifact_path = artifacts.get(key)
+        if artifact_path:
+            p = Path(artifact_path)
+            if path_exists(p):
+                return p
+
+    run_id = phase3_run.get("run_id")
+    if run_id:
+        run_dir = ws_path / "phase3_runs" / str(run_id)
+        p = run_dir / "optimised_cameras.camset"
+        if path_exists(p):
             return p
 
     return None

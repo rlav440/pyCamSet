@@ -26,6 +26,9 @@ from PySide6.QtWidgets import (
 
 from pyCamSet.calibration_targets.create_Ccube import build_ccube, generate_ccube_target
 from pyCamSet.calibration_targets.create_charuco import build_charuco, generate_charuco_target
+from pyCamSet.calibration_targets.create_puzzleboard import build_puzzleboard, generate_puzzleboard_target
+from pyCamSet.calibration_targets.create_puzzleboard_cube import build_puzzleboard_cube, generate_puzzleboard_cube_target
+from pyCamSet.calibration_targets.target_puzzleboard_cube import MAX_FACE_SQUARES
 from pyCamSet.gui.shared_functions import TerminalWidget, WorkspaceManager, make_blue_button, make_section_label, make_separator
 
 _EXPORT_CHOICES = {
@@ -35,6 +38,8 @@ _EXPORT_CHOICES = {
 }
 _TARGET_CCUBE = "Ccube"
 _TARGET_CHARUCO = "ChArUco"
+_TARGET_PUZZLEBOARD = "PuzzleBoard"
+_TARGET_PUZZLEBOARD_CUBE = "PuzzleBoard Cube"
 _ARUCO_DICT_CHOICES = [
     "DICT_4X4_50",
     "DICT_4X4_100",
@@ -56,7 +61,7 @@ _ARUCO_DICT_CHOICES = [
 
 
 class CreateTargetTab(QWidget):
-    """Generate printable Ccube or ChArUco targets and optionally visualise them externally."""
+    """Generate printable Ccube, ChArUco, or PuzzleBoard targets and visualise them externally."""
 
     def __init__(
         self,
@@ -84,7 +89,7 @@ class CreateTargetTab(QWidget):
         root.addLayout(form)
 
         self._target_combo = QComboBox()
-        self._target_combo.addItems([_TARGET_CCUBE, _TARGET_CHARUCO])
+        self._target_combo.addItems([_TARGET_CCUBE, _TARGET_CHARUCO, _TARGET_PUZZLEBOARD, _TARGET_PUZZLEBOARD_CUBE])
         self._target_combo.currentIndexChanged.connect(self._on_target_changed)
         form.addRow("Target type:", self._target_combo)
 
@@ -150,6 +155,93 @@ class CreateTargetTab(QWidget):
 
         self._param_stack.addWidget(charuco_params)
 
+        puzzleboard_params = QWidget()
+        puzzleboard_form = QFormLayout(puzzleboard_params)
+        puzzleboard_form.setContentsMargins(0, 0, 0, 0)
+
+        self._puzzleboard_x_spin = QSpinBox()
+        self._puzzleboard_x_spin.setRange(2, 501)
+        self._puzzleboard_x_spin.setValue(105)
+        self._puzzleboard_x_spin.setFixedWidth(110)
+        self._puzzleboard_x_spin.valueChanged.connect(self._sync_default_name)
+        puzzleboard_form.addRow("num_squares_x:", self._puzzleboard_x_spin)
+
+        self._puzzleboard_y_spin = QSpinBox()
+        self._puzzleboard_y_spin.setRange(2, 501)
+        self._puzzleboard_y_spin.setValue(148)
+        self._puzzleboard_y_spin.setFixedWidth(110)
+        self._puzzleboard_y_spin.valueChanged.connect(self._sync_default_name)
+        puzzleboard_form.addRow("num_squares_y:", self._puzzleboard_y_spin)
+
+        self._puzzleboard_square_edit = QLineEdit("2")
+        self._puzzleboard_square_edit.setFixedWidth(110)
+        self._puzzleboard_square_edit.textChanged.connect(self._sync_default_name)
+        puzzleboard_form.addRow("square_size (mm):", self._puzzleboard_square_edit)
+
+        self._puzzleboard_start_x_spin = QSpinBox()
+        self._puzzleboard_start_x_spin.setRange(0, 500)
+        self._puzzleboard_start_x_spin.setValue(0)
+        self._puzzleboard_start_x_spin.setFixedWidth(110)
+        puzzleboard_form.addRow("start_x:", self._puzzleboard_start_x_spin)
+
+        self._puzzleboard_start_y_spin = QSpinBox()
+        self._puzzleboard_start_y_spin.setRange(0, 500)
+        self._puzzleboard_start_y_spin.setValue(0)
+        self._puzzleboard_start_y_spin.setFixedWidth(110)
+        puzzleboard_form.addRow("start_y:", self._puzzleboard_start_y_spin)
+
+        self._puzzleboard_page_width_edit = QLineEdit("210")
+        self._puzzleboard_page_width_edit.setFixedWidth(110)
+        puzzleboard_form.addRow("paper_width (mm):", self._puzzleboard_page_width_edit)
+
+        self._puzzleboard_page_height_edit = QLineEdit("297")
+        self._puzzleboard_page_height_edit.setFixedWidth(110)
+        puzzleboard_form.addRow("paper_height (mm):", self._puzzleboard_page_height_edit)
+
+        self._puzzleboard_min_width_spin = QSpinBox()
+        self._puzzleboard_min_width_spin.setRange(1, 501)
+        self._puzzleboard_min_width_spin.setValue(4)
+        self._puzzleboard_min_width_spin.setFixedWidth(110)
+        puzzleboard_form.addRow("detector min_width:", self._puzzleboard_min_width_spin)
+
+        self._param_stack.addWidget(puzzleboard_params)
+
+        puzzleboard_cube_params = QWidget()
+        puzzleboard_cube_form = QFormLayout(puzzleboard_cube_params)
+        puzzleboard_cube_form.setContentsMargins(0, 0, 0, 0)
+
+        self._puzzleboard_cube_size_spin = QSpinBox()
+        self._puzzleboard_cube_size_spin.setRange(2, MAX_FACE_SQUARES)
+        self._puzzleboard_cube_size_spin.setValue(20)
+        self._puzzleboard_cube_size_spin.setFixedWidth(110)
+        self._puzzleboard_cube_size_spin.valueChanged.connect(self._sync_default_name)
+        puzzleboard_cube_form.addRow(f"squares per face (max {MAX_FACE_SQUARES}):", self._puzzleboard_cube_size_spin)
+
+        self._puzzleboard_cube_square_edit = QLineEdit("10")
+        self._puzzleboard_cube_square_edit.setFixedWidth(110)
+        self._puzzleboard_cube_square_edit.textChanged.connect(self._sync_default_name)
+        puzzleboard_cube_form.addRow("square_size (mm):", self._puzzleboard_cube_square_edit)
+
+        self._puzzleboard_cube_min_width_spin = QSpinBox()
+        self._puzzleboard_cube_min_width_spin.setRange(1, 501)
+        self._puzzleboard_cube_min_width_spin.setValue(4)
+        self._puzzleboard_cube_min_width_spin.setFixedWidth(110)
+        puzzleboard_cube_form.addRow("detector min_width:", self._puzzleboard_cube_min_width_spin)
+
+        self._puzzleboard_cube_border_edit = QLineEdit("10")
+        self._puzzleboard_cube_border_edit.setFixedWidth(110)
+        puzzleboard_cube_form.addRow("net border (mm):", self._puzzleboard_cube_border_edit)
+
+        self._puzzleboard_cube_outline_check = QCheckBox()
+        self._puzzleboard_cube_outline_check.setChecked(True)
+        puzzleboard_cube_form.addRow("draw cut outlines:", self._puzzleboard_cube_outline_check)
+
+        self._puzzleboard_cube_ids_check = QCheckBox()
+        self._puzzleboard_cube_ids_check.setChecked(True)
+        puzzleboard_cube_form.addRow("draw face labels:", self._puzzleboard_cube_ids_check)
+
+        self._param_stack.addWidget(puzzleboard_cube_params)
+
         self._format_combo = QComboBox()
         self._format_combo.addItems(list(_EXPORT_CHOICES.keys()))
         self._format_combo.setCurrentText("SVG")
@@ -193,6 +285,10 @@ class CreateTargetTab(QWidget):
     def _on_target_changed(self) -> None:
         if self._target_combo.currentText() == _TARGET_CHARUCO:
             self._param_stack.setCurrentIndex(1)
+        elif self._target_combo.currentText() == _TARGET_PUZZLEBOARD:
+            self._param_stack.setCurrentIndex(2)
+        elif self._target_combo.currentText() == _TARGET_PUZZLEBOARD_CUBE:
+            self._param_stack.setCurrentIndex(3)
         else:
             self._param_stack.setCurrentIndex(0)
         self._sync_default_name()
@@ -206,20 +302,56 @@ class CreateTargetTab(QWidget):
                 payload["n_points"] = int(self._npts_spin.value())
                 payload["length"] = float(self._length_edit.text().strip())
                 payload["aruco_dict"] = self._ccube_dict_combo.currentText()
-            else:
+            elif target_type == _TARGET_CHARUCO:
                 payload["num_squares_x"] = int(self._charuco_x_spin.value())
                 payload["num_squares_y"] = int(self._charuco_y_spin.value())
                 payload["square_size"] = float(self._charuco_square_edit.text().strip())
                 payload["marker_fraction"] = float(self._charuco_marker_fraction_edit.text().strip())
                 payload["aruco_dict"] = self._charuco_dict_combo.currentText()
+            elif target_type == _TARGET_PUZZLEBOARD:
+                payload["num_squares_x"] = int(self._puzzleboard_x_spin.value())
+                payload["num_squares_y"] = int(self._puzzleboard_y_spin.value())
+                payload["square_size"] = float(self._puzzleboard_square_edit.text().strip())
+                payload["start_x"] = int(self._puzzleboard_start_x_spin.value())
+                payload["start_y"] = int(self._puzzleboard_start_y_spin.value())
+                payload["paper_width"] = float(self._puzzleboard_page_width_edit.text().strip())
+                payload["paper_height"] = float(self._puzzleboard_page_height_edit.text().strip())
+                payload["min_width"] = int(self._puzzleboard_min_width_spin.value())
+            else:
+                payload["num_squares_per_side"] = int(self._puzzleboard_cube_size_spin.value())
+                payload["square_size"] = float(self._puzzleboard_cube_square_edit.text().strip())
+                payload["min_width"] = int(self._puzzleboard_cube_min_width_spin.value())
+                payload["border_width"] = float(self._puzzleboard_cube_border_edit.text().strip())
+                payload["draw_cut_outline"] = self._puzzleboard_cube_outline_check.isChecked()
+                payload["draw_face_ids"] = self._puzzleboard_cube_ids_check.isChecked()
         except ValueError as exc:
             QMessageBox.critical(self, "Validation Error", f"Invalid numeric value: {exc}")
             return None
 
         if target_type == _TARGET_CHARUCO:
-            marker_fraction = float(payload["marker_fraction"])
+            marker_fraction = float(payload.get("marker_fraction", 0.8))
             if marker_fraction <= 0.0 or marker_fraction >= 1.0:
                 QMessageBox.critical(self, "Validation Error", "marker_fraction must be between 0 and 1.")
+                return None
+        elif target_type == _TARGET_PUZZLEBOARD:
+            if payload["square_size"] <= 0.0:
+                QMessageBox.critical(self, "Validation Error", "square_size must be greater than zero.")
+                return None
+            if payload["paper_width"] <= 0.0 or payload["paper_height"] <= 0.0:
+                QMessageBox.critical(self, "Validation Error", "paper dimensions must be greater than zero.")
+                return None
+            if payload["start_x"] + payload["num_squares_x"] > 501:
+                QMessageBox.critical(self, "Validation Error", "start_x + num_squares_x must not exceed 501.")
+                return None
+            if payload["start_y"] + payload["num_squares_y"] > 501:
+                QMessageBox.critical(self, "Validation Error", "start_y + num_squares_y must not exceed 501.")
+                return None
+        elif target_type == _TARGET_PUZZLEBOARD_CUBE:
+            if payload["square_size"] <= 0.0:
+                QMessageBox.critical(self, "Validation Error", "square_size must be greater than zero.")
+                return None
+            if payload["border_width"] < 0.0:
+                QMessageBox.critical(self, "Validation Error", "net border must not be negative.")
                 return None
 
         out_dir_text = self._out_dir_edit.text().strip()
@@ -257,6 +389,25 @@ class CreateTargetTab(QWidget):
             self._name_edit.setText(f"ccube_{n_points}points_{length:g}mm{suffix}")
             return
 
+        if self._target_combo.currentText() == _TARGET_PUZZLEBOARD:
+            num_squares_x = int(self._puzzleboard_x_spin.value())
+            num_squares_y = int(self._puzzleboard_y_spin.value())
+            try:
+                square_size = float(self._puzzleboard_square_edit.text().strip())
+            except ValueError:
+                return
+            self._name_edit.setText(f"puzzleboard_{num_squares_x}x{num_squares_y}_{square_size:g}mm{suffix}")
+            return
+
+        if self._target_combo.currentText() == _TARGET_PUZZLEBOARD_CUBE:
+            num_squares = int(self._puzzleboard_cube_size_spin.value())
+            try:
+                square_size = float(self._puzzleboard_cube_square_edit.text().strip())
+            except ValueError:
+                return
+            self._name_edit.setText(f"puzzleboard_cube_{num_squares}x{num_squares}_{square_size:g}mm{suffix}")
+            return
+
         num_squares_x = int(self._charuco_x_spin.value())
         num_squares_y = int(self._charuco_y_spin.value())
         try:
@@ -280,13 +431,39 @@ class CreateTargetTab(QWidget):
                     file_name=collected["file_name"],
                     export_kind=collected["export_kind"],
                 )
-            else:
+            elif collected["target_type"] == _TARGET_CHARUCO:
                 _, out_path = generate_charuco_target(
                     num_squares_x=int(collected["num_squares_x"]),
                     num_squares_y=int(collected["num_squares_y"]),
                     square_size=float(collected["square_size"]),
-                    marker_fraction=float(collected["marker_fraction"]),
+                    marker_fraction=float(collected.get("marker_fraction", 0.8)),
                     aruco_dict=str(collected["aruco_dict"]),
+                    output_dir=collected["out_dir"],
+                    file_name=collected["file_name"],
+                    export_kind=collected["export_kind"],
+                )
+            elif collected["target_type"] == _TARGET_PUZZLEBOARD:
+                _, out_path = generate_puzzleboard_target(
+                    num_squares_x=int(collected["num_squares_x"]),
+                    num_squares_y=int(collected["num_squares_y"]),
+                    square_size=float(collected["square_size"]),
+                    start_x=int(collected["start_x"]),
+                    start_y=int(collected["start_y"]),
+                    paper_width=float(collected["paper_width"]),
+                    paper_height=float(collected["paper_height"]),
+                    min_width=int(collected["min_width"]),
+                    output_dir=collected["out_dir"],
+                    file_name=collected["file_name"],
+                    export_kind=collected["export_kind"],
+                )
+            else:
+                _, out_path = generate_puzzleboard_cube_target(
+                    num_squares_per_side=int(collected["num_squares_per_side"]),
+                    square_size=float(collected["square_size"]),
+                    min_width=int(collected["min_width"]),
+                    border_width=float(collected["border_width"]),
+                    draw_cut_outline=bool(collected["draw_cut_outline"]),
+                    draw_face_ids=bool(collected["draw_face_ids"]),
                     output_dir=collected["out_dir"],
                     file_name=collected["file_name"],
                     export_kind=collected["export_kind"],
@@ -312,15 +489,34 @@ class CreateTargetTab(QWidget):
                     aruco_dict=str(collected["aruco_dict"]),
                 )
                 cube.plot()  # External pyvista/matplotlib window
-            else:
+            elif collected["target_type"] == _TARGET_CHARUCO:
                 board = build_charuco(
                     num_squares_x=int(collected["num_squares_x"]),
                     num_squares_y=int(collected["num_squares_y"]),
                     square_size=float(collected["square_size"]),
-                    marker_fraction=float(collected["marker_fraction"]),
+                    marker_fraction=float(collected.get("marker_fraction", 0.8)),
                     aruco_dict=str(collected["aruco_dict"]),
                 )
                 board.plot()
+            elif collected["target_type"] == _TARGET_PUZZLEBOARD:
+                board = build_puzzleboard(
+                    num_squares_x=int(collected["num_squares_x"]),
+                    num_squares_y=int(collected["num_squares_y"]),
+                    square_size=float(collected["square_size"]),
+                    start_x=int(collected["start_x"]),
+                    start_y=int(collected["start_y"]),
+                    paper_width=float(collected["paper_width"]),
+                    paper_height=float(collected["paper_height"]),
+                    min_width=int(collected["min_width"]),
+                )
+                board.plot()
+            else:
+                cube = build_puzzleboard_cube(
+                    num_squares_per_side=int(collected["num_squares_per_side"]),
+                    square_size=float(collected["square_size"]),
+                    min_width=int(collected["min_width"]),
+                )
+                cube.plot()
             self._terminal.append_line("Opened external target visualisation window.")
         except Exception as exc:
             QMessageBox.critical(self, "Visualise Failed", str(exc))

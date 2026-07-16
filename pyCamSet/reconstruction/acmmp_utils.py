@@ -49,7 +49,7 @@ def calc_pairs(c_vec, r_param: ReconParams, rng=None, pick_closest=False):
     Calclulates the likely pairs from camera view vectors.
 
     :param c_vec: the camera view vectors.
-    :param r_param: the parameters of the reconsturction. Places limits on
+    :param r_param: the parameters of the reconstruction. Places limits on
     acceptable pairs.
     :param rng: an rng seed for reproducibility.
     :param pick_closest: whether to sort the cameras by angle, or use random selection

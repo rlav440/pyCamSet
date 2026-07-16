@@ -20,6 +20,17 @@ from pyCamSet import CameraSet, Camera
 
 from pyCamSet.calibration_targets import TargetDetection
 import pyvista as pv
+
+# Import lockbox functionality
+from pyCamSet.optimisation.camera_lockbox import (
+    CameraLockboxConfig,
+    CameraLockboxPrior,
+    make_disabled_prior,
+    build_extrinsic_parameter_lockbox,
+    apply_lockbox_bounds,
+    append_lockbox_residuals,
+    append_lockbox_jacobian
+)
     
 if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
@@ -110,11 +121,26 @@ class TemplateBundleHandler:
                  camset: CameraSet, target: AbstractTarget, detection: TargetDetection,
                  fixed_params: dict|None = None,
                  options: dict | None = None,
-                 missing_poses: list | None =None
+                 missing_poses: list | None =None,
+                 lockbox_config: Optional[CameraLockboxConfig] = None,
+                 lockbox_source_camset: Optional[CameraSet] = None,
+                 lockbox_warm_start: bool = True,
                  ):
         
 
-        self.problem_opts = DEFAULT_OPTIONS
+        # Copy DEFAULT_OPTIONS rather than aliasing the module-level dict: the old
+        # `self.problem_opts = DEFAULT_OPTIONS` bound this instance's problem_opts to the
+        # SAME shared dict object, so `.update(options)` below permanently mutated
+        # DEFAULT_OPTIONS itself. In a long-running GUI process every later
+        # TemplateBundleHandler/SelfBundleHandler construction (Phase 3 reruns, the
+        # Diagnostics "rerun with images excluded" path replaying an older saved run
+        # whose params predate the loss/f_scale GUI controls, Phase 4, the Optimisation
+        # tab's internal trials) inherited whatever 'loss'/'f_scale'/'interactive'/'draw'
+        # values a PRIOR handler happened to leave behind, instead of the caller's own
+        # explicit choice or the documented defaults -- exactly the kind of session-order
+        # -dependent "loss selection sometimes silently does something else" behaviour a
+        # real interactive user would see and a fresh-process-per-test suite would not.
+        self.problem_opts = dict(DEFAULT_OPTIONS)
         if options is not None:
             self.problem_opts.update(options)
 
@@ -129,6 +155,10 @@ class TemplateBundleHandler:
         self.point_data = deepcopy(target.point_data)
         self.target_point_shape = np.array(target.point_data.shape)
         self.initial_params = None
+        self.lockbox_config = lockbox_config or CameraLockboxConfig(enabled=False)
+        self.lockbox_source_camset = lockbox_source_camset
+        self.lockbox_warm_start = bool(lockbox_warm_start)
+        self.lockbox_prior: CameraLockboxPrior | None = None
 
         n_poses = detection.max_ims
         n_cams = camset.get_n_cams()
@@ -163,31 +193,102 @@ class TemplateBundleHandler:
         self.op_fun: afb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.template_points()
         self.problem_maximums = {"max_cams": self.camset.get_n_cams() , "max_imgs": self.detection.max_ims, "max_keys": None}
 
+    def _get_lockbox_source_extrinsics(self) -> np.ndarray | None:
+        """Return source camera extrinsics as Rodrigues+translation six-vectors."""
+        if not self.lockbox_config.enabled:
+            return None
+        if self.lockbox_source_camset is None:
+            raise ValueError("Camera lockbox is enabled, but no source CameraSet was supplied")
+
+        source_names = set(self.lockbox_source_camset.get_names())
+        missing_names = [name for name in self.cam_names if name not in source_names]
+        if missing_names:
+            raise ValueError(f"Camera lockbox source CameraSet is missing cameras: {missing_names}")
+
+        source_extrinsics = []
+        for cam_name in self.cam_names:
+            rot_vec, trans_vec = gu.ext_4x4_to_rod(self.lockbox_source_camset[cam_name].extrinsic)
+            source_extrinsics.append(np.concatenate((rot_vec, trans_vec), axis=0))
+        return np.asarray(source_extrinsics, dtype=float)
+
+    def _ensure_lockbox_prior(self, param_len: int) -> CameraLockboxPrior:
+        """Build or refresh the packed-parameter lockbox prior for a parameter length."""
+        if self.lockbox_prior is not None and self.lockbox_prior.param_len == param_len:
+            return self.lockbox_prior
+        if not self.lockbox_config.enabled:
+            self.lockbox_prior = make_disabled_prior(param_len)
+        else:
+            self.lockbox_prior = build_extrinsic_parameter_lockbox(
+                cam_names=self.cam_names,
+                extr_unfixed=self.bundlePrimitive.extr_unfixed,
+                source_extrinsics=self._get_lockbox_source_extrinsics(),
+                intr_end=self.bundlePrimitive.intr_end,
+                param_len=param_len,
+                config=self.lockbox_config,
+            )
+        return self.lockbox_prior
+
+    def get_lockbox_bounds(self, param_len: int | None = None) -> tuple[np.ndarray, np.ndarray]:
+        """Return lockbox bounds for scipy.optimize.least_squares."""
+        if param_len is None:
+            if self.initial_params is None:
+                return apply_lockbox_bounds(0, make_disabled_prior(0))
+            param_len = len(self.initial_params)
+        prior = self._ensure_lockbox_prior(int(param_len))
+        return apply_lockbox_bounds(int(param_len), prior)
+
+    def get_lockbox_diagnostics(self, params: np.ndarray | None = None) -> dict:
+        """Return compact diagnostics for enabled Phase 3 lockboxes."""
+        param_len = len(params) if params is not None else (len(self.initial_params) if self.initial_params is not None else 0)
+        prior = self._ensure_lockbox_prior(param_len) if param_len else make_disabled_prior(0)
+        diagnostics = {
+            "enabled": bool(prior.enabled),
+            "implementation_mode": prior.implementation_mode,
+            "constrained_parameter_count": int(prior.indices.size),
+            "constrained_camera_names": sorted(set(prior.camera_names)),
+        }
+        if params is not None and prior.enabled:
+            diagnostics["final_parameter_deltas"] = (np.asarray(params)[prior.indices] - prior.centres).tolist()
+        return diagnostics
 
 
     def can_make_jac(self):
-        return self.op_fun.can_make_jac() 
+        return self.op_fun.can_make_jac()
 
     def make_loss_fun(self, threads):
-        
+
         #flatten the object shape
-        obj_data = self.target.point_data.reshape((-1, 3)) #maybe this is wrong. 
+        obj_data = self.target.point_data.reshape((-1, 3)) #maybe this is wrong.
 
         target_shape = self.target.point_data.shape
-        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        detection = self.detection
+        if self.missing_poses is not None and np.any(self.missing_poses):
+            # Outlier/degenerate poses marked by find_and_exclude_transform_outliers (or the
+            # initial NaN-pose scan) must actually be excluded from the residuals the
+            # optimiser sees, not just recorded. get_detection_data() already does this
+            # filtering correctly; mirror it here rather than building dd from the raw,
+            # unfiltered self.detection.
+            detection = detection.delete_row(global_im_num=np.where(self.missing_poses)[0])
+        dd = detection.return_flattened_keys(target_shape[:-1]).get_data()
 
-        temp_loss = self.op_fun.make_full_loss_fn(dd, threads, self.problem_maximums) 
+        temp_loss = self.op_fun.make_full_loss_fn(dd, threads, self.problem_maximums)
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
-            return temp_loss(param_str, obj_data).flatten()
+            base_residuals = temp_loss(param_str, obj_data).flatten()
+            return append_lockbox_residuals(base_residuals, params, self._ensure_lockbox_prior(len(params)))
         return loss_fun
 
-    def make_loss_jac(self, threads): 
-        #TODO implement proper culling
+    def make_loss_jac(self, threads):
         obj_data = self.target.point_data.reshape((-1, 3))
         target_shape = self.target.point_data.shape
-        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        detection = self.detection
+        if self.missing_poses is not None and np.any(self.missing_poses):
+            # See make_loss_fun: must match the same filtered detection set the loss
+            # function itself uses, or the jacobian shape/content disagrees with the
+            # residuals actually being optimised.
+            detection = detection.delete_row(global_im_num=np.where(self.missing_poses)[0])
+        dd = detection.return_flattened_keys(target_shape[:-1]).get_data()
         mask = np.concatenate(
             ( 
                 np.repeat(self.bundlePrimitive.intr_unfixed, 9),
@@ -204,7 +305,8 @@ class TemplateBundleHandler:
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
             d, c, rp = temp_loss(param_str, obj_data)
-            return csr_array((d,c,rp), shape=(2*dd.shape[0], params.shape[0]))
+            base_jacobian = csr_array((d,c,rp), shape=(2*dd.shape[0], params.shape[0]))
+            return append_lockbox_jacobian(base_jacobian, len(params), self._ensure_lockbox_prior(len(params)), params)
         return jac_fn
 
     def special_plots(self, params):
@@ -374,6 +476,10 @@ class TemplateBundleHandler:
                 param_array.append(ext[1])
 
         param_array = np.concatenate(param_array, axis=0)
+        if self.lockbox_config.enabled and self.lockbox_warm_start:
+            # The source calibration doubles as the safest warm start for bounded entries.
+            prior = self._ensure_lockbox_prior(len(param_array))
+            param_array[prior.indices] = prior.centres
         return param_array
 
     def get_camset(self, x, return_pose=False) -> CameraSet | tuple[CameraSet, np.ndarray]:
@@ -537,7 +643,16 @@ def estimate_camera_relative_poses(
     ref_pose, try_graph = check_feasiblity_and_update_refpose(Mat_ac, ref_pose) 
     try_graph = True
     if try_graph:
-        return graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection, cost_mat=Mat_ac_cost)
+        return graph_estimate_initial_pose(
+            Mat_ac,
+            cams,
+            img_detections,
+            ref_pose,
+            calibration_target,
+            detection,
+            cost_mat=Mat_ac_cost,
+            draw_diagnostics=draw_diagnostics,
+        )
 
     
     Mrt_ac = Mat_ac[:, ref_pose]
@@ -626,7 +741,9 @@ def estimate_camera_relative_poses(
     Mat_rt[ref_pose] = np.eye(4)
     return Mrt_ac, Mat_rt, init_per_im_reproj_err
 
-def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection, cost_mat=None):
+def graph_estimate_initial_pose(
+        Mat_ac, cams, img_detections, ref_pose, calibration_target, detection,
+        cost_mat=None, draw_diagnostics: bool = True):
 
     valid_pose = ~np.isnan(Mat_ac[:,:,0,0]) 
 

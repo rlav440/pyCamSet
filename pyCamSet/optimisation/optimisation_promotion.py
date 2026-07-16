@@ -147,6 +147,7 @@ def promote_retained_trial(workspace_mgr: WorkspaceManager, metadata_path: str |
                 "inputs": {"phase3_run_id": phase3_run_id},
                 "artifacts": {
                     "self_calibrated_camset": str(phase4_camset),
+                    "optimised_camset": str(phase4_camset),
                     "phase3_camset_used": str(phase3_camset),
                 },
             },

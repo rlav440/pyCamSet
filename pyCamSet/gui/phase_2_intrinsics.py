@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
+            as_io_path,
     TAB_PHASE2,
     TAB_PHASE3,
     CollapsibleSection,
@@ -58,8 +59,11 @@ from pyCamSet.gui.shared_functions import (
     make_scrollable_tab,
     make_section_label,
     make_separator,
+    ensure_directory,
+    path_exists,
     render_predecessor_chain_section,
     resolve_phase1_pickle_artifact,
+    resolve_phase2_camset_artifact,
 )
 
 try:
@@ -358,6 +362,25 @@ class Phase2Tab(QWidget):
         )
         target_sect.addRow("Length / square size (mm):", self._length_edit)
 
+        self._border_label = QLabel("Border fraction (Ccube):")
+        self._border_spin = QDoubleSpinBox()
+        self._border_spin.setRange(0.0, 0.9)
+        self._border_spin.setDecimals(3)
+        self._border_spin.setSingleStep(0.01)
+        self._border_spin.setValue(0.1)
+        target_sect.addRow(self._border_label, self._border_spin)
+
+        self._marker_label = QLabel("Marker fraction (ChArUco):")
+        self._marker_spin = QDoubleSpinBox()
+        self._marker_spin.setRange(0.1, 1.0)
+        self._marker_spin.setDecimals(3)
+        self._marker_spin.setSingleStep(0.05)
+        self._marker_spin.setValue(0.8)
+        target_sect.addRow(self._marker_label, self._marker_spin)
+
+        self._target_combo.currentTextChanged.connect(self._on_target_type_changed)
+        self._on_target_type_changed(self._target_combo.currentText())
+
         # ── Initial Calibration Options ────────────────────────────────
         form_root.addWidget(make_separator())
         form_root.addWidget(make_section_label("Initial Calibration Options"))
@@ -390,6 +413,17 @@ class Phase2Tab(QWidget):
             "Default: blank (no limit)."
         )
         opts_form.addRow("Max images per camera (n_lim):", self._nlim_edit)
+
+        self._min_dtct_spin = QSpinBox()
+        self._min_dtct_spin.setRange(1, 500)
+        self._min_dtct_spin.setValue(12)
+        self._min_dtct_spin.setFixedWidth(110)
+        self._min_dtct_spin.setToolTip(
+            "Concept: minimum detected corners required for a board observation\n"
+            "to contribute to per-camera intrinsic calibration.\n"
+            "Default: 12. Lower to 6 for difficult datasets if needed."
+        )
+        opts_form.addRow("Min detections per board:", self._min_dtct_spin)
 
         self._fp_edit = QLineEdit()
         self._fp_edit.setPlaceholderText('e.g. {"cam0": "int"}')
@@ -496,6 +530,13 @@ class Phase2Tab(QWidget):
     def _on_phase1_source_changed(self) -> None:
         self._update_detection_source_label()
 
+    def _on_target_type_changed(self, target_type: str) -> None:
+        is_ccube = target_type == "Ccube"
+        self._border_label.setVisible(is_ccube)
+        self._border_spin.setVisible(is_ccube)
+        self._marker_label.setVisible(not is_ccube)
+        self._marker_spin.setVisible(not is_ccube)
+
     def _collect_params(self) -> Optional[dict]:
         floc = self._floc_edit.text().strip()
         if not floc:
@@ -529,10 +570,13 @@ class Phase2Tab(QWidget):
             "caching": self._cache_cb.isChecked(),
             "high_distortion": self._hd_cb.isChecked(),
             "n_lim": n_lim,
+            "min_detections_per_board": self._min_dtct_spin.value(),
             "fixed_params": fixed_params,
             "target_type": self._target_combo.currentText(),
             "n_points": self._npts_spin.value(),
             "length": length,
+            "border_fraction": self._border_spin.value(),
+            "marker_fraction": self._marker_spin.value(),
         }
 
     def _load_phase1_run(self) -> Optional[dict]:
@@ -558,7 +602,7 @@ class Phase2Tab(QWidget):
         override = self._det_pickle_edit.text().strip() if hasattr(self, "_det_pickle_edit") else ""
         if override:
             p = Path(override)
-            self._phase1_lbl.setText(f"Detection source: override file ({'exists' if p.exists() else 'missing'})")
+            self._phase1_lbl.setText(f"Detection source: override file ({'exists' if path_exists(p) else 'missing'})")
             return
 
         run = self._load_phase1_run()
@@ -621,11 +665,11 @@ class Phase2Tab(QWidget):
 
             run_id = make_run_id()
             run_dir = ws_path / "phase2_runs" / run_id
-            run_dir.mkdir(parents=True, exist_ok=True)
+            ensure_directory(run_dir)
 
             det_pickle = None
             if override_pickle is not None:
-                if override_pickle.exists():
+                if path_exists(override_pickle):
                     det_pickle = override_pickle
                     emit(f"Using override detections: {det_pickle}")
                 else:
@@ -645,7 +689,13 @@ class Phase2Tab(QWidget):
 
             try:
                 with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
-                    target = build_target(params["target_type"], params["n_points"], params["length"])
+                    target = build_target(
+                        params["target_type"],
+                        params["n_points"],
+                        params["length"],
+                        border_fraction=params.get("border_fraction", 0.1),
+                        marker_fraction=params.get("marker_fraction", 0.8),
+                    )
                     selected = list(params.get("selected_cameras") or [])
                     selected_set = set(selected)
                     f_loc = Path(params["f_loc"])
@@ -676,9 +726,9 @@ class Phase2Tab(QWidget):
                                 shutil.copytree(cam, dst)
 
                     try:
-                        if det_pickle is not None and det_pickle.exists():
+                        if det_pickle is not None and path_exists(det_pickle):
                             emit(f"Using detections: {det_pickle}")
-                            payload = load_pickle(det_pickle)
+                            payload = load_pickle(as_io_path(det_pickle))
                             detections, cam_res = extract_detection_and_cam_res(payload)
                             if selected_set:
                                 det_cam_names = list(getattr(detections, "cam_names", []) or [])
@@ -707,6 +757,7 @@ class Phase2Tab(QWidget):
                             save=False,
                             fixed_params=params["fixed_params"],
                             return_poses_and_costs=True,
+                            min_detections_per_board=int(params.get("min_detections_per_board", 12)),
                         )
                         emit("2b  Initial calibration completed.")
 
@@ -727,6 +778,7 @@ class Phase2Tab(QWidget):
                                 save=False,
                                 fixed_params=params["fixed_params"],
                                 return_poses_and_costs=True,
+                                min_detections_per_board=int(params.get("min_detections_per_board", 12)),
                             )
                             detections = detections_hd
                             emit("2c  High-distortion refinement completed.")
@@ -802,6 +854,10 @@ class Phase2Tab(QWidget):
                     "diagnostics": diagnostics,
                     "error": error_msg,
                     "inputs": {"phase1_run_id": phase1_run.get("run_id") if phase1_run else None},
+                    "artifacts": {
+                        "phase1_detection_pickle": str(det_pickle) if det_pickle is not None else None,
+                        "detection_source_override": str(override_pickle) if override_pickle is not None else None,
+                    },
                 }
                 self._workspace_mgr.save_run("phase2", run_id, metadata)
                 return metadata
@@ -834,7 +890,9 @@ class Phase2Tab(QWidget):
         chosen = runs[-1]
         f_loc = (chosen.get("params") or {}).get("f_loc")
         run_id = chosen.get("run_id")
-        camset_path = (chosen.get("artifacts") or {}).get("initial_camset")
+        ws = self._workspace_mgr.workspace_path
+        camset_resolved = resolve_phase2_camset_artifact(chosen, ws) if ws is not None else None
+        camset_path = str(camset_resolved) if camset_resolved is not None else (chosen.get("artifacts") or {}).get("initial_camset")
 
         self._workspace_mgr.write_handoff(
             {
@@ -1282,14 +1340,14 @@ class Phase2DiagnosticsTab(QWidget):
 
             run_id = make_run_id()
             run_dir = ws / "phase2_runs" / run_id
-            run_dir.mkdir(parents=True, exist_ok=True)
+            ensure_directory(run_dir)
             diagnostics: dict = {}
             error_msg: Optional[str] = None
 
             try:
                 # ── Resolve Phase 1 detection pickle ───────────────────
                 source_pickle_str = (source_run.get("artifacts") or {}).get("phase1_detection_pickle")
-                if source_pickle_str and Path(source_pickle_str).exists():
+                if source_pickle_str and path_exists(source_pickle_str):
                     source_pickle = Path(source_pickle_str)
                 else:
                     p1_runs = self._workspace_mgr.load_runs("phase1")
@@ -1299,13 +1357,13 @@ class Phase2DiagnosticsTab(QWidget):
                         p1_run = p1_runs[-1]
                     source_pickle = resolve_phase1_pickle_artifact(p1_run, ws) if p1_run else None
 
-                if source_pickle is None or not Path(source_pickle).exists():
+                if source_pickle is None or not path_exists(source_pickle):
                     raise RuntimeError(
                         "Could not resolve Phase 1 detected_datapoints.pickle for the source run."
                     )
 
                 emit(f"Loading Phase 1 detections: {source_pickle}")
-                payload = load_pickle(Path(source_pickle))
+                payload = load_pickle(as_io_path(source_pickle))
                 detections, cam_res = extract_detection_and_cam_res(payload)
 
                 # ── Filter detections (per-camera) ──────────────────────
@@ -1315,7 +1373,7 @@ class Phase2DiagnosticsTab(QWidget):
 
                 # ── Save filtered detection pickle ──────────────────────
                 filt_pickle_path = run_dir / "filtered_detected_datapoints.pickle"
-                with open(filt_pickle_path, "wb") as fh:
+                with open(as_io_path(filt_pickle_path), "wb") as fh:
                     _pkl.dump((filtered_det, cam_res), fh)
                 emit(f"Saved filtered detections: {filt_pickle_path}")
 
@@ -1325,6 +1383,8 @@ class Phase2DiagnosticsTab(QWidget):
                     src_params.get("target_type", "Ccube"),
                     src_params.get("n_points", 6),
                     src_params.get("length", 30.0),
+                    border_fraction=src_params.get("border_fraction", 0.1),
+                    marker_fraction=src_params.get("marker_fraction", 0.8),
                 )
                 emit("Running Phase 2 initial calibration on filtered detections…")
                 stream = EmitStream(emit)
@@ -1341,6 +1401,7 @@ class Phase2DiagnosticsTab(QWidget):
                             save=False,
                             fixed_params=src_params.get("fixed_params"),
                             return_poses_and_costs=True,
+                            min_detections_per_board=int(src_params.get("min_detections_per_board", 12)),
                         )
                 finally:
                     root_logger.removeHandler(log_handler)
@@ -1415,6 +1476,10 @@ class Phase2DiagnosticsTab(QWidget):
                     "phase": "phase2",
                     "diagnostics": diagnostics,
                     "error": error_msg,
+                    "inputs": {
+                        "phase2_run_id": source_run.get("run_id"),
+                        "phase1_run_id": (source_run.get("inputs") or {}).get("phase1_run_id"),
+                    },
                 }
                 self._workspace_mgr.save_run("phase2", run_id, metadata)
                 return metadata
@@ -1463,7 +1528,7 @@ class Phase2DiagnosticsTab(QWidget):
             for h in root_logger.handlers:
                 h.addFilter(filt)
             try:
-                cams = load_CameraSet(camset_path)
+                cams = load_CameraSet(as_io_path(camset_path))
             finally:
                 for h in root_logger.handlers:
                     h.removeFilter(filt)
@@ -1497,12 +1562,13 @@ class Phase2DiagnosticsTab(QWidget):
             return
 
         run = runs[-1]
-        camset_path = run.get("artifacts", {}).get("initial_camset")
-        if not camset_path:
+        ws = self._workspace_mgr.workspace_path
+        camset_resolved = resolve_phase2_camset_artifact(run, ws) if ws is not None else None
+        if not camset_resolved:
             self._distortion_layout.addWidget(QLabel("No camset artifact found for selected run."))
             return
 
-        cams, note, err = self._load_camset_cached(Path(camset_path))
+        cams, note, err = self._load_camset_cached(Path(camset_resolved))
         if err is not None or cams is None:
             self._distortion_layout.addWidget(QLabel(f"Could not load camset: {err}"))
             return
@@ -1601,7 +1667,9 @@ class Phase2DiagnosticsTab(QWidget):
         chosen = selected[0]
         f_loc = (chosen.get("params") or {}).get("f_loc")
         run_id = chosen.get("run_id")
-        camset_path = (chosen.get("artifacts") or {}).get("initial_camset")
+        ws = self._workspace_mgr.workspace_path
+        camset_resolved = resolve_phase2_camset_artifact(chosen, ws) if ws is not None else None
+        camset_path = str(camset_resolved) if camset_resolved is not None else (chosen.get("artifacts") or {}).get("initial_camset")
         self._workspace_mgr.write_handoff(
             {
                 "phase": "phase2",

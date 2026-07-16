@@ -194,7 +194,12 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         """
         target_shape = self.target.point_data.shape
-        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        detection = self.detection
+        if self.missing_poses is not None and np.any(self.missing_poses):
+            # Same fix as TemplateBundleHandler.make_loss_fun: outlier/missing poses must
+            # actually be excluded from the residuals, not just recorded.
+            detection = detection.delete_row(global_im_num=np.where(self.missing_poses)[0])
+        dd = detection.return_flattened_keys(target_shape[:-1]).get_data()
         temp_loss = self.op_fun.make_full_loss_fn(dd, threads)
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
@@ -211,7 +216,11 @@ class SelfBundleHandler(TemplateBundleHandler):
         :returns jac_fn: a callable jacobian function that returns the jacobian of the given paramaters.
         """
         target_shape = self.target.point_data.shape
-        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        detection = self.detection
+        if self.missing_poses is not None and np.any(self.missing_poses):
+            # See make_loss_fun above.
+            detection = detection.delete_row(global_im_num=np.where(self.missing_poses)[0])
+        dd = detection.return_flattened_keys(target_shape[:-1]).get_data()
         mask = np.concatenate(
             ( 
                 np.repeat(self.bundlePrimitive.intr_unfixed, 9),

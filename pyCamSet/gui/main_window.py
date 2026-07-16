@@ -360,23 +360,21 @@ class PyCamSetApp(QMainWindow):
     def _normalize_outlier_combos(self, root: QWidget) -> None:
         yes_tokens = {"yes", "true", "1", "on", "enabled"}
         no_tokens = {"no", "false", "0", "off", "none", "disabled"}
-        outlier_tokens = {
-            "outlier", "robust", "loss", "huber", "cauchy", "soft_l1", "arctan", "tukey", "ransac"
-        }
 
-        for combo in root.findChildren(QComboBox):
-            text_blob = " ".join(
-                [
-                    combo.objectName() or "",
-                    combo.accessibleName() or "",
-                    combo.toolTip() or "",
-                    *[combo.itemText(i) for i in range(combo.count())],
-                ]
-            ).lower()
-
-            if not any(tok in text_blob for tok in outlier_tokens):
-                continue
-
+        # Matched by explicit widget identity (objectName "outliers_combo", set on
+        # each tab's real outliers combo), not by scanning tooltip/item text for
+        # keyword overlap. The previous free-text token match (tokens including
+        # "outlier", "robust", "loss", "huber", "cauchy", "soft_l1", "arctan")
+        # also matched Phase 3/4's unrelated scipy-loss combo -- whose own items
+        # are literally soft_l1/huber/cauchy/arctan and whose tooltip legitimately
+        # discusses "outlier target points/poses" -- silently turning it into a
+        # nonfunctional Yes/No toggle on every tab visit. Once corrupted, that
+        # value flowed straight into problem_options["loss"] and crashed scipy's
+        # least_squares() with an invalid loss name, blocking Phase 3/4 from
+        # running via the GUI at all. No token set can safely distinguish the two
+        # combos by content alone, since the loss tooltip's own wording overlaps
+        # every reasonable "outlier" token -- identity-based matching is required.
+        for combo in root.findChildren(QComboBox, "outliers_combo"):
             current = (combo.currentText() or "").strip().lower()
             is_yes = current in yes_tokens or (current not in no_tokens and combo.currentIndex() > 0)
 

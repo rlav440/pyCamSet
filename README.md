@@ -49,6 +49,41 @@ Here is the [link](https://pypi.org/project/pyCamSet/) to our project on PyPI
 pip install pyCamSet
 ```
 
+### PuzzleBoard target
+
+The PuzzleBoard calibration target is provided by and depends on the upstream
+[PuzzleBoard repository](https://github.com/PStelldinger/PuzzleBoard) by Peer
+Stelldinger and the HAW Hamburg authors. pyCamSet installs that repository
+directly from GitHub; it is intentionally a required dependency of the
+PuzzleBoard target so that the original project remains identifiable and
+credited.
+
+For the vector SVG/PDF target generators, install the graphics dependencies in
+the active conda environment:
+
+```powershell
+conda activate calibration_07032026
+conda install -c conda-forge cairo cairosvg svgwrite
+pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
+```
+
+The PuzzleBoard source is released under CC0 in its upstream repository. Users
+should retain the upstream attribution and cite the original PuzzleBoard work
+when publishing results that use this target.
+
+### PuzzleBoard Cube target
+
+The `PuzzleBoardCube` target assigns six disjoint, deterministic windows of the
+same periodic PuzzleBoard code to the cube faces in the fixed order front,
+right, back, left, top, bottom. Its `puzzle-cube-v1` layout is non-random and
+reproducible: identical face-size and square-size parameters produce identical
+face patterns and cube geometry.
+
+The maximum face size is **167 squares per side**. This limit is enforced by
+the three-column, two-row face layout, which tiles the 501x501 PuzzleBoard code
+field exactly without overlap. The cube generator rejects larger values rather
+than allowing windows to overlap or exceed the code period.
+
 ## Reporting issues 
 To report an issue or suggest a new feature, please use the [issues page](https://github.com/rlav440/pyCamSet/issues). 
 Please check existing issues before submitting a new one.

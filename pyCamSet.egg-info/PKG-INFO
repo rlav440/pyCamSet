@@ -1,4 +1,4 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: pyCamSet
 Version: 1.1.2
 Summary: Object oriented cameras for computer vision
@@ -8,8 +8,30 @@ Author-email: r.laven@auckland.ac.nz
 License: "Apache-2.0"
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
-Provides-Extra: optimisation
 License-File: LICENSE
+Requires-Dist: numpy
+Requires-Dist: pyvista
+Requires-Dist: scipy
+Requires-Dist: matplotlib
+Requires-Dist: opencv-python
+Requires-Dist: tqdm
+Requires-Dist: numba
+Requires-Dist: natsort
+Requires-Dist: coloredlogs
+Requires-Dist: blosc
+Requires-Dist: uniplot
+Requires-Dist: scikit-learn
+Requires-Dist: scikit-image
+Requires-Dist: dill
+Requires-Dist: PySide6
+Requires-Dist: open3d
+Requires-Dist: cairosvg
+Requires-Dist: svgwrite
+Requires-Dist: pillow
+Requires-Dist: puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git
+Provides-Extra: optimisation
+Requires-Dist: optuna; extra == "optimisation"
+Dynamic: license-file
 
 
 # pyCamSet
@@ -61,6 +83,28 @@ Here is the [link](https://pypi.org/project/pyCamSet/) to our project on PyPI
 ```
 pip install pyCamSet
 ```
+
+### PuzzleBoard target
+
+The PuzzleBoard calibration target is provided by and depends on the upstream
+[PuzzleBoard repository](https://github.com/PStelldinger/PuzzleBoard) by Peer
+Stelldinger and the HAW Hamburg authors. pyCamSet installs that repository
+directly from GitHub; it is intentionally a required dependency of the
+PuzzleBoard target so that the original project remains identifiable and
+credited.
+
+For the vector SVG/PDF target generators, install the graphics dependencies in
+the active conda environment:
+
+```powershell
+conda activate calibration_07032026
+conda install -c conda-forge cairo cairosvg svgwrite
+pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
+```
+
+The PuzzleBoard source is released under CC0 in its upstream repository. Users
+should retain the upstream attribution and cite the original PuzzleBoard work
+when publishing results that use this target.
 
 ## Reporting issues 
 To report an issue or suggest a new feature, please use the [issues page](https://github.com/rlav440/pyCamSet/issues). 

@@ -275,14 +275,13 @@ class ChArUco(AbstractTarget):
         """
         # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
         # _, _, mloc, mid = self.board_detectors.detectBoard(image)
-        c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image) #, markerCorners=mloc, markerIds=mid)
+        c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image)
         if c_corners is None and mloc is not None:
             if not self.given_legacy_warning:
-                logging.warning("Found markers, but no corners, trying using alternative board detection")
+                pattern_type = "legacy" if self.board.getLegacyPattern() else "new"
+                logging.warning(f"ChArUco: Found ArUco markers but no ChArUco corners with {pattern_type} pattern. "
+                                f"If detections are consistently low, verify your physical board matches legacy={self.board.getLegacyPattern()}.")
                 self.given_legacy_warning = True
-            am_legacy = self.board.getLegacyPattern()
-            self.board.setLegacyPattern(not am_legacy)
-            c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image, markerCorners=mloc, markerIds=mid)
 
         od = 1
 

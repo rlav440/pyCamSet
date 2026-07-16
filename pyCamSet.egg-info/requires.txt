@@ -1,18 +1,23 @@
-PySide6
-blosc
-coloredlogs
-dill
-matplotlib
-natsort
-numba
 numpy
-open3d
-opencv-python
 pyvista
-scikit-learn
 scipy
+matplotlib
+opencv-python
 tqdm
+numba
+natsort
+coloredlogs
+blosc
 uniplot
+scikit-learn
+scikit-image
+dill
+PySide6
+open3d
+cairosvg
+svgwrite
+pillow
+puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git
 
 [optimisation]
 optuna

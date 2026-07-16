@@ -1,0 +1,10 @@
+{
+  "best_p4_label": "L3/sl1-500",
+  "best_p4_run_id": "20260701_221136_f10197",
+  "best_p4_mean_rpe": 2.4763572457633884,
+  "best_p4_cam4_rpe": 1.8834767314560998,
+  "best_p4_max_rpe": 3.6382260289900077,
+  "best_p4_displacement_mm": 0.8273056982802507,
+  "best_p4_free_pts": 125,
+  "stretch_goal_achieved": false
+}

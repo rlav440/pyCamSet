@@ -66,7 +66,16 @@ def resolve_run_camset_artifact(run: dict) -> Optional[Path]:
 
 
 def merge_phase3_phase4_runs(phase3_runs: list[dict], phase4_runs: list[dict]) -> list[dict]:
-    """Merge runs into one ordered list with a stable phase label."""
+    """Merge runs into one ordered list (oldest-first) with a stable phase label.
+
+    Sorts by each run's ``_recency_ts`` (set by WorkspaceManager.load_runs -- see its
+    docstring) rather than a lexicographic sort of ``run_id``: run_id formats differ
+    across producers (e.g. this GUI vs. a headless script) and are not reliably
+    orderable as plain strings, which previously made a stale/older run look "most
+    recent" whenever both formats coexisted in the same workspace. Falls back to 0.0
+    for any run missing ``_recency_ts`` (e.g. a hand-built dict in a test) so sorting
+    never raises -- such entries sort as oldest rather than raising.
+    """
     merged: list[dict] = []
     for phase_name, runs in (("phase3", phase3_runs), ("phase4", phase4_runs)):
         for run in runs:
@@ -74,7 +83,7 @@ def merge_phase3_phase4_runs(phase3_runs: list[dict], phase4_runs: list[dict]) -
             copied.setdefault("phase", phase_name)
             copied["display_name"] = f"{copied.get('phase', phase_name)} | {copied.get('run_id', 'unknown')}"
             merged.append(copied)
-    merged.sort(key=lambda r: str(r.get("run_id", "")))
+    merged.sort(key=lambda r: r.get("_recency_ts", 0.0))
     return merged
 
 

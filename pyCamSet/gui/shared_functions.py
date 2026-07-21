@@ -990,7 +990,7 @@ class WorkspaceManager:
         # supplied its own created_at (e.g. re-saving/migrating) is not overridden.
         metadata = dict(metadata)
         metadata.setdefault("created_at", datetime.now().isoformat())
-        with open(_as_windows_extended_path(meta_path), "w") as fh:
+        with open(_as_windows_extended_path(meta_path), "w", encoding="utf-8") as fh:
             json.dump(metadata, fh, indent=2, default=str)
         return meta_path
 
@@ -1024,7 +1024,7 @@ class WorkspaceManager:
                 meta_path_io = _as_windows_extended_path(meta_path)
                 if os.path.exists(meta_path_io):
                     try:
-                        with open(meta_path_io) as fh:
+                        with open(meta_path_io, encoding="utf-8") as fh:
                             data = json.load(fh)
                         data.setdefault("run_id", run_name)
                         # Cache the resolved recency value on the in-memory dict (leading
@@ -1101,7 +1101,7 @@ class WorkspaceManager:
         if self.workspace_path is None:
             raise RuntimeError("Workspace path is not set.")
         handoff_path = self.workspace_path / "handoff.json"
-        with open(_as_windows_extended_path(handoff_path), "w") as fh:
+        with open(_as_windows_extended_path(handoff_path), "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2, default=str)
 
 
@@ -1290,6 +1290,9 @@ def copy_file(src: Path | str, dst: Path | str) -> None:
 
 def ensure_directory(path: Path | str) -> None:
     """Create a directory tree with Windows long-path support."""
+    if os.name != "nt":
+        os.makedirs(Path(path), exist_ok=True)
+        return
     os.makedirs(_as_windows_extended_path(path), exist_ok=True)
 
 

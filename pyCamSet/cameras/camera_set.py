@@ -268,7 +268,7 @@ class CameraSet:
             [cam.view for cam in self]
         )
         pairs = calc_pairs(cvwc, r, pick_closest=use_closest_cams)
-        with open((loc.parent) / "pair.txt", 'w') as f:
+        with open((loc.parent) / "pair.txt", 'w', encoding="utf-8", newline="\n") as f:
             write_pair_file(f, pairs)
 
 

@@ -135,7 +135,7 @@ class Camera:
         :param depth_range: The depth range to use.
         :param depth_steps: The number of discrete steps
         """
-        with open(f_loc, 'w') as f:
+        with open(f_loc, 'w', encoding="utf-8", newline="\n") as f:
             f.write('extrinsic' + '\n')
             for row in self.extrinsic:
                 f.write(f"{row[0]} {row[1]} {row[2]} {row[3]}" + '\n')

@@ -168,6 +168,12 @@ def run_initial_calibration(detection: TargetDetection,
     # define the input structure to the
     # inp = data, target, intial_estimate, camera_res
     c_m = detection.features_per_im_per_cam()
+    if c_m.size == 0:
+        raise ValueError(
+            "No detection features were found for any camera/image. "
+            "Check that the calibration target matches the detected board "
+            "type and that the test data contains valid images."
+        )
     mask = ~np.any(c_m < 6, axis=1)
     score = np.sum(c_m, axis=1)
     pose_im = np.argmax(score * mask)

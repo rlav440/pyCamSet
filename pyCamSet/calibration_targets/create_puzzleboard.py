@@ -2,7 +2,8 @@ from pathlib import Path  # Keep output-path handling consistent with create_cha
 
 from pyCamSet.calibration_targets import target_puzzleboard as pb  # Import the PuzzleBoard target implementation.
 
-_DEFAULT_OUTPUT_DIR = Path(r"D:\Work\calibration_targets\2D")  # Match the existing target-generation location.
+# Match the existing target-generation location.
+_DEFAULT_OUTPUT_DIR = Path.cwd() / "calibration_targets" / "2D"
 
 
 def _resolve_inputs(

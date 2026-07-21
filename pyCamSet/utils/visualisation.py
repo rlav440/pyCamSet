@@ -8,7 +8,12 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 from scipy.stats import multivariate_normal
 import numpy as np
-import pyvista as pv
+try:
+    import pyvista as pv
+    _PYVISTA_OK = True
+except ImportError:  # pragma: no cover
+    pv = None
+    _PYVISTA_OK = False
 from matplotlib.colors import LogNorm, LinearSegmentedColormap
 
 from pyCamSet.utils.general_utils import h_tform, get_close_square_tuple
@@ -217,6 +222,11 @@ def visualise_calibration(
     :param param_handler: The parameter handler that organised the optimisation.
     :return:
     """
+    if not _PYVISTA_OK:
+        raise ImportError("pyvista is required for visualisation. Install with: pip install pyvista")
+    import os as _os
+    if _os.name != "nt" and not _os.environ.get("DISPLAY") and not _os.environ.get("PYVISTA_OFF_SCREEN"):
+        _os.environ["PYVISTA_OFF_SCREEN"] = "true"
     euclidean_err = np.linalg.norm(np.reshape(o_results['err'], (-1,2)), axis=1)
     e_lim = np.median(euclidean_err) * 3
     # print("Calibration Standard Deviation of euclidean Error:", np.std(euclidean_err))
@@ -489,30 +499,38 @@ def _render_open3d_geometries_offscreen(
     except Exception as offscreen_exc:
         _LOGGER.warning('Open3D OffscreenRenderer unavailable; using hidden Visualizer fallback: %s', offscreen_exc)
 
-    vis = _o3d.visualization.Visualizer()
-    created = vis.create_window(window_name='Open3DHiddenRender', width=width, height=height, visible=False)
-    if not created:
-        raise RuntimeError('Open3D hidden Visualizer window could not be created')
     try:
-        render_option = vis.get_render_option()
-        render_option.background_color = np.array([0.08, 0.10, 0.16], dtype=np.float64)
-        render_option.point_size = float(point_size)
-        render_option.line_width = 2.0
-        for geom in geoms:
-            vis.add_geometry(geom)
-        vis.poll_events()
-        vis.update_renderer()
-        image = (np.clip(np.asarray(vis.capture_screen_float_buffer(do_render=True)), 0.0, 1.0) * 255).astype(np.uint8)
-        params = vis.get_view_control().convert_to_pinhole_camera_parameters()
-        return image, {
-            'mode': 'pinhole',
-            'intrinsic': np.asarray(params.intrinsic.intrinsic_matrix, dtype=np.float64),
-            'extrinsic': np.asarray(params.extrinsic, dtype=np.float64),
-            'width': width,
-            'height': height,
-        }
-    finally:
-        vis.destroy_window()
+        vis = _o3d.visualization.Visualizer()
+        created = vis.create_window(window_name='Open3DHiddenRender', width=width, height=height, visible=False)
+        if not created:
+            raise RuntimeError('Open3D hidden Visualizer window could not be created')
+        try:
+            render_option = vis.get_render_option()
+            render_option.background_color = np.array([0.08, 0.10, 0.16], dtype=np.float64)
+            render_option.point_size = float(point_size)
+            render_option.line_width = 2.0
+            for geom in geoms:
+                vis.add_geometry(geom)
+            vis.poll_events()
+            vis.update_renderer()
+            image = (np.clip(np.asarray(vis.capture_screen_float_buffer(do_render=True)), 0.0, 1.0) * 255).astype(np.uint8)
+            params = vis.get_view_control().convert_to_pinhole_camera_parameters()
+            return image, {
+                'mode': 'pinhole',
+                'intrinsic': np.asarray(params.intrinsic.intrinsic_matrix, dtype=np.float64),
+                'extrinsic': np.asarray(params.extrinsic, dtype=np.float64),
+                'width': width,
+                'height': height,
+            }
+        finally:
+            vis.destroy_window()
+    except Exception as viz_exc:
+        raise RuntimeError(
+            "Open3D offscreen rendering failed via both OffscreenRenderer and "
+            "hidden Visualizer. This typically indicates missing EGL/GPU support "
+            "on headless systems. Consider installing Open3D with EGL support or "
+            f"running with a display. Last error: {viz_exc}"
+        ) from viz_exc
 
 
 def _project_points_to_pixels(
@@ -893,6 +911,11 @@ def render_calibration_pyvista_png(
     :param output_path: Destination file path for the PNG screenshot.
     :returns: ``(success, message)`` tuple.
     """
+    if not _PYVISTA_OK:
+        return False, (
+            "pyvista is required for offscreen PNG rendering. "
+            "Install with: pip install pyvista"
+        )
     try:
         euclidean_err = np.linalg.norm(np.reshape(o_results['err'], (-1, 2)), axis=1)
         e_lim = np.median(euclidean_err) * 3
@@ -929,7 +952,14 @@ def render_calibration_pyvista_png(
 
         pv.set_plot_theme('document')
         pv.global_theme.multi_rendering_splitting_position = 0.50
-        plotter = pv.Plotter(shape='1|2', off_screen=True, window_size=(1600, 600))
+        try:
+            plotter = pv.Plotter(shape='1|2', off_screen=True, window_size=(1600, 600))
+        except Exception as plotter_exc:
+            return False, (
+                "PyVista offscreen plotter could not be created. "
+                "On headless Linux this usually means EGL/GPU support is missing. "
+                f"Original error: {plotter_exc}"
+            )
         plotter.title = "Calibration Evaluation (Offscreen)"
 
         # Subplot 0: scene coordinates

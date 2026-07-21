@@ -679,7 +679,7 @@ def write_trial_metadata(
     if extra:
         metadata["extra"] = dict(extra)
     json_path = out_dir / "metadata.json"
-    json_path.write_text(json.dumps(metadata, indent=2, default=_json_default))
+    json_path.write_text(json.dumps(metadata, indent=2, default=_json_default), encoding="utf-8")
     result.saved_metadata_path = str(json_path)
     return json_path
 
@@ -754,7 +754,7 @@ def write_study_summary(
         ],
     }
     path = out_dir / "study_summary.json"
-    path.write_text(json.dumps(summary, indent=2, default=_json_default))
+    path.write_text(json.dumps(summary, indent=2, default=_json_default), encoding="utf-8")
     return path
 
 

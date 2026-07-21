@@ -198,7 +198,7 @@ def write_colour_ply(f_name, verts, cols):
     :param verts: the points of the cloud in 3D space
     :param cols: the colours of the cloud.
     """
-    with open(f_name, 'w') as f:
+    with open(f_name, 'w', encoding="utf-8") as f:
         f.write("ply\n")
         f.write("format ascii 1.0\n")
         f.write(f"element vertex {len(verts)}\n")

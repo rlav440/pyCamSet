@@ -1,4 +1,3 @@
-import pyvista as pv        
 import numpy as np
 from pyCamSet.optimisation.compiled_helpers import n_estimate_rigid_transform
 

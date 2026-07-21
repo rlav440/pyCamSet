@@ -24,7 +24,7 @@ def promote_retained_trial(workspace_mgr: WorkspaceManager, metadata_path: str |
     if workspace_mgr.workspace_path is None:  # Promotion needs a destination workspace.
         raise RuntimeError("Workspace path is not set.")
     metadata_file = Path(metadata_path)  # Normalise the retained trial metadata path.
-    metadata = json.loads(metadata_file.read_text())  # Load the structured optimisation metadata.
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))  # Load the structured optimisation metadata.
     stage = (metadata.get("identity") or {}).get("success_stage")  # Decide which phases to promote.
     if stage not in {"phase3", "phase4"}:  # Only successful retained trials have enough artefacts.
         raise RuntimeError(f"Only successful phase3/phase4 trials can be promoted. Found success_stage: {stage!r}.")

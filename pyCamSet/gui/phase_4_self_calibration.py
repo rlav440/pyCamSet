@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -400,7 +401,7 @@ class Phase4Tab(QWidget):
             handoff = ws / "handoff.json"
             if handoff.exists():
                 try:
-                    payload = json.loads(handoff.read_text())
+                    payload = json.loads(handoff.read_text(encoding="utf-8"))
                     if payload.get("phase") == "phase3" and payload.get("runs"):
                         wanted = payload["runs"][0].get("run_id")
                         for run in runs:
@@ -960,10 +961,11 @@ class Phase4DiagnosticsTab(QWidget):
             f"Currently showing: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}"
         )
         if self._open3d_cb.isChecked():
-            # Pass output_widget=None so visualise_calibration_open3d opens a
-            # separate native Open3D window instead of attempting offscreen
-            # rendering (which fails on Windows due to missing EGL support).
-            ok, msg = launch_visualise_calibration_open3d_for_run(chosen, output_widget=None)
+            # On Linux, EGL offscreen rendering is typically available, so we
+            # can embed the Open3D view in the GUI. On Windows, EGL support is
+            # missing so we fall back to a separate native Open3D window.
+            _open3d_widget = self._open3d_output if os.name != "nt" else None
+            ok, msg = launch_visualise_calibration_open3d_for_run(chosen, output_widget=_open3d_widget)
         else:
             ok, msg = launch_visualise_calibration_for_run(chosen)
         if not ok:

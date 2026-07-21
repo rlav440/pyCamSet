@@ -584,7 +584,7 @@ class Phase2Tab(QWidget):
         if not handoff.exists():
             return None
         try:
-            payload = json.loads(handoff.read_text())
+            payload = json.loads(handoff.read_text(encoding="utf-8"))
             if payload.get("phase") == "phase1" and payload.get("runs"):
                 wanted = payload["runs"][0].get("run_id")
                 if wanted and any(r.get("run_id") == wanted for r in runs):

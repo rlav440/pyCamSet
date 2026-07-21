@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 
 import numpy as np
 import pytest
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QCheckBox, QWidget
 
 from pyCamSet.gui.optimisation_tab import OptimisationTab
@@ -537,7 +539,7 @@ def test_write_study_summary_lists_successes(tmp_path: Path):
 
 def test_default_output_dir_under_floc():
     result = default_output_dir("/tmp/data", "study_abc")
-    assert str(result).endswith(".pycamset_workspace/optimisation_runs/study_abc")
+    assert result.parts[-3:] == (".pycamset_workspace", "optimisation_runs", "study_abc")
 
 
 def test_make_study_id_format():

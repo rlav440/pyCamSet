@@ -5,7 +5,7 @@ import cv2
 
 from pyCamSet.calibration_targets import target_charuco as ch
 
-_DEFAULT_OUTPUT_DIR = Path(r"D:\Work\calibration_targets\2D")
+_DEFAULT_OUTPUT_DIR = Path.cwd() / "calibration_targets" / "2D"
 _DEFAULT_DICT_NAME = "DICT_4X4_1000"
 
 

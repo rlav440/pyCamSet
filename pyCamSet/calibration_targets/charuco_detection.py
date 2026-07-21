@@ -1,8 +1,3 @@
-"""
-Purpose: Share ChArUco detector-option construction across ChArUco-based targets.
-Status: Active helper used by the ChArUco and Ccube targets.
-Future: Extend this module if more ChArUco-based targets need the same detector setup.
-"""
 from __future__ import annotations  # Keep postponed annotations consistent with the package style.
 
 import logging  # Emit compatibility warnings from one shared location.

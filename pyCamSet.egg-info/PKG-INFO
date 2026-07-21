@@ -97,7 +97,7 @@ For the vector SVG/PDF target generators, install the graphics dependencies in
 the active conda environment:
 
 ```powershell
-conda activate calibration_07032026
+conda activate [your calibration env here]
 conda install -c conda-forge cairo cairosvg svgwrite
 pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
 ```
@@ -111,5 +111,7 @@ To report an issue or suggest a new feature, please use the [issues page](https:
 Please check existing issues before submitting a new one.
 
 ## Contributors
+Collin Snitchler (@coldsnit) - Developed the GUI, and introduced some tools that require further testing:
+The puzzleboard target, bundle adjustment lockbox priors, and alternative loss functions in bundle adjustment.
 
 ## Acknowledgements

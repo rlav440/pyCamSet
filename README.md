@@ -62,7 +62,7 @@ For the vector SVG/PDF target generators, install the graphics dependencies in
 the active conda environment:
 
 ```powershell
-conda activate calibration_07032026
+conda activate [your calibration env here]
 conda install -c conda-forge cairo cairosvg svgwrite
 pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
 ```
@@ -77,7 +77,9 @@ The `PuzzleBoardCube` target assigns six disjoint, deterministic windows of the
 same periodic PuzzleBoard code to the cube faces in the fixed order front,
 right, back, left, top, bottom. Its `puzzle-cube-v1` layout is non-random and
 reproducible: identical face-size and square-size parameters produce identical
-face patterns and cube geometry.
+face patterns and cube geometry. This is a modified implementation of the original 
+PuzzleBoard target, which is a single planar target. The cube version is intended
+to be similar to the ccube target.
 
 The maximum face size is **167 squares per side**. This limit is enforced by
 the three-column, two-row face layout, which tiles the 501x501 PuzzleBoard code

@@ -1,10 +1,3 @@
-"""
-Purpose: Generate a raster PDF, vector PDF, or SVG of a ChArUco target.
-
-Note: These conversions were created as, with higher resolution cameras,
-rasters create artifacts that reduce the accuracy of corner and marker detection.
-"""
-
 import warnings
 from pathlib import Path
 

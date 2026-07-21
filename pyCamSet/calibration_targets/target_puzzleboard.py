@@ -1,8 +1,3 @@
-'''
-Purpose: Define PuzzleBoard calibration targets and vector exports for pyCamSet.
-Status: Active target implementation backed by the installed PuzzleBoard detector.
-Future: Add target-specific detector tuning once the external package exposes options.
-'''
 from __future__ import annotations  # Keep postponed annotations consistent with pyCamSet targets.
 
 from io import BytesIO  # Hold temporary SVG rasterisations in memory for PDF/plot output.

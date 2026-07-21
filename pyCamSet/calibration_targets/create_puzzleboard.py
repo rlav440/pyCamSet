@@ -1,8 +1,3 @@
-'''
-Purpose: Generate raster PDF, vector PDF, or SVG PuzzleBoard targets.
-Status: Active creation wrapper matching the pyCamSet ChArUco generator API.
-Future: Add command-line argument parsing once target-generation workflows stabilise.
-'''
 from pathlib import Path  # Keep output-path handling consistent with create_charuco.py.
 
 from pyCamSet.calibration_targets import target_puzzleboard as pb  # Import the PuzzleBoard target implementation.

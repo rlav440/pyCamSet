@@ -1,8 +1,3 @@
-'''
-Purpose: Define a deterministic six-face PuzzleBoard cube target for pyCamSet.
-Status: Active target with bounded face windows, cube geometry, and vector exports.
-Future: Add alternative fixed layout versions only when backwards compatibility is preserved.
-'''
 from __future__ import annotations  # Keep postponed annotations consistent with pyCamSet targets.
 
 from io import BytesIO  # Hold temporary SVG rasterisations in memory for PDF and visualisation output.

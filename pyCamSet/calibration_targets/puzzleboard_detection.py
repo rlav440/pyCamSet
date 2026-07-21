@@ -1,8 +1,3 @@
-'''
-Purpose: Adapt the external PuzzleBoard detector for pyCamSet image handling.
-Status: Active helper used by the PuzzleBoard calibration target.
-Future: Add detector-specific options if the PuzzleBoard package exposes them.
-'''
 from __future__ import annotations  # Keep annotations consistent with pyCamSet targets.
 
 import cv2  # Convert pyCamSet's OpenCV images to the detector's expected colour order.

@@ -1,10 +1,3 @@
-"""
-Purpose: Generate a raster PDF, vector PDF, or SVG of a Ccube target.
-
-Note: These conversions were created as, with higher resolution cameras,
-rasters create artifacts that reduce the accuracy of corner and marker detection.
-"""
-
 from pathlib import Path
 
 import cv2

@@ -1,8 +1,3 @@
-'''
-Purpose: Generate raster PDF, vector PDF, or SVG deterministic PuzzleBoard cube nets.
-Status: Active creation wrapper matching the pyCamSet target-generator API.
-Future: Add additional fixed layout versions only with explicit versioned parameters.
-'''
 from pathlib import Path  # Keep output-path handling consistent with other target generators.
 
 from pyCamSet.calibration_targets import target_puzzleboard_cube as pbc  # Import the PuzzleBoard cube target.

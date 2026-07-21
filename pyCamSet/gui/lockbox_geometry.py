@@ -123,6 +123,18 @@ def snap_radius_to_reference(point: Iterable[float], object_center: Iterable[flo
     return centre + (float(target_radius) * vec / norm)
 
 
+def select_fit_members(members: Iterable) -> list:
+    """Return the trust-priority subset of members eligible for a plane fit.
+
+    Trusted members are preferred; if none are trusted, all non-bad members
+    are used as a fallback. This centralises the selection policy so the GUI
+    editor and tests cannot drift apart on trust semantics, fallback order,
+    or the bad-exclusion rule.
+    """
+    trusted = [m for m in members if m.trust == 'trusted']  # prefer trusted cameras
+    return trusted or [m for m in members if m.trust != 'bad']  # fall back to non-bad
+
+
 def fit_plane(points: Iterable[Iterable[float]]) -> dict:
     """Fit n.x+d=0 using SVD and return canonicalised unit-normal diagnostics."""
     arr = np.asarray(list(points), dtype=float)

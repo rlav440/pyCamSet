@@ -50,6 +50,7 @@ from pyCamSet.gui.lockbox_geometry import (
     radius_from_center,
     reference_radius,
     resolve_object_centre,
+    select_fit_members,
     snap_radius_to_reference,
 )
 from pyCamSet.utils.saving import load_CameraSet
@@ -1827,7 +1828,7 @@ class Phase3LockboxEditor(QDialog):
         for plane_id in sorted({state.plane_group for state in self.states.values() if state.plane_group}):  # unique non-empty group names
             members = [state for state in self.states.values() if state.plane_group == plane_id]  # all states in this group
             trusted_members = [state for state in members if state.trust == 'trusted']  # prefer trusted for fitting
-            fit_members = trusted_members or [state for state in members if state.trust != 'bad']  # fall back to non-bad
+            fit_members = select_fit_members(members)  # centralised trust-priority selection, kept in sync with tests
             group = PlaneGroup(
                 plane_id=plane_id,
                 member_camera_names=[state.name for state in members],  # names of all group members

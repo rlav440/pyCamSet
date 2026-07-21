@@ -342,7 +342,7 @@ def detect_datapoints_in_imfile(
     if camset is not None:
         cache_name = cache_name.split('.')[0] + "_with_calib.pickle"
 
-    # A.3: incorporate upscale factor into cache filename so different upscale
+    # incorporate upscale factor into cache filename so different upscale
     # settings get independent caches. When upscale_factor == 1 (default),
     # keep the original cache name unchanged so existing caches stay valid.
     if upscale_factor != 1:
@@ -382,7 +382,7 @@ def detect_datapoints_in_imfile(
             detections = [work_fn(file) for file in tqdm(detected_sub_folders)]
         detected = reduce(lambda x, y: x + y, detections)
 
-        # A.2: cam_res must reflect the upscaled coordinate frame, not native.
+        # cam_res must reflect the upscaled coordinate frame, not native.
         # When upscale_factor > 1, detected 2D pixel coords are in the upscaled
         # frame, so cam_res must match. Multiply native .shape[:2] by the factor
         # (cheaper than re-reading the image and resizing it).

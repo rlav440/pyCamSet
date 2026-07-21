@@ -80,7 +80,7 @@ except ImportError:
     load_pickle = None
     _PYCAMSET_OK = False
 
-_TARGET_CHOICES = ["Ccube", "ChArUco"]
+_TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
 
 
 def _normalise_per_view_series(payload: object) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -108,6 +108,7 @@ def _compute_true_per_view_reprojection(detections, calibration_target, cams) ->
     if get_keys is None:
         raise RuntimeError("pyCamSet detection helpers are unavailable.")
 
+    _compute_true_per_view_reprojection._exception_count = 0
     d26_per_view: dict[str, dict] = {}
     d21_rms: dict[str, float] = {}
     max_ims = int(detections.max_ims)
@@ -150,7 +151,16 @@ def _compute_true_per_view_reprojection(detections, calibration_target, cams) ->
 
             try:
                 pose = calibration_target.target_pose_in_cam_image(im_detect, cam, mode="nan")
-            except Exception:
+            except Exception as pose_exc:
+                # Distinguish a real exception from a legitimate "no pose"
+                # result. Keep the NaN fallback (this must not become a hard
+                # crash), but make the exception case observable instead of
+                # silently swallowing it.
+                logging.debug(
+                    "target_pose_in_cam_image raised for cam=%s im=%d: %s",
+                    cam_name, im_idx, pose_exc,
+                )
+                _compute_true_per_view_reprojection._exception_count += 1
                 pose = np.ones((4, 4), dtype=float) * np.nan
 
             pose_arr = np.asarray(pose, dtype=float)
@@ -189,7 +199,20 @@ def _compute_true_per_view_reprojection(detections, calibration_target, cams) ->
         }
         d21_rms[cam_name] = float(np.sqrt(weighted_sq_sum / total_points)) if total_points else float("nan")
 
+    exc_count = _compute_true_per_view_reprojection._exception_count
+    if exc_count > 0:
+        logging.warning(
+            "_compute_true_per_view_reprojection: %d target_pose_in_cam_image "
+            "call(s) raised exceptions (converted to NaN poses). Check debug "
+            "logs for details.",
+            exc_count,
+        )
+
     return d26_per_view, d21_rms
+
+
+# Module-level initialisation of the exception counter attribute.
+_compute_true_per_view_reprojection._exception_count = 0
 
 
 def _make_grid_image(width: int, height: int, step: int = 48) -> np.ndarray:
@@ -344,6 +367,7 @@ class Phase2Tab(QWidget):
         )
         target_sect.addRow("Target type:", self._target_combo)
 
+        self._npts_label = QLabel("n_points / squares_x:")
         self._npts_spin = QSpinBox()
         self._npts_spin.setRange(2, 30)
         self._npts_spin.setValue(6)
@@ -352,15 +376,16 @@ class Phase2Tab(QWidget):
             "Concept: target discretization (points/squares along x).\n"
             "Default: 6."
         )
-        target_sect.addRow("n_points / squares_x:", self._npts_spin)
+        target_sect.addRow(self._npts_label, self._npts_spin)
 
+        self._length_label = QLabel("Length / square size (mm):")
         self._length_edit = QLineEdit("30.0")
         self._length_edit.setFixedWidth(110)
         self._length_edit.setToolTip(
             "Concept: physical target size parameter in millimetres.\n"
             "Default: 30.0 mm."
         )
-        target_sect.addRow("Length / square size (mm):", self._length_edit)
+        target_sect.addRow(self._length_label, self._length_edit)
 
         self._border_label = QLabel("Border fraction (Ccube):")
         self._border_spin = QDoubleSpinBox()
@@ -377,6 +402,66 @@ class Phase2Tab(QWidget):
         self._marker_spin.setSingleStep(0.05)
         self._marker_spin.setValue(0.8)
         target_sect.addRow(self._marker_label, self._marker_spin)
+
+        # ── PuzzleBoard-specific fields ───────────────────────────────
+        self._pb_x_spin = QSpinBox()
+        self._pb_x_spin.setRange(2, 501)
+        self._pb_x_spin.setValue(105)
+        self._pb_x_spin.setFixedWidth(90)
+        target_sect.addRow("PB num_squares_x:", self._pb_x_spin)
+
+        self._pb_y_spin = QSpinBox()
+        self._pb_y_spin.setRange(2, 501)
+        self._pb_y_spin.setValue(148)
+        self._pb_y_spin.setFixedWidth(90)
+        target_sect.addRow("PB num_squares_y:", self._pb_y_spin)
+
+        self._pb_square_edit = QLineEdit("2.0")
+        self._pb_square_edit.setFixedWidth(110)
+        target_sect.addRow("PB square_size (mm):", self._pb_square_edit)
+
+        self._pb_start_x_spin = QSpinBox()
+        self._pb_start_x_spin.setRange(0, 500)
+        self._pb_start_x_spin.setValue(0)
+        self._pb_start_x_spin.setFixedWidth(90)
+        target_sect.addRow("PB start_x:", self._pb_start_x_spin)
+
+        self._pb_start_y_spin = QSpinBox()
+        self._pb_start_y_spin.setRange(0, 500)
+        self._pb_start_y_spin.setValue(0)
+        self._pb_start_y_spin.setFixedWidth(90)
+        target_sect.addRow("PB start_y:", self._pb_start_y_spin)
+
+        self._pb_paper_w_edit = QLineEdit("210.0")
+        self._pb_paper_w_edit.setFixedWidth(110)
+        target_sect.addRow("PB paper_width (mm):", self._pb_paper_w_edit)
+
+        self._pb_paper_h_edit = QLineEdit("297.0")
+        self._pb_paper_h_edit.setFixedWidth(110)
+        target_sect.addRow("PB paper_height (mm):", self._pb_paper_h_edit)
+
+        self._pb_min_width_spin = QSpinBox()
+        self._pb_min_width_spin.setRange(1, 501)
+        self._pb_min_width_spin.setValue(4)
+        self._pb_min_width_spin.setFixedWidth(90)
+        target_sect.addRow("PB min_width:", self._pb_min_width_spin)
+
+        # ── PuzzleBoardCube-specific fields ───────────────────────────
+        self._pbc_size_spin = QSpinBox()
+        self._pbc_size_spin.setRange(2, 160)
+        self._pbc_size_spin.setValue(20)
+        self._pbc_size_spin.setFixedWidth(90)
+        target_sect.addRow("PBC squares per face:", self._pbc_size_spin)
+
+        self._pbc_square_edit = QLineEdit("10.0")
+        self._pbc_square_edit.setFixedWidth(110)
+        target_sect.addRow("PBC square_size (mm):", self._pbc_square_edit)
+
+        self._pbc_min_width_spin = QSpinBox()
+        self._pbc_min_width_spin.setRange(1, 501)
+        self._pbc_min_width_spin.setValue(4)
+        self._pbc_min_width_spin.setFixedWidth(90)
+        target_sect.addRow("PBC min_width:", self._pbc_min_width_spin)
 
         self._target_combo.currentTextChanged.connect(self._on_target_type_changed)
         self._on_target_type_changed(self._target_combo.currentText())
@@ -532,10 +617,26 @@ class Phase2Tab(QWidget):
 
     def _on_target_type_changed(self, target_type: str) -> None:
         is_ccube = target_type == "Ccube"
+        is_charuco_only = target_type == "ChArUco"
+        is_puzzleboard = target_type == "PuzzleBoard"
+        is_puzzleboard_cube = target_type == "PuzzleBoardCube"
+        show_ccube_charuco = is_ccube or is_charuco_only
         self._border_label.setVisible(is_ccube)
         self._border_spin.setVisible(is_ccube)
-        self._marker_label.setVisible(not is_ccube)
-        self._marker_spin.setVisible(not is_ccube)
+        self._marker_label.setVisible(is_charuco_only)
+        self._marker_spin.setVisible(is_charuco_only)
+        self._npts_label.setVisible(show_ccube_charuco)
+        self._npts_spin.setVisible(show_ccube_charuco)
+        self._length_label.setVisible(show_ccube_charuco)
+        self._length_edit.setVisible(show_ccube_charuco)
+        # PuzzleBoard fields.
+        for w in (self._pb_x_spin, self._pb_y_spin, self._pb_square_edit,
+                  self._pb_start_x_spin, self._pb_start_y_spin,
+                  self._pb_paper_w_edit, self._pb_paper_h_edit, self._pb_min_width_spin):
+            w.setVisible(is_puzzleboard)
+        # PuzzleBoardCube fields.
+        for w in (self._pbc_size_spin, self._pbc_square_edit, self._pbc_min_width_spin):
+            w.setVisible(is_puzzleboard_cube)
 
     def _collect_params(self) -> Optional[dict]:
         floc = self._floc_edit.text().strip()
@@ -565,6 +666,28 @@ class Phase2Tab(QWidget):
                 QMessageBox.critical(self, "Validation Error", f"Fixed params JSON: {exc}")
                 return None
 
+        # PuzzleBoard / PuzzleBoardCube parameters.
+        try:
+            pb_square_size = float(self._pb_square_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoard square_size must be numeric.")
+            return None
+        try:
+            pb_paper_width = float(self._pb_paper_w_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_width must be numeric.")
+            return None
+        try:
+            pb_paper_height = float(self._pb_paper_h_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_height must be numeric.")
+            return None
+        try:
+            pbc_square_size = float(self._pbc_square_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube square_size must be numeric.")
+            return None
+
         return {
             "f_loc": floc,
             "caching": self._cache_cb.isChecked(),
@@ -577,6 +700,18 @@ class Phase2Tab(QWidget):
             "length": length,
             "border_fraction": self._border_spin.value(),
             "marker_fraction": self._marker_spin.value(),
+            # PuzzleBoard:
+            "num_squares_x": self._pb_x_spin.value(),
+            "num_squares_y": self._pb_y_spin.value(),
+            "square_size": pb_square_size,
+            "start_x": self._pb_start_x_spin.value(),
+            "start_y": self._pb_start_y_spin.value(),
+            "paper_width": pb_paper_width,
+            "paper_height": pb_paper_height,
+            "min_width": self._pb_min_width_spin.value(),
+            # PuzzleBoardCube:
+            "num_squares_per_side": self._pbc_size_spin.value(),
+            "cube_square_size": pbc_square_size,
         }
 
     def _load_phase1_run(self) -> Optional[dict]:
@@ -695,6 +830,16 @@ class Phase2Tab(QWidget):
                         params["length"],
                         border_fraction=params.get("border_fraction", 0.1),
                         marker_fraction=params.get("marker_fraction", 0.8),
+                        num_squares_x=params.get("num_squares_x", 105),
+                        num_squares_y=params.get("num_squares_y", 148),
+                        square_size=params.get("square_size", 2.0),
+                        start_x=params.get("start_x", 0),
+                        start_y=params.get("start_y", 0),
+                        paper_width=params.get("paper_width", 210.0),
+                        paper_height=params.get("paper_height", 297.0),
+                        min_width=params.get("min_width", 4),
+                        num_squares_per_side=params.get("num_squares_per_side", 20),
+                        cube_square_size=params.get("cube_square_size", 10.0),
                     )
                     selected = list(params.get("selected_cameras") or [])
                     selected_set = set(selected)
@@ -1385,6 +1530,16 @@ class Phase2DiagnosticsTab(QWidget):
                     src_params.get("length", 30.0),
                     border_fraction=src_params.get("border_fraction", 0.1),
                     marker_fraction=src_params.get("marker_fraction", 0.8),
+                    num_squares_x=src_params.get("num_squares_x", 105),
+                    num_squares_y=src_params.get("num_squares_y", 148),
+                    square_size=src_params.get("square_size", 2.0),
+                    start_x=src_params.get("start_x", 0),
+                    start_y=src_params.get("start_y", 0),
+                    paper_width=src_params.get("paper_width", 210.0),
+                    paper_height=src_params.get("paper_height", 297.0),
+                    min_width=src_params.get("min_width", 4),
+                    num_squares_per_side=src_params.get("num_squares_per_side", 20),
+                    cube_square_size=src_params.get("cube_square_size", 10.0),
                 )
                 emit("Running Phase 2 initial calibration on filtered detections…")
                 stream = EmitStream(emit)

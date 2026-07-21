@@ -43,11 +43,13 @@ def init_worker(detector_class, input_args): #: Optional['AbstractTarget']):
     global worker_detector
     worker_detector = detector_class(**input_args)
 
-def _process_image(im_file:Path, cam_name:str, idx:int, draw:bool, camera:Camera):
+def _process_image(im_file:Path, cam_name:str, idx:int, draw:bool, camera:Camera, upscale_factor:int=1):
     """
     Helper function to process a single image.
     """
     im = cv2.imread(im_file)
+    if upscale_factor > 1:
+        im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
     # Use the globally available detector in this worker process
     detection = worker_detector.find_in_image(im, draw=draw, camera=camera)
     return cam_name, idx, detection
@@ -117,7 +119,7 @@ class AbstractTarget(ABC):
         """
         raise NotImplementedError
 
-    def find_in_imfolder(self, file:Path, cam_names, draw=False, n_lim=None, camera: Camera=None, threads=12) -> TargetDetection:
+    def find_in_imfolder(self, file:Path, cam_names, draw=False, n_lim=None, camera: Camera=None, threads=12, upscale_factor:int=1) -> TargetDetection:
         """
         Notes: A function to detect the camera results in the image folder.
         generally a process wrapper around the previous function
@@ -155,6 +157,8 @@ class AbstractTarget(ABC):
             detections = TargetDetection(cam_names=cam_names)
             for idx, im_file in enumerate(im_locs):
                 im = cv2.imread(im_file)
+                if upscale_factor > 1:
+                    im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
                 detection = self.find_in_image(im, draw=draw, camera=camera)
                 detections.add_detection(cam_name, idx, detection)
             return detections
@@ -167,7 +171,7 @@ class AbstractTarget(ABC):
         os.environ['Detection_PID'] = str(os.getpid())
 
         # prepare arguments for the worker processes
-        tasks = [(im_file, cam_name, idx, draw, camera) for idx, im_file in enumerate(im_locs)]
+        tasks = [(im_file, cam_name, idx, draw, camera, upscale_factor) for idx, im_file in enumerate(im_locs)]
         # use a Pool of worker processes.
         if not (processname := multiprocessing.current_process().name) == "MainProcess":
             # print(processname)
@@ -383,6 +387,13 @@ class AbstractTarget(ABC):
                     )
 
         start = time.time()
+        if len(object_points) == 0:
+            raise ValueError(
+                f"Camera {cam_name} has zero valid board detections "
+                f"(after the {min_detections_per_board}-detection-per-board "
+                f"minimum) — cannot run initial calibration. Check Phase 1 "
+                f"detection results for this camera."
+            )
         ic = cv2.calibrateCameraExtended(
             object_points,
             image_points,

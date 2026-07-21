@@ -356,9 +356,12 @@ class TargetDetection:
         n_cams = len(self.cam_names)
         n_ims = self.max_ims
         block = np.zeros((n_ims, n_cams))
-        for cam_list in self.get_cam_list():
-            cam_ind = int(cam_list.get_data()[0, 0])
-
+        # get_cam_list() returns one TargetDetection per camera in cam_names order,
+        # so the enumerate index equals the cam index stored in column 0.
+        # Indexing get_data()[0, 0] crashes when a camera has zero detections
+        # (get_data() returns None); the enumerate index is the same value
+        # and is safe for the empty-camera case.
+        for cam_ind, cam_list in enumerate(self.get_cam_list()):
             board_detected = 0
             im_lists = cam_list.get_image_list()
             for im_list in im_lists:

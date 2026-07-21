@@ -97,7 +97,7 @@ except ImportError:
     validate_detections = None
     _PYCAMSET_OK = False
 
-_TARGET_CHOICES = ["Ccube", "ChArUco"]
+_TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
 _CHARUCO_BASED_TARGETS = {"Ccube", "ChArUco"}  # Both targets detect ChArUco corners in Phase 1.
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
@@ -109,6 +109,18 @@ def _build_target(
     charuco_detection_options: dict[str, dict[str, Any]] | None = None,
     border_fraction: float = 0.1,
     marker_fraction: float = 0.8,
+    # PuzzleBoard-only:
+    num_squares_x: int = 105,
+    num_squares_y: int = 148,
+    square_size: float = 2.0,
+    start_x: int = 0,
+    start_y: int = 0,
+    paper_width: float = 210.0,
+    paper_height: float = 297.0,
+    min_width: int = 4,
+    # PuzzleBoardCube-only:
+    num_squares_per_side: int = 20,
+    cube_square_size: float = 10.0,
 ):
     """Construct the calibration target object from existing pyCamSet classes."""
     if not _PYCAMSET_OK:
@@ -120,6 +132,16 @@ def _build_target(
         charuco_detection_options=charuco_detection_options,
         border_fraction=border_fraction,
         marker_fraction=marker_fraction,
+        num_squares_x=num_squares_x,
+        num_squares_y=num_squares_y,
+        square_size=square_size,
+        start_x=start_x,
+        start_y=start_y,
+        paper_width=paper_width,
+        paper_height=paper_height,
+        min_width=min_width,
+        num_squares_per_side=num_squares_per_side,
+        cube_square_size=cube_square_size,
     )
 
 
@@ -267,6 +289,7 @@ class Phase1Tab(QWidget):
         )
         target_sect.addRow("Target type:", self._target_combo)
 
+        self._npts_label = QLabel("n_points / squares_x:")
         self._npts_spin = QSpinBox()
         self._npts_spin.setRange(2, 20)
         self._npts_spin.setValue(6)
@@ -280,8 +303,9 @@ class Phase1Tab(QWidget):
             "Guidance: must exactly match the physical target you are using.\n"
             "Higher values give more feature constraints per image."
         )
-        target_sect.addRow("n_points / squares_x:", self._npts_spin)
+        target_sect.addRow(self._npts_label, self._npts_spin)
 
+        self._length_label = QLabel("Length / square size (mm):")
         self._length_edit = QLineEdit("30.0")
         self._length_edit.setFixedWidth(100)
         self._length_edit.setToolTip(
@@ -293,7 +317,7 @@ class Phase1Tab(QWidget):
             "Guidance: measure the actual printed/machined target — even a\n"
             "1% error here propagates directly into reconstructed distances."
         )
-        target_sect.addRow("Length / square size (mm):", self._length_edit)
+        target_sect.addRow(self._length_label, self._length_edit)
 
         self._border_label = QLabel("Border fraction (Ccube):")
         self._border_spin = QDoubleSpinBox()
@@ -310,6 +334,77 @@ class Phase1Tab(QWidget):
         self._marker_spin.setSingleStep(0.05)
         self._marker_spin.setValue(0.8)
         target_sect.addRow(self._marker_label, self._marker_spin)
+
+        # ── PuzzleBoard-specific fields ───────────────────────────────
+        self._pb_x_label = QLabel("PB num_squares_x:")
+        self._pb_x_spin = QSpinBox()
+        self._pb_x_spin.setRange(2, 501)
+        self._pb_x_spin.setValue(105)
+        self._pb_x_spin.setFixedWidth(80)
+        target_sect.addRow(self._pb_x_label, self._pb_x_spin)
+
+        self._pb_y_label = QLabel("PB num_squares_y:")
+        self._pb_y_spin = QSpinBox()
+        self._pb_y_spin.setRange(2, 501)
+        self._pb_y_spin.setValue(148)
+        self._pb_y_spin.setFixedWidth(80)
+        target_sect.addRow(self._pb_y_label, self._pb_y_spin)
+
+        self._pb_square_label = QLabel("PB square_size (mm):")
+        self._pb_square_edit = QLineEdit("2.0")
+        self._pb_square_edit.setFixedWidth(100)
+        target_sect.addRow(self._pb_square_label, self._pb_square_edit)
+
+        self._pb_start_x_label = QLabel("PB start_x:")
+        self._pb_start_x_spin = QSpinBox()
+        self._pb_start_x_spin.setRange(0, 500)
+        self._pb_start_x_spin.setValue(0)
+        self._pb_start_x_spin.setFixedWidth(80)
+        target_sect.addRow(self._pb_start_x_label, self._pb_start_x_spin)
+
+        self._pb_start_y_label = QLabel("PB start_y:")
+        self._pb_start_y_spin = QSpinBox()
+        self._pb_start_y_spin.setRange(0, 500)
+        self._pb_start_y_spin.setValue(0)
+        self._pb_start_y_spin.setFixedWidth(80)
+        target_sect.addRow(self._pb_start_y_label, self._pb_start_y_spin)
+
+        self._pb_paper_w_label = QLabel("PB paper_width (mm):")
+        self._pb_paper_w_edit = QLineEdit("210.0")
+        self._pb_paper_w_edit.setFixedWidth(100)
+        target_sect.addRow(self._pb_paper_w_label, self._pb_paper_w_edit)
+
+        self._pb_paper_h_label = QLabel("PB paper_height (mm):")
+        self._pb_paper_h_edit = QLineEdit("297.0")
+        self._pb_paper_h_edit.setFixedWidth(100)
+        target_sect.addRow(self._pb_paper_h_label, self._pb_paper_h_edit)
+
+        self._pb_min_width_label = QLabel("PB min_width:")
+        self._pb_min_width_spin = QSpinBox()
+        self._pb_min_width_spin.setRange(1, 501)
+        self._pb_min_width_spin.setValue(4)
+        self._pb_min_width_spin.setFixedWidth(80)
+        target_sect.addRow(self._pb_min_width_label, self._pb_min_width_spin)
+
+        # ── PuzzleBoardCube-specific fields ───────────────────────────
+        self._pbc_size_label = QLabel("PBC squares per face:")
+        self._pbc_size_spin = QSpinBox()
+        self._pbc_size_spin.setRange(2, 160)
+        self._pbc_size_spin.setValue(20)
+        self._pbc_size_spin.setFixedWidth(80)
+        target_sect.addRow(self._pbc_size_label, self._pbc_size_spin)
+
+        self._pbc_square_label = QLabel("PBC square_size (mm):")
+        self._pbc_square_edit = QLineEdit("10.0")
+        self._pbc_square_edit.setFixedWidth(100)
+        target_sect.addRow(self._pbc_square_label, self._pbc_square_edit)
+
+        self._pbc_min_width_label = QLabel("PBC min_width:")
+        self._pbc_min_width_spin = QSpinBox()
+        self._pbc_min_width_spin.setRange(1, 501)
+        self._pbc_min_width_spin.setValue(4)
+        self._pbc_min_width_spin.setFixedWidth(80)
+        target_sect.addRow(self._pbc_min_width_label, self._pbc_min_width_spin)
 
         # ── Detection options ──────────────────────────────────────────
         form_root.addWidget(make_separator())
@@ -331,6 +426,18 @@ class Phase1Tab(QWidget):
             "a real change (e.g. new images added to an existing folder)."
         )
         detect_form.addRow(self._cache_cb)
+
+        self._upscale_combo = QComboBox()
+        self._upscale_combo.addItems(["1x", "2x", "3x", "4x", "5x"])
+        self._upscale_combo.setFixedWidth(80)
+        self._upscale_combo.setCurrentText("1x")
+        self._upscale_combo.setToolTip(
+            "Upscales images before detection. Useful for low-resolution\n"
+            "PuzzleBoard/PuzzleBoardCube datasets where native resolution\n"
+            "gives too few detections. Leave at 1x unless detection rates\n"
+            "are poor."
+        )
+        detect_form.addRow("Upscale factor:", self._upscale_combo)
 
         self._hd_cb = QCheckBox("High Distortion Mode")
         self._hd_cb.setToolTip(
@@ -519,10 +626,32 @@ class Phase1Tab(QWidget):
         if hasattr(self, "_charuco_opts_section"):
             self._charuco_opts_section.setVisible(is_charuco)
         is_ccube = target_type == "Ccube"
+        is_charuco_only = target_type == "ChArUco"
+        is_puzzleboard = target_type == "PuzzleBoard"
+        is_puzzleboard_cube = target_type == "PuzzleBoardCube"
+        # Ccube/ChArUco fields — visible only for their respective types.
         self._border_label.setVisible(is_ccube)
         self._border_spin.setVisible(is_ccube)
-        self._marker_label.setVisible(not is_ccube)
-        self._marker_spin.setVisible(not is_ccube)
+        self._marker_label.setVisible(is_charuco_only)
+        self._marker_spin.setVisible(is_charuco_only)
+        self._npts_label.setVisible(is_ccube or is_charuco_only)
+        self._npts_spin.setVisible(is_ccube or is_charuco_only)
+        self._length_label.setVisible(is_ccube or is_charuco_only)
+        self._length_edit.setVisible(is_ccube or is_charuco_only)
+        # PuzzleBoard fields — toggle labels and field widgets in lockstep.
+        for w in (self._pb_x_label, self._pb_x_spin, self._pb_y_label, self._pb_y_spin,
+                  self._pb_square_label, self._pb_square_edit,
+                  self._pb_start_x_label, self._pb_start_x_spin,
+                  self._pb_start_y_label, self._pb_start_y_spin,
+                  self._pb_paper_w_label, self._pb_paper_w_edit,
+                  self._pb_paper_h_label, self._pb_paper_h_edit,
+                  self._pb_min_width_label, self._pb_min_width_spin):
+            w.setVisible(is_puzzleboard)
+        # PuzzleBoardCube fields — toggle labels and field widgets in lockstep.
+        for w in (self._pbc_size_label, self._pbc_size_spin,
+                  self._pbc_square_label, self._pbc_square_edit,
+                  self._pbc_min_width_label, self._pbc_min_width_spin):
+            w.setVisible(is_puzzleboard_cube)
 
     def _collect_params(self) -> Optional[dict]:
         floc = self._floc_edit.text().strip()
@@ -588,12 +717,35 @@ class Phase1Tab(QWidget):
             QMessageBox.critical(self, "Validation Error", "Select at least one camera.")
             return None
 
+        # PuzzleBoard / PuzzleBoardCube parameters — collected from their respective widgets.
+        try:
+            pb_square_size = float(self._pb_square_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoard square_size must be a number.")
+            return None
+        try:
+            pb_paper_width = float(self._pb_paper_w_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_width must be a number.")
+            return None
+        try:
+            pb_paper_height = float(self._pb_paper_h_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_height must be a number.")
+            return None
+        try:
+            pbc_square_size = float(self._pbc_square_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube square_size must be a number.")
+            return None
+
         return {
             "f_loc": floc,
             "caching": self._cache_cb.isChecked(),
             "high_distortion": self._hd_cb.isChecked(),
             "n_lim": n_lim,
             "threads": threads,
+            "upscale_factor": int(self._upscale_combo.currentText().rstrip("x")),
             "fixed_params": fixed_params,
             "problem_options": problem_options,
             "charuco_detection_options": charuco_detection_options,
@@ -602,6 +754,18 @@ class Phase1Tab(QWidget):
             "length": length,
             "border_fraction": self._border_spin.value(),
             "marker_fraction": self._marker_spin.value(),
+            # PuzzleBoard:
+            "num_squares_x": self._pb_x_spin.value(),
+            "num_squares_y": self._pb_y_spin.value(),
+            "square_size": pb_square_size,
+            "start_x": self._pb_start_x_spin.value(),
+            "start_y": self._pb_start_y_spin.value(),
+            "paper_width": pb_paper_width,
+            "paper_height": pb_paper_height,
+            "min_width": self._pb_min_width_spin.value(),
+            # PuzzleBoardCube:
+            "num_squares_per_side": self._pbc_size_spin.value(),
+            "cube_square_size": pbc_square_size,
             "selected_cameras": selected_cameras,
         }
 
@@ -625,6 +789,8 @@ class Phase1Tab(QWidget):
         self._terminal.append_line(f"caching      : {params['caching']}")
         self._terminal.append_line(f"high_distort : {params['high_distortion']}")
         self._terminal.append_line(f"threads      : {params['threads'] or 'auto'}")
+        if params.get("upscale_factor", 1) != 1:
+            self._terminal.append_line(f"upscale      : {params['upscale_factor']}x")
         self._terminal.append_line(f"selected cams: {params['selected_cameras']}")
         self._terminal.append_line("Starting detection…")
 
@@ -651,6 +817,9 @@ class Phase1Tab(QWidget):
                     cam_names = [p.name for p in cam_folders]
                     cam_img_counts = {p.name: count_images_in_folder(p) for p in cam_folders}
                     emit(f"1a  Camera sub-folders: {cam_names}")
+                    upscale_factor = params.get("upscale_factor", 1)
+                    if upscale_factor > 1:
+                        emit(f"1a  Upscale factor: {upscale_factor}x")
                     if len(cam_folders) < 1:
                         raise RuntimeError("No selected camera sub-folders found.")
                     counts = [count_images_in_folder(p) for p in cam_folders]
@@ -664,6 +833,16 @@ class Phase1Tab(QWidget):
                         charuco_detection_options=params.get("charuco_detection_options"),
                         border_fraction=params.get("border_fraction", 0.1),
                         marker_fraction=params.get("marker_fraction", 0.8),
+                        num_squares_x=params.get("num_squares_x", 105),
+                        num_squares_y=params.get("num_squares_y", 148),
+                        square_size=params.get("square_size", 2.0),
+                        start_x=params.get("start_x", 0),
+                        start_y=params.get("start_y", 0),
+                        paper_width=params.get("paper_width", 210.0),
+                        paper_height=params.get("paper_height", 297.0),
+                        min_width=params.get("min_width", 4),
+                        num_squares_per_side=params.get("num_squares_per_side", 20),
+                        cube_square_size=params.get("cube_square_size", 10.0),
                     )
 
                     detect_root = f_loc
@@ -689,19 +868,27 @@ class Phase1Tab(QWidget):
                             caching=params["caching"],
                             draw=False,
                             n_lim=params["n_lim"],
+                            upscale_factor=upscale_factor,
                         )
                         emit("1b  Detection complete.")
 
                         if detect_root != f_loc:
-                            for artifact_name in ("detected_datapoints.pickle",):
+                            # Compute the actual cache filename (may include upscale suffix).
+                            _cache_base = "detected_datapoints.pickle"
+                            if upscale_factor != 1:
+                                _cache_base = f"detected_datapoints_upscale{upscale_factor}x.pickle"
+                            for artifact_name in (_cache_base,):
                                 src = detect_root / artifact_name
                                 if path_exists(src):
                                     dst = f_loc / artifact_name
                                     copy_file(src, dst)
-                                    if artifact_name == "detected_datapoints.pickle":
+                                    if artifact_name == _cache_base:
                                         det_pickle_src = dst
                         else:
-                            cand = f_loc / "detected_datapoints.pickle"
+                            _cache_base = "detected_datapoints.pickle"
+                            if upscale_factor != 1:
+                                _cache_base = f"detected_datapoints_upscale{upscale_factor}x.pickle"
+                            cand = f_loc / _cache_base
                             if path_exists(cand):
                                 det_pickle_src = cand
 
@@ -725,7 +912,15 @@ class Phase1Tab(QWidget):
                         diagnostics["D1.1_total_detections"] = total_per_cam
 
                         # D1.2 / D1.3 revised
-                        corners_per_face = int(target.point_data.shape[-2])
+                        # PuzzleBoard's point_data spans the entire 501x501 virtual
+                        # code-lookup field (251,001 positions), not the physically
+                        # printed window. Use num_squares_x * num_squares_y for the
+                        # printed-window point count; all other targets (Ccube,
+                        # ChArUco, PuzzleBoardCube) correctly use point_data.shape[-2].
+                        if target.__class__.__name__ == "PuzzleBoard":
+                            corners_per_face = int(target.num_squares_x * target.num_squares_y)
+                        else:
+                            corners_per_face = int(target.point_data.shape[-2])
                         det_rate: dict[str, float] = {}
                         completeness: dict[str, float] = {}
 
@@ -792,10 +987,19 @@ class Phase1Tab(QWidget):
                         try:
                             from scipy.spatial import ConvexHull
                             coverage: dict[str, float] = {}
-                            for cam_det, res in zip(detections.get_cam_list(), cam_res):
-                                cam_idx = int(cam_det.get_data()[0, 0])
-                                cam_name = detections.cam_names[cam_idx]
-                                pts = cam_det.get_data()[:, -2:]
+                            # Use enumerate index (= cam_names order) instead of
+                            # get_data()[0, 0] which crashes when get_data() is
+                            # None for zero-detection cameras. Same fix pattern
+                            # as camera_calibrator.py:408.
+                            for cam_ind, (cam_det, res) in enumerate(
+                                zip(detections.get_cam_list(), cam_res)
+                            ):
+                                cam_name = detections.cam_names[cam_ind]
+                                data = cam_det.get_data()
+                                if data is None or len(data) == 0:
+                                    coverage[cam_name] = float("nan")
+                                    continue
+                                pts = data[:, -2:]
                                 img_area = float(res[0]) * float(res[1])
                                 if len(pts) >= 3:
                                     try:
@@ -1307,6 +1511,21 @@ class Phase1DiagnosticsTab(QWidget):
         if matrix_data is None:
             lbl = QLabel(
                 "No heatmap data in selected run(s).\nRe-run Phase 1 to generate it."
+            )
+            lbl.setStyleSheet("color: gray;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._heatmap_layout.addWidget(lbl)
+            return
+
+        # Guard: empty or non-2D feature matrix (happens when a run has
+        # zero detections across all cameras — matrix is [] or shape (0,)).
+        # Render an informative placeholder instead of crashing on
+        # n_ims, n_cams = matrix_data.shape (ValueError for 1-D arrays).
+        if matrix_data.size == 0 or matrix_data.ndim < 2:
+            lbl = QLabel(
+                "No detections for this run — heatmap is empty.\n"
+                "Check Phase 1 detection results; this run produced zero "
+                "detected features across all cameras."
             )
             lbl.setStyleSheet("color: gray;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)

@@ -203,6 +203,20 @@ def resolve_object_centre(target: object | None) -> dict:
     elif target.__class__.__name__ == "Ccube":
         point = np.zeros(3, dtype=float)
         mode = "target_origin"
+    elif target.__class__.__name__ == "PuzzleBoard":
+        # PuzzleBoard's point_data spans the full 501x501 periodic code field, not just
+        # the physically printed window — the naive centroid would land far outside the
+        # actual board. Compute the centre of the printed window from the target's own
+        # dimensions using the same coordinate formula as target_puzzleboard._make_point_data.
+        nsx = int(getattr(target, "num_squares_x", 105))
+        nsy = int(getattr(target, "num_squares_y", 148))
+        ss = float(getattr(target, "square_size", 2.0))
+        # Centre of the printed window: (col - start_x) ranges 0..nsx-1, so the
+        # midpoint is (nsx - 1) / 2 * square_size — same for y.
+        cx = (nsx - 1) / 2.0 * ss
+        cy = (nsy - 1) / 2.0 * ss
+        point = np.array([cx, cy, 0.0], dtype=float)
+        mode = "puzzleboard_printed_window_centre"
     elif hasattr(target, "origin"):
         point = np.asarray(getattr(target, "origin"), dtype=float).reshape(3)
         mode = "target_defined_origin"

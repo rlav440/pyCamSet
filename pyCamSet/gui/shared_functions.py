@@ -766,6 +766,18 @@ def build_target(
     charuco_detection_options: dict[str, dict[str, Any]] | None = None,
     border_fraction: float = 0.1,
     marker_fraction: float = 0.8,
+    # PuzzleBoard-only parameters:
+    num_squares_x: int = 105,
+    num_squares_y: int = 148,
+    square_size: float = 2.0,
+    start_x: int = 0,
+    start_y: int = 0,
+    paper_width: float = 210.0,
+    paper_height: float = 297.0,
+    min_width: int = 4,
+    # PuzzleBoardCube-only parameters:
+    num_squares_per_side: int = 20,
+    cube_square_size: float = 10.0,
 ):
     """Construct a calibration target from canonical GUI options."""
     from pyCamSet.calibration_targets.target_Ccube import Ccube
@@ -784,6 +796,29 @@ def build_target(
             num_squares_y=n_points,
             square_size=length,
             marker_fraction=marker_fraction,
+            detection_options=charuco_detection_options,
+        )
+    if target_type == "PuzzleBoard":
+        from pyCamSet.calibration_targets.target_puzzleboard import PuzzleBoard
+
+        return PuzzleBoard(
+            num_squares_x=num_squares_x,
+            num_squares_y=num_squares_y,
+            square_size=square_size,
+            start_x=start_x,
+            start_y=start_y,
+            paper_width=paper_width,
+            paper_height=paper_height,
+            min_width=min_width,
+            detection_options=charuco_detection_options,
+        )
+    if target_type == "PuzzleBoardCube":
+        from pyCamSet.calibration_targets.target_puzzleboard_cube import PuzzleBoardCube
+
+        return PuzzleBoardCube(
+            num_squares_per_side=num_squares_per_side,
+            square_size=cube_square_size,
+            min_width=min_width,
             detection_options=charuco_detection_options,
         )
     raise ValueError(f"Unknown target type: {target_type!r}")

@@ -76,7 +76,7 @@ except ImportError:
     load_CameraSet = None
     _PYCAMSET_OK = False
 
-_TARGET_CHOICES = ["Ccube", "ChArUco"]
+_TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
 
 
 class Phase4Tab(QWidget):
@@ -606,19 +606,34 @@ class Phase4Tab(QWidget):
                     out_cams.save(out_path)
 
                     visible = np.array(getattr(handler, "visible_feature_mask", []), dtype=bool)
-                    fixed_inds = list(getattr(handler, "fixed_inds", []))
+                    fixed_inds = [int(x) for x in getattr(handler, "fixed_inds", [])]
                     updated_target = np.array(handler.get_updated_target(optimisation.x), dtype=float)
                     ref_target = np.array(handler.target.point_data, dtype=float).reshape(-1, 3)
 
-                    with np.errstate(invalid="ignore", divide="ignore"):
-                        ref_norm = np.linalg.norm(ref_target, axis=1)
-                        upd_norm = np.linalg.norm(updated_target, axis=1)
+                    # Mask to only visible features for D4.5/D4.7. Flat PuzzleBoard's
+                    # point_data spans 251,001 virtual-field positions; only the
+                    # ~15,540 printed-window points are actually detected. Undetected
+                    # points are fixed at their initial values (ratio~1, disp~0),
+                    # which would dilute np.nanmedian(ratio) and np.nanmean(displacement)
+                    # if included. All other targets have no virtual-field padding, so
+                    # this mask is a no-op for them (visible is all-True for detected
+                    # points and correctly excludes only genuinely unseen features).
+                    if visible.size == ref_target.shape[0] and np.any(visible):
+                        ref_norm = np.linalg.norm(ref_target[visible], axis=1)
+                        upd_norm = np.linalg.norm(updated_target[visible], axis=1)
                         ratio = ref_norm / np.where(upd_norm == 0.0, np.nan, upd_norm)
+                        displacement = np.linalg.norm(updated_target[visible] - ref_target[visible], axis=1)
+                    else:
+                        with np.errstate(invalid="ignore", divide="ignore"):
+                            ref_norm = np.linalg.norm(ref_target, axis=1)
+                            upd_norm = np.linalg.norm(updated_target, axis=1)
+                            ratio = ref_norm / np.where(upd_norm == 0.0, np.nan, upd_norm)
+                        displacement = np.linalg.norm(updated_target - ref_target, axis=1)
                     scale_est = float(np.nanmedian(ratio)) if ratio.size else float("nan")
-                    displacement = np.linalg.norm(updated_target - ref_target, axis=1)
                     mean_disp_mm = float(np.nanmean(displacement) * 1000.0) if displacement.size else float("nan")
 
-                    per_im_init = np.array(getattr(handler, "initial_per_im_error", []), dtype=float)
+                    _raw_init = getattr(handler, "initial_per_im_error", None)
+                    per_im_init = np.asarray(_raw_init, dtype=float) if _raw_init is not None else np.array([])
                     per_cam_err: dict[str, float] = {}
                     try:
                         dd = np.asarray(handler.get_detection_data(flatten=True))
@@ -638,17 +653,29 @@ class Phase4Tab(QWidget):
                         emit(f"Warning: D4.12 skipped due to diagnostics error: {diag_exc}")
 
                     diagnostics["D4.1_n_free_target_points"] = int(np.sum(visible))
+                    emit(f"D4.1  Free target points: {diagnostics['D4.1_n_free_target_points']}")
                     diagnostics["D4.2_gauge_fixed_points"] = {"count": len(fixed_inds), "indices": fixed_inds}
+                    emit(f"D4.2  Gauge-fixed points: count={len(fixed_inds)}, indices={fixed_inds}")
                     diagnostics["D4.3_per_image_initial_reprojection"] = per_im_init.tolist()
                     diagnostics["D4.3_initial_euclid_px"] = init_euclid
                     diagnostics["D4.3_final_euclid_px"] = final_euclid
                     diagnostics["D4.4_vs_phase3_delta_px"] = d44
                     diagnostics["D4.5_gauge_scale_factor"] = scale_est
+                    emit(f"D4.5  Gauge scale factor: {scale_est:.6f}")
                     diagnostics["D4.7_mean_target_displacement_mm"] = mean_disp_mm
+                    emit(f"D4.7  Mean target displacement: {mean_disp_mm:.5f} mm")
                     diagnostics["D4.8_shape_change_arrows"] = "available in Assess Calibration"
                     diagnostics["D4.9_planarity_rms_mm"] = "available in backend special_plots"
                     diagnostics["D4.10_accuracy_precision"] = "available in Assess Calibration"
                     diagnostics["D4.12_per_camera_mean_reprojection"] = per_cam_err
+                    if per_cam_err:
+                        valid_cams = {k: v for k, v in per_cam_err.items() if np.isfinite(v)}
+                        if valid_cams:
+                            worst_cam = max(valid_cams, key=valid_cams.get)
+                            best_cam = min(valid_cams, key=valid_cams.get)
+                            emit(f"D4.12  Per-camera mean reprojection: best={best_cam}={valid_cams[best_cam]:.2f}px, worst={worst_cam}={valid_cams[worst_cam]:.2f}px")
+                        else:
+                            emit("D4.12  Per-camera mean reprojection: no valid cameras")
 
                     metadata = {
                         "run_id": run_id,
@@ -875,6 +902,30 @@ class Phase4DiagnosticsTab(QWidget):
                 form.addRow("D4.4 vs Phase 3 delta (px):", QLabel(f"{float(d.get('D4.4_vs_phase3_delta_px', float('nan'))):.5f}"))
                 form.addRow("D4.5 gauge scale factor:", QLabel(f"{float(d.get('D4.5_gauge_scale_factor', float('nan'))):.6f}"))
                 form.addRow("D4.7 mean target displacement (mm):", QLabel(f"{float(d.get('D4.7_mean_target_displacement_mm', float('nan'))):.5f}"))
+
+                # D4.12 — per-camera mean reprojection error
+                d412 = d.get("D4.12_per_camera_mean_reprojection", {})
+                if d412 and isinstance(d412, dict):
+                    valid = {k: v for k, v in d412.items() if isinstance(v, (int, float)) and np.isfinite(v)}
+                    if valid:
+                        worst_cam = max(valid, key=valid.get)
+                        worst_val = valid[worst_cam]
+                        best_cam = min(valid, key=valid.get)
+                        best_val = valid[best_cam]
+                        worst_lbl = QLabel(f"worst={worst_cam} ({worst_val:.2f} px), best={best_cam} ({best_val:.2f} px)")
+                        if worst_val > 3 * best_val and best_val > 0:
+                            worst_lbl.setStyleSheet("color: red; font-weight: bold;")
+                        form.addRow("D4.12 per-camera reprojection:", worst_lbl)
+                        for cam_name in sorted(d412.keys()):
+                            val = d412[cam_name]
+                            if isinstance(val, (int, float)) and np.isfinite(val):
+                                form.addRow(f"  {cam_name}:", QLabel(f"{val:.2f} px"))
+                            else:
+                                form.addRow(f"  {cam_name}:", QLabel("—"))
+                    else:
+                        form.addRow("D4.12 per-camera reprojection:", QLabel("no valid cameras"))
+                else:
+                    form.addRow("D4.12 per-camera reprojection:", QLabel("—"))
             if run.get("error"):
                 form.addRow("Error:", QLabel(str(run["error"])))
             self._summary_layout.addLayout(form)

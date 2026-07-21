@@ -321,6 +321,7 @@ def detect_datapoints_in_imfile(
     camset:CameraSet|None = None,
     subfolder_string: str|None = None,
     threads=1,
+    upscale_factor:int=1,
 ) -> tuple[TargetDetection, list[tuple]]:
     """
     This function organises the detection of the image datapoints in a folder of images.
@@ -340,6 +341,13 @@ def detect_datapoints_in_imfile(
 
     if camset is not None:
         cache_name = cache_name.split('.')[0] + "_with_calib.pickle"
+
+    # A.3: incorporate upscale factor into cache filename so different upscale
+    # settings get independent caches. When upscale_factor == 1 (default),
+    # keep the original cache name unchanged so existing caches stay valid.
+    if upscale_factor != 1:
+        base = cache_name.split('.')[0]
+        cache_name = f"{base}_upscale{upscale_factor}x.pickle"
 
     if not (f_loc / cache_name).exists() or not caching:
         logging.info('Not caching, starting detection')
@@ -364,6 +372,7 @@ def detect_datapoints_in_imfile(
                 n_lim=n_lim,
                 camera=cam,
                 threads=threads,
+                upscale_factor=upscale_factor,
             )
 
         if use_cams:
@@ -373,7 +382,11 @@ def detect_datapoints_in_imfile(
             detections = [work_fn(file) for file in tqdm(detected_sub_folders)]
         detected = reduce(lambda x, y: x + y, detections)
 
-        cam_res = [cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2] for cname in cam_names]
+        # A.2: cam_res must reflect the upscaled coordinate frame, not native.
+        # When upscale_factor > 1, detected 2D pixel coords are in the upscaled
+        # frame, so cam_res must match. Multiply native .shape[:2] by the factor
+        # (cheaper than re-reading the image and resizing it).
+        cam_res = [tuple(int(d * upscale_factor) for d in cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2]) for cname in cam_names]
 
         if caching:
             save_pickle((detected, cam_res), f_loc / cache_name)
@@ -390,11 +403,22 @@ def validate_detections(detected:TargetDetection, target:AbstractTarget):
 
     board_fraction = {}
 
-    corners_per_face = target.point_data.shape[-2]
+    # PuzzleBoard's point_data spans the entire 501x501 virtual code-lookup field
+    # (251,001 positions), not the physically printed window. Use num_squares_x *
+    # num_squares_y for the printed-window point count; all other targets (Ccube,
+    # ChArUco, PuzzleBoardCube) correctly use point_data.shape[-2].
+    if target.__class__.__name__ == "PuzzleBoard":
+        corners_per_face = int(target.num_squares_x * target.num_squares_y)
+    else:
+        corners_per_face = target.point_data.shape[-2]
     cam_names = detected.cam_names
 
-    for cam_list in detected.get_cam_list():
-        cam_ind = int(cam_list.get_data()[0,0])
+    # get_cam_list() returns one TargetDetection per camera in cam_names order,
+    # so the enumerate index equals the cam index stored in column 0.
+    # Indexing get_data()[0, 0] crashes when a camera has zero detections
+    # (get_data() returns None); the enumerate index is the same value
+    # and is safe for the empty-camera case.
+    for cam_ind, cam_list in enumerate(detected.get_cam_list()):
         cam_name = cam_names[cam_ind]
 
         board_detected = 0
@@ -415,11 +439,17 @@ def validate_detections(detected:TargetDetection, target:AbstractTarget):
                     seen.append(
                         total_seen / corners_per_face / n_boards
                     )
-        n_detected[cam_name] = board_detected / detected.max_ims
+        # Guard against zero max_ims (no images detected for any camera) so
+        # validate_detections reports 0% rather than crashing — it is a
+        # detection-quality reporter, not a crash-on-empty gate.
+        max_ims = detected.max_ims
+        n_detected[cam_name] = board_detected / max_ims if max_ims > 0 else 0.0
 
     for cam in cam_names:
         metric0 = n_detected[cam] * 100
-        metric1 = np.mean(board_fraction[cam]) * 100
+        # board_fraction[cam] may be absent if no boards were detected for this
+        # camera; treat that as 0% completeness rather than KeyError.
+        metric1 = np.mean(board_fraction[cam]) * 100 if board_fraction.get(cam) else 0.0
         logging.info(f'\tCamera "{cam}" detected boards: {metric0: .1f}%,'
                      f' board completeness: {metric1: .1f}%')
         if metric0 < 90:

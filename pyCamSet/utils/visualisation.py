@@ -24,6 +24,32 @@ except ImportError:  # pragma: no cover
 
 _LOGGER = logging.getLogger(__name__)
 
+def _target_mean_distance(target) -> float:
+    """Compute the mean Euclidean distance of target points from the origin.
+
+    For flat PuzzleBoard, point_data spans the entire 501x501 virtual code-lookup
+    field (251,001 positions), not the physically printed window. Computing the
+    mean over all positions gives an inflated value (~765mm vs ~194mm for the
+    printed window), which degrades the 3*mean_dist outlier filter and coordinate
+    frame sizing. This helper dispatches on target type: PuzzleBoard uses only
+    the printed-window points; all other targets use point_data directly.
+    """
+    if target.__class__.__name__ == "PuzzleBoard":
+        nsx = int(getattr(target, "num_squares_x", 105))
+        nsy = int(getattr(target, "num_squares_y", 148))
+        start_x = int(getattr(target, "start_x", 0))
+        start_y = int(getattr(target, "start_y", 0))
+        from pyCamSet.calibration_targets.target_puzzleboard import _CODE_SIZE
+        # Gather only the printed-window point coordinates from point_data.
+        pts = []
+        for row in range(start_y, start_y + nsy):
+            for col in range(start_x, start_x + nsx):
+                pid = row * _CODE_SIZE + col
+                pts.append(target.point_data[0, pid])
+        pts = np.array(pts, dtype=float)
+        return float(np.mean(np.linalg.norm(pts, axis=-1)))
+    return float(np.mean(np.linalg.norm(target.point_data, axis=-1)))
+
 blues_with_white = LinearSegmentedColormap.from_list('Blues_with_white', [(1, 1, 1), *plt.cm.Blues(np.linspace(0, 1, 1024)[:900])])
 
 
@@ -271,7 +297,7 @@ def visualise_calibration(
     col_locs = {}
     raw_obj_points  = []
     errors = []
-    mean_dist = np.mean(np.linalg.norm(param_handler.target.point_data, axis=-1))
+    mean_dist = _target_mean_distance(param_handler.target)
     bad_points = 0
     for point, im, key, c in zip(reconstructed, im_nums, keys, error_subset):
         inv_pose = np.empty(12)
@@ -288,10 +314,16 @@ def visualise_calibration(
             col_locs.setdefault(tuple(key.astype(int)), []).append(c)
             errors.append(c)
 
-    m = np.array(mask)
-    seen_pts = pv.PolyData(reconstructed[m])
-    seen_pts['Reprojection error (px)'] = error_subset[m]
-    plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=2, clim=[0, e_lim])
+    m = np.array(mask, dtype=bool)
+    if np.any(m):
+        seen_pts = pv.PolyData(reconstructed[m])
+        seen_pts['Reprojection error (px)'] = error_subset[m]
+        plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=2, clim=[0, e_lim])
+    else:
+        plotter.add_text(
+            "No points within outlier threshold",
+            position='upper_edge', font_size=10, font='times'
+        )
 
     plotter.subplot(1)
     plotter.add_text("Reconstructed Points in Target Coordinates", position="upper_edge", font_size=10, font='times')
@@ -687,22 +719,28 @@ def visualise_calibration_open3d(
 
         raw_obj_points: list[np.ndarray] = []
         errors: list[float] = []
-        mean_dist = np.mean(np.linalg.norm(param_handler.target.point_data, axis=-1))
+        mean_dist = _target_mean_distance(param_handler.target)
 
-        inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True)[1])
-        im_nums = reconstructed_subset[inv, 1]
+        if reconstructed.size == 0 or reconstructed_subset.size == 0:
+            # No reconstructed points — render an empty scene rather than
+            # crashing on the indexing below.
+            bad_points = 0
+            im_nums = np.array([], dtype=int)
+        else:
+            inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True)[1])
+            im_nums = reconstructed_subset[inv, 1]
 
-        bad_points = 0
-        for point, im, c in zip(reconstructed, im_nums, error_subset):
-            inv_pose = np.empty(12)
-            n_inv_pose(poses[int(im)], inv_pose)
-            obj_point = np.empty(3)
-            n_htform_prealloc(point, inv_pose, obj_point)
-            if np.linalg.norm(obj_point) < 3 * mean_dist:
-                raw_obj_points.append(obj_point.copy())
-                errors.append(float(c))
-            else:
-                bad_points += 1
+            bad_points = 0
+            for point, im, c in zip(reconstructed, im_nums, error_subset):
+                inv_pose = np.empty(12)
+                n_inv_pose(poses[int(im)], inv_pose)
+                obj_point = np.empty(3)
+                n_htform_prealloc(point, inv_pose, obj_point)
+                if np.linalg.norm(obj_point) < 3 * mean_dist:
+                    raw_obj_points.append(obj_point.copy())
+                    errors.append(float(c))
+                else:
+                    bad_points += 1
 
         scene_geoms, camera_positions, camera_names = _build_open3d_scene_view(
             cams,
@@ -868,7 +906,7 @@ def render_calibration_pyvista_png(
         )
         error_subset = np.array([np.mean(euclidean_err[datum]) for datum in where_mask])
 
-        mean_dist = np.mean(np.linalg.norm(param_handler.target.point_data, axis=-1))
+        mean_dist = _target_mean_distance(param_handler.target)
         inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True)[1])
         im_nums = reconstructed_subset[inv, 1]
         keys = reconstructed_subset[inv, 2:-2]

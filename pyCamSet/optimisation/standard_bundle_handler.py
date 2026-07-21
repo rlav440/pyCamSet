@@ -381,8 +381,17 @@ class SelfBundleHandler(TemplateBundleHandler):
             inds = np.triu_indices(point_estimate[vm].shape[0], k=1)
             new_map = cdist(point_estimate[vm], point_estimate[vm])[inds]
             ref_map = cdist(ref_points[vm], ref_points[vm])[inds]
-            dt = self.target.square_size 
-            # dt = 0.0045 #hard coded for today
+            # Derive the expected adjacent-point distance from the reference points
+            # themselves, to avoid unit mismatches between target.square_size
+            # (which may be in mm or m depending on the target class) and ref_map
+            # (which is always in the same units as point_data, i.e. metres).
+            # Exclude near-zero cross-face coincidences (cube edges/corners where
+            # faces share points in 3D) by requiring a 1µm minimum; real grid
+            # spacing for physical targets is always > 1mm.
+            nonzero_dists = ref_map[ref_map > 1e-6]
+            if len(nonzero_dists) == 0:
+                raise ValueError("No non-zero reference point distances found for gauge transform.")
+            dt = np.min(nonzero_dists)
             mask = np.isclose(ref_map, dt)
             new_map = new_map[mask]
             ref_map = ref_map[mask]
@@ -410,7 +419,7 @@ class SelfBundleHandler(TemplateBundleHandler):
             logging.critical("Failed to find an acceptable gauge transform, returning the identity")
             logging.critical(f"Gave error: {e}")
             update_tform = np.eye(4)
-            breakpoint()
+            logging.error("apply_gauge_transform: using identity fallback — gauge transform failed; breakpoint() removed to prevent headless hang")
 
         inv_update = np.linalg.inv(update_tform)
         # inv_update = np.eye(4)
@@ -489,37 +498,36 @@ class SelfBundleHandler(TemplateBundleHandler):
         # s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[1]]*descale), color='k')
         # s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[2]]*descale), color='k')
 
-        p1, np1, cp1 = pv.fit_plane_to_points(final_data[vm & m1]*descale, return_meta=True)
-        p4, np4, cp4 = pv.fit_plane_to_points(final_data[vm & m4]*descale, return_meta=True)
-        p5, np5, cp5 = pv.fit_plane_to_points(final_data[vm & m5]*descale, return_meta=True)
+        # The face-based plane fitting and wireframe rendering below assumes a
+        # 6-face cube target (Ccube/PuzzleBoardCube), where point_data is divided
+        # into 6 equal segments (one per face). For flat PuzzleBoard (1 face,
+        # 251,001 virtual-field points), this division produces arbitrary segments
+        # with invalid grid connectivity. Skip the face-based sections for any
+        # target that is not a multi-face cube.
+        _target_name = self.target.__class__.__name__
+        _is_cube_target = _target_name in ("Ccube", "PuzzleBoardCube")
+        if _is_cube_target:
+            p1, np1, cp1 = pv.fit_plane_to_points(final_data[vm & m1]*descale, return_meta=True)
+            p4, np4, cp4 = pv.fit_plane_to_points(final_data[vm & m4]*descale, return_meta=True)
+            p5, np5, cp5 = pv.fit_plane_to_points(final_data[vm & m5]*descale, return_meta=True)
 
-        s1 = pv.PolyData(og_data[m1]*descale, lines=make_connectivity(og_data[m1]))
-        s.add_mesh(s1, style='wireframe', line_width=2, color='k', opacity=0.1)
-        s4 = pv.PolyData(og_data[m4]*descale, lines=make_connectivity(og_data[m4]))
-        s.add_mesh(s4, style='wireframe', line_width=2, color='k', opacity=0.1)
-        s5 = pv.PolyData(og_data[m5]*descale, lines=make_connectivity(og_data[m5]))
-        s.add_mesh(s5, style='wireframe', line_width=2, color='k', opacity=0.1)
+            s1 = pv.PolyData(og_data[m1]*descale, lines=make_connectivity(og_data[m1]))
+            s.add_mesh(s1, style='wireframe', line_width=2, color='k', opacity=0.1)
+            s4 = pv.PolyData(og_data[m4]*descale, lines=make_connectivity(og_data[m4]))
+            s.add_mesh(s4, style='wireframe', line_width=2, color='k', opacity=0.1)
+            s5 = pv.PolyData(og_data[m5]*descale, lines=make_connectivity(og_data[m5]))
+            s.add_mesh(s5, style='wireframe', line_width=2, color='k', opacity=0.1)
 
         labels = np.arange(len(og_data))
         s.add_point_labels(descale * og_data[vm], labels[vm])
         s.show()
-        raise ValueError()
-        # rms1 = rms_plane(np1, cp1, final_data[vm & m1]*descale)
-        # rms4 = rms_plane(np4, cp4, final_data[vm & m4]*descale)
-        # rms5 = rms_plane(np5, cp5, final_data[vm & m5]*descale)
-        # print(rms1, rms4, rms5)
-        # # s.add_mesh(pv.PolyData(final_data[vm & m2]), point_size=6)
-        # s.add_mesh(p1, color='lightblue', opacity=0.7)
-        # s.add_mesh(p4, color='lightblue', opacity=0.7)
-        # s.add_mesh(p5, color='lightblue', opacity=0.7)
         s.add_legend(bcolor='w', border=True)
-        
-    
-        a14 = angle_between_planes(cp1, cp4)
-        a15 = angle_between_planes(cp1, cp5)
-        a45 = angle_between_planes(cp4, cp5)
 
-        print(a14, a15, a45)
+        if _is_cube_target:
+            a14 = angle_between_planes(cp1, cp4)
+            a15 = angle_between_planes(cp1, cp5)
+            a45 = angle_between_planes(cp4, cp5)
+            logging.debug("Plane angles: a14=%s, a15=%s, a45=%s", a14, a15, a45)
 
         camera = s.camera
         camera.position = (-60, -60, -36)

@@ -90,7 +90,7 @@ except ImportError:
     load_pickle = None
     _PYCAMSET_OK = False
 
-_TARGET_CHOICES = ["Ccube", "ChArUco"]
+_TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
 
 
 class Phase3Tab(QWidget):
@@ -188,6 +188,7 @@ class Phase3Tab(QWidget):
         )
         target_sect.addRow("Target type:", self._target_combo)
 
+        self._npts_label = QLabel("n_points / squares_x:")
         self._npts_spin = QSpinBox()
         self._npts_spin.setRange(2, 30)
         self._npts_spin.setValue(6)
@@ -198,8 +199,9 @@ class Phase3Tab(QWidget):
             "Range: 2–30\n"
             "Guidance: must exactly match the value used in Phase 1."
         )
-        target_sect.addRow("n_points / squares_x:", self._npts_spin)
+        target_sect.addRow(self._npts_label, self._npts_spin)
 
+        self._length_label = QLabel("Length / square size (mm):")
         self._length_edit = QLineEdit("30.0")
         self._length_edit.setFixedWidth(110)
         self._length_edit.setToolTip(
@@ -207,7 +209,7 @@ class Phase3Tab(QWidget):
             "Default: 30.0 mm\n"
             "Guidance: must exactly match the value used in Phase 1."
         )
-        target_sect.addRow("Length / square size (mm):", self._length_edit)
+        target_sect.addRow(self._length_label, self._length_edit)
 
         self._border_label = QLabel("Border fraction (Ccube):")
         self._border_spin = QDoubleSpinBox()
@@ -224,6 +226,66 @@ class Phase3Tab(QWidget):
         self._marker_spin.setSingleStep(0.05)
         self._marker_spin.setValue(0.8)
         target_sect.addRow(self._marker_label, self._marker_spin)
+
+        # ── PuzzleBoard-specific fields ───────────────────────────────
+        self._pb_x_spin = QSpinBox()
+        self._pb_x_spin.setRange(2, 501)
+        self._pb_x_spin.setValue(105)
+        self._pb_x_spin.setFixedWidth(90)
+        target_sect.addRow("PB num_squares_x:", self._pb_x_spin)
+
+        self._pb_y_spin = QSpinBox()
+        self._pb_y_spin.setRange(2, 501)
+        self._pb_y_spin.setValue(148)
+        self._pb_y_spin.setFixedWidth(90)
+        target_sect.addRow("PB num_squares_y:", self._pb_y_spin)
+
+        self._pb_square_edit = QLineEdit("2.0")
+        self._pb_square_edit.setFixedWidth(110)
+        target_sect.addRow("PB square_size (mm):", self._pb_square_edit)
+
+        self._pb_start_x_spin = QSpinBox()
+        self._pb_start_x_spin.setRange(0, 500)
+        self._pb_start_x_spin.setValue(0)
+        self._pb_start_x_spin.setFixedWidth(90)
+        target_sect.addRow("PB start_x:", self._pb_start_x_spin)
+
+        self._pb_start_y_spin = QSpinBox()
+        self._pb_start_y_spin.setRange(0, 500)
+        self._pb_start_y_spin.setValue(0)
+        self._pb_start_y_spin.setFixedWidth(90)
+        target_sect.addRow("PB start_y:", self._pb_start_y_spin)
+
+        self._pb_paper_w_edit = QLineEdit("210.0")
+        self._pb_paper_w_edit.setFixedWidth(110)
+        target_sect.addRow("PB paper_width (mm):", self._pb_paper_w_edit)
+
+        self._pb_paper_h_edit = QLineEdit("297.0")
+        self._pb_paper_h_edit.setFixedWidth(110)
+        target_sect.addRow("PB paper_height (mm):", self._pb_paper_h_edit)
+
+        self._pb_min_width_spin = QSpinBox()
+        self._pb_min_width_spin.setRange(1, 501)
+        self._pb_min_width_spin.setValue(4)
+        self._pb_min_width_spin.setFixedWidth(90)
+        target_sect.addRow("PB min_width:", self._pb_min_width_spin)
+
+        # ── PuzzleBoardCube-specific fields ───────────────────────────
+        self._pbc_size_spin = QSpinBox()
+        self._pbc_size_spin.setRange(2, 160)
+        self._pbc_size_spin.setValue(20)
+        self._pbc_size_spin.setFixedWidth(90)
+        target_sect.addRow("PBC squares per face:", self._pbc_size_spin)
+
+        self._pbc_square_edit = QLineEdit("10.0")
+        self._pbc_square_edit.setFixedWidth(110)
+        target_sect.addRow("PBC square_size (mm):", self._pbc_square_edit)
+
+        self._pbc_min_width_spin = QSpinBox()
+        self._pbc_min_width_spin.setRange(1, 501)
+        self._pbc_min_width_spin.setValue(4)
+        self._pbc_min_width_spin.setFixedWidth(90)
+        target_sect.addRow("PBC min_width:", self._pbc_min_width_spin)
 
         self._target_combo.currentTextChanged.connect(self._on_target_type_changed)
         self._on_target_type_changed(self._target_combo.currentText())
@@ -556,6 +618,16 @@ class Phase3Tab(QWidget):
                 float(self._length_edit.text().strip()),
                 border_fraction=self._border_spin.value(),
                 marker_fraction=self._marker_spin.value(),
+                num_squares_x=self._pb_x_spin.value(),
+                num_squares_y=self._pb_y_spin.value(),
+                square_size=float(self._pb_square_edit.text().strip() or "2.0"),
+                start_x=self._pb_start_x_spin.value(),
+                start_y=self._pb_start_y_spin.value(),
+                paper_width=float(self._pb_paper_w_edit.text().strip() or "210.0"),
+                paper_height=float(self._pb_paper_h_edit.text().strip() or "297.0"),
+                min_width=self._pb_min_width_spin.value(),
+                num_squares_per_side=self._pbc_size_spin.value(),
+                cube_square_size=float(self._pbc_square_edit.text().strip() or "10.0"),
             )
         except Exception:
             target = None
@@ -618,10 +690,26 @@ class Phase3Tab(QWidget):
 
     def _on_target_type_changed(self, target_type: str) -> None:
         is_ccube = target_type == "Ccube"
+        is_charuco_only = target_type == "ChArUco"
+        is_puzzleboard = target_type == "PuzzleBoard"
+        is_puzzleboard_cube = target_type == "PuzzleBoardCube"
+        show_ccube_charuco = is_ccube or is_charuco_only
         self._border_label.setVisible(is_ccube)
         self._border_spin.setVisible(is_ccube)
-        self._marker_label.setVisible(not is_ccube)
-        self._marker_spin.setVisible(not is_ccube)
+        self._marker_label.setVisible(is_charuco_only)
+        self._marker_spin.setVisible(is_charuco_only)
+        self._npts_label.setVisible(show_ccube_charuco)
+        self._npts_spin.setVisible(show_ccube_charuco)
+        self._length_label.setVisible(show_ccube_charuco)
+        self._length_edit.setVisible(show_ccube_charuco)
+        # PuzzleBoard fields.
+        for w in (self._pb_x_spin, self._pb_y_spin, self._pb_square_edit,
+                  self._pb_start_x_spin, self._pb_start_y_spin,
+                  self._pb_paper_w_edit, self._pb_paper_h_edit, self._pb_min_width_spin):
+            w.setVisible(is_puzzleboard)
+        # PuzzleBoardCube fields.
+        for w in (self._pbc_size_spin, self._pbc_square_edit, self._pbc_min_width_spin):
+            w.setVisible(is_puzzleboard_cube)
 
     def _collect_params(self) -> Optional[dict]:
         floc = self._floc_edit.text().strip()
@@ -672,6 +760,28 @@ class Phase3Tab(QWidget):
                 QMessageBox.critical(self, "Validation Error", f"Effective lockbox source does not exist: {effective_lockbox_source_path}")
                 return None
 
+        # PuzzleBoard / PuzzleBoardCube parameters.
+        try:
+            pb_square_size = float(self._pb_square_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoard square_size must be numeric.")
+            return None
+        try:
+            pb_paper_width = float(self._pb_paper_w_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_width must be numeric.")
+            return None
+        try:
+            pb_paper_height = float(self._pb_paper_h_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_height must be numeric.")
+            return None
+        try:
+            pbc_square_size = float(self._pbc_square_edit.text().strip())
+        except ValueError:
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube square_size must be numeric.")
+            return None
+
         return {
             "f_loc": floc,
             "threads": threads,
@@ -681,6 +791,18 @@ class Phase3Tab(QWidget):
             "length": length,
             "border_fraction": self._border_spin.value(),
             "marker_fraction": self._marker_spin.value(),
+            # PuzzleBoard:
+            "num_squares_x": self._pb_x_spin.value(),
+            "num_squares_y": self._pb_y_spin.value(),
+            "square_size": pb_square_size,
+            "start_x": self._pb_start_x_spin.value(),
+            "start_y": self._pb_start_y_spin.value(),
+            "paper_width": pb_paper_width,
+            "paper_height": pb_paper_height,
+            "min_width": self._pb_min_width_spin.value(),
+            # PuzzleBoardCube:
+            "num_squares_per_side": self._pbc_size_spin.value(),
+            "cube_square_size": pbc_square_size,
             "lockbox": {
                 "enabled": bool(lockbox_enabled),
                 "original_source_camset": original_lockbox_source_path if lockbox_enabled else None,
@@ -934,6 +1056,16 @@ class Phase3Tab(QWidget):
                         params["length"],
                         border_fraction=params.get("border_fraction", 0.1),
                         marker_fraction=params.get("marker_fraction", 0.8),
+                        num_squares_x=params.get("num_squares_x", 105),
+                        num_squares_y=params.get("num_squares_y", 148),
+                        square_size=params.get("square_size", 2.0),
+                        start_x=params.get("start_x", 0),
+                        start_y=params.get("start_y", 0),
+                        paper_width=params.get("paper_width", 210.0),
+                        paper_height=params.get("paper_height", 297.0),
+                        min_width=params.get("min_width", 4),
+                        num_squares_per_side=params.get("num_squares_per_side", 20),
+                        cube_square_size=params.get("cube_square_size", 10.0),
                     )
                     lockbox_params = dict(params.get("lockbox") or {})
                     lockbox_config = CameraLockboxConfig(
@@ -1054,7 +1186,7 @@ class Phase3Tab(QWidget):
                         "observation_count": obs_count,
                         "ratio": float(param_count / max(obs_count, 1)),
                     }
-                    diagnostics["D3.11_residual_xy_scatter"] = "rendered in diagnostics tab"
+                    diagnostics["D3.11_residual_xy_scatter"] = residual_xy.tolist() if 'residual_xy' in locals() else []
                     diagnostics["D3.12_per_camera_mean_reprojection"] = per_cam_err
                     diagnostics["D3.13_extrinsic_pose_view"] = "rendered in diagnostics tab"
 
@@ -1249,6 +1381,10 @@ class Phase3DiagnosticsTab(QWidget):
         self._residual_widget, self._residual_layout, self._residual_scroll = make_scrollable_tab()
         self._sub_tabs.addTab(self._residual_widget, "Residuals / Per-camera (D3.11-D3.12)")
 
+        # D3.13 — Camera extrinsic poses sub-tab
+        self._poses_widget, self._poses_layout, self._poses_scroll = make_scrollable_tab()
+        self._sub_tabs.addTab(self._poses_widget, "Camera Poses (D3.13)")
+
         self._visual_widget = QWidget()
         visual_layout = QVBoxLayout(self._visual_widget)
         visual_btn_row = QHBoxLayout()
@@ -1312,6 +1448,7 @@ class Phase3DiagnosticsTab(QWidget):
         self._render_summary(selected)
         self._render_initial_plot(selected)
         self._render_residuals(selected)
+        self._render_poses(selected)
 
     def _on_selection_changed(self, runs: list[dict]) -> None:
         self._run_selector.enforce_max_selection(4)
@@ -1319,6 +1456,7 @@ class Phase3DiagnosticsTab(QWidget):
         self._render_summary(selected)
         self._render_initial_plot(selected)
         self._render_residuals(selected)
+        self._render_poses(selected)
 
     def _go_to_settings(self) -> None:
         for i in range(self._notebook.count()):
@@ -1717,6 +1855,16 @@ class Phase3DiagnosticsTab(QWidget):
                     src_params.get("length", 30.0),
                     border_fraction=src_params.get("border_fraction", 0.1),
                     marker_fraction=src_params.get("marker_fraction", 0.8),
+                    num_squares_x=src_params.get("num_squares_x", 105),
+                    num_squares_y=src_params.get("num_squares_y", 148),
+                    square_size=src_params.get("square_size", 2.0),
+                    start_x=src_params.get("start_x", 0),
+                    start_y=src_params.get("start_y", 0),
+                    paper_width=src_params.get("paper_width", 210.0),
+                    paper_height=src_params.get("paper_height", 297.0),
+                    min_width=src_params.get("min_width", 4),
+                    num_squares_per_side=src_params.get("num_squares_per_side", 20),
+                    cube_square_size=src_params.get("cube_square_size", 10.0),
                 )
                 problem_options = dict(src_params.get("problem_options") or {})
                 threads = src_params.get("threads", 1)
@@ -1836,7 +1984,7 @@ class Phase3DiagnosticsTab(QWidget):
                     "observation_count": obs_count,
                     "ratio": float(param_count / max(obs_count, 1)),
                 }
-                diagnostics["D3.11_residual_xy_scatter"] = "rendered in diagnostics tab"
+                diagnostics["D3.11_residual_xy_scatter"] = residual_xy.tolist() if 'residual_xy' in locals() else []
                 diagnostics["D3.12_per_camera_mean_reprojection"] = per_cam_err
                 diagnostics["D3.13_extrinsic_pose_view"] = "rendered in diagnostics tab"
 
@@ -1978,6 +2126,37 @@ class Phase3DiagnosticsTab(QWidget):
                 min_height=360,
             )
         )
+
+        # D3.11 — Residual x/y scatter (one point per detection)
+        d311 = d.get("D3.11_residual_xy_scatter", [])
+        if d311 and isinstance(d311, list) and len(d311) > 0:
+            try:
+                res_arr = np.array(d311, dtype=float)
+                if res_arr.ndim == 2 and res_arr.shape[1] == 2:
+                    fig2 = Figure(figsize=(8.2, 6.0), tight_layout=True)
+                    ax2 = fig2.add_subplot(111)
+                    ax2.scatter(res_arr[:, 0], res_arr[:, 1], s=4, alpha=0.4, c="#1f77b4")
+                    ax2.axhline(0, color="#888", linewidth=0.5)
+                    ax2.axvline(0, color="#888", linewidth=0.5)
+                    ax2.set_xlabel("Residual x (px)")
+                    ax2.set_ylabel("Residual y (px)")
+                    ax2.set_title(
+                        f"D3.11 Residual x/y scatter ({run.get('run_id', '?')})\n"
+                        f"({res_arr.shape[0]} detections)"
+                    )
+                    ax2.set_aspect("equal", adjustable="box")
+                    ax2.grid(alpha=0.2)
+                    self._residual_layout.addWidget(
+                        MatplotlibFigureCard(
+                            f"D3.11 Residual x/y scatter ({run.get('run_id', '?')})",
+                            fig2,
+                            FigureCanvasQTAgg,
+                            parent=self._residual_widget,
+                            min_height=360,
+                        )
+                    )
+            except Exception:
+                pass  # D3.11 rendering is best-effort
 
     def _render_poses(self, runs: list[dict]) -> None:
         while self._poses_layout.count():

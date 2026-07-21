@@ -12,7 +12,7 @@ from matplotlib import pyplot as plt
 
 
 from pyCamSet.cameras.camera import Camera
-from pyCamSet.utils.visualisation import visualise_calibration
+from pyCamSet.utils.visualisation import visualise_calibration, _target_mean_distance
 from pyCamSet.utils.general_utils import get_subfolder_names
 from pyCamSet.utils.general_utils import get_close_square_tuple, glob_ims_local
 
@@ -736,7 +736,7 @@ class CameraSet:
         im_nums = reconstructed_subset[inv, 1]
         keys = reconstructed_subset[inv, 2:-2]
         #point_errors = error_subset[inv]
-        mean_dist = np.mean(np.linalg.norm(self.calibration_handler.target.point_data, axis=-1))
+        mean_dist = _target_mean_distance(self.calibration_handler.target)
         mask = []
         for point, im in zip(reconstructed, im_nums):
             inv_pose = np.empty(12)

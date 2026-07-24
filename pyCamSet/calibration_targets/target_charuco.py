@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import cairosvg
 import cv2
 import numpy as np
 import svgwrite
@@ -100,6 +99,18 @@ class ChArUco(AbstractTarget):
         f_out.parent.mkdir(parents=True, exist_ok=True)
 
         if data_format == "vector":
+            try:
+                import cairosvg
+            except OSError as _cairo_err:
+                raise OSError(
+                    f"{_cairo_err}\n\n"
+                    "pyCamSet's ChArUco/Ccube target code requires the native 'cairo' "
+                    "library, which cairosvg needs but pip cannot install reliably on "
+                    "Windows.\n"
+                    "Fix: if using conda, run:\n"
+                    "    conda install -c conda-forge cairo\n"
+                    "Then try importing pyCamSet again."
+                ) from _cairo_err
             svg_out = f_out.with_suffix(".svg")
             self.save_to_svg(svg_out, suppress_svg_log=True)
             cairosvg.svg2pdf(url=str(svg_out), write_to=str(f_out))

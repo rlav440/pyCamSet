@@ -42,6 +42,27 @@ pyCamSet is a python library for multi-camera calibration for MVS systems and in
 ### Pre-requisites 
 - Python versions:
    - 3.11
+
+#### Native cairo library (for ChArUco, Ccube, PuzzleBoard, and PuzzleBoardCube targets)
+
+pyCamSet's target-generation and detection code for ChArUco, Ccube,
+PuzzleBoard, and PuzzleBoardCube imports `cairosvg` at module level.
+`cairosvg` depends on `cairocffi`, which needs the native `cairo` library
+to be installed separately — `pip` alone cannot provide this reliably on
+Windows. If the native library is missing, importing any of these target
+modules will fail with an `OSError` about a missing `cairo-2` library.
+
+**Install the native cairo library before importing these modules:**
+
+- **conda (Windows/Linux/macOS):** `conda install -c conda-forge cairo`
+- **Debian/Ubuntu:** `apt install libcairo2` *(best-guess — not verified
+  by the pyCamSet team; the system package name may differ on other
+  distributions)*
+- **macOS (Homebrew):** `brew install cairo`
+
+After installing the native library, `pip install cairosvg` (or
+`conda install -c conda-forge cairosvg`) should work without errors, and
+`import pyCamSet.calibration_targets.target_charuco` will succeed.
 ###  Installing via PyPI
 
 Here is the [link](https://pypi.org/project/pyCamSet/) to our project on PyPI

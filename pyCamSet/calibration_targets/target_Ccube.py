@@ -8,7 +8,6 @@ from cv2 import aruco
 import cv2
 from PIL import Image
 import svgwrite
-import cairosvg
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
@@ -190,6 +189,18 @@ class Ccube(AbstractTarget):
             return
 
         if data_format == "vector":
+            try:
+                import cairosvg
+            except OSError as _cairo_err:
+                raise OSError(
+                    f"{_cairo_err}\n\n"
+                    "pyCamSet's ChArUco/Ccube target code requires the native 'cairo' "
+                    "library, which cairosvg needs but pip cannot install reliably on "
+                    "Windows.\n"
+                    "Fix: if using conda, run:\n"
+                    "    conda install -c conda-forge cairo\n"
+                    "Then try importing pyCamSet again."
+                ) from _cairo_err
             if f_out is None:
                 f_out = Path(
                     f'Ccube_length_{self.length * 1000:.2f}mm'

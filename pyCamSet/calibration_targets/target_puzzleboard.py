@@ -4,7 +4,6 @@ from io import BytesIO  # Hold temporary SVG rasterisations in memory for PDF/pl
 import logging  # Report completed target exports.
 from pathlib import Path  # Provide the same path handling as the ChArUco target.
 
-import cairosvg  # Convert the vector SVG to PDF or PNG when requested.
 import cv2  # Draw optional detections and provide image constants.
 import matplotlib.pyplot as plt  # Display the generated target in plot().
 import numpy as np  # Store code tables, object points, and detector results.
@@ -207,6 +206,18 @@ class PuzzleBoard(AbstractTarget):
         f_out = f_out.expanduser().with_suffix(".pdf").resolve()  # Force the correct PDF extension.
         f_out.parent.mkdir(parents=True, exist_ok=True)  # Create the output directory when needed.
         svg_text = self._svg_document().tostring()  # Use one vector source for both PDF formats.
+        try:
+            import cairosvg
+        except OSError as _cairo_err:
+            raise OSError(
+                f"{_cairo_err}\n\n"
+                "pyCamSet's target-generation code requires the native 'cairo' "
+                "library, which cairosvg needs but pip cannot install reliably on "
+                "Windows.\n"
+                "Fix: if using conda, run:\n"
+                "    conda install -c conda-forge cairo\n"
+                "Then try importing pyCamSet again."
+            ) from _cairo_err
         if data_format == "vector":  # Preserve the original vector geometry in the PDF.
             cairosvg.svg2pdf(bytestring=svg_text.encode("utf-8"), write_to=str(f_out))  # Convert SVG paths without rasterising.
             logging.info("Saved PuzzleBoard Vector PDF: %s", f_out)  # Report the completed vector export.
@@ -261,6 +272,18 @@ class PuzzleBoard(AbstractTarget):
 
     def plot(self, imres: tuple[int, int] = (1000, 1000)) -> None:
         """Display a rasterised preview of the vector target."""
+        try:
+            import cairosvg
+        except OSError as _cairo_err:
+            raise OSError(
+                f"{_cairo_err}\n\n"
+                "pyCamSet's target-generation code requires the native 'cairo' "
+                "library, which cairosvg needs but pip cannot install reliably on "
+                "Windows.\n"
+                "Fix: if using conda, run:\n"
+                "    conda install -c conda-forge cairo\n"
+                "Then try importing pyCamSet again."
+            ) from _cairo_err
         png = cairosvg.svg2png(  # Rasterise only for interactive display; the saved target remains vector.
             bytestring=self._svg_document().tostring().encode("utf-8"),
             output_width=int(imres[0]),

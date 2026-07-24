@@ -4,7 +4,6 @@ from io import BytesIO  # Hold temporary SVG rasterisations in memory for PDF an
 import logging  # Report completed cube exports.
 from pathlib import Path  # Provide the same path handling as the other target generators.
 
-import cairosvg  # Convert the vector net to PDF or raster preview data.
 import cv2  # Draw optional detector results.
 import numpy as np  # Store face origins, object points, and detected coordinates.
 from PIL import Image  # Convert rasterised SVG data to PDF and texture arrays.
@@ -435,6 +434,18 @@ class PuzzleBoardCube(AbstractTarget):
         f_out.parent.mkdir(parents=True, exist_ok=True)  # Ensure the destination directory exists.
         drawing, canvas_w_mm, canvas_h_mm = self._svg_document(border_width, draw_cut_outline, draw_face_ids)  # Build one SVG source.
         svg_bytes = drawing.tostring().encode("utf-8")  # Convert the svgwrite document to Cairo input.
+        try:
+            import cairosvg
+        except OSError as _cairo_err:
+            raise OSError(
+                f"{_cairo_err}\n\n"
+                "pyCamSet's target-generation code requires the native 'cairo' "
+                "library, which cairosvg needs but pip cannot install reliably on "
+                "Windows.\n"
+                "Fix: if using conda, run:\n"
+                "    conda install -c conda-forge cairo\n"
+                "Then try importing pyCamSet again."
+            ) from _cairo_err
         if data_format == "vector":  # Preserve all vector primitives in the resulting PDF.
             cairosvg.svg2pdf(bytestring=svg_bytes, write_to=str(f_out))  # Convert SVG without rasterising.
             logging.info("Saved PuzzleBoard cube Vector PDF: %s", f_out)  # Report the completed vector export.
@@ -453,6 +464,18 @@ class PuzzleBoardCube(AbstractTarget):
 
     def plot(self, return_scene: bool = False, draw_res: tuple[int, int] = (800, 800)):
         """Visualise the six textured faces in a 3-D pyVista scene."""
+        try:
+            import cairosvg
+        except OSError as _cairo_err:
+            raise OSError(
+                f"{_cairo_err}\n\n"
+                "pyCamSet's target-generation code requires the native 'cairo' "
+                "library, which cairosvg needs but pip cannot install reliably on "
+                "Windows.\n"
+                "Fix: if using conda, run:\n"
+                "    conda install -c conda-forge cairo\n"
+                "Then try importing pyCamSet again."
+            ) from _cairo_err
         textures: list[np.ndarray] = []  # Build one raster texture per face only when visualisation is requested.
         for face_index in range(FACE_COUNT):  # Rasterise each deterministic face pattern.
             png = cairosvg.svg2png(  # Use the requested preview resolution for each face texture.

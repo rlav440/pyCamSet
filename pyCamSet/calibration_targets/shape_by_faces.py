@@ -18,7 +18,7 @@ def make_shape(shape_name, size=None):
     if shape_name == "cube":
         return pv.Cube(x_length=size, y_length=size, z_length=size)
     elif shape_name == "Icosahedron":
-        return pv.Icosahedron()
+        return pv.Icosahedron(radius=size)
     raise ValueError(f"Unknown shape: {shape_name}")
 
 def bound_pts(face, res):

@@ -5,7 +5,12 @@ from typing import overload
 import cv2
 import numpy as np
 from numpy.linalg import norm
-import pyvista as pv
+try:
+    import pyvista as pv
+    _PYVISTA_OK = True
+except ImportError:  # pragma: no cover
+    pv = None
+    _PYVISTA_OK = False
 from pathlib import Path
 from copy import deepcopy
 from matplotlib import pyplot as plt

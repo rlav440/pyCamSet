@@ -6,7 +6,12 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import pyvista as pv
+try:
+    import pyvista as pv
+    _PYVISTA_OK = True
+except ImportError:  # pragma: no cover
+    pv = None
+    _PYVISTA_OK = False
 from matplotlib import pyplot as plt
 from numpy.linalg import norm
 

@@ -195,11 +195,12 @@ class Ccube(AbstractTarget):
                 raise OSError(
                     f"{_cairo_err}\n\n"
                     "pyCamSet's ChArUco/Ccube target code requires the native 'cairo' "
-                    "library, which cairosvg needs but pip cannot install reliably on "
-                    "Windows.\n"
-                    "Fix: if using conda, run:\n"
-                    "    conda install -c conda-forge cairo\n"
-                    "Then try importing pyCamSet again."
+                    "library, which cairosvg requires but pip cannot install on its own.\n"
+                    "Install the native cairo library for your platform, then re-import pyCamSet:\n"
+                    "  - conda (Windows/Linux/macOS):  conda install -c conda-forge cairo\n"
+                    "  - Debian/Ubuntu:                 apt install libcairo2\n"
+                    "  - macOS (Homebrew):              brew install cairo\n"
+                    "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
                 ) from _cairo_err
             if f_out is None:
                 f_out = Path(

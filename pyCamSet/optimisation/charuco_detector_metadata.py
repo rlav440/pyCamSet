@@ -1,9 +1,4 @@
-"""Purpose: Define the Optimisation tab's shared detector-parameter metadata.
-
-Status: Active source of truth for GUI rows, validation, sampling, and detector-option assembly.
-
-Future: Keep targeted support for discrete detector enums minimal unless the UI needs more categorical fields.
-"""
+"""Define the Optimisation tab's shared detector-parameter metadata."""
 from __future__ import annotations
 
 from typing import Any, Iterable
@@ -33,6 +28,7 @@ CHARUCO_PARAMETER_METADATA: list[dict[str, Any]] = [
         "min": 3,
         "max": 99,
         "step": 2,
+        "odd": True,
         "concept": (
             "Minimum adaptive-threshold window size used during marker "
             "candidate extraction.  Must be odd."
@@ -47,6 +43,7 @@ CHARUCO_PARAMETER_METADATA: list[dict[str, Any]] = [
         "min": 3,
         "max": 199,
         "step": 2,
+        "odd": True,
         "concept": (
             "Maximum adaptive-threshold window size used during marker "
             "candidate extraction.  Must be odd and >= min."
@@ -321,7 +318,7 @@ def validate_parameter_row(
     lower: Any | None = None,
     upper: Any | None = None,
 ) -> list[str]:
-    """Validate one parameter row (§16.1).
+    """Validate one parameter row.
 
     Returns a list of human-readable error strings.  An empty list means the
     row is valid.  This function is pure — it does not raise.

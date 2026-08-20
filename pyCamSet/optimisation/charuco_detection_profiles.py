@@ -1,9 +1,4 @@
-"""Purpose: Define named ChArUco detection-bound profiles for the Optimisation tab.
-
-Status: Active profile presets used to pre-fill detector lower/upper bounds in the GUI.
-
-Future: Keep this limited to ChArUco detection bounds unless a broader cross-tab profile design is introduced.
-"""
+"""Define named ChArUco detection-bound profiles for the Optimisation tab."""
 from __future__ import annotations
 
 from typing import Any

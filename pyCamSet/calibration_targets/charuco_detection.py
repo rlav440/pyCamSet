@@ -18,7 +18,13 @@ def _group_options(detection_options: dict | None, group_name: str) -> dict:
 def _coerce_corner_refinement_method(value):
     """Resolve enum-like string values to OpenCV constants when needed."""
     if isinstance(value, str):  # GUI values arrive as enum names.
-        return getattr(aruco, value, value)  # Prefer the OpenCV constant when it exists.
+        resolved = getattr(aruco, value, None)  # Look up the OpenCV constant by name.
+        if resolved is None:  # Unknown name: fail clearly rather than passing a bad string to OpenCV.
+            raise ValueError(
+                f"Unknown corner refinement method {value!r}; expected one of "
+                "NONE, REFINE_SUBPIX, REFINE_CONTOUR, REFINE_APRILTAG."
+            )
+        return resolved
     return value  # Pass through numeric/native values unchanged.
 
 

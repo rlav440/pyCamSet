@@ -16,6 +16,7 @@ pyCamSet/calibration_targets/charuco_detection.py
 pyCamSet/calibration_targets/create_Ccube.py
 pyCamSet/calibration_targets/create_charuco.py
 pyCamSet/calibration_targets/create_puzzleboard.py
+pyCamSet/calibration_targets/create_puzzleboard_cube.py
 pyCamSet/calibration_targets/net_maker.py
 pyCamSet/calibration_targets/puzzleboard_detection.py
 pyCamSet/calibration_targets/shape_by_faces.py
@@ -23,6 +24,7 @@ pyCamSet/calibration_targets/target_Ccube.py
 pyCamSet/calibration_targets/target_charuco.py
 pyCamSet/calibration_targets/target_detections.py
 pyCamSet/calibration_targets/target_puzzleboard.py
+pyCamSet/calibration_targets/target_puzzleboard_cube.py
 pyCamSet/cameras/__init__.py
 pyCamSet/cameras/camera.py
 pyCamSet/cameras/camera_set.py
@@ -70,10 +72,8 @@ pyCamSet/reconstruction/__init__.py
 pyCamSet/reconstruction/acmmp_utils.py
 pyCamSet/reconstruction/reconstruction_utils.py
 pyCamSet/utils/__init__.py
+pyCamSet/utils/cairo_dll_helper.py
 pyCamSet/utils/general_utils.py
 pyCamSet/utils/saving.py
 pyCamSet/utils/visualisation.py
-tests/test_lockbox_geometry.py
-tests/test_loss_fscale_gui_widgets.py
-tests/test_optimisation_tab.py
-tests/test_soft_lockbox.py
+tests/test_lockbox_reshape.py

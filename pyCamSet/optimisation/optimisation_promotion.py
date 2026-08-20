@@ -1,9 +1,4 @@
-"""Purpose: Bridge retained optimisation trials into normal workspace phase outputs.
-
-Status: Active helper for Optimisation-tab full mode and retained-run promotion.
-
-Future: Replace the lightweight metadata copies if phase tabs gain shared service APIs.
-"""
+"""Bridge retained optimisation trials into normal workspace phase outputs."""
 from __future__ import annotations
 
 import json

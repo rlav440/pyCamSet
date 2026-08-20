@@ -15,6 +15,25 @@ import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.template_handler as th
 
 from pyCamSet.calibration_targets import TargetDetection
+
+
+def _split_residuals(fun, param_handler):
+    """Split a residual vector into reprojection and lockbox-prior segments.
+
+    Lockbox prior residuals are appended after the reprojection residuals by
+    ``append_lockbox_residuals``.  The reprojection segment is always an even
+    length (two residuals per observation), so it can be reshaped into
+    ``(x, y)`` pairs for the Euclidean RPE.  The prior segment is returned
+    separately and must not be folded into the per-row norm, which would
+    dilute the RPE (and crash the reshape when the total length is odd).
+    """
+    fun = np.asarray(fun)
+    base_count = 0
+    if param_handler is not None:
+        base_count = int(getattr(param_handler, "get_base_residual_count", lambda: 0)())
+    if base_count <= 0 or base_count >= fun.size:
+        return fun, None
+    return fun[:base_count], fun[base_count:]
     
 if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
@@ -64,7 +83,8 @@ def run_bundle_adjustment(param_handler: th.TemplateBundleHandler,
     )
 
     init_err = loss_fn(init_params)
-    init_euclid = np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1))
+    init_reproj, _ = _split_residuals(init_err, param_handler)
+    init_euclid = np.mean(np.linalg.norm(np.reshape(init_reproj, (-1, 2)), axis=1))
     logging.info(f'found {len(init_params):.2e} parameters')
     logging.info(f'found {len(init_err):.2e} control points')
     logging.info(f'Initial Euclidean error: {init_euclid:.2f} px')
@@ -94,14 +114,16 @@ def run_bundle_adjustment(param_handler: th.TemplateBundleHandler,
         # tr_solver='lsmr',
         jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
         max_nfev=param_handler.problem_opts["max_nfev"],
-        # loss = "cauchy"
+        loss=param_handler.problem_opts.get("loss", "linear"),
+        f_scale=param_handler.problem_opts.get("f_scale", 1.0),
         x_scale='jac',
         xtol=1e-4,
         bounds=bounds,
     )
     end = time.time()
 
-    final_euclid = np.mean(np.linalg.norm(np.reshape(optimisation.fun, (-1, 2)), axis=1))
+    final_reproj, _ = _split_residuals(optimisation.fun, param_handler)
+    final_euclid = np.mean(np.linalg.norm(np.reshape(final_reproj, (-1, 2)), axis=1))
     logging.info(f'Final Euclidean error: {final_euclid:.2f} px')
     logging.info(f'Optimisation took {end - start: .2f} seconds.')
 
@@ -113,7 +135,8 @@ def run_bundle_adjustment(param_handler: th.TemplateBundleHandler,
     camset.set_calibration_history(optimisation, param_handler)
 
     init_err = loss_fn(optimisation.x)
-    init_euclid = np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1))
+    init_reproj, _ = _split_residuals(init_err, param_handler)
+    init_euclid = np.mean(np.linalg.norm(np.reshape(init_reproj, (-1, 2)), axis=1))
     logging.info(f"Check test with a result of {init_euclid:.2f}")
 
     return optimisation, camset
@@ -137,13 +160,16 @@ def get_bundle_adjustment_stats(
         or a code path that never called ``calc_initial_params``), the corresponding
         keys are simply omitted and the rest of the stats dict is unaffected.
     """
-    init_euclid = float(np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1)))
-    final_euclid = float(np.mean(np.linalg.norm(np.reshape(optimisation.fun, (-1, 2)), axis=1)))
+    init_reproj, _ = _split_residuals(init_err, param_handler)
+    init_euclid = float(np.mean(np.linalg.norm(np.reshape(init_reproj, (-1, 2)), axis=1)))
+    final_reproj, final_priors = _split_residuals(optimisation.fun, param_handler)
+    final_euclid = float(np.mean(np.linalg.norm(np.reshape(final_reproj, (-1, 2)), axis=1)))
     stats = {
         "initial_euclid": init_euclid,
         "final_euclid": final_euclid,
         "param_count": int(len(init_params)),
-        "observation_count": int(len(optimisation.fun) // 2),
+        "observation_count": int(len(final_reproj) // 2),
+        "prior_residual_count": int(final_priors.size) if final_priors is not None else 0,
         "elapsed_sec": float(elapsed_sec),
         "status": int(optimisation.status),
         "success": bool(optimisation.success),

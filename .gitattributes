@@ -1,0 +1,10 @@
+# Normalise line endings to LF in the repository so diffs against upstream
+# stay clean on Windows/Linux/macOS checkouts (see PR #18 style review).
+* text=auto
+*.py text eol=lf
+*.cfg text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf

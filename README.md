@@ -39,7 +39,7 @@ pyCamSet is a python library for multi-camera calibration for MVS systems and in
 
 ## Getting started
 
-### Pre-requisites 
+### Pre-requisites
 - Python versions:
    - 3.11
 
@@ -74,18 +74,23 @@ pip install pyCamSet
 
 The PuzzleBoard calibration target is provided by and depends on the upstream
 [PuzzleBoard repository](https://github.com/PStelldinger/PuzzleBoard) by Peer
-Stelldinger and the HAW Hamburg authors. pyCamSet installs that repository
-directly from GitHub; it is intentionally a required dependency of the
-PuzzleBoard target so that the original project remains identifiable and
-credited.
+Stelldinger and the HAW Hamburg authors. Because that repository is a research
+codebase that is not published on PyPI, it is an *optional* dependency: the
+core pyCamSet install does not pull it in, and the PuzzleBoard target is only
+available when it is installed separately.
 
-For the vector SVG/PDF target generators, install the graphics dependencies in
-the active conda environment:
+To use the PuzzleBoard target, install the optional dependency:
+
+```powershell
+pip install "pyCamSet[puzzle]"
+```
+
+For the vector SVG/PDF target generators, also install the graphics
+dependencies in the active conda environment:
 
 ```powershell
 conda activate [your calibration env here]
 conda install -c conda-forge cairo cairosvg svgwrite
-pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
 ```
 
 The PuzzleBoard source is released under CC0 in its upstream repository. Users
@@ -98,7 +103,7 @@ The `PuzzleBoardCube` target assigns six disjoint, deterministic windows of the
 same periodic PuzzleBoard code to the cube faces in the fixed order front,
 right, back, left, top, bottom. Its `puzzle-cube-v1` layout is non-random and
 reproducible: identical face-size and square-size parameters produce identical
-face patterns and cube geometry. This is a modified implementation of the original 
+face patterns and cube geometry. This is a modified implementation of the original
 PuzzleBoard target, which is a single planar target. The cube version is intended
 to be similar to the ccube target.
 
@@ -107,8 +112,8 @@ the three-column, two-row face layout, which tiles the 501x501 PuzzleBoard code
 field exactly without overlap. The cube generator rejects larger values rather
 than allowing windows to overlap or exceed the code period.
 
-## Reporting issues 
-To report an issue or suggest a new feature, please use the [issues page](https://github.com/rlav440/pyCamSet/issues). 
+## Reporting issues
+To report an issue or suggest a new feature, please use the [issues page](https://github.com/rlav440/pyCamSet/issues).
 Please check existing issues before submitting a new one.
 
 ## Contributors

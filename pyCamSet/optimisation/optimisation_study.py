@@ -1,22 +1,10 @@
-"""Purpose: Headless data model for the Optimisation tab.
-
-Status: Active scoring, retention, and metadata support for optimisation studies.
-
-Future: Keep persisted metadata backwards-compatible for promoted retained runs.
+"""Headless data model for the Optimisation tab.
 
 This module is intentionally GUI-free and Optuna-free so it can be unit-tested
 without a display or the optional ``optuna`` dependency.  It implements the
-spec sections:
-
-- §8: coverage / quality metrics
-- §9: validity rules
-- §10: objective functions
-- §11: successful run definition
-- §12: retention policy (best-N successes, default 20)
-- §13: metadata saving
-- §16: validation rules
-- §20: trial result schema
-- §24: success ranking semantics
+coverage/quality metrics, validity rules, objective functions, retention
+policy, metadata saving, and success-ranking semantics for optimisation
+studies.
 
 The trial-runner worker (``pyCamSet.optimisation.optimisation_worker``) and
 the optional Optuna adapter
@@ -37,25 +25,25 @@ from pyCamSet.utils.general_utils import get_subfolder_names
 
 
 # ---------------------------------------------------------------------------
-# Constants from the spec
+# Constants
 # ---------------------------------------------------------------------------
 
-OBJECTIVE_DIRECTION = "minimize"
-"""Lower is better — applies to both fast and full mode (§10)."""
+OBJECTIVE_DIRECTION = "minimize"  # Optuna API string — must stay US-spelled.
+"""Lower is better — applies to both fast and full mode."""
 
 FAILURE_SCORE: float = 1e9
-"""Score assigned to invalid trials (§9)."""
+"""Score assigned to invalid trials."""
 
 MAX_SUCCESSES_HARD_CAP: int = 20
-"""Hard cap for retained successful runs (§4.4, §12)."""
+"""Hard cap for retained successful runs."""
 
-# Full-mode penalty thresholds (§10.1, §23)
+# Full-mode penalty thresholds
 FULL_IMAGE_COVERAGE_MIN: float = 0.60
 FULL_CAMERA_COVERAGE_MIN: float = 0.90
 FULL_MULTICAM_COVERAGE_MIN: float = 0.50
 FULL_POINT_RATIO_MIN: float = 0.70
 
-# Fast-mode penalty thresholds (§10.2, §23)
+# Fast-mode penalty thresholds
 FAST_IMAGE_COVERAGE_MIN: float = 0.50
 FAST_CAMERA_COVERAGE_MIN: float = 0.60
 FAST_MULTICAM_COVERAGE_MIN: float = 0.40
@@ -91,11 +79,11 @@ _TRIAL_GATING_PRESETS: dict[str, dict[str, float]] = {
     },
 }
 
-# Stage offsets used by the full-mode objective (§10.1).
+# Stage offsets used by the full-mode objective.
 STAGE_OFFSET_PHASE3: float = 0.00
 STAGE_OFFSET_PHASE4: float = 0.25
 
-# Score added to phase4-unsuccessful but still-valid trials (§10.1, recommended policy).
+# Score added to phase4-unsuccessful but still-valid trials.
 UNSUCCESSFUL_FULL_STAGE_OFFSET: float = 1.0
 
 
@@ -106,7 +94,7 @@ UNSUCCESSFUL_FULL_STAGE_OFFSET: float = 1.0
 
 @dataclass
 class TrialResult:
-    """Structured trial outcome (§20).
+    """Structured trial outcome.
 
     Use :meth:`as_dict` for JSON-ready serialisation.
     """
@@ -149,7 +137,7 @@ class TrialResult:
 
 
 # ---------------------------------------------------------------------------
-# Trial gating (§9)
+# Trial gating
 # ---------------------------------------------------------------------------
 
 
@@ -204,7 +192,7 @@ def make_trial_gating_settings(profile_name: str = "Moderate") -> TrialGatingSet
 
 
 # ---------------------------------------------------------------------------
-# Coverage metrics (§8)
+# Coverage metrics
 # ---------------------------------------------------------------------------
 
 
@@ -213,7 +201,7 @@ def compute_coverage_metrics(
     *,
     baseline_point_count: Optional[int] = None,
 ) -> dict[str, float]:
-    """Compute the §8 coverage metrics from a per-image-per-camera feature table.
+    """Compute the coverage metrics from a per-image-per-camera feature table.
 
     Parameters
     ----------
@@ -222,7 +210,7 @@ def compute_coverage_metrics(
         of detected features per image / camera cell.  Cells with ``0`` are
         treated as unused.
     baseline_point_count:
-        Optional reference count for :math:`point\\_ratio` (§8.5).  When
+        Optional reference count for :math:`point\\_ratio` .  When
         ``None`` or ``<= 0``, the point ratio is set to ``0.0``.
 
     Returns a dict with keys ``image_coverage``, ``camera_coverage``,
@@ -266,7 +254,7 @@ def compute_coverage_metrics(
 
 
 # ---------------------------------------------------------------------------
-# Validity (§9)
+# Validity
 # ---------------------------------------------------------------------------
 
 
@@ -290,7 +278,7 @@ def assess_validity(
     trial_gating: Optional[TrialGatingSettings] = None,
     final_rpe: Optional[float] = None,
 ) -> ValidityVerdict:
-    """Apply the §9 validity rules."""
+    """Apply the validity rules."""
     gating = trial_gating or make_trial_gating_settings()
     if coverage.get("point_count", 0) <= 0:
         return ValidityVerdict(False, "no usable detections", "detection")
@@ -358,7 +346,7 @@ def assess_validity(
 
 
 # ---------------------------------------------------------------------------
-# Objective functions (§10)
+# Objective functions
 # ---------------------------------------------------------------------------
 
 
@@ -378,7 +366,7 @@ def compute_full_score(
     multicam_image_coverage: float,
     point_ratio: float,
 ) -> tuple[float, Optional[float]]:
-    """Full-mode objective (§10.1).
+    """Full-mode objective.
 
     Returns ``(score, final_rpe)``.  ``final_rpe`` is ``None`` for invalid trials.
     """
@@ -397,8 +385,8 @@ def compute_full_score(
     if success_stage == "phase4" and phase4_rpe is not None:
         return STAGE_OFFSET_PHASE4 + float(phase4_rpe) + penalties, float(phase4_rpe)
 
-    # Valid but unsuccessful: keep ranking information per the §10.1
-    # "recommended policy".  Prefer the latest available RPE.
+    # Valid but unsuccessful: keep ranking information per the
+    # recommended policy.  Prefer the latest available RPE.
     ranking_rpe = phase4_rpe if phase4_rpe is not None else phase3_rpe
     if ranking_rpe is None:
         return FAILURE_SCORE, None
@@ -413,7 +401,7 @@ def compute_fast_score(
     multicam_image_coverage: float,
     point_ratio: float,
 ) -> float:
-    """Fast-mode objective (§10.2).  Lower is better."""
+    """Fast-mode objective.  Lower is better."""
     if not valid:
         return FAILURE_SCORE
     return (
@@ -425,12 +413,12 @@ def compute_fast_score(
 
 
 # ---------------------------------------------------------------------------
-# Retention (§12, §24)
+# Retention
 # ---------------------------------------------------------------------------
 
 
 def _stage_rank(stage: Optional[str]) -> int:
-    """Lower is better — phase3 preferred over phase4 (§24)."""
+    """Lower is better — phase3 preferred over phase4."""
     if stage == "phase3":
         return 0
     if stage == "phase4":
@@ -439,7 +427,7 @@ def _stage_rank(stage: Optional[str]) -> int:
 
 
 def _ranking_key(result: TrialResult) -> tuple[float, float, int, float, int]:
-    """Tie-breaker key for §24."""
+    """Tie-breaker key for ranking."""
     rpe = result.final_rpe if result.final_rpe is not None else math.inf
     coverage_score = -(
         result.image_coverage + result.camera_coverage + result.multicam_image_coverage
@@ -454,7 +442,7 @@ def _ranking_key(result: TrialResult) -> tuple[float, float, int, float, int]:
 
 
 def clamp_retain_count(value: int, *, hard_cap: int = MAX_SUCCESSES_HARD_CAP) -> int:
-    """Clamp the user-supplied "retain successes" value to ``[1, hard_cap]`` (§12)."""
+    """Clamp the user-supplied "retain successes" value to ``[1, hard_cap]``."""
     try:
         v = int(value)
     except (TypeError, ValueError):
@@ -463,9 +451,9 @@ def clamp_retain_count(value: int, *, hard_cap: int = MAX_SUCCESSES_HARD_CAP) ->
 
 
 class SuccessRetention:
-    """Bounded best-N container for successful full-mode trials (§12).
+    """Bounded best-N container for successful full-mode trials.
 
-    The container retains the *best* successes by §24 ranking, not the
+    The container retains the *best* successes by ranking, not the
     earliest.  Operations are O(N log N) per insert which is fine for N <= 20.
     """
 
@@ -484,7 +472,7 @@ class SuccessRetention:
         return iter(self.ranked())
 
     def ranked(self) -> list[TrialResult]:
-        """Return retained successes in §24 order (best first)."""
+        """Return retained successes in ranking order (best first)."""
         return sorted(self._items, key=_ranking_key)
 
     def consider(self, result: TrialResult) -> bool:
@@ -512,7 +500,7 @@ class SuccessRetention:
 
 
 # ---------------------------------------------------------------------------
-# Run-level validation (§16.2)
+# Run-level validation
 # ---------------------------------------------------------------------------
 
 
@@ -527,7 +515,7 @@ def validate_run_settings(
     target_settings: dict[str, Any],
     trial_gating: Optional[dict[str, Any]] = None,
 ) -> list[str]:
-    """Validate global run settings (§16.2).  Returns a list of error messages."""
+    """Validate global run settings.  Returns a list of error messages."""
     errors: list[str] = []
     p = Path(f_loc) if f_loc else None
     if p is None or not str(p):
@@ -584,7 +572,7 @@ def validate_run_settings(
 
 
 # ---------------------------------------------------------------------------
-# Metadata writer (§13, §14)
+# Metadata writer
 # ---------------------------------------------------------------------------
 
 
@@ -603,7 +591,7 @@ def default_output_dir(f_loc: Path | str, study_id: Optional[str] = None) -> Pat
 
 
 def trial_subdir_name(result: TrialResult) -> str:
-    """Return the subdirectory name for one successful trial (§13.1)."""
+    """Return the subdirectory name for one successful trial."""
     stage = result.success_stage or "valid"
     return f"trial_{result.trial_number:06d}_{stage}"
 
@@ -622,7 +610,7 @@ def write_trial_metadata(
     camset_path: Optional[Path | str] = None,
     extra: Optional[dict[str, Any]] = None,
 ) -> Path:
-    """Persist a per-trial metadata record (§13.2, §13.3).
+    """Persist a per-trial metadata record.
 
     Returns the path to the written JSON file.  The function also stores the
     written path on ``result.saved_metadata_path`` for convenience.
@@ -714,7 +702,7 @@ def write_study_summary(
     sampler_name: Optional[str] = None,
     seed: Optional[int] = None,
 ) -> Path:
-    """Write a top-level ``study_summary.json`` (§13.1)."""
+    """Write a top-level ``study_summary.json``."""
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     summary = {

@@ -1843,7 +1843,7 @@ class Phase3DiagnosticsTab(QWidget):
 
                 # ── Save filtered detection pickle ──────────────────────
                 filt_pickle_path = run_dir / "filtered_detected_datapoints.pickle"
-                with open(filt_pickle_path, "wb") as fh:
+                with open(as_io_path(filt_pickle_path), "wb") as fh:
                     _pkl.dump(filtered_det, fh)
                 emit(f"Saved filtered detections: {filt_pickle_path}")
 

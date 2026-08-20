@@ -1,17 +1,9 @@
-"""Purpose: PySide6 Optimisation tab for detector sweeps and retained-run promotion.
+"""PySide6 Optimisation tab for detector sweeps and retained-run promotion.
 
-Status: Active GUI shell for fast/full optimisation studies.
-
-Future: Move any remaining backend orchestration into optimisation service helpers.
-
-The tab implements the user-facing parts of the Optimisation Tab Specification:
-
-- §4.1 Paths
-- §4.2 Calibration Target
-- §4.3 Optimisation Mode
-- §4.4 Calibration Controls
-- §4.5 ChArUco Detection Options (built dynamically from the metadata table)
-- §4.6 Results / Progress
+The tab implements the user-facing parts of the Optimisation tab: paths,
+calibration target, optimisation mode, calibration controls, ChArUco
+detection options (built dynamically from the metadata table), and results /
+progress.
 
 Heavy lifting (detection, phase 3, phase 4, scoring, retention, metadata)
 lives in :mod:`pyCamSet.optimisation.optimisation_worker` and is invoked from

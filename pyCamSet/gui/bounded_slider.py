@@ -1,9 +1,4 @@
-"""Purpose: Render one Optimisation-tab detector-parameter row.
-
-Status: Active shared widget for numeric detector sliders and the discrete corner-refinement selector.
-
-Future: Keep special-case categorical handling narrow unless more Optimisation controls genuinely need it.
-"""
+"""Render one Optimisation-tab detector-parameter row."""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -42,7 +37,7 @@ def _make_spin(entry: dict[str, Any]) -> QDoubleSpinBox | QSpinBox:
 
 
 class BoundedSliderRow(QWidget):
-    """One detector-parameter row (§4.5).
+    """One detector-parameter row.
 
     Signals
     -------

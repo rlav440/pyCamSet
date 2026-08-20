@@ -195,8 +195,8 @@ def run_initial_calibration(detection: TargetDetection,
             )
         results = [work_fn(datum) for datum in work_data]
         raw_calibration = [res[0] for res in results]
-        poses = np.asarray([res[1] for res in results], dtype=object)
-        per_im = np.asarray([res[2] for res in results], dtype=object)
+        poses = [res[1] for res in results]
+        per_im = [res[2] for res in results]
     else:
         work_fn = lambda datum: calibration_target.initial_calibration(
                 cam_name=datum[0],

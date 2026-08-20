@@ -165,8 +165,16 @@ def _is_candidate_camera_folder(path: Path) -> bool:
     if path.name.startswith("."):  # Ignore hidden/system folders, including workspace folders.
         return False
     if path.name in _IGNORED_CAMERA_ROOT_FOLDERS:  # Ignore known generated non-camera folders.
+        logging.warning(
+            "Ignoring folder %r: it is a known generated (non-camera) folder.", path.name
+        )
         return False
     if not glob_ims_local(path):  # Ignore folders that contain no supported image files.
+        logging.warning(
+            "Ignoring folder %r: it contains no image files directly (images in nested "
+            "subfolders are not detected). If this is a camera folder, move its images "
+            "to the folder root or pass a subfolder_string.", path.name
+        )
         return False
     return True
 

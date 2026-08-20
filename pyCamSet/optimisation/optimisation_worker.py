@@ -1,16 +1,12 @@
-"""Purpose: Headless backend worker for the Optimisation tab.
+"""Headless backend worker for the Optimisation tab.
 
-Status: Active optimisation orchestration used by the GUI and tests.
-
-Future: Keep GUI-specific promotion and target widgets outside this module.
-
-This module orchestrates one trial of the §27 execution contract:
+This module orchestrates one optimisation trial end-to-end:
 
 - builds the effective detector settings (fixed + Optuna-sampled overrides),
 - runs phase 1 detection on the dataset (or invokes the injected detection callable),
 - runs phase 2 initial calibration from that trial's detections,
 - runs phase 3 bundle adjustment and optionally phase 4 self-calibration,
-- computes the §10 objective,
+- computes the objective score,
 - writes per-success metadata via :mod:`pyCamSet.optimisation.optimisation_study`.
 
 The worker exposes a synchronous, callable Python API (``run_trial``) and an
@@ -111,7 +107,7 @@ class TargetSettings:
 
 @dataclass
 class CalibrationControls:
-    """Non-detector optimisation settings (§4.4)."""
+    """Non-detector optimisation settings."""
 
     outliers: str = "n"  # "ask" | "y" | "n"
     max_nfev_phase3: int = 100
@@ -131,7 +127,7 @@ class CalibrationControls:
 
 @dataclass
 class RunConfig:
-    """Full configuration for an optimisation study run (§19)."""
+    """Full configuration for an optimisation study run."""
 
     f_loc: Path
     mode: str = "full"  # "fast" | "full"
@@ -408,9 +404,9 @@ def default_phase4_fn(
 
 
 class CancelToken:
-    """Thread-safe cancellation flag (§17.1).
+    """Thread-safe cancellation flag.
 
-    The §17.1 contract is: cancellation stops new trials from starting and lets
+    The contract is: cancellation stops new trials from starting and lets
     the in-flight trial finish cleanly.  Callers should periodically check
     :meth:`is_cancelled`.
     """
@@ -517,7 +513,7 @@ def run_trial(
     Returns ``(result, payload)`` where ``payload`` contains the trial's
     detection / phase outputs and is suitable for downstream camset saving.
     Failure modes are caught and surfaced via :attr:`TrialResult.failure_reason`
-    rather than re-raised; this matches §22's per-trial recoverable failure
+    rather than re-raised; this matches the per-trial recoverable failure
     policy.
     """
     effective = build_effective_settings(rows, sampled=sampled)
@@ -768,7 +764,7 @@ class OptimisationStudy:
     # ------------------------------------------------------------------
 
     def validate(self) -> list[str]:
-        """Run §16 validation; returns list of error messages."""
+        """Run validation; returns list of error messages."""
         errors = validate_run_settings(
             f_loc=self.config.f_loc,
             n_trials=self.config.n_trials,
@@ -796,7 +792,7 @@ class OptimisationStudy:
     # ------------------------------------------------------------------
 
     def compute_baseline(self) -> Optional[int]:
-        """Run detection once with fixed defaults to anchor :math:`point\\_ratio` (§18)."""
+        """Run detection once with fixed defaults to anchor :math:`point\\_ratio` ."""
         baseline_settings = fixed_settings_only(self.config.parameter_rows)
         grouped = detection_options_from_settings(baseline_settings)
         try:
@@ -819,7 +815,7 @@ class OptimisationStudy:
             if not self.write_metadata:
                 return
             if not result.successful:
-                return  # §13: per-success metadata
+                return  # per-success metadata
             camset_path = None
             detection_pickle_path = None
             phase2_camset_path = None

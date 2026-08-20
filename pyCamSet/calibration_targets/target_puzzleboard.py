@@ -212,11 +212,12 @@ class PuzzleBoard(AbstractTarget):
             raise OSError(
                 f"{_cairo_err}\n\n"
                 "pyCamSet's target-generation code requires the native 'cairo' "
-                "library, which cairosvg needs but pip cannot install reliably on "
-                "Windows.\n"
-                "Fix: if using conda, run:\n"
-                "    conda install -c conda-forge cairo\n"
-                "Then try importing pyCamSet again."
+                "library, which cairosvg requires but pip cannot install on its own.\n"
+                "Install the native cairo library for your platform, then re-import pyCamSet:\n"
+                "  - conda (Windows/Linux/macOS):  conda install -c conda-forge cairo\n"
+                "  - Debian/Ubuntu:                 apt install libcairo2\n"
+                "  - macOS (Homebrew):              brew install cairo\n"
+                "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
             ) from _cairo_err
         if data_format == "vector":  # Preserve the original vector geometry in the PDF.
             cairosvg.svg2pdf(bytestring=svg_text.encode("utf-8"), write_to=str(f_out))  # Convert SVG paths without rasterising.
@@ -278,11 +279,12 @@ class PuzzleBoard(AbstractTarget):
             raise OSError(
                 f"{_cairo_err}\n\n"
                 "pyCamSet's target-generation code requires the native 'cairo' "
-                "library, which cairosvg needs but pip cannot install reliably on "
-                "Windows.\n"
-                "Fix: if using conda, run:\n"
-                "    conda install -c conda-forge cairo\n"
-                "Then try importing pyCamSet again."
+                "library, which cairosvg requires but pip cannot install on its own.\n"
+                "Install the native cairo library for your platform, then re-import pyCamSet:\n"
+                "  - conda (Windows/Linux/macOS):  conda install -c conda-forge cairo\n"
+                "  - Debian/Ubuntu:                 apt install libcairo2\n"
+                "  - macOS (Homebrew):              brew install cairo\n"
+                "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
             ) from _cairo_err
         png = cairosvg.svg2png(  # Rasterise only for interactive display; the saved target remains vector.
             bytestring=self._svg_document().tostring().encode("utf-8"),

@@ -1,9 +1,15 @@
+from __future__ import annotations
 import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
 import cv2
-import pyvista as pv
+try:
+    import pyvista as pv
+    _PYVISTA_OK = True
+except ImportError:  # pragma: no cover
+    pv = None
+    _PYVISTA_OK = False
 from functools import reduce
 
 from pyCamSet.cameras import Camera

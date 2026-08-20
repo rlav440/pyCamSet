@@ -12,12 +12,26 @@ uniplot
 scikit-learn
 scikit-image
 dill
-PySide6
-open3d
 cairosvg
 svgwrite
 pillow
-puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git
+
+[all]
+optuna
+PySide6
+open3d
+pyvista
+puzzle_board@ git+https://github.com/PStelldinger/PuzzleBoard.git
+
+[gui]
+PySide6
 
 [optimisation]
 optuna
+
+[puzzle]
+puzzle_board@ git+https://github.com/PStelldinger/PuzzleBoard.git
+
+[viz]
+open3d
+pyvista

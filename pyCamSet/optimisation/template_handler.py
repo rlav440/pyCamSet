@@ -2,6 +2,7 @@ from __future__ import annotations
 from tqdm import tqdm
 from scipy.sparse import csgraph
 import logging
+import sys
 from copy import copy, deepcopy
 from uniplot import plot as uplot, uniplot
 
@@ -19,7 +20,12 @@ import pyCamSet.optimisation.abstract_function_blocks as afb
 from pyCamSet import CameraSet, Camera
 
 from pyCamSet.calibration_targets import TargetDetection
-import pyvista as pv
+try:
+    import pyvista as pv
+    _PYVISTA_OK = True
+except ImportError:  # pragma: no cover
+    pv = None
+    _PYVISTA_OK = False
 
 # Import lockbox functionality
 from pyCamSet.optimisation.camera_lockbox import (
@@ -155,6 +161,7 @@ class TemplateBundleHandler:
         self.point_data = deepcopy(target.point_data)
         self.target_point_shape = np.array(target.point_data.shape)
         self.initial_params = None
+        self._base_residual_count = 0  # reprojection residuals (2 per observation); set in make_loss_fun
         self.lockbox_config = lockbox_config or CameraLockboxConfig(enabled=False)
         self.lockbox_source_camset = lockbox_source_camset
         self.lockbox_warm_start = bool(lockbox_warm_start)
@@ -251,6 +258,16 @@ class TemplateBundleHandler:
             diagnostics["final_parameter_deltas"] = (np.asarray(params)[prior.indices] - prior.centres).tolist()
         return diagnostics
 
+    def get_base_residual_count(self) -> int:
+        """Return the number of reprojection residuals (two per observation).
+
+        Lockbox prior residuals are appended after this segment by
+        ``append_lockbox_residuals``.  Callers that reshape residuals into
+        ``(x, y)`` pairs must use only this prefix, or the reshape crashes on
+        an odd total length and folds the priors into the per-row norm.
+        """
+        return int(self._base_residual_count)
+
 
     def can_make_jac(self):
         return self.op_fun.can_make_jac()
@@ -270,6 +287,7 @@ class TemplateBundleHandler:
             # unfiltered self.detection.
             detection = detection.delete_row(global_im_num=np.where(self.missing_poses)[0])
         dd = detection.return_flattened_keys(target_shape[:-1]).get_data()
+        self._base_residual_count = 2 * int(dd.shape[0])  # two residuals per observation
 
         temp_loss = self.op_fun.make_full_loss_fn(dd, threads, self.problem_maximums)
         def loss_fun(params):
@@ -368,7 +386,7 @@ class TemplateBundleHandler:
         cyclic_outlier_detection = True
         num_loops = 0
         logging.info("Beginning outlier detection")
-        interactive = bool(self.problem_opts.get("interactive", True))
+        interactive = bool(self.problem_opts.get("interactive", sys.stdin.isatty()))
         user_in = str(self.problem_opts.get('outliers', 'ask')).strip().lower()
         if not interactive and user_in == "ask":
             # Backend optimisation runs must never block on stdin.

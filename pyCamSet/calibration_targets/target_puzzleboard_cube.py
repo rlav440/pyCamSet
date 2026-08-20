@@ -46,8 +46,7 @@ OPPOSITE_FACE_MAP = {0: 4, 1: 3, 2: 5, 3: 1, 4: 0, 5: 2}
 # width at detection time and, below this threshold, drops the contaminated
 # cluster via the gate's existing fail-safe path instead of running the PnP
 # tie-breaker — never force an assignment the signal is known to get wrong more
-# often than not. See REBELS_RELATIVE_GEOMETRY_FACE_ID_REPORT.md "Moderate
-# issues" §1 and "Round 4 — final cleanup" §Issue 3.
+# often than not.
 FACE_REASSIGNMENT_MIN_SAFE_FOV_DEG = 13.0
 
 # These transforms unfold the six faces into a deterministic printable cube net.
@@ -100,8 +99,7 @@ class PuzzleBoardCube(AbstractTarget):
         points that are not geometrically consistent with the face's majority plane.
         Designed to catch geometrically impossible merged point sets (two physical
         regions of the cube incorrectly decoded into the same face window). Default
-        OFF until validated against the full component survey; see
-        ``REBELS_PLANE_CONSISTENCY_GATE_IMPLEMENTATION_REPORT.md``.
+        OFF until validated against the full component survey.
 
         face_reassignment (default False, opt-in): when True (and
         ``plane_consistency_gate`` is also True), the dropped cluster from each
@@ -132,9 +130,7 @@ class PuzzleBoardCube(AbstractTarget):
         would produce confidently-wrong relabelings more often than not. The
         method therefore refuses to run the PnP tie-breaker in that regime and
         falls back to the gate's drop path (the dropped cluster is dropped,
-        never force-assigned). See ``_run_face_reassignment`` and
-        ``REBELS_RELATIVE_GEOMETRY_FACE_ID_REPORT.md`` "Round 4 — final cleanup"
-        §Issue 3.
+        never force-assigned). See ``_run_face_reassignment``.
 
         Gate thresholds (in units of square pitch):
         - plane_gate_contam_squares (2.0): stage-1 trigger — a face is considered
@@ -440,11 +436,12 @@ class PuzzleBoardCube(AbstractTarget):
             raise OSError(
                 f"{_cairo_err}\n\n"
                 "pyCamSet's target-generation code requires the native 'cairo' "
-                "library, which cairosvg needs but pip cannot install reliably on "
-                "Windows.\n"
-                "Fix: if using conda, run:\n"
-                "    conda install -c conda-forge cairo\n"
-                "Then try importing pyCamSet again."
+                "library, which cairosvg requires but pip cannot install on its own.\n"
+                "Install the native cairo library for your platform, then re-import pyCamSet:\n"
+                "  - conda (Windows/Linux/macOS):  conda install -c conda-forge cairo\n"
+                "  - Debian/Ubuntu:                 apt install libcairo2\n"
+                "  - macOS (Homebrew):              brew install cairo\n"
+                "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
             ) from _cairo_err
         if data_format == "vector":  # Preserve all vector primitives in the resulting PDF.
             cairosvg.svg2pdf(bytestring=svg_bytes, write_to=str(f_out))  # Convert SVG without rasterising.
@@ -470,11 +467,12 @@ class PuzzleBoardCube(AbstractTarget):
             raise OSError(
                 f"{_cairo_err}\n\n"
                 "pyCamSet's target-generation code requires the native 'cairo' "
-                "library, which cairosvg needs but pip cannot install reliably on "
-                "Windows.\n"
-                "Fix: if using conda, run:\n"
-                "    conda install -c conda-forge cairo\n"
-                "Then try importing pyCamSet again."
+                "library, which cairosvg requires but pip cannot install on its own.\n"
+                "Install the native cairo library for your platform, then re-import pyCamSet:\n"
+                "  - conda (Windows/Linux/macOS):  conda install -c conda-forge cairo\n"
+                "  - Debian/Ubuntu:                 apt install libcairo2\n"
+                "  - macOS (Homebrew):              brew install cairo\n"
+                "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
             ) from _cairo_err
         textures: list[np.ndarray] = []  # Build one raster texture per face only when visualisation is requested.
         for face_index in range(FACE_COUNT):  # Rasterise each deterministic face pattern.
@@ -679,9 +677,7 @@ class PuzzleBoardCube(AbstractTarget):
         Narrow-FOV safety guard: the PnP confidence gate is known to invert
         (fire-accuracy drops *below* the 0.25 chance baseline, i.e. it gets the
         relabeling wrong more often than not) at effective full-field FOV below
-        ~13deg (fx > ~2000 on a 500px-wide image). See
-        ``REBELS_RELATIVE_GEOMETRY_FACE_ID_REPORT.md`` "Moderate issues" §1 and
-        "Round 4 — final cleanup" §Issue 3. When the assumed fx and the
+        ~13deg (fx > ~2000 on a 500px-wide image). When the assumed fx and the
         detection-time image width imply a full FOV below
         ``FACE_REASSIGNMENT_MIN_SAFE_FOV_DEG``, this method refuses to run the
         PnP tie-breaker entirely and instead falls back to the gate's existing

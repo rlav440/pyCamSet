@@ -1,8 +1,4 @@
-"""Purpose: Optional Optuna integration for the Optimisation tab.
-
-Status: Active adapter that keeps Optuna optional at import time.
-
-Future: Keep the public surface small so the headless worker remains testable.
+"""Optional Optuna integration for the Optimisation tab.
 
 ``optuna`` is an *optional* dependency.  Importing this module never raises;
 callers should consult :data:`OPTUNA_AVAILABLE` and, if it is ``False``, fall
@@ -80,7 +76,10 @@ def suggest_for_row(trial: Any, row: ParameterRowConfig) -> Optional[Any]:
     if lo > hi:
         lo, hi = hi, lo
     if entry["dtype"] == "int":
-        return int(trial.suggest_int(row.key, int(lo), int(hi)))
+        value = int(trial.suggest_int(row.key, int(lo), int(hi)))
+        if entry.get("odd"):  # Some OpenCV params (adaptive-threshold window sizes) must be odd.
+            value |= 1  # Force odd by setting the lowest bit (rounds up to the nearest odd).
+        return value
     return float(trial.suggest_float(row.key, float(lo), float(hi)))
 
 

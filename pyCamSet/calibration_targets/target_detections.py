@@ -66,7 +66,6 @@ class TargetDetection:
             'cam': self._get_cam,
             'key': self._get_key,
             'global_im_num': self._get_global_image_num,
-            'im_num': self._get_global_image_num,  # compatibility alias
             'index': self._get_index,
         }
 
@@ -110,7 +109,7 @@ class TargetDetection:
         if len(direction) > 1:
             raise ValueError('Can only get one item at a time')
         key, target = next(iter(direction.items()))
-        if key not in ['cam', 'key', 'global_im_num', 'im_num']:
+        if key not in ['cam', 'key', 'global_im_num']:
             raise ValueError(f'{key} is not a gettable item: accepted are "cam", "key", or "global_im_num"')
         data = self._data[self._get_methods[key](target), :]
         if data.shape[0] == 0:
@@ -126,7 +125,7 @@ class TargetDetection:
         if len(direction) > 1:
             raise ValueError('Can only get one item at a time')
         key, target = next(iter(direction.items()))
-        if key not in ['cam', 'key', 'global_im_num', 'im_num', 'cam_im_num', 'index']:
+        if key not in ['cam', 'key', 'global_im_num', 'cam_im_num', 'index']:
             raise ValueError(
                 f'{key} is not a gettable item: accepted are "cam", "key", "global_im_num", "cam_im_num" or "index"'
             )
@@ -208,10 +207,6 @@ class TargetDetection:
         """
         mask = np.isclose(self._data[:, 1], global_im_num)
         return mask
-
-    def _get_image_num(self, im_num):
-        """Compatibility alias for the legacy im_num name."""
-        return self._get_global_image_num(im_num)
 
     def _get_cam_global_image_num(self, cam, global_im_num):
         """Return rows matching a camera/global image index pair."""
@@ -320,7 +315,7 @@ class TargetDetection:
             keys_to_sort = [keys_to_sort]
 
         for item in keys_to_sort:
-            if item not in ['cam', 'key', 'global_im_num', 'im_num']:
+            if item not in ['cam', 'key', 'global_im_num']:
                 raise ValueError(f"{item} is not an accepted sort key.\n"
                                  f"Accepted keys are: 'cam', 'key', or 'global_im_num'")
 
@@ -330,7 +325,7 @@ class TargetDetection:
             if item == 'cam':
                 temp = data[:, 0]
 
-            elif item in ('global_im_num', 'im_num'):
+            elif item == 'global_im_num':
                 temp = data[:, 1]
             elif item == "key":
                 if self._data.shape[1] == 5: # 1D case

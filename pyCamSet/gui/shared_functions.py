@@ -776,8 +776,8 @@ def build_target(
     paper_height: float = 297.0,
     min_width: int = 4,
     # PuzzleBoardCube-only parameters:
-    num_squares_per_side: int = 20,
-    cube_square_size: float = 10.0,
+    pbc_n_points: int = 20,
+    pbc_length: float = 200.0,
 ):
     """Construct a calibration target from canonical GUI options."""
     from pyCamSet.calibration_targets.target_Ccube import Ccube
@@ -816,8 +816,8 @@ def build_target(
         from pyCamSet.calibration_targets.target_puzzleboard_cube import PuzzleBoardCube
 
         return PuzzleBoardCube(
-            num_squares_per_side=num_squares_per_side,
-            square_size=cube_square_size,
+            n_points=pbc_n_points,
+            length=pbc_length,
             min_width=min_width,
             detection_options=charuco_detection_options,
         )

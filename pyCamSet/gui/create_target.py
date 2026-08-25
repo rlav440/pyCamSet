@@ -215,12 +215,12 @@ class CreateTargetTab(QWidget):
         self._puzzleboard_cube_size_spin.setValue(20)
         self._puzzleboard_cube_size_spin.setFixedWidth(110)
         self._puzzleboard_cube_size_spin.valueChanged.connect(self._sync_default_name)
-        puzzleboard_cube_form.addRow(f"squares per face (max {MAX_FACE_SQUARES}):", self._puzzleboard_cube_size_spin)
+        puzzleboard_cube_form.addRow(f"n_points / pieces per face (max {MAX_FACE_SQUARES}):", self._puzzleboard_cube_size_spin)
 
-        self._puzzleboard_cube_square_edit = QLineEdit("10")
+        self._puzzleboard_cube_square_edit = QLineEdit("200")
         self._puzzleboard_cube_square_edit.setFixedWidth(110)
         self._puzzleboard_cube_square_edit.textChanged.connect(self._sync_default_name)
-        puzzleboard_cube_form.addRow("square_size (mm):", self._puzzleboard_cube_square_edit)
+        puzzleboard_cube_form.addRow("length (mm):", self._puzzleboard_cube_square_edit)
 
         self._puzzleboard_cube_min_width_spin = QSpinBox()
         self._puzzleboard_cube_min_width_spin.setRange(1, 501)
@@ -318,8 +318,8 @@ class CreateTargetTab(QWidget):
                 payload["paper_height"] = float(self._puzzleboard_page_height_edit.text().strip())
                 payload["min_width"] = int(self._puzzleboard_min_width_spin.value())
             else:
-                payload["num_squares_per_side"] = int(self._puzzleboard_cube_size_spin.value())
-                payload["square_size"] = float(self._puzzleboard_cube_square_edit.text().strip())
+                payload["n_points"] = int(self._puzzleboard_cube_size_spin.value())
+                payload["length"] = float(self._puzzleboard_cube_square_edit.text().strip())
                 payload["min_width"] = int(self._puzzleboard_cube_min_width_spin.value())
                 payload["border_width"] = float(self._puzzleboard_cube_border_edit.text().strip())
                 payload["draw_cut_outline"] = self._puzzleboard_cube_outline_check.isChecked()
@@ -347,8 +347,8 @@ class CreateTargetTab(QWidget):
                 QMessageBox.critical(self, "Validation Error", "start_y + num_squares_y must not exceed 501.")
                 return None
         elif target_type == _TARGET_PUZZLEBOARD_CUBE:
-            if payload["square_size"] <= 0.0:
-                QMessageBox.critical(self, "Validation Error", "square_size must be greater than zero.")
+            if payload["length"] <= 0.0:
+                QMessageBox.critical(self, "Validation Error", "length must be greater than zero.")
                 return None
             if payload["border_width"] < 0.0:
                 QMessageBox.critical(self, "Validation Error", "net border must not be negative.")
@@ -400,12 +400,12 @@ class CreateTargetTab(QWidget):
             return
 
         if self._target_combo.currentText() == _TARGET_PUZZLEBOARD_CUBE:
-            num_squares = int(self._puzzleboard_cube_size_spin.value())
+            n_points = int(self._puzzleboard_cube_size_spin.value())
             try:
-                square_size = float(self._puzzleboard_cube_square_edit.text().strip())
+                length = float(self._puzzleboard_cube_square_edit.text().strip())
             except ValueError:
                 return
-            self._name_edit.setText(f"puzzleboard_cube_{num_squares}x{num_squares}_{square_size:g}mm{suffix}")
+            self._name_edit.setText(f"puzzleboard_cube_{n_points}points_{length:g}mm{suffix}")
             return
 
         num_squares_x = int(self._charuco_x_spin.value())
@@ -458,8 +458,8 @@ class CreateTargetTab(QWidget):
                 )
             else:
                 _, out_path = generate_puzzleboard_cube_target(
-                    num_squares_per_side=int(collected["num_squares_per_side"]),
-                    square_size=float(collected["square_size"]),
+                    n_points=int(collected["n_points"]),
+                    length=float(collected["length"]),
                     min_width=int(collected["min_width"]),
                     border_width=float(collected["border_width"]),
                     draw_cut_outline=bool(collected["draw_cut_outline"]),
@@ -512,8 +512,8 @@ class CreateTargetTab(QWidget):
                 board.plot()
             else:
                 cube = build_puzzleboard_cube(
-                    num_squares_per_side=int(collected["num_squares_per_side"]),
-                    square_size=float(collected["square_size"]),
+                    n_points=int(collected["n_points"]),
+                    length=float(collected["length"]),
                     min_width=int(collected["min_width"]),
                 )
                 cube.plot()

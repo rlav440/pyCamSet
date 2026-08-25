@@ -451,11 +451,11 @@ class Phase2Tab(QWidget):
         self._pbc_size_spin.setRange(2, 160)
         self._pbc_size_spin.setValue(20)
         self._pbc_size_spin.setFixedWidth(90)
-        target_sect.addRow("PBC squares per face:", self._pbc_size_spin)
+        target_sect.addRow("PBC n_points / pieces per face:", self._pbc_size_spin)
 
-        self._pbc_square_edit = QLineEdit("10.0")
+        self._pbc_square_edit = QLineEdit("200.0")
         self._pbc_square_edit.setFixedWidth(110)
-        target_sect.addRow("PBC square_size (mm):", self._pbc_square_edit)
+        target_sect.addRow("PBC length (mm):", self._pbc_square_edit)
 
         self._pbc_min_width_spin = QSpinBox()
         self._pbc_min_width_spin.setRange(1, 501)
@@ -683,9 +683,9 @@ class Phase2Tab(QWidget):
             QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_height must be numeric.")
             return None
         try:
-            pbc_square_size = float(self._pbc_square_edit.text().strip())
+            pbc_length = float(self._pbc_square_edit.text().strip())
         except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube square_size must be numeric.")
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube length must be numeric.")
             return None
 
         return {
@@ -710,8 +710,8 @@ class Phase2Tab(QWidget):
             "paper_height": pb_paper_height,
             "min_width": self._pb_min_width_spin.value(),
             # PuzzleBoardCube:
-            "num_squares_per_side": self._pbc_size_spin.value(),
-            "cube_square_size": pbc_square_size,
+            "pbc_n_points": self._pbc_size_spin.value(),
+            "pbc_length": pbc_length,
         }
 
     def _load_phase1_run(self) -> Optional[dict]:
@@ -838,8 +838,8 @@ class Phase2Tab(QWidget):
                         paper_width=params.get("paper_width", 210.0),
                         paper_height=params.get("paper_height", 297.0),
                         min_width=params.get("min_width", 4),
-                        num_squares_per_side=params.get("num_squares_per_side", 20),
-                        cube_square_size=params.get("cube_square_size", 10.0),
+                        pbc_n_points=params.get("pbc_n_points", 20),
+                        pbc_length=params.get("pbc_length", 200.0),
                     )
                     selected = list(params.get("selected_cameras") or [])
                     selected_set = set(selected)
@@ -1538,8 +1538,8 @@ class Phase2DiagnosticsTab(QWidget):
                     paper_width=src_params.get("paper_width", 210.0),
                     paper_height=src_params.get("paper_height", 297.0),
                     min_width=src_params.get("min_width", 4),
-                    num_squares_per_side=src_params.get("num_squares_per_side", 20),
-                    cube_square_size=src_params.get("cube_square_size", 10.0),
+                    pbc_n_points=src_params.get("pbc_n_points", 20),
+                    pbc_length=src_params.get("pbc_length", 200.0),
                 )
                 emit("Running Phase 2 initial calibration on filtered detections…")
                 stream = EmitStream(emit)

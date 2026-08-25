@@ -75,8 +75,8 @@ class PuzzleBoardCube(AbstractTarget):
 
     def __init__(
         self,
-        num_squares_per_side: int = 20,
-        square_size: float = 10.0,
+        n_points: int = 20,
+        length: float = 200.0,
         min_width: int = 4,
         plane_consistency_gate: bool = False,
         plane_gate_inlier_squares: float = 0.5,
@@ -152,9 +152,11 @@ class PuzzleBoardCube(AbstractTarget):
           0.69-1.50 squares) never reach stage 2.
         """
         super().__init__(inputs=locals())  # Save constructor inputs for pyCamSet serialisation and multiprocessing.
-        self.num_squares_per_side = int(num_squares_per_side)  # Store the square face dimension.
-        self.square_size = float(square_size)  # Store the physical edge length in millimetres.
+        self.n_points = int(n_points)  # Store the puzzle-piece count along one cube-face edge.
+        self.length = float(length)  # Store the total physical cube edge length in millimetres.
         self.min_width = int(min_width)  # Store the detector's minimum accepted grid width.
+        self._validate_dimensions()  # Reject invalid counts/lengths before deriving the pitch.
+        self.square_size = self.length / self.n_points  # Retain the derived puzzle-piece pitch for rendering/detection.
         self.plane_consistency_gate = bool(plane_consistency_gate)  # Opt-in geometric gate.
         self.plane_gate_inlier_squares = float(plane_gate_inlier_squares)  # RANSAC inlier threshold (pitch units).
         self.plane_gate_contam_squares = float(plane_gate_contam_squares)  # Stage-1 contamination trigger (pitch units).
@@ -174,9 +176,8 @@ class PuzzleBoardCube(AbstractTarget):
                                                  if face_reassignment_intrinsics_cy is not None else None)
         self.detection_options = detection_options or {}  # Retain a future detector-options extension point.
         self.layout_version = CODE_LAYOUT_VERSION  # Record the deterministic face-layout version on the target.
-        self.face_origins = self.face_origins_for_size(self.num_squares_per_side)  # Assign six disjoint code windows.
-        self._validate_dimensions()  # Reject unsupported face sizes before constructing geometry.
-        self.face_length = self.num_squares_per_side * self.square_size / 1000.0  # Convert cube side length to metres.
+        self.face_origins = self.face_origins_for_size(self.n_points)  # Assign six disjoint code windows.
+        self.face_length = self.length / 1000.0  # Convert the configured total cube edge to metres.
         self.base_face = np.array(  # Define the square face outline in the same order as Ccube.
             [[0.0, self.face_length, 0.0], [self.face_length, self.face_length, 0.0],
              [self.face_length, 0.0, 0.0], [0.0, 0.0, 0.0]],
@@ -191,14 +192,14 @@ class PuzzleBoardCube(AbstractTarget):
         self._process_data()  # Compute pyCamSet's per-face local representation.
 
     @classmethod
-    def face_origins_for_size(cls, num_squares_per_side: int) -> tuple[tuple[int, int], ...]:
+    def face_origins_for_size(cls, n_points: int) -> tuple[tuple[int, int], ...]:
         """Return deterministic row/column origins for the six disjoint face windows."""
-        size = int(num_squares_per_side)  # Normalise the requested face size before arithmetic.
+        size = int(n_points)  # Normalise the requested face size before arithmetic.
         if size < 2:  # A face needs at least two points to contain encoded edges.
-            raise ValueError("num_squares_per_side must be at least 2.")
+            raise ValueError("n_points must be at least 2.")
         if size > MAX_FACE_SQUARES:  # Six faces cannot fit disjointly beyond the bounded horizontal layout.
             raise ValueError(
-                f"num_squares_per_side must not exceed {MAX_FACE_SQUARES} for {CODE_LAYOUT_VERSION}; "
+                f"n_points must not exceed {MAX_FACE_SQUARES} for {CODE_LAYOUT_VERSION}; "
                 f"three face windows across must fit inside the {_CODE_SIZE}x{_CODE_SIZE} code field."
             )
         step = size + FACE_WINDOW_GAP  # Place adjacent windows consecutively without overlapping coordinates.
@@ -213,16 +214,16 @@ class PuzzleBoardCube(AbstractTarget):
 
     def _validate_dimensions(self) -> None:
         """Validate physical and detector parameters."""
-        if self.num_squares_per_side < 2 or self.num_squares_per_side > MAX_FACE_SQUARES:  # Enforce the code limit.
-            raise ValueError(f"num_squares_per_side must be between 2 and {MAX_FACE_SQUARES}.")
-        if self.square_size <= 0.0:  # Physical geometry cannot use a zero or negative edge length.
-            raise ValueError("square_size must be greater than zero.")
+        if self.n_points < 2 or self.n_points > MAX_FACE_SQUARES:  # Enforce the code limit.
+            raise ValueError(f"n_points must be between 2 and {MAX_FACE_SQUARES}.")
+        if self.length <= 0.0:  # Physical geometry cannot use a zero or negative cube edge length.
+            raise ValueError("length must be greater than zero.")
         if self.min_width < 1:  # The external detector requires a positive minimum width.
             raise ValueError("min_width must be at least 1.")
 
     def _make_local_face_points(self) -> np.ndarray:
         """Create the six identical local point grids before cube-face transforms."""
-        size = self.num_squares_per_side  # Use one local square dimension for every face.
+        size = self.n_points  # Use one local square dimension for every face.
         side_m = self.face_length  # Use the physical face side in metres.
         points = np.zeros((FACE_COUNT, size * size, 3), dtype=np.float64)  # Allocate face/key-indexed points.
         for face in range(FACE_COUNT):  # Populate every face with the same local lattice.
@@ -249,7 +250,7 @@ class PuzzleBoardCube(AbstractTarget):
 
     def _face_rectangles(self, face_index: int) -> list[np.ndarray]:
         """Return black checkerboard polygons for one face in local metres."""
-        size = self.num_squares_per_side  # Use the square face dimension.
+        size = self.n_points  # Use the square face dimension.
         side_m = self.face_length  # Use the physical face side length.
         square_m = self.square_size / 1000.0  # Convert one printed square to metres.
         rectangles: list[np.ndarray] = []  # Collect only black squares, leaving the page background white.
@@ -281,7 +282,7 @@ class PuzzleBoardCube(AbstractTarget):
 
     def _face_circles(self, face_index: int) -> list[tuple[np.ndarray, str]]:
         """Return encoded circle centres and colours for one face in local metres."""
-        size = self.num_squares_per_side  # Use the square face dimension.
+        size = self.n_points  # Use the square face dimension.
         square_m = self.square_size / 1000.0  # Convert one printed square to metres.
         radius_m = square_m / 6.0  # Match the JavaScript generator's RES_PER_SQ / 6 radius.
         start_x, start_y = self.face_origins[face_index]  # Read this face's deterministic code origin.
@@ -396,7 +397,7 @@ class PuzzleBoardCube(AbstractTarget):
     ) -> Path:
         """Save the deterministic cube net as a physically sized vector SVG."""
         if f_out is None:  # Construct a descriptive filename when no output path was supplied.
-            f_out = Path(f"puzzleboard_cube_{self.num_squares_per_side}_{self.square_size:g}mm.svg")
+            f_out = Path(f"puzzleboard_cube_{self.n_points}points_{self.length:g}mm.svg")
         else:  # Accept strings and paths like the other target classes.
             f_out = Path(f_out)
         f_out = f_out.expanduser().with_suffix(".svg").resolve()  # Force the vector extension.
@@ -423,7 +424,7 @@ class PuzzleBoardCube(AbstractTarget):
     ) -> Path:
         """Save the cube net as a raster or vector PDF."""
         if f_out is None:  # Construct a descriptive filename when no output path was supplied.
-            f_out = Path(f"puzzleboard_cube_{self.num_squares_per_side}_{self.square_size:g}mm.pdf")
+            f_out = Path(f"puzzleboard_cube_{self.n_points}points_{self.length:g}mm.pdf")
         else:  # Accept strings and paths like the other target classes.
             f_out = Path(f_out)
         f_out = f_out.expanduser().with_suffix(".pdf").resolve()  # Force the PDF extension.
@@ -538,7 +539,7 @@ class PuzzleBoardCube(AbstractTarget):
         if not keys:
             return keys, image_points
 
-        size = self.num_squares_per_side
+        size = self.n_points
         inlier_thresh_squares = self.plane_gate_inlier_squares
         contam_thresh_squares = self.plane_gate_contam_squares
         min_contam_frac = self.plane_gate_min_contam_frac
@@ -688,7 +689,7 @@ class PuzzleBoardCube(AbstractTarget):
         if not keys:
             return keys, image_points
 
-        size = self.num_squares_per_side
+        size = self.n_points
         inlier_thresh_squares = self.plane_gate_inlier_squares
         contam_thresh_squares = self.plane_gate_contam_squares
         min_contam_frac = self.plane_gate_min_contam_frac
@@ -919,7 +920,7 @@ class PuzzleBoardCube(AbstractTarget):
             raise ValueError("PuzzleBoard detector coordinates must have shape (n, 2).")
         keys: list[list[int]] = []  # Store [face_index, local_flat_point] keys for pyCamSet.
         image_points: list[np.ndarray] = []  # Store matching [x, y] image coordinates.
-        size = self.num_squares_per_side  # Use the configured local face dimension.
+        size = self.n_points  # Use the configured local face dimension.
         for position, coordinate in zip(positions, coordinates):  # Classify every recovered global point.
             row, column = int(position[0]), int(position[1])  # Preserve the detector's row/column convention.
             matches = []  # Collect any face windows containing this global coordinate.

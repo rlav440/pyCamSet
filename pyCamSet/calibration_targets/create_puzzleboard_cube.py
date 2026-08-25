@@ -7,31 +7,31 @@ _DEFAULT_OUTPUT_DIR = Path.cwd() / "calibration_targets" / "2D"
 
 
 def build_puzzleboard_cube(
-    num_squares_per_side: int = 20,
-    square_size: float = 10.0,
+    n_points: int = 20,
+    length: float = 200.0,
     min_width: int = 4,
 ) -> pbc.PuzzleBoardCube:
     """Instantiate a deterministic PuzzleBoard cube from explicit parameters."""
     return pbc.PuzzleBoardCube(  # Construct the bounded six-face target.
-        num_squares_per_side=int(num_squares_per_side),  # Normalise the face dimension.
-        square_size=float(square_size),  # Normalise the physical square size in millimetres.
+        n_points=int(n_points),  # Normalise the face dimension.
+        length=float(length),  # Normalise the physical square size in millimetres.
         min_width=int(min_width),  # Normalise the detector minimum width.
     )
 
 
 def default_output_name(
-    num_squares_per_side: int,
-    square_size: float,
+    n_points: int,
+    length: float,
     export_kind: str,
 ) -> str:
     """Return a default output filename for the requested cube export kind."""
     suffix = ".svg" if export_kind == "svg" else ".pdf"  # Both PDF modes use a PDF suffix.
-    return f"puzzleboard_cube_{int(num_squares_per_side)}x{int(num_squares_per_side)}_{float(square_size):g}mm{suffix}"
+    return f"puzzleboard_cube_{int(n_points)}points_{float(length):g}mm{suffix}"
 
 
 def generate_puzzleboard_cube_target(
-    num_squares_per_side: int = 20,
-    square_size: float = 10.0,
+    n_points: int = 20,
+    length: float = 200.0,
     min_width: int = 4,
     output_dir: Path | str = _DEFAULT_OUTPUT_DIR,
     file_name: str | None = None,
@@ -44,10 +44,10 @@ def generate_puzzleboard_cube_target(
     out_dir = Path(output_dir)  # Accept strings and Path objects like the other generators.
     out_dir.mkdir(parents=True, exist_ok=True)  # Create the output directory when needed.
     if file_name is None or not str(file_name).strip():  # Generate a descriptive filename by default.
-        file_name = default_output_name(num_squares_per_side, square_size, export_kind)
+        file_name = default_output_name(n_points, length, export_kind)
     cube = build_puzzleboard_cube(  # Build the target through the public factory.
-        num_squares_per_side=num_squares_per_side,
-        square_size=square_size,
+        n_points=n_points,
+        length=length,
         min_width=min_width,
     )
     out_path = out_dir / file_name  # Combine the destination directory and requested filename.
@@ -81,12 +81,12 @@ def generate_puzzleboard_cube_target(
 
 def main() -> None:
     """Generate the default deterministic PuzzleBoard cube SVG when run directly."""
-    num_squares_per_side = 20  # Use a conservative default face size for a printable cube net.
-    square_size = 10.0  # Use a physically visible square size for the default target.
-    file_name = default_output_name(num_squares_per_side, square_size, "svg")  # Name the vector net output.
+    n_points = 20  # Use a conservative default face size for a printable cube net.
+    length = 200.0  # Use a physically visible square size for the default target.
+    file_name = default_output_name(n_points, length, "svg")  # Name the vector net output.
     generate_puzzleboard_cube_target(  # Use the same direct-script style as the other target generators.
-        num_squares_per_side=num_squares_per_side,
-        square_size=square_size,
+        n_points=n_points,
+        length=length,
         output_dir=_DEFAULT_OUTPUT_DIR,
         file_name=file_name,
         export_kind="svg",

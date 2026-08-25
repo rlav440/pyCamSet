@@ -102,7 +102,7 @@ when publishing results that use this target.
 The `PuzzleBoardCube` target assigns six disjoint, deterministic windows of the
 same periodic PuzzleBoard code to the cube faces in the fixed order front,
 right, back, left, top, bottom. Its `puzzle-cube-v1` layout is non-random and
-reproducible: identical face-size and square-size parameters produce identical
+reproducible: identical n_points and length parameters produce identical
 face patterns and cube geometry. This is a modified implementation of the original
 PuzzleBoard target, which is a single planar target. The cube version is intended
 to be similar to the ccube target.

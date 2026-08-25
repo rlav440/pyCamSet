@@ -276,11 +276,11 @@ class Phase3Tab(QWidget):
         self._pbc_size_spin.setRange(2, 160)
         self._pbc_size_spin.setValue(20)
         self._pbc_size_spin.setFixedWidth(90)
-        target_sect.addRow("PBC squares per face:", self._pbc_size_spin)
+        target_sect.addRow("PBC n_points / pieces per face:", self._pbc_size_spin)
 
-        self._pbc_square_edit = QLineEdit("10.0")
+        self._pbc_square_edit = QLineEdit("200.0")
         self._pbc_square_edit.setFixedWidth(110)
-        target_sect.addRow("PBC square_size (mm):", self._pbc_square_edit)
+        target_sect.addRow("PBC length (mm):", self._pbc_square_edit)
 
         self._pbc_min_width_spin = QSpinBox()
         self._pbc_min_width_spin.setRange(1, 501)
@@ -627,8 +627,8 @@ class Phase3Tab(QWidget):
                 paper_width=float(self._pb_paper_w_edit.text().strip() or "210.0"),
                 paper_height=float(self._pb_paper_h_edit.text().strip() or "297.0"),
                 min_width=self._pb_min_width_spin.value(),
-                num_squares_per_side=self._pbc_size_spin.value(),
-                cube_square_size=float(self._pbc_square_edit.text().strip() or "10.0"),
+                pbc_n_points=self._pbc_size_spin.value(),
+                pbc_length=float(self._pbc_square_edit.text().strip() or "200.0"),
             )
         except Exception:
             target = None
@@ -778,9 +778,9 @@ class Phase3Tab(QWidget):
             QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_height must be numeric.")
             return None
         try:
-            pbc_square_size = float(self._pbc_square_edit.text().strip())
+            pbc_length = float(self._pbc_square_edit.text().strip())
         except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube square_size must be numeric.")
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube length must be numeric.")
             return None
 
         return {
@@ -802,8 +802,8 @@ class Phase3Tab(QWidget):
             "paper_height": pb_paper_height,
             "min_width": self._pb_min_width_spin.value(),
             # PuzzleBoardCube:
-            "num_squares_per_side": self._pbc_size_spin.value(),
-            "cube_square_size": pbc_square_size,
+            "pbc_n_points": self._pbc_size_spin.value(),
+            "pbc_length": pbc_length,
             "lockbox": {
                 "enabled": bool(lockbox_enabled),
                 "original_source_camset": original_lockbox_source_path if lockbox_enabled else None,
@@ -1065,8 +1065,8 @@ class Phase3Tab(QWidget):
                         paper_width=params.get("paper_width", 210.0),
                         paper_height=params.get("paper_height", 297.0),
                         min_width=params.get("min_width", 4),
-                        num_squares_per_side=params.get("num_squares_per_side", 20),
-                        cube_square_size=params.get("cube_square_size", 10.0),
+                        pbc_n_points=params.get("pbc_n_points", 20),
+                        pbc_length=params.get("pbc_length", 200.0),
                     )
                     lockbox_params = dict(params.get("lockbox") or {})
                     lockbox_config = CameraLockboxConfig(
@@ -1864,8 +1864,8 @@ class Phase3DiagnosticsTab(QWidget):
                     paper_width=src_params.get("paper_width", 210.0),
                     paper_height=src_params.get("paper_height", 297.0),
                     min_width=src_params.get("min_width", 4),
-                    num_squares_per_side=src_params.get("num_squares_per_side", 20),
-                    cube_square_size=src_params.get("cube_square_size", 10.0),
+                    pbc_n_points=src_params.get("pbc_n_points", 20),
+                    pbc_length=src_params.get("pbc_length", 200.0),
                 )
                 problem_options = dict(src_params.get("problem_options") or {})
                 threads = src_params.get("threads", 1)

@@ -119,8 +119,8 @@ def _build_target(
     paper_height: float = 297.0,
     min_width: int = 4,
     # PuzzleBoardCube-only:
-    num_squares_per_side: int = 20,
-    cube_square_size: float = 10.0,
+    pbc_n_points: int = 20,
+    pbc_length: float = 200.0,
 ):
     """Construct the calibration target object from existing pyCamSet classes."""
     if not _PYCAMSET_OK:
@@ -140,8 +140,8 @@ def _build_target(
         paper_width=paper_width,
         paper_height=paper_height,
         min_width=min_width,
-        num_squares_per_side=num_squares_per_side,
-        cube_square_size=cube_square_size,
+        pbc_n_points=pbc_n_points,
+        pbc_length=pbc_length,
     )
 
 
@@ -387,15 +387,15 @@ class Phase1Tab(QWidget):
         target_sect.addRow(self._pb_min_width_label, self._pb_min_width_spin)
 
         # ── PuzzleBoardCube-specific fields ───────────────────────────
-        self._pbc_size_label = QLabel("PBC squares per face:")
+        self._pbc_size_label = QLabel("PBC n_points / pieces per face:")
         self._pbc_size_spin = QSpinBox()
         self._pbc_size_spin.setRange(2, 160)
         self._pbc_size_spin.setValue(20)
         self._pbc_size_spin.setFixedWidth(80)
         target_sect.addRow(self._pbc_size_label, self._pbc_size_spin)
 
-        self._pbc_square_label = QLabel("PBC square_size (mm):")
-        self._pbc_square_edit = QLineEdit("10.0")
+        self._pbc_square_label = QLabel("PBC length (mm):")
+        self._pbc_square_edit = QLineEdit("200.0")
         self._pbc_square_edit.setFixedWidth(100)
         target_sect.addRow(self._pbc_square_label, self._pbc_square_edit)
 
@@ -734,9 +734,9 @@ class Phase1Tab(QWidget):
             QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_height must be a number.")
             return None
         try:
-            pbc_square_size = float(self._pbc_square_edit.text().strip())
+            pbc_length = float(self._pbc_square_edit.text().strip())
         except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube square_size must be a number.")
+            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube length must be a number.")
             return None
 
         return {
@@ -764,8 +764,8 @@ class Phase1Tab(QWidget):
             "paper_height": pb_paper_height,
             "min_width": self._pb_min_width_spin.value(),
             # PuzzleBoardCube:
-            "num_squares_per_side": self._pbc_size_spin.value(),
-            "cube_square_size": pbc_square_size,
+            "pbc_n_points": self._pbc_size_spin.value(),
+            "pbc_length": pbc_length,
             "selected_cameras": selected_cameras,
         }
 
@@ -841,8 +841,8 @@ class Phase1Tab(QWidget):
                         paper_width=params.get("paper_width", 210.0),
                         paper_height=params.get("paper_height", 297.0),
                         min_width=params.get("min_width", 4),
-                        num_squares_per_side=params.get("num_squares_per_side", 20),
-                        cube_square_size=params.get("cube_square_size", 10.0),
+                        pbc_n_points=params.get("pbc_n_points", 20),
+                        pbc_length=params.get("pbc_length", 200.0),
                     )
 
                     detect_root = f_loc

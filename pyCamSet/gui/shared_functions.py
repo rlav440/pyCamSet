@@ -77,6 +77,105 @@ TAB_PRINT_TARGET = TAB_CREATE_TARGET
 TAB_EXPORT_CALIBRATION = "Export Calibration"
 
 # ---------------------------------------------------------------------------
+# Marker backend (ArUco 1 / ArUco 2) shared GUI constants
+# ---------------------------------------------------------------------------
+# Plan v4 D8/D9/D10: every target section exposes a "Marker backend" combo
+# whose item data is one of these values. The dictionary combo repopulates
+# per backend: aruco1 = 22 names (OpenCV ints 0-21), aruco2 = 24 names
+# (adds DICT_ALVAR_5X5_256 and DICT_ALVAR_7X7_1000, ints 22-23).
+MARKER_BACKEND_LABELS = {
+    "ArUco 1 (OpenCV)": "aruco1",
+    "ArUco 2 (aruco2)": "aruco2",
+}
+ARUCO1_DICT_NAMES = [
+    "DICT_4X4_50",
+    "DICT_4X4_100",
+    "DICT_4X4_250",
+    "DICT_4X4_1000",
+    "DICT_5X5_50",
+    "DICT_5X5_100",
+    "DICT_5X5_250",
+    "DICT_5X5_1000",
+    "DICT_6X6_50",
+    "DICT_6X6_100",
+    "DICT_6X6_250",
+    "DICT_6X6_1000",
+    "DICT_7X7_50",
+    "DICT_7X7_100",
+    "DICT_7X7_250",
+    "DICT_7X7_1000",
+    "DICT_ARUCO_ORIGINAL",
+    "DICT_APRILTAG_16h5",
+    "DICT_APRILTAG_25h9",
+    "DICT_APRILTAG_36h10",
+    "DICT_APRILTAG_36h11",
+    "DICT_ARUCO_MIP_36h12",
+]
+ARUCO2_DICT_NAMES = ARUCO1_DICT_NAMES + ["DICT_ALVAR_5X5_256", "DICT_ALVAR_7X7_1000"]
+_DICT_FALLBACK_NAME = "DICT_4X4_1000"
+
+
+def dict_names_for_backend(marker_backend: str) -> list[str]:
+    """Return the dictionary-name list for a marker backend (plan v4 R1-P2)."""
+    if marker_backend == "aruco2":
+        return list(ARUCO2_DICT_NAMES)
+    return list(ARUCO1_DICT_NAMES)
+
+
+def repopulate_dict_combo(combo, marker_backend: str) -> None:
+    """Repopulate a dictionary combo for the given backend (plan v4 R2-H6/H7).
+
+    The caller must set its ``self._repopulating`` guard around the call so
+    connected slots (e.g. ``_sync_default_name``) early-return during the
+    repopulation. When the currently selected dictionary name is absent from
+    the new list, the combo falls back to ``DICT_4X4_1000``. Signals are
+    blocked for the whole repopulation and restored in ``finally``.
+    """
+    current_name = combo.currentText()
+    combo.blockSignals(True)
+    try:
+        combo.clear()
+        combo.addItems(dict_names_for_backend(marker_backend))
+        if combo.findText(current_name) >= 0:
+            combo.setCurrentText(current_name)
+        else:
+            combo.setCurrentText(_DICT_FALLBACK_NAME)
+    finally:
+        combo.blockSignals(False)
+
+
+def marker_backend_availability_text(marker_backend: str) -> str:
+    """Return the short availability label for a marker backend (plan v4 D12).
+
+    Used by the small status label near each backend combo; the label is
+    refreshed on combo change so availability is honoured immediately, not
+    only at save/start.
+    """
+    if marker_backend != "aruco2":
+        return "backend: built-in OpenCV ArUco"
+    if marker_backend_available("aruco2"):
+        return "aruco2: available"
+    return "aruco2: not installed - pip install aruco2"
+
+
+def marker_backend_available(marker_backend: str) -> bool:
+    """Return whether the requested marker backend is usable.
+
+    aruco1 is always available (OpenCV). aruco2 availability is read from the
+    module-level ``ARUCO2_AVAILABLE`` flag in
+    :mod:`pyCamSet.calibration_targets.aruco2_detection` (lazy import so the
+    GUI never hard-depends on the optional aruco2 package).
+    """
+    if marker_backend != "aruco2":
+        return True
+    try:
+        from pyCamSet.calibration_targets.aruco2_detection import ARUCO2_AVAILABLE
+        return bool(ARUCO2_AVAILABLE)
+    except Exception:  # pragma: no cover - defensive; module is importable
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Styling helpers
 # ---------------------------------------------------------------------------
 
@@ -766,6 +865,8 @@ def build_target(
     charuco_detection_options: dict[str, dict[str, Any]] | None = None,
     border_fraction: float = 0.1,
     marker_fraction: float = 0.8,
+    marker_backend: str = "aruco1",
+    aruco_dict: int | None = None,
     # PuzzleBoard-only parameters:
     num_squares_x: int = 105,
     num_squares_y: int = 148,
@@ -784,20 +885,28 @@ def build_target(
     from pyCamSet.calibration_targets.target_charuco import ChArUco
 
     if target_type == "Ccube":
-        return Ccube(
-            n_points=n_points,
-            length=length,
-            border_fraction=border_fraction,
-            detection_options=charuco_detection_options,  # Ccube detection also runs through ChArUco boards.
-        )
+        ccube_kwargs: dict[str, Any] = {
+            "n_points": n_points,
+            "length": length,
+            "border_fraction": border_fraction,
+            "marker_backend": marker_backend,
+            "detection_options": charuco_detection_options,  # Ccube detection also runs through ChArUco boards.
+        }
+        if aruco_dict is not None:
+            ccube_kwargs["aruco_dict"] = aruco_dict
+        return Ccube(**ccube_kwargs)
     if target_type == "ChArUco":
-        return ChArUco(
-            num_squares_x=n_points,
-            num_squares_y=n_points,
-            square_size=length,
-            marker_fraction=marker_fraction,
-            detection_options=charuco_detection_options,
-        )
+        charuco_kwargs: dict[str, Any] = {
+            "num_squares_x": n_points,
+            "num_squares_y": n_points,
+            "square_size": length,
+            "marker_fraction": marker_fraction,
+            "marker_backend": marker_backend,
+            "detection_options": charuco_detection_options,
+        }
+        if aruco_dict is not None:
+            charuco_kwargs["a_dict"] = aruco_dict
+        return ChArUco(**charuco_kwargs)
     if target_type == "PuzzleBoard":
         from pyCamSet.calibration_targets.target_puzzleboard import PuzzleBoard
 

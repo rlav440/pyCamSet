@@ -29,7 +29,18 @@ from pyCamSet.calibration_targets.create_charuco import build_charuco, generate_
 from pyCamSet.calibration_targets.create_puzzleboard import build_puzzleboard, generate_puzzleboard_target
 from pyCamSet.calibration_targets.create_puzzleboard_cube import build_puzzleboard_cube, generate_puzzleboard_cube_target
 from pyCamSet.calibration_targets.target_puzzleboard_cube import MAX_FACE_SQUARES
-from pyCamSet.gui.shared_functions import TerminalWidget, WorkspaceManager, make_blue_button, make_section_label, make_separator
+from pyCamSet.gui.shared_functions import (
+    ARUCO1_DICT_NAMES,
+    MARKER_BACKEND_LABELS,
+    TerminalWidget,
+    WorkspaceManager,
+    make_blue_button,
+    make_section_label,
+    make_separator,
+    marker_backend_availability_text,
+    marker_backend_available,
+    repopulate_dict_combo,
+)
 
 _EXPORT_CHOICES = {
     "PDF (Raster)": "pdf_raster",
@@ -40,24 +51,7 @@ _TARGET_CCUBE = "Ccube"
 _TARGET_CHARUCO = "ChArUco"
 _TARGET_PUZZLEBOARD = "PuzzleBoard"
 _TARGET_PUZZLEBOARD_CUBE = "PuzzleBoard Cube"
-_ARUCO_DICT_CHOICES = [
-    "DICT_4X4_50",
-    "DICT_4X4_100",
-    "DICT_4X4_250",
-    "DICT_4X4_1000",
-    "DICT_5X5_50",
-    "DICT_5X5_100",
-    "DICT_5X5_250",
-    "DICT_5X5_1000",
-    "DICT_6X6_50",
-    "DICT_6X6_100",
-    "DICT_6X6_250",
-    "DICT_6X6_1000",
-    "DICT_7X7_50",
-    "DICT_7X7_100",
-    "DICT_7X7_250",
-    "DICT_7X7_1000",
-]
+_ARUCO_DICT_CHOICES = ARUCO1_DICT_NAMES
 
 
 class CreateTargetTab(QWidget):
@@ -75,6 +69,7 @@ class CreateTargetTab(QWidget):
         self._notebook = notebook
         self._info_cb = info_cb
         self._workspace_mgr = workspace_mgr
+        self._repopulating = False
         self._build_ui(terminal_cb)
 
     def _build_ui(self, terminal_cb: QCheckBox) -> None:
@@ -117,6 +112,18 @@ class CreateTargetTab(QWidget):
         self._ccube_dict_combo.setCurrentText("DICT_4X4_1000")
         ccube_form.addRow("dictionary:", self._ccube_dict_combo)
 
+        self._ccube_backend_combo = QComboBox()
+        for label, value in MARKER_BACKEND_LABELS.items():
+            self._ccube_backend_combo.addItem(label, value)
+        self._ccube_backend_combo.setCurrentText("ArUco 1 (OpenCV)")
+        self._ccube_backend_combo.currentIndexChanged.connect(self._on_ccube_backend_changed)
+        ccube_form.addRow("Marker backend:", self._ccube_backend_combo)
+        # FIX 8(g): small availability label near the combo (plan v4 D12),
+        # refreshed on combo change so availability is honoured immediately.
+        self._ccube_backend_status = QLabel(marker_backend_availability_text("aruco1"))
+        self._ccube_backend_status.setStyleSheet("color: #2a7a2a;")
+        ccube_form.addRow("", self._ccube_backend_status)
+
         self._param_stack.addWidget(ccube_params)
 
         charuco_params = QWidget()
@@ -152,6 +159,17 @@ class CreateTargetTab(QWidget):
         self._charuco_dict_combo.setCurrentText("DICT_4X4_1000")
         self._charuco_dict_combo.currentIndexChanged.connect(self._sync_default_name)
         charuco_form.addRow("dictionary:", self._charuco_dict_combo)
+
+        self._charuco_backend_combo = QComboBox()
+        for label, value in MARKER_BACKEND_LABELS.items():
+            self._charuco_backend_combo.addItem(label, value)
+        self._charuco_backend_combo.setCurrentText("ArUco 1 (OpenCV)")
+        self._charuco_backend_combo.currentIndexChanged.connect(self._on_charuco_backend_changed)
+        charuco_form.addRow("Marker backend:", self._charuco_backend_combo)
+        # FIX 8(g): small availability label near the combo (plan v4 D12).
+        self._charuco_backend_status = QLabel(marker_backend_availability_text("aruco1"))
+        self._charuco_backend_status.setStyleSheet("color: #2a7a2a;")
+        charuco_form.addRow("", self._charuco_backend_status)
 
         self._param_stack.addWidget(charuco_params)
 
@@ -293,6 +311,42 @@ class CreateTargetTab(QWidget):
             self._param_stack.setCurrentIndex(0)
         self._sync_default_name()
 
+    def _backend_value(self, combo: QComboBox) -> str:
+        """Return the marker-backend value for a backend combo (default aruco1)."""
+        return str(combo.currentData() or "aruco1")
+
+    def _on_ccube_backend_changed(self) -> None:
+        self._repopulating = True
+        try:
+            repopulate_dict_combo(self._ccube_dict_combo, self._backend_value(self._ccube_backend_combo))
+        finally:
+            self._repopulating = False
+        # FIX 8(g): honour availability on combo change, not only at save/start.
+        self._ccube_backend_status.setText(
+            marker_backend_availability_text(self._backend_value(self._ccube_backend_combo))
+        )
+        self._ccube_backend_status.setStyleSheet(
+            "color: #2a7a2a;" if marker_backend_available(
+                self._backend_value(self._ccube_backend_combo)
+            ) else "color: #8a4a00;"
+        )
+
+    def _on_charuco_backend_changed(self) -> None:
+        self._repopulating = True
+        try:
+            repopulate_dict_combo(self._charuco_dict_combo, self._backend_value(self._charuco_backend_combo))
+        finally:
+            self._repopulating = False
+        # FIX 8(g): honour availability on combo change, not only at save/start.
+        self._charuco_backend_status.setText(
+            marker_backend_availability_text(self._backend_value(self._charuco_backend_combo))
+        )
+        self._charuco_backend_status.setStyleSheet(
+            "color: #2a7a2a;" if marker_backend_available(
+                self._backend_value(self._charuco_backend_combo)
+            ) else "color: #8a4a00;"
+        )
+
     def _collect(self) -> dict | None:
         target_type = self._target_combo.currentText()
         payload: dict = {"target_type": target_type}
@@ -302,12 +356,14 @@ class CreateTargetTab(QWidget):
                 payload["n_points"] = int(self._npts_spin.value())
                 payload["length"] = float(self._length_edit.text().strip())
                 payload["aruco_dict"] = self._ccube_dict_combo.currentText()
+                payload["marker_backend"] = self._backend_value(self._ccube_backend_combo)
             elif target_type == _TARGET_CHARUCO:
                 payload["num_squares_x"] = int(self._charuco_x_spin.value())
                 payload["num_squares_y"] = int(self._charuco_y_spin.value())
                 payload["square_size"] = float(self._charuco_square_edit.text().strip())
                 payload["marker_fraction"] = float(self._charuco_marker_fraction_edit.text().strip())
                 payload["aruco_dict"] = self._charuco_dict_combo.currentText()
+                payload["marker_backend"] = self._backend_value(self._charuco_backend_combo)
             elif target_type == _TARGET_PUZZLEBOARD:
                 payload["num_squares_x"] = int(self._puzzleboard_x_spin.value())
                 payload["num_squares_y"] = int(self._puzzleboard_y_spin.value())
@@ -327,6 +383,17 @@ class CreateTargetTab(QWidget):
         except ValueError as exc:
             QMessageBox.critical(self, "Validation Error", f"Invalid numeric value: {exc}")
             return None
+
+        if target_type in (_TARGET_CCUBE, _TARGET_CHARUCO):
+            if not marker_backend_available(payload.get("marker_backend", "aruco1")):
+                QMessageBox.warning(
+                    self,
+                    "Marker backend unavailable",
+                    "ArUco 2 (aruco2) is selected but the 'aruco2' package is not "
+                    "installed. Install it with `pip install aruco2` or switch the "
+                    "marker backend to ArUco 1 (OpenCV).",
+                )
+                return None
 
         if target_type == _TARGET_CHARUCO:
             marker_fraction = float(payload.get("marker_fraction", 0.8))
@@ -377,6 +444,8 @@ class CreateTargetTab(QWidget):
         return payload
 
     def _sync_default_name(self) -> None:
+        if self._repopulating:
+            return
         export_kind = _EXPORT_CHOICES.get(self._format_combo.currentText(), "svg")
         suffix = ".svg" if export_kind == "svg" else ".pdf"
 
@@ -427,6 +496,7 @@ class CreateTargetTab(QWidget):
                     n_points=int(collected["n_points"]),
                     length=float(collected["length"]),
                     aruco_dict=str(collected["aruco_dict"]),
+                    marker_backend=collected.get("marker_backend", "aruco1"),
                     output_dir=collected["out_dir"],
                     file_name=collected["file_name"],
                     export_kind=collected["export_kind"],
@@ -438,6 +508,7 @@ class CreateTargetTab(QWidget):
                     square_size=float(collected["square_size"]),
                     marker_fraction=float(collected.get("marker_fraction", 0.8)),
                     aruco_dict=str(collected["aruco_dict"]),
+                    marker_backend=collected.get("marker_backend", "aruco1"),
                     output_dir=collected["out_dir"],
                     file_name=collected["file_name"],
                     export_kind=collected["export_kind"],
@@ -487,6 +558,7 @@ class CreateTargetTab(QWidget):
                     n_points=int(collected["n_points"]),
                     length=float(collected["length"]),
                     aruco_dict=str(collected["aruco_dict"]),
+                    marker_backend=collected.get("marker_backend", "aruco1"),
                 )
                 cube.plot()  # External pyvista/matplotlib window
             elif collected["target_type"] == _TARGET_CHARUCO:
@@ -496,6 +568,7 @@ class CreateTargetTab(QWidget):
                     square_size=float(collected["square_size"]),
                     marker_fraction=float(collected.get("marker_fraction", 0.8)),
                     aruco_dict=str(collected["aruco_dict"]),
+                    marker_backend=collected.get("marker_backend", "aruco1"),
                 )
                 board.plot()
             elif collected["target_type"] == _TARGET_PUZZLEBOARD:

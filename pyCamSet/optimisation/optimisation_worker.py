@@ -89,6 +89,7 @@ class TargetSettings:
     length: float = 30.0  # mm
     border_fraction: float = 0.1
     legacy: bool = False
+    marker_backend: str = "aruco1"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -102,6 +103,7 @@ class TargetSettings:
             "length": self.length,
             "border_fraction": self.border_fraction,
             "legacy": self.legacy,
+            "marker_backend": self.marker_backend,
         }
 
 
@@ -233,6 +235,7 @@ def default_detection_fn(
             aruco_dict=target_settings.a_dict,
             border_fraction=target_settings.border_fraction,
             legacy=target_settings.legacy,
+            marker_backend=target_settings.marker_backend,
             detection_options=detection_options,
         )
     else:
@@ -245,6 +248,7 @@ def default_detection_fn(
             marker_fraction=target_settings.marker_fraction,
             a_dict=target_settings.a_dict,
             legacy=target_settings.legacy,
+            marker_backend=target_settings.marker_backend,
             detection_options=detection_options,
         )
     detections, cam_res = detect_datapoints_in_imfile(

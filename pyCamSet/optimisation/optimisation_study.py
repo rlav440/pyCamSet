@@ -561,6 +561,11 @@ def validate_run_settings(
             errors.append(f"Target field '{required}' must be numeric.")
     if target_type not in {"ChArUco", "Ccube"}:
         errors.append(f"Unknown target type: {target_type!r}.")
+    marker_backend = target_settings.get("marker_backend")
+    if marker_backend is not None and marker_backend not in {"aruco1", "aruco2"}:
+        errors.append(
+            f"marker_backend must be one of 'aruco1' or 'aruco2'; got {marker_backend!r}."
+        )
     if trial_gating is not None:
         try:
             gating = TrialGatingSettings(**trial_gating)

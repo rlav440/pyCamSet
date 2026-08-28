@@ -68,10 +68,13 @@ from pyCamSet.gui.shared_functions import (
     TerminalWidget,
     WorkspaceManager,
     CHARUCO_DETECTION_OPTION_METADATA,
+    MARKER_BACKEND_LABELS,
     build_charuco_option_tooltip,
     build_target,
     collect_charuco_detection_options,
     copy_file,
+    marker_backend_availability_text,
+    marker_backend_available,
     count_images_in_folder,
     get_camera_subfolders,
     make_blue_button,
@@ -109,6 +112,7 @@ def _build_target(
     charuco_detection_options: dict[str, dict[str, Any]] | None = None,
     border_fraction: float = 0.1,
     marker_fraction: float = 0.8,
+    marker_backend: str = "aruco1",
     # PuzzleBoard-only:
     num_squares_x: int = 105,
     num_squares_y: int = 148,
@@ -132,6 +136,7 @@ def _build_target(
         charuco_detection_options=charuco_detection_options,
         border_fraction=border_fraction,
         marker_fraction=marker_fraction,
+        marker_backend=marker_backend,
         num_squares_x=num_squares_x,
         num_squares_y=num_squares_y,
         square_size=square_size,
@@ -334,6 +339,26 @@ class Phase1Tab(QWidget):
         self._marker_spin.setSingleStep(0.05)
         self._marker_spin.setValue(0.8)
         target_sect.addRow(self._marker_label, self._marker_spin)
+
+        self._marker_backend_combo = QComboBox()
+        for label, value in MARKER_BACKEND_LABELS.items():
+            self._marker_backend_combo.addItem(label, value)
+        self._marker_backend_combo.setCurrentText("ArUco 1 (OpenCV)")
+        self._marker_backend_combo.setFixedWidth(140)
+        # FIX 8(g): small availability label near the combo (plan v4 D12),
+        # refreshed on combo change so availability is honoured immediately.
+        self._marker_backend_status = QLabel(marker_backend_availability_text("aruco1"))
+        self._marker_backend_status.setStyleSheet("color: #2a7a2a;")
+        self._marker_backend_combo.setToolTip(
+            "Concept: which marker dictionary backend to use for detection.\n\n"
+            "ArUco 1 (OpenCV) — the built-in OpenCV ArUco detector.\n"
+            "ArUco 2 (aruco2) — the aruco2 package (ALVAR dictionaries).\n\n"
+            "Default: ArUco 1 (OpenCV)\n"
+            "Guidance: choose ArUco 2 only when the target was printed with an\n"
+            "ALVAR dictionary or when aruco2 detection is required."
+        )
+        target_sect.addRow("Marker backend:", self._marker_backend_combo)
+        target_sect.addRow("", self._marker_backend_status)
 
         # ── PuzzleBoard-specific fields ───────────────────────────────
         self._pb_x_label = QLabel("PB num_squares_x:")
@@ -578,6 +603,7 @@ class Phase1Tab(QWidget):
         root.addWidget(self._terminal)
 
         self._target_combo.currentTextChanged.connect(self._on_target_type_changed)
+        self._marker_backend_combo.currentIndexChanged.connect(self._on_marker_backend_changed)
         self._on_target_type_changed(self._target_combo.currentText())
 
     # ------------------------------------------------------------------
@@ -638,6 +664,8 @@ class Phase1Tab(QWidget):
         self._npts_spin.setVisible(is_ccube or is_charuco_only)
         self._length_label.setVisible(is_ccube or is_charuco_only)
         self._length_edit.setVisible(is_ccube or is_charuco_only)
+        self._marker_backend_combo.setVisible(is_ccube or is_charuco_only)
+        self._marker_backend_status.setVisible(is_ccube or is_charuco_only)
         # PuzzleBoard fields — toggle labels and field widgets in lockstep.
         for w in (self._pb_x_label, self._pb_x_spin, self._pb_y_label, self._pb_y_spin,
                   self._pb_square_label, self._pb_square_edit,
@@ -652,6 +680,14 @@ class Phase1Tab(QWidget):
                   self._pbc_square_label, self._pbc_square_edit,
                   self._pbc_min_width_label, self._pbc_min_width_spin):
             w.setVisible(is_puzzleboard_cube)
+
+    def _on_marker_backend_changed(self) -> None:
+        """FIX 8(g): refresh the availability label on combo change."""
+        backend = str(self._marker_backend_combo.currentData() or "aruco1")
+        self._marker_backend_status.setText(marker_backend_availability_text(backend))
+        self._marker_backend_status.setStyleSheet(
+            "color: #2a7a2a;" if marker_backend_available(backend) else "color: #8a4a00;"
+        )
 
     def _collect_params(self) -> Optional[dict]:
         floc = self._floc_edit.text().strip()
@@ -752,6 +788,7 @@ class Phase1Tab(QWidget):
             "target_type": self._target_combo.currentText(),
             "n_points": self._npts_spin.value(),
             "length": length,
+            "marker_backend": str(self._marker_backend_combo.currentData() or "aruco1"),
             "border_fraction": self._border_spin.value(),
             "marker_fraction": self._marker_spin.value(),
             # PuzzleBoard:
@@ -772,6 +809,20 @@ class Phase1Tab(QWidget):
     def _run_phase1(self) -> None:
         params = self._collect_params()
         if params is None:
+            return
+        # FIX 2 (R1): the backend is unused for PuzzleBoard/PuzzleBoardCube
+        # (they never detect ArUco markers), so only refuse when the selected
+        # target actually uses the marker backend (mirror create_target.py).
+        if params.get("target_type") in ("Ccube", "ChArUco") and not marker_backend_available(
+            params.get("marker_backend", "aruco1")
+        ):
+            QMessageBox.warning(
+                self,
+                "Marker backend unavailable",
+                "ArUco 2 (aruco2) is selected but the 'aruco2' package is not "
+                "installed. Install it with `pip install aruco2` or switch the "
+                "marker backend to ArUco 1 (OpenCV).",
+            )
             return
 
         f_loc = Path(params["f_loc"])
@@ -833,6 +884,7 @@ class Phase1Tab(QWidget):
                         charuco_detection_options=params.get("charuco_detection_options"),
                         border_fraction=params.get("border_fraction", 0.1),
                         marker_fraction=params.get("marker_fraction", 0.8),
+                        marker_backend=params.get("marker_backend", "aruco1"),
                         num_squares_x=params.get("num_squares_x", 105),
                         num_squares_y=params.get("num_squares_y", 148),
                         square_size=params.get("square_size", 2.0),

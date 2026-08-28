@@ -285,6 +285,11 @@ class PyCamSetApp(QMainWindow):
                 t_type = source_tab._target_combo.currentText()
                 n_pts = source_tab._npts_spin.value()
                 length = source_tab._length_edit.text()
+                backend = (
+                    source_tab._marker_backend_combo.currentData()
+                    if hasattr(source_tab, "_marker_backend_combo")
+                    else None
+                )
                 for tab in (self.phase1_tab, self.phase2_tab, self.phase3_tab, self.phase4_tab):
                     if tab is source_tab:
                         continue
@@ -293,14 +298,34 @@ class PyCamSetApp(QMainWindow):
                     tab._target_combo.blockSignals(True)
                     tab._npts_spin.blockSignals(True)
                     tab._length_edit.blockSignals(True)
+                    if hasattr(tab, "_marker_backend_combo"):
+                        tab._marker_backend_combo.blockSignals(True)
                     idx = tab._target_combo.findText(t_type)
                     if idx >= 0:
                         tab._target_combo.setCurrentIndex(idx)
                     tab._npts_spin.setValue(n_pts)
                     tab._length_edit.setText(length)
+                    if backend is not None and hasattr(tab, "_marker_backend_combo"):
+                        b_idx = tab._marker_backend_combo.findData(backend)
+                        if b_idx >= 0:
+                            tab._marker_backend_combo.setCurrentIndex(b_idx)
+                    # P2 fix: the backend combo's signals are blocked during
+                    # propagation, so its availability label would keep the
+                    # previous backend's text. Refresh it directly to match
+                    # the propagated backend.
+                    if hasattr(tab, "_on_marker_backend_changed"):
+                        tab._on_marker_backend_changed()
+                    # FIX 8(h): the receiving tab's visibility updater is not
+                    # fired while signals are blocked; call it directly so the
+                    # backend combo (and its availability label) stays in sync
+                    # with the propagated target type.
+                    if hasattr(tab, "_on_target_type_changed"):
+                        tab._on_target_type_changed(t_type)
                     tab._target_combo.blockSignals(False)
                     tab._npts_spin.blockSignals(False)
                     tab._length_edit.blockSignals(False)
+                    if hasattr(tab, "_marker_backend_combo"):
+                        tab._marker_backend_combo.blockSignals(False)
             finally:
                 self._syncing_target = False
 
@@ -309,6 +334,8 @@ class PyCamSetApp(QMainWindow):
                 src._target_combo.currentIndexChanged.connect(lambda _v, s=src: _propagate_target(s))
                 src._npts_spin.valueChanged.connect(lambda _v, s=src: _propagate_target(s))
                 src._length_edit.textChanged.connect(lambda _v, s=src: _propagate_target(s))
+                if hasattr(src, "_marker_backend_combo"):
+                    src._marker_backend_combo.currentIndexChanged.connect(lambda _v, s=src: _propagate_target(s))
 
         # Fallback tooltips for any controls missing explicit help text.
         self._apply_generic_option_tooltips(self.phase2_tab, "Phase 2")

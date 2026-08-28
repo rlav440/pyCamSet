@@ -43,11 +43,16 @@ from PySide6.QtWidgets import (
 
 from pyCamSet.gui.bounded_slider import BoundedSliderRow
 from pyCamSet.gui.shared_functions import (
+    ARUCO1_DICT_NAMES,
+    MARKER_BACKEND_LABELS,
     TAB_OPTIMISATION,
     WorkspaceManager,
     make_green_button,
     make_orange_button,
     make_section_label,
+    marker_backend_availability_text,
+    marker_backend_available,
+    repopulate_dict_combo,
 )
 from pyCamSet.optimisation.charuco_detector_metadata import (
     CHARUCO_PARAMETER_METADATA,
@@ -309,13 +314,21 @@ class OptimisationTab(QWidget):
         form.addRow(self._border_label, self._border_spin)
 
         self._aruco_combo = QComboBox()
-        self._aruco_combo.addItems([
-            "DICT_4X4_50", "DICT_4X4_100", "DICT_4X4_250", "DICT_4X4_1000",
-            "DICT_5X5_50", "DICT_5X5_100", "DICT_5X5_250", "DICT_5X5_1000",
-            "DICT_6X6_50", "DICT_6X6_100", "DICT_6X6_250", "DICT_6X6_1000",
-        ])
+        self._aruco_combo.addItems(ARUCO1_DICT_NAMES)
         self._aruco_combo.setCurrentText("DICT_4X4_1000")
         form.addRow("ArUco dictionary:", self._aruco_combo)
+
+        self._backend_combo = QComboBox()
+        for label, value in MARKER_BACKEND_LABELS.items():
+            self._backend_combo.addItem(label, value)
+        self._backend_combo.setCurrentText("ArUco 1 (OpenCV)")
+        self._backend_combo.currentIndexChanged.connect(self._on_backend_changed)
+        form.addRow("Marker backend:", self._backend_combo)
+        # FIX 8(g): small availability label near the combo (plan v4 D12),
+        # refreshed on combo change so availability is honoured immediately.
+        self._backend_status = QLabel(marker_backend_availability_text("aruco1"))
+        self._backend_status.setStyleSheet("color: #2a7a2a;")
+        form.addRow("", self._backend_status)
 
         self._legacy_cb = QCheckBox("Legacy pattern")
         form.addRow("", self._legacy_cb)
@@ -585,13 +598,40 @@ class OptimisationTab(QWidget):
             )
         return rows
 
+    def _on_backend_changed(self) -> None:
+        # Note: the ArUco dictionary combo has no change listeners, so no
+        # re-entrancy guard is needed while it is repopulated here.
+        repopulate_dict_combo(self._aruco_combo, str(self._backend_combo.currentData() or "aruco1"))
+        # FIX 8(g): honour availability on combo change, not only at start.
+        backend = str(self._backend_combo.currentData() or "aruco1")
+        self._backend_status.setText(marker_backend_availability_text(backend))
+        self._backend_status.setStyleSheet(
+            "color: #2a7a2a;" if marker_backend_available(backend) else "color: #8a4a00;"
+        )
+
     def _collect_target(self) -> TargetSettings:
-        # ArUco dict name → cv2 enum, looked up lazily to avoid hard cv2 dependency at import.
+        # ArUco dict name → enum, looked up lazily to avoid hard cv2/aruco2
+        # dependencies at import. The lookup is backend-aware (plan v4 D9):
+        # aruco2 names resolve through the aruco2 package, aruco1 through
+        # OpenCV. An unresolvable name is a hard validation error, never a
+        # silent fallback to dictionary 0.
+        marker_backend = str(self._backend_combo.currentData() or "aruco1")
+        dict_name = self._aruco_combo.currentText()
         try:
-            import cv2  # type: ignore[import-not-found]
-            a_dict_value = int(getattr(cv2.aruco, self._aruco_combo.currentText()))
-        except Exception:
-            a_dict_value = 0
+            if marker_backend == "aruco2":
+                import aruco2  # type: ignore[import-not-found]
+                a_dict_value = int(getattr(aruco2, dict_name))
+            else:
+                import cv2  # type: ignore[import-not-found]
+                a_dict_value = int(getattr(cv2.aruco, dict_name))
+        except (AttributeError, ImportError) as exc:
+            # Single-dialog contract: raise with the full detail and let the
+            # caller's existing error dialog present it - showing one here as
+            # well would double-report the same failure (P2 fix).
+            raise ValueError(
+                f"Could not resolve ArUco dictionary {dict_name!r} for marker "
+                f"backend {marker_backend!r}: {exc}"
+            ) from exc
         return TargetSettings(
             target_type=self._target_type_combo.currentText(),
             num_squares_x=int(self._cols_spin.value()),
@@ -603,6 +643,7 @@ class OptimisationTab(QWidget):
             length=float(self._square_spin.value()),
             border_fraction=float(self._border_spin.value()),
             legacy=self._legacy_cb.isChecked(),
+            marker_backend=marker_backend,
         )
 
     def _collect_controls(self) -> CalibrationControls:
@@ -764,6 +805,15 @@ class OptimisationTab(QWidget):
     def _on_start(self) -> None:
         if self._thread is not None:
             QMessageBox.information(self, "Optimisation", "A run is already in progress.")
+            return
+        if not marker_backend_available(str(self._backend_combo.currentData() or "aruco1")):
+            QMessageBox.warning(
+                self,
+                "Marker backend unavailable",
+                "ArUco 2 (aruco2) is selected but the 'aruco2' package is not "
+                "installed. Install it with `pip install aruco2` or switch the "
+                "marker backend to ArUco 1 (OpenCV).",
+            )
             return
         try:
             config = self._collect_config()

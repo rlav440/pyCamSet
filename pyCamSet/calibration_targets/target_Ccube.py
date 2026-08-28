@@ -12,6 +12,11 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 from pyCamSet.calibration_targets import AbstractTarget, ImageDetection, FaceToShape
+from pyCamSet.calibration_targets.aruco2_detection import (
+    detect_markers,
+    interpolate_board_corners,
+    resolve_dictionary,
+)
 from pyCamSet.calibration_targets.charuco_detection import (
     build_charuco_detector_components,
     construct_charuco_detector,
@@ -81,12 +86,25 @@ class Ccube(AbstractTarget):
                  border_fraction=0.1,
                  line_fraction=0.003,
                  legacy=False,
+                 marker_backend: str = "aruco1",
                  detection_options: dict | None = None,
                  ):
         super().__init__(inputs=locals())
         self.input_border_fraction = border_fraction
         self.actual_border_fraction = None
         self.line_fraction = line_fraction
+        if marker_backend not in ("aruco1", "aruco2"):
+            raise ValueError(
+                f"marker_backend must be 'aruco1' or 'aruco2', got {marker_backend!r}"
+            )
+        self.marker_backend = marker_backend
+        # FIX 1 (R1): only coerce ints. The pre-existing API also accepts a
+        # cv2.aruco.Dictionary object (split_aruco_dictionary handles both);
+        # keep the original object for the aruco1 path exactly as before.
+        if isinstance(aruco_dict, int):
+            self._aruco_dict_int = int(aruco_dict)
+        else:
+            self._aruco_dict_int = None
         self.aruco_dict = aruco_dict
         self.length = length/1000
         self.square_size = self.length * (1 - border_fraction) / n_points
@@ -95,7 +113,10 @@ class Ccube(AbstractTarget):
         else:
             split = int((n_points - 1) * (n_points + 1) / 2)
         self.markers_per_face = split
-        self.a_dicts = split_aruco_dictionary(split, self.aruco_dict)
+        # D6: in aruco2 mode split the RESOLVED cv2 Dictionary (built from
+        # aruco2 bytes), never the raw int.
+        resolved_dict = resolve_dictionary(aruco_dict, marker_backend)
+        self.a_dicts = split_aruco_dictionary(split, resolved_dict)
         if len(self.a_dicts) < 6:
             raise ValueError("Input dictionary of marker didn't contain enough "
                              "markers for this cube")
@@ -111,6 +132,13 @@ class Ccube(AbstractTarget):
         if legacy:
             [b.setLegacyPattern(True) for b in self.boards]
         self.detection_options = detection_options or {}  # Store the shared ChArUco detector overrides.
+        if marker_backend == "aruco2" and self.detection_options:
+            if not getattr(self, "_warned_detection_options", False):
+                logging.warning(
+                    "Ccube: detection_options are OpenCV-only and are ignored "
+                    "with marker_backend='aruco2'."
+                )
+                self._warned_detection_options = True
         self.detection_params, self.detector_params, self.refine_params = build_charuco_detector_components(
             self.detection_options
         )  # Build one shared parameter bundle for all six faces.
@@ -154,6 +182,16 @@ class Ccube(AbstractTarget):
 
         self.board_detectors = None
         self.given_legacy_warning = False
+
+    def _warn_legacy_once(self) -> None:
+        """Warn once per target when aruco2 interpolation still disagrees."""
+        if not self.given_legacy_warning:
+            logging.warning(
+                "Ccube (aruco2): cross-marker disagreement remains above 5px "
+                "after the legacy-pattern toggle on an even-row face. Verify "
+                "your physical board matches legacy=True."
+            )
+            self.given_legacy_warning = True
 
     def plot(self, return_scene = False):
         """
@@ -601,6 +639,45 @@ class Ccube(AbstractTarget):
             im_idea = downsample_valid(im_idea, d_f).astype(np.uint8)
             if im_idea.ndim == 2:
                 im_idea = np.tile(im_idea[..., None], (1, 1, 3))
+
+
+        if self.marker_backend == "aruco2":
+            # D5: detect ONCE with the parent dictionary int, then interpolate
+            # per face with the face-local board.
+            markers = detect_markers(image, self._aruco_dict_int)
+            seen_keys = []
+            seen_data = []
+            for idb, board in enumerate(self.boards):
+                # global id -> (face, local id): face = gid // markers_per_face;
+                # markers from other faces (or stray ids) are skipped.
+                face_markers = [
+                    (gid - idb * self.markers_per_face, corners)
+                    for gid, corners in markers
+                    if gid // self.markers_per_face == idb
+                ]
+                if not face_markers:
+                    continue
+                c_ids, c_pts = interpolate_board_corners(
+                    image,
+                    board,
+                    face_markers,
+                    warn_legacy=self._warn_legacy_once,
+                )
+                if c_ids is None:
+                    continue
+                for cid, corner in zip(c_ids, c_pts):
+                    seen_keys.append([idb, int(cid)])
+                    seen_data.append(corner)
+                if draw:
+                    aruco.drawDetectedCornersCharuco(
+                        im_idea,
+                        np.asarray(c_pts, dtype=np.float32).reshape(-1, 1, 2) / d_f,
+                        np.asarray(c_ids, dtype=np.int32).reshape(-1, 1),
+                    )
+            if draw:
+                cv2.imshow('detections', im_idea)
+                cv2.waitKey(wait_len)
+            return ImageDetection(keys=seen_keys, image_points=seen_data)
 
 
         seen_keys = []

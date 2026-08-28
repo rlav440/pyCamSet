@@ -9,7 +9,7 @@ _DEFAULT_OUTPUT_DIR = Path.cwd() / "calibration_targets" / "2D"
 _DEFAULT_DICT_NAME = "DICT_4X4_1000"
 
 
-def _normalise_aruco_dict(aruco_dict: int | str) -> int:
+def _normalise_aruco_dict(aruco_dict: int | str, marker_backend: str = "aruco1") -> int:
     if isinstance(aruco_dict, str):
         dict_name = aruco_dict.strip()
         if not dict_name:
@@ -17,9 +17,17 @@ def _normalise_aruco_dict(aruco_dict: int | str) -> int:
         if not dict_name.startswith("DICT_"):
             dict_name = f"DICT_{dict_name}"
         try:
+            if marker_backend == "aruco2":
+                import aruco2  # Lazy import: aruco2 is an optional dependency.
+                return int(getattr(aruco2, dict_name))
             return int(getattr(cv2.aruco, dict_name))
         except AttributeError as exc:
             raise ValueError(f"Unknown ArUco dictionary name: {aruco_dict}") from exc
+        except ImportError as exc:
+            raise ImportError(
+                "aruco2 is not installed. Install it with `pip install aruco2` "
+                "to use marker_backend='aruco2'."
+            ) from exc
     return int(aruco_dict)
 
 
@@ -66,6 +74,7 @@ def build_charuco(
     square_size: float | None = None,
     marker_fraction: float = 0.8,
     aruco_dict: int | str = _DEFAULT_DICT_NAME,
+    marker_backend: str = "aruco1",
     *,
     n_points: int | None = None,
     length: float | None = None,
@@ -80,7 +89,8 @@ def build_charuco(
         num_squares_y=y,
         square_size=size,
         marker_fraction=float(marker_fraction),
-        a_dict=_normalise_aruco_dict(aruco_dict),
+        a_dict=_normalise_aruco_dict(aruco_dict, marker_backend),
+        marker_backend=marker_backend,
     )
 
 
@@ -104,6 +114,7 @@ def generate_charuco_target(
     square_size: float | None = None,
     marker_fraction: float = 0.8,
     aruco_dict: int | str = _DEFAULT_DICT_NAME,
+    marker_backend: str = "aruco1",
     output_dir: Path | str = _DEFAULT_OUTPUT_DIR,
     file_name: str | None = None,
     export_kind: str = "svg",
@@ -132,6 +143,7 @@ def generate_charuco_target(
         square_size=size,
         marker_fraction=marker_fraction,
         aruco_dict=aruco_dict,
+        marker_backend=marker_backend,
     )
     out_path = out_dir / file_name
 

@@ -50,8 +50,11 @@ from pyCamSet.gui.shared_functions import (
     RunSelectorWidget,
     TerminalWidget,
     WorkspaceManager,
+    MARKER_BACKEND_LABELS,
     build_target,
     extract_detection_and_cam_res,
+    marker_backend_availability_text,
+    marker_backend_available,
     make_blue_button,
     make_continue_button,
     make_orange_button,
@@ -403,6 +406,26 @@ class Phase2Tab(QWidget):
         self._marker_spin.setValue(0.8)
         target_sect.addRow(self._marker_label, self._marker_spin)
 
+        self._marker_backend_combo = QComboBox()
+        for label, value in MARKER_BACKEND_LABELS.items():
+            self._marker_backend_combo.addItem(label, value)
+        self._marker_backend_combo.setCurrentText("ArUco 1 (OpenCV)")
+        self._marker_backend_combo.setFixedWidth(140)
+        # FIX 8(g): small availability label near the combo (plan v4 D12),
+        # refreshed on combo change so availability is honoured immediately.
+        self._marker_backend_status = QLabel(marker_backend_availability_text("aruco1"))
+        self._marker_backend_status.setStyleSheet("color: #2a7a2a;")
+        self._marker_backend_combo.setToolTip(
+            "Concept: which marker dictionary backend to use for detection.\n\n"
+            "ArUco 1 (OpenCV) — the built-in OpenCV ArUco detector.\n"
+            "ArUco 2 (aruco2) — the aruco2 package (ALVAR dictionaries).\n\n"
+            "Default: ArUco 1 (OpenCV)\n"
+            "Guidance: choose ArUco 2 only when the target was printed with an\n"
+            "ALVAR dictionary or when aruco2 detection is required."
+        )
+        target_sect.addRow("Marker backend:", self._marker_backend_combo)
+        target_sect.addRow("", self._marker_backend_status)
+
         # ── PuzzleBoard-specific fields ───────────────────────────────
         self._pb_x_spin = QSpinBox()
         self._pb_x_spin.setRange(2, 501)
@@ -464,6 +487,7 @@ class Phase2Tab(QWidget):
         target_sect.addRow("PBC min_width:", self._pbc_min_width_spin)
 
         self._target_combo.currentTextChanged.connect(self._on_target_type_changed)
+        self._marker_backend_combo.currentIndexChanged.connect(self._on_marker_backend_changed)
         self._on_target_type_changed(self._target_combo.currentText())
 
         # ── Initial Calibration Options ────────────────────────────────
@@ -629,6 +653,8 @@ class Phase2Tab(QWidget):
         self._npts_spin.setVisible(show_ccube_charuco)
         self._length_label.setVisible(show_ccube_charuco)
         self._length_edit.setVisible(show_ccube_charuco)
+        self._marker_backend_combo.setVisible(show_ccube_charuco)
+        self._marker_backend_status.setVisible(show_ccube_charuco)
         # PuzzleBoard fields.
         for w in (self._pb_x_spin, self._pb_y_spin, self._pb_square_edit,
                   self._pb_start_x_spin, self._pb_start_y_spin,
@@ -637,6 +663,14 @@ class Phase2Tab(QWidget):
         # PuzzleBoardCube fields.
         for w in (self._pbc_size_spin, self._pbc_square_edit, self._pbc_min_width_spin):
             w.setVisible(is_puzzleboard_cube)
+
+    def _on_marker_backend_changed(self) -> None:
+        """FIX 8(g): refresh the availability label on combo change."""
+        backend = str(self._marker_backend_combo.currentData() or "aruco1")
+        self._marker_backend_status.setText(marker_backend_availability_text(backend))
+        self._marker_backend_status.setStyleSheet(
+            "color: #2a7a2a;" if marker_backend_available(backend) else "color: #8a4a00;"
+        )
 
     def _collect_params(self) -> Optional[dict]:
         floc = self._floc_edit.text().strip()
@@ -698,6 +732,7 @@ class Phase2Tab(QWidget):
             "target_type": self._target_combo.currentText(),
             "n_points": self._npts_spin.value(),
             "length": length,
+            "marker_backend": str(self._marker_backend_combo.currentData() or "aruco1"),
             "border_fraction": self._border_spin.value(),
             "marker_fraction": self._marker_spin.value(),
             # PuzzleBoard:
@@ -754,6 +789,20 @@ class Phase2Tab(QWidget):
     def _run_phase2(self) -> None:
         params = self._collect_params()
         if params is None:
+            return
+        # FIX 2 (R1): the backend is unused for PuzzleBoard/PuzzleBoardCube
+        # (they never detect ArUco markers), so only refuse when the selected
+        # target actually uses the marker backend (mirror create_target.py).
+        if params.get("target_type") in ("Ccube", "ChArUco") and not marker_backend_available(
+            params.get("marker_backend", "aruco1")
+        ):
+            QMessageBox.warning(
+                self,
+                "Marker backend unavailable",
+                "ArUco 2 (aruco2) is selected but the 'aruco2' package is not "
+                "installed. Install it with `pip install aruco2` or switch the "
+                "marker backend to ArUco 1 (OpenCV).",
+            )
             return
         if not _PYCAMSET_OK:
             QMessageBox.critical(self, "Import error", "pyCamSet calibration modules are unavailable.")
@@ -830,6 +879,7 @@ class Phase2Tab(QWidget):
                         params["length"],
                         border_fraction=params.get("border_fraction", 0.1),
                         marker_fraction=params.get("marker_fraction", 0.8),
+                        marker_backend=params.get("marker_backend", "aruco1"),
                         num_squares_x=params.get("num_squares_x", 105),
                         num_squares_y=params.get("num_squares_y", 148),
                         square_size=params.get("square_size", 2.0),
@@ -1530,6 +1580,7 @@ class Phase2DiagnosticsTab(QWidget):
                     src_params.get("length", 30.0),
                     border_fraction=src_params.get("border_fraction", 0.1),
                     marker_fraction=src_params.get("marker_fraction", 0.8),
+                    marker_backend=src_params.get("marker_backend", "aruco1"),
                     num_squares_x=src_params.get("num_squares_x", 105),
                     num_squares_y=src_params.get("num_squares_y", 148),
                     square_size=src_params.get("square_size", 2.0),

@@ -11,6 +11,10 @@ from cv2 import aruco
 from matplotlib import pyplot as plt
 
 from pyCamSet.calibration_targets.abstract_target import AbstractTarget
+from pyCamSet.calibration_targets.aruco2_detection import (
+    detect_charuco_corners,
+    resolve_dictionary,
+)
 from pyCamSet.calibration_targets.charuco_detection import (
     build_charuco_detector_components,
     construct_charuco_detector,
@@ -29,6 +33,7 @@ class ChArUco(AbstractTarget):
         marker_fraction=0.8,
         a_dict=cv2.aruco.DICT_4X4_1000,
         legacy=False,
+        marker_backend: str = "aruco1",
         detection_options: dict | None = None,
     ):
         """
@@ -39,6 +44,8 @@ class ChArUco(AbstractTarget):
         :param square_size: the size of a square in mm! mm!
         :param marker_fraction: the percentage of a chessboard square occupied by a marker
         :param a_dict: the aruco dictionary to use.
+        :param marker_backend: the marker backend to use, "aruco1" (OpenCV) or
+            "aruco2" (aruco2 package). Defaults to "aruco1".
         """
         super().__init__(inputs=locals())
 
@@ -48,8 +55,15 @@ class ChArUco(AbstractTarget):
         marker_size = marker_fraction * self.square_size  # 80% of the square size
         # convert to meters
 
-        # Create the dictionary for the Charuco board
-        self.a_dict = cv2.aruco.getPredefinedDictionary(a_dict)
+        # Validate the marker backend and resolve the dictionary per D3.
+        if marker_backend not in ("aruco1", "aruco2"):
+            raise ValueError(
+                f"marker_backend must be 'aruco1' or 'aruco2', got {marker_backend!r}"
+            )
+        self.marker_backend = marker_backend
+        self._aruco_dict_int = int(a_dict)
+        # Create the dictionary for the Charuco board (backend-specific bytes).
+        self.a_dict = resolve_dictionary(a_dict, marker_backend)
         # Create the Charuco board
         self.board = cv2.aruco.CharucoBoard((num_squares_x, num_squares_y),self.square_size, marker_size, self.a_dict)
         if legacy:
@@ -57,6 +71,13 @@ class ChArUco(AbstractTarget):
         self.point_data = np.asarray(self.board.getChessboardCorners(), dtype=np.float64).squeeze()
 
         self.detection_options = detection_options or {}  # Store the normalised detection overrides for reuse.
+        if marker_backend == "aruco2" and self.detection_options:
+            if not getattr(self, "_warned_detection_options", False):
+                logging.warning(
+                    "ChArUco: detection_options are OpenCV-only and are ignored "
+                    "with marker_backend='aruco2'."
+                )
+                self._warned_detection_options = True
         self.detection_params, self.detector_params, self.refine_params = build_charuco_detector_components(
             self.detection_options
         )  # Build the shared OpenCV parameter objects in one place.
@@ -69,6 +90,16 @@ class ChArUco(AbstractTarget):
         self.given_legacy_warning = False
 
         self._process_data()
+
+    def _warn_legacy_once(self) -> None:
+        """Warn once per target when aruco2 interpolation still disagrees."""
+        if not self.given_legacy_warning:
+            logging.warning(
+                "ChArUco (aruco2): cross-marker disagreement remains above 5px "
+                "after the legacy-pattern toggle. Verify your physical board "
+                f"matches legacy={self.board.getLegacyPattern()}."
+            )
+            self.given_legacy_warning = True
 
     def _board_size_mm(self) -> tuple[float, float]:
         n_x, n_y = self.board.getChessboardSize()
@@ -285,9 +316,26 @@ class ChArUco(AbstractTarget):
 
         :return ImageDetection: a data class wrapping the data detected in the image.
         """
-        # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
-        # _, _, mloc, mid = self.board_detectors.detectBoard(image)
-        c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image)
+        if self.marker_backend == "aruco2":
+            # aruco2 branch (D4): detect markers with aruco2 and interpolate
+            # ChArUco corners; the legacy-pattern toggle runs inside the module.
+            # D4 step 10 returns (corner_ids 1D, pts (N,2)); unpack ids first.
+            c_ids, c_corners = detect_charuco_corners(
+                image,
+                self.board,
+                self._aruco_dict_int,
+                warn_legacy=self._warn_legacy_once,
+            )
+            if c_ids is None:
+                return ImageDetection()  # return an empty detection
+            # normalise to the aruco1 shapes used below: (N,1,2) and (N,1)
+            c_corners = np.asarray(c_corners, dtype=np.float32).reshape(-1, 1, 2)
+            c_ids = np.asarray(c_ids, dtype=np.int32).reshape(-1, 1)
+            mloc, mid = None, None
+        else:
+            # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
+            # _, _, mloc, mid = self.board_detectors.detectBoard(image)
+            c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image)
         if c_corners is None and mloc is not None:
             if not self.given_legacy_warning:
                 pattern_type = "legacy" if self.board.getLegacyPattern() else "new"

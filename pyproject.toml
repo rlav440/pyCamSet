@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+# Only "test_*.py". The "*_test.py" suffix pytest also accepts by default has
+# previously caused scratch modules dropped into tests/ to be imported (and
+# their module-level side effects executed) during collection.
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers --strict-config"

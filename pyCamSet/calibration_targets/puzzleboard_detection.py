@@ -2,7 +2,6 @@ from __future__ import annotations  # Keep annotations consistent with pyCamSet 
 
 import cv2  # Convert pyCamSet's OpenCV images to the detector's expected colour order.
 import numpy as np  # Type and shape normalisation for detector inputs.
-from puzzle_board.puzzle_board_detector import detect_puzzleboard  # Require and credit the upstream PuzzleBoard repository.
 
 
 def prepare_puzzleboard_image(image: np.ndarray) -> np.ndarray:
@@ -22,5 +21,6 @@ def detect_puzzleboard_image(
     min_width: int = 4,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """Detect PuzzleBoard grid points from a pyCamSet/OpenCV image."""
+    from puzzle_board.puzzle_board_detector import detect_puzzleboard  # Load the optional detector only when requested.
     detector_image = prepare_puzzleboard_image(image)  # Normalise the image before external detection.
     return detect_puzzleboard(detector_image, min_width=int(min_width))  # Preserve the original detector output.

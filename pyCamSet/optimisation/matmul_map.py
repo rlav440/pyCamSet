@@ -7,6 +7,21 @@ from matplotlib import pyplot as plt
 # from .abstract_function_blocks import optimisation_function
 #
 
+# The sparsity of the generated jacobian is inferred by evaluating each
+# function block numerically and testing entries against 0 and 1, which become
+# literals in the emitted source. One sample cannot tell a structural zero from
+# a derivative that merely vanishes at the sampled point, so several are taken
+# and an entry is only treated as constant when it holds that value at every
+# one of them. The probe is cheap -- the matrices are (mat_size, mat_size) with
+# mat_size ~30, and 100 samples of every block costs well under a millisecond.
+SPARSITY_PROBE_SAMPLES = 100
+
+# Fixed so codegen is reproducible. A dedicated Generator is used rather than
+# the global numpy RNG so that generating a template neither depends on nor
+# perturbs the caller's random state.
+SPARSITY_PROBE_SEED = 0
+
+
 # we take a function and have some parameters of interest.
 # we take the matricies and left collapse them.
 # then we can represent the multiplication in some form of hierachical way.
@@ -15,16 +30,32 @@ from matplotlib import pyplot as plt
 # indx class represents the origin of data
 
 
-def convert_matrix(mat, size, matnum):
+def convert_matrix(mat_samples, size, matnum):
     """
-    given a matrix, converts it to the form used for encapsulation
+    given jacobian samples of one function block, converts them to the form
+    used for encapsulation
+
+    An entry is encoded as the literal 0 or 1 only when it holds that value in
+    every sample. Encoding it from a single sample bakes a coincidental zero
+    into the generated source, which then drops that derivative term for every
+    future input -- a silent loss of jacobian columns rather than an error.
+
+    :param mat_samples: an (n_samples, size, size) stack of evaluated jacobians
+    :param size: the side length of the jacobian
+    :param matnum: the index of the function block the samples came from
     """
+    samples = np.asarray(mat_samples)
+    if samples.ndim == 2:  # tolerate a single un-stacked sample
+        samples = samples[None, ...]
+    always_zero = np.all(samples == 0, axis=0)
+    always_one = np.all(samples == 1, axis=0)
+
     output = {}
     for i in range(size):
         for j in range(size):
-            if mat[i,j] == 0:
+            if always_zero[i,j]:
                 output[(i,j)] = 0
-            elif mat[i,j] == 1:
+            elif always_one[i,j]:
                 output[(i,j)] = 1
             else:
                 output[(i,j)] = indx(i,j, matnum)
@@ -144,6 +175,41 @@ def map_outputs_to_jac(output, jac, param_slices, n_blocks, ide, m2i, output_off
                 m2i[ide][(output_var, idv)] = idc * ll + + n_param + ids + output_offsets[ide]
 
 
+def check_all_params_reach_the_output(out_mat, param_len, n_outputs=2):
+    """
+    Raises when a parameter has no surviving derivative path to the residuals.
+
+    The generated jacobian encodes its own sparsity, so a derivative term that
+    is wrongly treated as structurally zero simply disappears from the emitted
+    source. The optimiser then sees a column of zeros, cannot move that
+    parameter, and converges to a worse answer with no error raised -- which is
+    exactly how the macos-14 Ccube regression behaved (69 of 183 columns dead,
+    6.17 px instead of 2.62 px).
+
+    The check is over the encoded structure rather than numbers, so it costs
+    nothing and runs on every code generation.
+
+    :param out_mat: the encoded jacobian, keyed by (row, column)
+    :param param_len: the number of parameter columns
+    :param n_outputs: the number of residual rows the jacobian writes
+    """
+    dead = [
+        col for col in range(param_len)
+        if all(out_mat.get((row, col), 0) == 0 for row in range(param_len, param_len + n_outputs))
+    ]
+    if dead:
+        raise RuntimeError(
+            f"Generated jacobian is degenerate: {len(dead)} of {param_len} "
+            f"function-block parameters have no derivative path to the "
+            f"residuals (block-space columns {dead}; these index the combined "
+            f"function-block parameter vector, not the full optimisation "
+            f"parameter array). The sparsity probe has encoded live derivative "
+            f"terms as structural zeros, so those parameters could not be "
+            f"optimised. This is a code generation fault, not a data problem "
+            f"-- please report it with your platform and numpy/numba versions."
+        )
+
+
 def create_optimisable_compute_flow(opfun, out_name:str, in_name:str):
     """
     We use multivariate calculus to perpetuate the derivatives of each function block.
@@ -177,28 +243,31 @@ def create_optimisable_compute_flow(opfun, out_name:str, in_name:str):
     mat_ind_2_derivout_ind = [{} for _ in range(n_blocks)]
     
     #create and build the matricies
+    # Seeded locally so the emitted source is reproducible and independent of
+    # the caller's random state.
+    rng = np.random.default_rng(SPARSITY_PROBE_SEED)
     matricies = []
     for ide, element in enumerate(opfun.function_blocks):
-        jac = np.eye(mat_size)
         outsize = (element.params.n_params + element.num_inp) * element.num_out
-        output = np.empty(outsize)
-        inps = np.random.random(element.num_inp)
-        params = np.random.random(element.params.n_params)
+        jac_samples = np.empty((SPARSITY_PROBE_SAMPLES, mat_size, mat_size))
 
-        element.compute_jac(
-            inp=inps,
-            params=params,
-            output=output,
-            memory=np.empty(element.array_memory),
-        )
-        #write the permutation into the array.
-        map_outputs_to_jac(output, jac, param_slices, n_blocks, ide, mat_ind_2_derivout_ind, locs)
-        # og_jac = jac.copy()
-        jac = convert_matrix(jac, mat_size, matnum=ide)
-        # re_jac = unconvert_matrix(jac, mat_size, og_jac)
-        # plt.imshow(np.abs(og_jac - re_jac))
-        # plt.show()
-        matricies.append(jac)
+        for ids in range(SPARSITY_PROBE_SAMPLES):
+            jac = np.eye(mat_size)
+            # NaN rather than np.empty: an entry the kernel fails to write is
+            # then neither 0 nor 1, so the term is emitted instead of being
+            # silently dropped, and the probe stays deterministic.
+            output = np.full(outsize, np.nan)
+            element.compute_jac(
+                inp=rng.random(element.num_inp),
+                params=rng.random(element.params.n_params),
+                output=output,
+                memory=np.zeros(element.array_memory),
+            )
+            #write the permutation into the array.
+            map_outputs_to_jac(output, jac, param_slices, n_blocks, ide, mat_ind_2_derivout_ind, locs)
+            jac_samples[ids] = jac
+
+        matricies.append(convert_matrix(jac_samples, mat_size, matnum=ide))
 
     for i in range(len(matricies) -1):
         matricies[i+1] = encapsulate_multiplication(matricies[i], matricies[i+1], mat_size)
@@ -210,7 +279,11 @@ def create_optimisable_compute_flow(opfun, out_name:str, in_name:str):
         #         print(f"{key} = {value}")
 
     out_mat = matricies[i+1]            
-    
+
+    # Fail at generation time rather than silently emitting a jacobian that
+    # cannot move some parameters.
+    check_all_params_reach_the_output(out_mat, param_len)
+
     #with this structure in place, what we then need to do is to write the code that converts this to a multiplication
     def jac2ret(ind):
         return f"{ind[0] - param_len},{ind[1]}"

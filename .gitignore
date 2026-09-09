@@ -1,8 +1,12 @@
 .idea/
+.DS_Store
 __pycache__/
 docs/build/
+build/
 pyCamSet.egg-info/
+.codegraph/
 pyCamSet/optimisation/template_functions/*
+tests/test_data/**/*.camset
 tests/test_data/*.camset
 tests/test_data/**/detected_datapoints*.pickle
 tests/test_data/cam_test_cache.pkl

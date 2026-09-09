@@ -75,6 +75,7 @@ from pyCamSet.gui.assess_calibration import (
     launch_visualise_calibration_open3d_for_run,
     launch_save_pyvista_png_for_run,
     merge_phase3_phase4_runs,
+    observation_residual_xy,
     select_latest_visualisation_run,
 )
 from pyCamSet.gui.phase_3_lockbox_editor import Phase3LockboxEditor
@@ -1190,18 +1191,16 @@ class Phase3Tab(QWidget):
                     per_cam_err: dict[str, float] = {}
                     try:
                         dd = np.asarray(handler.get_detection_data(flatten=True))
-                        residual_xy = np.reshape(np.asarray(optimisation.fun, dtype=float), (-1, 2))
+                        residual_xy = observation_residual_xy(optimisation.fun, handler)
                         residual_norm = np.linalg.norm(residual_xy, axis=1)
 
                         if dd.ndim == 2 and dd.shape[1] >= 1:
                             cam_idx = dd[:, 0].astype(int)
                             if cam_idx.size != residual_norm.size:
-                                n = min(cam_idx.size, residual_norm.size)
-                                emit(
-                                    f"Warning: D3.12 alignment mismatch (cam_idx={cam_idx.size}, residuals={residual_norm.size}); truncating to {n}."
+                                raise ValueError(
+                                    "D3.12 alignment mismatch: "
+                                    f"cam_idx={cam_idx.size}, residuals={residual_norm.size}"
                                 )
-                                cam_idx = cam_idx[:n]
-                                residual_norm = residual_norm[:n]
 
                             for idx, name in enumerate(handler.cam_names):
                                 mask = cam_idx == idx
@@ -1874,7 +1873,8 @@ class Phase3DiagnosticsTab(QWidget):
                     if p2_run is None and p2_runs:
                         p2_run = p2_runs[-1]
                     if p2_run:
-                        camset_path_str = (p2_run.get("artifacts") or {}).get("initial_camset")
+                        resolved_camset = resolve_phase2_camset_artifact(p2_run, ws)
+                        camset_path_str = str(resolved_camset) if resolved_camset is not None else None
 
                 if not camset_path_str or not path_exists(camset_path_str):
                     raise RuntimeError("Could not resolve Phase 2 initial camset.")
@@ -1996,14 +1996,15 @@ class Phase3DiagnosticsTab(QWidget):
                 per_cam_err: dict = {}
                 try:
                     dd = np.asarray(handler.get_detection_data(flatten=True))
-                    residual_xy = np.reshape(np.asarray(optimisation.fun, dtype=float), (-1, 2))
+                    residual_xy = observation_residual_xy(optimisation.fun, handler)
                     residual_norm = np.linalg.norm(residual_xy, axis=1)
                     if dd.ndim == 2 and dd.shape[1] >= 1:
                         cam_idx = dd[:, 0].astype(int)
                         if cam_idx.size != residual_norm.size:
-                            n = min(cam_idx.size, residual_norm.size)
-                            cam_idx = cam_idx[:n]
-                            residual_norm = residual_norm[:n]
+                            raise ValueError(
+                                "D3.12 alignment mismatch: "
+                                f"cam_idx={cam_idx.size}, residuals={residual_norm.size}"
+                            )
                         for idx, name in enumerate(handler.cam_names):
                             mask = cam_idx == idx
                             per_cam_err[name] = (

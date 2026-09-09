@@ -37,6 +37,7 @@ def calibrate_cameras(
     threads=None,
     problem_options: dict|None = None,
     initial_cams: CameraSet | None= None,
+    min_detections_per_board: int = 12,
     ) -> CameraSet:
     """
     This function coordinates the calibration process, from detection to outputing a final camset.
@@ -49,6 +50,8 @@ def calibrate_cameras(
     :param n_lim: the maximum number of images to use for detection
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
     :param high_distortion: Implements an iterative scheme for high distortion cameras.
+    :param min_detections_per_board: Minimum number of detected corners required
+        for a board observation to contribute to the initial per-camera calibration.
     """
 
     if isinstance(f_loc, str):
@@ -80,7 +83,8 @@ def calibrate_cameras(
             camera_res,
             save=save,
             save_loc=save_loc / ('initial_cameras' + string_tail),
-            fixed_params=fixed_params
+            fixed_params=fixed_params,
+            min_detections_per_board=min_detections_per_board,
         )
 
 
@@ -100,6 +104,7 @@ def calibrate_cameras(
                 camera_res,
                 save=save,
                 save_loc=save_loc / ('initial_cameras_high_distortion' + string_tail),
+                min_detections_per_board=min_detections_per_board,
                 )
 
             initial_cams.draw_camera_distortions()
@@ -133,7 +138,8 @@ def run_initial_calibration(detection: TargetDetection,
                             save=True, save_loc: Path = Path('initial_estimate.camset'),
                             ref_cam: int|str = 0,
                             fixed_params: dict|None = None,
-                            return_poses_and_costs=False) -> CameraSet | tuple[CameraSet, np.ndarray, np.ndarray]:
+                            return_poses_and_costs=False,
+                            min_detections_per_board: int = 12) -> CameraSet | tuple[CameraSet, np.ndarray, np.ndarray]:
     """
     For all of the cameras, runs the calibration method provided by an abstract target.
     The default is an opencv calibration but may be overwritten.
@@ -143,6 +149,8 @@ def run_initial_calibration(detection: TargetDetection,
     :param save: should the result be saved
     :param save_loc: where should the result be saved
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
+    :param min_detections_per_board: Minimum number of detected corners required
+        for a board observation to contribute to the initial per-camera calibration.
     :return: the camera set with the initial calibration
     """
 
@@ -151,31 +159,57 @@ def run_initial_calibration(detection: TargetDetection,
         cams = load_CameraSet(save_loc)
         if return_poses_and_costs is False:
             return cams
-        poses = np.load(save_loc.parent/'calib_pose_data.npy')
-        per_im = np.load(save_loc.parent/'calib_im_data.npy')
+        pose_path = save_loc.parent/'calib_pose_data.npy'
+        per_im_path = save_loc.parent/'calib_im_data.npy'
+        poses = np.load(pose_path) if pose_path.exists() else np.array([], dtype=float)
+        per_im = np.load(per_im_path) if per_im_path.exists() else np.array([], dtype=float)
         return cams, poses, per_im
 
     # define the input structure to the
     # inp = data, target, intial_estimate, camera_res
     c_m = detection.features_per_im_per_cam()
+    if c_m.size == 0:
+        raise ValueError(
+            "No detection features were found for any camera/image. "
+            "Check that the calibration target matches the detected board "
+            "type and that the test data contains valid images."
+        )
     mask = ~np.any(c_m < 6, axis=1)
     score = np.sum(c_m, axis=1)
     pose_im = np.argmax(score * mask)
     # create a lambda based on the inputs
 
     logging.info("Pulling calibration method from target")
-    work_fn = lambda datum: calibration_target.initial_calibration(
-            cam_name=datum[0],
-            detection=datum[1],
-            res=datum[2],
-            pose_im=pose_im,
-            fixed_params=fixed_params,
-            return_poses=True,
-        )
     cam_names = detection.cam_names
     cam_detections = detection.get_cam_list()
     work_data = zip(cam_names, cam_detections, cam_res)
-    raw_calibration, poses, per_im = map(list, zip(*[work_fn(datum) for datum in work_data]))
+    if return_poses_and_costs:
+        work_fn = lambda datum: calibration_target.initial_calibration(
+                cam_name=datum[0],
+                detection=datum[1],
+                res=datum[2],
+                pose_im=pose_im,
+                fixed_params=fixed_params,
+                return_poses=True,
+                min_detections_per_board=min_detections_per_board,
+            )
+        results = [work_fn(datum) for datum in work_data]
+        raw_calibration = [res[0] for res in results]
+        poses = [res[1] for res in results]
+        per_im = [res[2] for res in results]
+    else:
+        work_fn = lambda datum: calibration_target.initial_calibration(
+                cam_name=datum[0],
+                detection=datum[1],
+                res=datum[2],
+                pose_im=pose_im,
+                fixed_params=fixed_params,
+                return_poses=False,
+                min_detections_per_board=min_detections_per_board,
+            )
+        raw_calibration = [work_fn(datum) for datum in work_data]
+        poses = []
+        per_im = []
     cam_dict = {cam_name: cam for cam_name, cam in zip(cam_names, raw_calibration)}
     cams = CameraSet(camera_dict=cam_dict)
 
@@ -203,8 +237,8 @@ def outlier_rejection(results, params) -> tuple[TargetDetection | None, bool]:
     detection = params.get_detection_data()
     # plot this as a boxplot
     d_list = [[] for _ in range(params.detection.max_ims)]
-    for im_num, errs in zip(detection[:, 1], results):
-        d_list[int(im_num)].append(errs)
+    for global_im_num, errs in zip(detection[:, 1], results):
+        d_list[int(global_im_num)].append(errs)
 
     per_im_outliers = mad_outlier_detection([np.mean(datum) for datum in d_list if datum],
                                             draw=False,
@@ -224,7 +258,7 @@ def outlier_rejection(results, params) -> tuple[TargetDetection | None, bool]:
         return None, False
     logging.info("deleting datum associated with the above outliers")
     data = params.detection
-    return data.delete_row(im_num=per_im_outliers), True
+    return data.delete_row(global_im_num=per_im_outliers), True
 
 def run_stereo_calibration(
     cams: CameraSet,
@@ -248,7 +282,10 @@ def run_stereo_calibration(
     :param save: should the result be saved
     :param save_loc: where should the result be saved
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
-    :param floc: the location of the images, used to update the camera resolutions
+    :param floc: the location of the images, used to update the camera resolutions.
+                 When supplied, set_resolutions_from_file() is always called regardless
+                 of the save flag, so that the returned CameraSet has correct resolution
+                 data even when save=False.
     """
     logging.info("Running the full multiview calibration")
 
@@ -273,9 +310,9 @@ def run_stereo_calibration(
     # outlier_rejection(optimisation.fun.reshape((-1,2)), param_handler)
 
 
+    if floc is not None:
+        optimised_cams.set_resolutions_from_file(floc)
     if save:
-        if floc is not None:
-            optimised_cams.set_resolutions_from_file(floc)
         optimised_cams.save(save_loc)
     return optimised_cams
 
@@ -290,6 +327,7 @@ def detect_datapoints_in_imfile(
     camset:CameraSet|None = None,
     subfolder_string: str|None = None,
     threads=1,
+    upscale_factor:int=1,
 ) -> tuple[TargetDetection, list[tuple]]:
     """
     This function organises the detection of the image datapoints in a folder of images.
@@ -309,6 +347,13 @@ def detect_datapoints_in_imfile(
 
     if camset is not None:
         cache_name = cache_name.split('.')[0] + "_with_calib.pickle"
+
+    # incorporate upscale factor into cache filename so different upscale
+    # settings get independent caches. When upscale_factor == 1 (default),
+    # keep the original cache name unchanged so existing caches stay valid.
+    if upscale_factor != 1:
+        base = cache_name.split('.')[0]
+        cache_name = f"{base}_upscale{upscale_factor}x.pickle"
 
     if not (f_loc / cache_name).exists() or not caching:
         logging.info('Not caching, starting detection')
@@ -333,6 +378,7 @@ def detect_datapoints_in_imfile(
                 n_lim=n_lim,
                 camera=cam,
                 threads=threads,
+                upscale_factor=upscale_factor,
             )
 
         if use_cams:
@@ -342,7 +388,11 @@ def detect_datapoints_in_imfile(
             detections = [work_fn(file) for file in tqdm(detected_sub_folders)]
         detected = reduce(lambda x, y: x + y, detections)
 
-        cam_res = [cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2] for cname in cam_names]
+        # cam_res must reflect the upscaled coordinate frame, not native.
+        # When upscale_factor > 1, detected 2D pixel coords are in the upscaled
+        # frame, so cam_res must match. Multiply native .shape[:2] by the factor
+        # (cheaper than re-reading the image and resizing it).
+        cam_res = [tuple(int(d * upscale_factor) for d in cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2]) for cname in cam_names]
 
         if caching:
             save_pickle((detected, cam_res), f_loc / cache_name)
@@ -359,11 +409,22 @@ def validate_detections(detected:TargetDetection, target:AbstractTarget):
 
     board_fraction = {}
 
-    corners_per_face = target.point_data.shape[-2]
+    # PuzzleBoard's point_data spans the entire 501x501 virtual code-lookup field
+    # (251,001 positions), not the physically printed window. Use num_squares_x *
+    # num_squares_y for the printed-window point count; all other targets (Ccube,
+    # ChArUco, PuzzleBoardCube) correctly use point_data.shape[-2].
+    if target.__class__.__name__ == "PuzzleBoard":
+        corners_per_face = int(target.num_squares_x * target.num_squares_y)
+    else:
+        corners_per_face = target.point_data.shape[-2]
     cam_names = detected.cam_names
 
-    for cam_list in detected.get_cam_list():
-        cam_ind = int(cam_list.get_data()[0,0])
+    # get_cam_list() returns one TargetDetection per camera in cam_names order,
+    # so the enumerate index equals the cam index stored in column 0.
+    # Indexing get_data()[0, 0] crashes when a camera has zero detections
+    # (get_data() returns None); the enumerate index is the same value
+    # and is safe for the empty-camera case.
+    for cam_ind, cam_list in enumerate(detected.get_cam_list()):
         cam_name = cam_names[cam_ind]
 
         board_detected = 0
@@ -384,11 +445,17 @@ def validate_detections(detected:TargetDetection, target:AbstractTarget):
                     seen.append(
                         total_seen / corners_per_face / n_boards
                     )
-        n_detected[cam_name] = board_detected / detected.max_ims
+        # Guard against zero max_ims (no images detected for any camera) so
+        # validate_detections reports 0% rather than crashing — it is a
+        # detection-quality reporter, not a crash-on-empty gate.
+        max_ims = detected.max_ims
+        n_detected[cam_name] = board_detected / max_ims if max_ims > 0 else 0.0
 
     for cam in cam_names:
         metric0 = n_detected[cam] * 100
-        metric1 = np.mean(board_fraction[cam]) * 100
+        # board_fraction[cam] may be absent if no boards were detected for this
+        # camera; treat that as 0% completeness rather than KeyError.
+        metric1 = np.mean(board_fraction[cam]) * 100 if board_fraction.get(cam) else 0.0
         logging.info(f'\tCamera "{cam}" detected boards: {metric0: .1f}%,'
                      f' board completeness: {metric1: .1f}%')
         if metric0 < 90:

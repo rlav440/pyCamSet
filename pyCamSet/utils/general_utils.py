@@ -134,13 +134,17 @@ def mad_outlier_detection(data: np.ndarray|list, out_thresh = 3, draw=True) -> n
 
 
 
+_SUPPORTED_IMAGE_SUFFIXES = {".png", ".bmp", ".tiff", ".jpeg", ".jpg"}
+_IGNORED_CAMERA_ROOT_FOLDERS = {"sparse", "optimisation_runs"}
+
+
 def glob_ims(loc: Path):
     """
     Returns a list of all images one folder below the input path
     :param loc:
     :return:
     """
-    imlocs = [p.resolve() for p in loc.glob("**/*") if p.suffix in {".png", '.bmp', '.tiff', '.jpeg', '.jpg'}]
+    imlocs = [p.resolve() for p in loc.glob("**/*") if p.suffix.lower() in _SUPPORTED_IMAGE_SUFFIXES]
     return imlocs
 
 
@@ -150,8 +154,29 @@ def glob_ims_local(loc: Path):
     :param loc:
     :return:
     """
-    imlocs = [p.resolve() for p in loc.glob("*") if p.suffix in {".png", '.bmp', '.tiff', '.jpeg', '.jpg'}]
+    imlocs = [p.resolve() for p in loc.glob("*") if p.suffix.lower() in _SUPPORTED_IMAGE_SUFFIXES]
     return imlocs
+
+
+def _is_candidate_camera_folder(path: Path) -> bool:
+    """Return whether *path* looks like a real camera folder in a dataset root."""
+    if not path.is_dir():  # Ignore root-level files and non-directories immediately.
+        return False
+    if path.name.startswith("."):  # Ignore hidden/system folders, including workspace folders.
+        return False
+    if path.name in _IGNORED_CAMERA_ROOT_FOLDERS:  # Ignore known generated non-camera folders.
+        logging.warning(
+            "Ignoring folder %r: it is a known generated (non-camera) folder.", path.name
+        )
+        return False
+    if not glob_ims_local(path):  # Ignore folders that contain no supported image files.
+        logging.warning(
+            "Ignoring folder %r: it contains no image files directly (images in nested "
+            "subfolders are not detected). If this is a camera folder, move its images "
+            "to the folder root or pass a subfolder_string.", path.name
+        )
+        return False
+    return True
 
 def plane_fit(points):
     """
@@ -181,7 +206,7 @@ def write_colour_ply(f_name, verts, cols):
     :param verts: the points of the cloud in 3D space
     :param cols: the colours of the cloud.
     """
-    with open(f_name, 'w') as f:
+    with open(f_name, 'w', encoding="utf-8", newline="\n") as f:
         f.write("ply\n")
         f.write("format ascii 1.0\n")
         f.write(f"element vertex {len(verts)}\n")
@@ -209,8 +234,12 @@ def get_subfolder_names(f_loc: Path, return_full_path = False) -> list[Path] | l
     Returns:
 
     """
-    detected_sub_folders = [p for p in f_loc.glob('*/') if p.is_dir()]
-    detected_sub_folders= natsorted(detected_sub_folders)
+    # Return no candidates when the dataset root is missing or invalid.
+    if not f_loc.exists() or not f_loc.is_dir():
+        return []
+    # Gather direct children from the dataset root so camera ordering is stable.
+    detected_sub_folders = [p for p in f_loc.iterdir() if _is_candidate_camera_folder(p)]
+    detected_sub_folders = natsorted(detected_sub_folders)
     if return_full_path:
         return detected_sub_folders
 

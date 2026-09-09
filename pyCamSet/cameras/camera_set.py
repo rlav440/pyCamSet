@@ -5,14 +5,19 @@ from typing import overload
 import cv2
 import numpy as np
 from numpy.linalg import norm
-import pyvista as pv
+try:
+    import pyvista as pv
+    _PYVISTA_OK = True
+except ImportError:  # pragma: no cover
+    pv = None
+    _PYVISTA_OK = False
 from pathlib import Path
 from copy import deepcopy
 from matplotlib import pyplot as plt
 
 
 from pyCamSet.cameras.camera import Camera
-from pyCamSet.utils.visualisation import visualise_calibration
+from pyCamSet.utils.visualisation import visualise_calibration, _target_mean_distance
 from pyCamSet.utils.general_utils import get_subfolder_names
 from pyCamSet.utils.general_utils import get_close_square_tuple, glob_ims_local
 
@@ -21,6 +26,11 @@ from pyCamSet.optimisation.compiled_helpers import nb_triangulate_full
 import pyCamSet.optimisation.compiled_helpers as ch
 from pyCamSet.utils.saving import save_camset
 from pyCamSet.reconstruction.acmmp_utils import ReconParams, write_pair_file, calc_pairs
+
+
+def _require_pyvista() -> None:
+    if not _PYVISTA_OK:
+        raise ImportError("PyVista is required for camera-set visualisation. Install it with: pip install pyCamSet[viz]")
 
 
 def make_cam_dict(camera_names:list, extrinsic_matrices:list, intrinsic_matrices:list,
@@ -268,7 +278,7 @@ class CameraSet:
             [cam.view for cam in self]
         )
         pairs = calc_pairs(cvwc, r, pick_closest=use_closest_cams)
-        with open((loc.parent) / "pair.txt", 'w') as f:
+        with open((loc.parent) / "pair.txt", 'w', encoding="utf-8", newline="\n") as f:
             write_pair_file(f, pairs)
 
 
@@ -409,6 +419,7 @@ class CameraSet:
         :param points: a numpy array or list of numpy arrays with dimension nx3 to draw.
         :return:
         """
+        _require_pyvista()
         if not isinstance(points, list):
             points = [points]
         pt = [pv.PolyData(point) for point in points]
@@ -420,6 +431,7 @@ class CameraSet:
         :param scale: the scale of the camera models.
         :returns: A list of pyvista mesh objects for every camera in the camera set
         """
+        _require_pyvista()
         if scale is None:
             scale = np.max([np.linalg.norm(cam.position) for cam in self]) * 0.1
 
@@ -442,6 +454,7 @@ class CameraSet:
         :param scene: optionally a scene to which the camera meshes will be added.
         :return: A scene containing the camera meshes.
         """
+        _require_pyvista()
         cam_meshes, v_cones = self.get_camera_meshes(viewcone=0.15, scale=scale_factor)
         positions = np.array([cam.position for cam in self])
         pv.set_plot_theme('Document')
@@ -497,6 +510,7 @@ class CameraSet:
         :param view_cones: whether to draw camera viewcones.
         """
 
+        _require_pyvista()
         cam_meshes, v_cones = self.get_camera_meshes(viewcone=0.15, scale=scale_factor)
         positions = np.array([cam.position for cam in self])
         # view_vectors = np.array([cam.view for cam in self.cam_list])
@@ -725,7 +739,7 @@ class CameraSet:
             raise ValueError("No calibration history was found")
 
         detection = self.calibration_handler.get_detection()
-        to_reconstruct = detection.sort(['key', 'im_num']).get_data()
+        to_reconstruct = detection.sort(['key', 'global_im_num']).get_data()
         _, poses = self.calibration_handler.get_camset(self.calibration_params, return_pose=True)
 
         ## Triangulation of points in world space
@@ -736,7 +750,7 @@ class CameraSet:
         im_nums = reconstructed_subset[inv, 1]
         keys = reconstructed_subset[inv, 2:-2]
         #point_errors = error_subset[inv]
-        mean_dist = np.mean(np.linalg.norm(self.calibration_handler.target.point_data, axis=-1))
+        mean_dist = _target_mean_distance(self.calibration_handler.target)
         mask = []
         for point, im in zip(reconstructed, im_nums):
             inv_pose = np.empty(12)

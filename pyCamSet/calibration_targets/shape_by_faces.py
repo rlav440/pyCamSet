@@ -2,15 +2,24 @@ import numpy as np
 from PIL import Image, ImageDraw
 import cv2
 from pyCamSet.utils.general_utils import h_tform
-import pyvista as pv
+try:
+    import pyvista as pv
+    _PYVISTA_OK = True
+except ImportError:
+    pv = None
+    _PYVISTA_OK = False
 from pyCamSet.optimisation.compiled_helpers import n_htform_broadcast_prealloc, n_estimate_rigid_transform
 
 from matplotlib import pyplot as plt
 
-make_shape = {
-    "cube":lambda size: pv.Cube(x_length=size, y_length=size, z_length=size),
-    "Icosahedron":pv.Icosahedron, 
-}
+def make_shape(shape_name, size=None):
+    if not _PYVISTA_OK:
+        raise ImportError("pyvista is required for shape generation.")
+    if shape_name == "cube":
+        return pv.Cube(x_length=size, y_length=size, z_length=size)
+    elif shape_name == "Icosahedron":
+        return pv.Icosahedron(radius=size)
+    raise ValueError(f"Unknown shape: {shape_name}")
 
 def bound_pts(face, res):
     max_bounds = np.max(face, axis=0)
@@ -40,7 +49,7 @@ def make_tforms(base_face, shape):
     #take the face corners and add them 
     #try assume the face is the right shape: push the  
     size = np.max(base_face[:, 1]) -  np.min(base_face[:, 1])
-    polyhedra: pv.PolyData = make_shape[shape](size)
+    polyhedra: pv.PolyData = make_shape(shape, size)
     poly_points = polyhedra.points
  
     tforms = []

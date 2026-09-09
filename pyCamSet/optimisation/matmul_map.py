@@ -396,7 +396,7 @@ def write_fun(opfun, lines, input_name, output_name):
     fn = start_lines + lines
     un_string = [f.replace("\t", "    ") for f in fn]
 
-    with open(write_file, 'w') as f:
+    with open(write_file, 'w', encoding="utf-8") as f:
         f.writelines((un + "\n" for un in un_string))
 
 def import_fn(opfun):

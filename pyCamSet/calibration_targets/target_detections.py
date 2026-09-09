@@ -49,7 +49,7 @@ class TargetDetection:
     data and detections to the object.
 
     Data is stored as
-    | cam | im_num | key ... | data_x | data_y |
+    | cam | global_im_num | key ... | data_x | data_y |
     Key is variable length.
     Cam is the index of the cam name in the input cam name list
 
@@ -63,7 +63,10 @@ class TargetDetection:
             raise ValueError('input camera names must be unique')
         self._data = copy(data)
         self._get_methods = {
-            'cam':self._get_cam, 'key':self._get_key, 'im_num':self._get_image_num, 'index':self._get_index,
+            'cam': self._get_cam,
+            'key': self._get_key,
+            'global_im_num': self._get_global_image_num,
+            'index': self._get_index,
         }
 
         self._update_buffer = []  # avoid copies when adding by writing to buffer
@@ -72,6 +75,8 @@ class TargetDetection:
 
     @property
     def max_ims(self):
+        if self._data is None or self._data.size == 0:
+            return self._max_ims
         temp_data = int(np.max(self._data[:, 1])) + 1
         self._max_ims = max(temp_data, self._max_ims)
         return self._max_ims
@@ -93,17 +98,19 @@ class TargetDetection:
 
     def get(self, **direction) -> TargetDetection:
         """
-        Gets a subset of detections related to a certain camera, key or image number
-        
-        :param direction: A kwarg argument of either "cam", "key" or "im_num" and the associated data
+        Gets a subset of detections related to a certain camera, key or global image number
+
+        :param direction: A kwarg argument of either "cam", "key" or "global_im_num" and the associated data
         :return: A TargetDetection containing only the requested data
         """
         self._glomp_buffer()
+        if self._data is None or self._data.size == 0:
+            return TargetDetection(cam_names=self.cam_names, data=None, max_ims=self._max_ims)
         if len(direction) > 1:
             raise ValueError('Can only get one item at a time')
         key, target = next(iter(direction.items()))
-        if key not in ['cam', 'key', 'im_num']:
-            raise ValueError(f'{key} is not a gettable item: accepted are "cam", "key", or "im_num"')
+        if key not in ['cam', 'key', 'global_im_num']:
+            raise ValueError(f'{key} is not a gettable item: accepted are "cam", "key", or "global_im_num"')
         data = self._data[self._get_methods[key](target), :]
         if data.shape[0] == 0:
             data = None
@@ -111,20 +118,43 @@ class TargetDetection:
 
     def delete_row(self, **direction):
         """
-        :param direction: A cam, key, imnum or index, and the associated data to delete
+        :param direction: A cam, key, global_im_num, cam_im_num, or index selector and the associated data to delete
         :return: A TargetDetection without hte deleted data.
         """
         self._glomp_buffer()
         if len(direction) > 1:
             raise ValueError('Can only get one item at a time')
         key, target = next(iter(direction.items()))
-        if key not in ['cam', 'key', 'im_num', 'index']:
-            raise ValueError(f'{key} is not a gettable item: accepted are "cam", "key", "im_num" or "index"')
+        if key not in ['cam', 'key', 'global_im_num', 'cam_im_num', 'index']:
+            raise ValueError(
+                f'{key} is not a gettable item: accepted are "cam", "key", "global_im_num", "cam_im_num" or "index"'
+            )
 
-        if not (isinstance(target, list) or isinstance(target, np.ndarray)):
-            target = [target]
+        if self._data is None or self._data.shape[0] == 0:
+            return TargetDetection(cam_names=self.cam_names, max_ims=self._max_ims, data=self._data)
 
-        masks = [self._get_methods[key](t) for t in target]
+        if key == 'cam_im_num':
+            if isinstance(target, dict):
+                items = target.items()
+            elif isinstance(target, tuple) and len(target) == 2 and isinstance(target[0], str):
+                items = [target]
+            else:
+                items = target
+
+            masks = []
+            for cam_name, global_im_nums in items:
+                if not isinstance(global_im_nums, (list, tuple, np.ndarray)):
+                    global_im_nums = [global_im_nums]
+                for global_im_num in global_im_nums:
+                    masks.append(self._get_cam_global_image_num(cam_name, global_im_num))
+        else:
+            if not isinstance(target, (list, np.ndarray)):
+                target = [target]
+            masks = [self._get_methods[key](t) for t in target]
+
+        if not masks:
+            return TargetDetection(cam_names=self.cam_names, max_ims=self._max_ims, data=self._data)
+
         final_mask = reduce(np.logical_or, masks)
         to_delete = np.where(final_mask)[0]
         new_data = np.delete(self._data, to_delete, axis=0)
@@ -141,7 +171,7 @@ class TargetDetection:
         """
         :return: a list of TargetDetections, each containing detections from a unique image.
         """
-        return [self.get(im_num=im_num) for im_num in range(int(self.max_ims))]
+        return [self.get(global_im_num=global_im_num) for global_im_num in range(int(self.max_ims))]
 
     def get_key_list(self) -> list[TargetDetection]:
         """
@@ -170,13 +200,17 @@ class TargetDetection:
         mask = reduce(np.logical_and, masks)
         return mask
 
-    def _get_image_num(self, im_num):
+    def _get_global_image_num(self, global_im_num):
         """
-        :param im_num: An image number
-        :return: mask: a mask indicating data associated with the image number
+        :param global_im_num: A global image number shared across cameras
+        :return: mask: a mask indicating data associated with the global image number
         """
-        mask = np.isclose(self._data[:, 1], im_num)
+        mask = np.isclose(self._data[:, 1], global_im_num)
         return mask
+
+    def _get_cam_global_image_num(self, cam, global_im_num):
+        """Return rows matching a camera/global image index pair."""
+        return self._get_cam(cam) & self._get_global_image_num(global_im_num)
 
     def _get_index(self, index_list):
         """
@@ -234,12 +268,12 @@ class TargetDetection:
         new_detection.max_ims = max(self.max_ims, other.max_ims)
         return new_detection
 
-    def add_detection(self, cam_name, im_num, detection: ImageDetection) -> None:
+    def add_detection(self, cam_name, global_im_num, detection: ImageDetection) -> None:
         """
         Gets the elements of a detection and adds them to an input buffer.
         
         :param cam_name: The name of a detecting camera
-        :param im_num: The image number of the detection.
+        :param global_im_num: The image number of the detection shared across cameras.
         :param detection: The detection data, contained as an image detection.
         """
         ind = self.cam_names.index(cam_name)
@@ -251,7 +285,7 @@ class TargetDetection:
                 keys = detection.keys
             try:
                 observation = np.concatenate(
-                    [np.ones((detection.data_len, 2))*[ind, im_num], keys, detection.image_points]
+                    [np.ones((detection.data_len, 2))*[ind, global_im_num], keys, detection.image_points]
                     , axis=1)
             except:
                 print(detection.image_points)
@@ -281,9 +315,9 @@ class TargetDetection:
             keys_to_sort = [keys_to_sort]
 
         for item in keys_to_sort:
-            if item not in ['cam', 'key', 'im_num']:
+            if item not in ['cam', 'key', 'global_im_num']:
                 raise ValueError(f"{item} is not an accepted sort key.\n"
-                                 f"Accepted keys are: 'cam', 'key', or 'im_num'")
+                                 f"Accepted keys are: 'cam', 'key', or 'global_im_num'")
 
         data = self.get_data()
         lex_target = []
@@ -291,7 +325,7 @@ class TargetDetection:
             if item == 'cam':
                 temp = data[:, 0]
 
-            elif item == 'im_num':
+            elif item == 'global_im_num':
                 temp = data[:, 1]
             elif item == "key":
                 if self._data.shape[1] == 5: # 1D case
@@ -317,9 +351,12 @@ class TargetDetection:
         n_cams = len(self.cam_names)
         n_ims = self.max_ims
         block = np.zeros((n_ims, n_cams))
-        for cam_list in self.get_cam_list():
-            cam_ind = int(cam_list.get_data()[0, 0])
-
+        # get_cam_list() returns one TargetDetection per camera in cam_names order,
+        # so the enumerate index equals the cam index stored in column 0.
+        # Indexing get_data()[0, 0] crashes when a camera has zero detections
+        # (get_data() returns None); the enumerate index is the same value
+        # and is safe for the empty-camera case.
+        for cam_ind, cam_list in enumerate(self.get_cam_list()):
             board_detected = 0
             im_lists = cam_list.get_image_list()
             for im_list in im_lists:

@@ -28,7 +28,7 @@ from .matmul_map import SPARSITY_PROBE_SAMPLES, SPARSITY_PROBE_SEED
 Import = namedtuple("Import", ["module", "name", "alias"])
 
 def get_imports(path):
-    with open(path) as fh:        
+    with open(path, encoding="utf-8") as fh:
        root = ast.parse(fh.read(), path)
 
     for node in ast.iter_child_nodes(root):
@@ -429,7 +429,7 @@ class optimisation_function:
             + t(param_slicing) + t(mid_amble) + t(loss_calc) + t(postamble)
         str_fn = "\n".join(fn).replace("\t", "    ")
 
-        with open(write_file, 'w') as f:
+        with open(write_file, 'w', encoding="utf-8") as f:
             f.write(str_fn)
         file_string = 'pyCamSet.optimisation.template_functions.'  + strings
 
@@ -644,7 +644,7 @@ class optimisation_function:
             
             un_string = [f.replace("\t", "    ") for f in fn]
 
-            with open(write_file, 'w') as f:
+            with open(write_file, 'w', encoding="utf-8") as f:
                 f.writelines((un + "\n" for un in un_string))
 
             file_string = 'pyCamSet.optimisation.template_functions.'  + strings

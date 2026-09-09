@@ -16,6 +16,8 @@ import logging
 import cv2
 import numpy as np
 
+from pyCamSet.calibration_targets.backend_registry import validate_marker_backend
+
 _LOG = logging.getLogger(__name__)
 
 # Module-level lazy aruco2 import guard (D3): the module must import cleanly
@@ -25,7 +27,7 @@ ARUCO2_AVAILABLE: bool = False
 try:
     import aruco2  # noqa: F401  (used lazily through the module reference)
     ARUCO2_AVAILABLE = True
-except ImportError:  # pragma: no cover - exercised by the mocked gate check
+except (ImportError, OSError):  # pragma: no cover - exercised by the mocked gate check
     aruco2 = None  # type: ignore[assignment]
 
 
@@ -38,6 +40,27 @@ def _require_aruco2() -> None:
         )
 
 
+def _as_uint8_image(image) -> np.ndarray:
+    """Return a contiguous uint8 image, rejecting unsafe conversions."""
+    img = np.asarray(image)
+    if img.dtype == np.uint8:
+        return np.ascontiguousarray(img)
+    convertible = (
+        np.issubdtype(img.dtype, np.floating)
+        and img.size > 0
+        and np.all(np.isfinite(img))
+        and np.allclose(img, np.round(img))
+        and float(np.min(img)) >= 0.0
+        and float(np.max(img)) <= 255.0
+    )
+    if not convertible:
+        raise ValueError(
+            "aruco2 detection requires a uint8 image or an integral floating-point image "
+            f"in the range 0..255; got dtype {img.dtype}."
+        )
+    return np.ascontiguousarray(img.astype(np.uint8))
+
+
 def resolve_dictionary(a_dict, marker_backend: str = "aruco1") -> cv2.aruco.Dictionary:
     """D3: resolve a dictionary int to a cv2.aruco.Dictionary for the backend.
 
@@ -46,6 +69,7 @@ def resolve_dictionary(a_dict, marker_backend: str = "aruco1") -> cv2.aruco.Dict
     path. aruco2: build a cv2 Dictionary from the aruco2 package's bytes so
     detection and rendering agree.
     """
+    validate_marker_backend(marker_backend)
     if isinstance(a_dict, cv2.aruco.Dictionary):
         # FIX 1 (R1): the pre-existing Ccube API accepts a resolved
         # cv2.aruco.Dictionary object; split_aruco_dictionary handles both
@@ -87,18 +111,7 @@ def detect_markers(image, dict_int):
     :return: list of (marker_id, corners (4,2) float32) tuples.
     """
     _require_aruco2()
-    img = np.ascontiguousarray(image)
-    if img.dtype != np.uint8:
-        # FIX 8(e): accept float64/float32 images whose values are integral
-        # (e.g. raw Ccube textures) by converting to uint8; genuinely
-        # non-convertible dtypes still raise.
-        if img.dtype in (np.float32, np.float64) and np.allclose(img, np.round(img)):
-            img = img.astype(np.uint8)
-        else:
-            raise ValueError(
-                "aruco2 detection requires a uint8 image; got dtype "
-                f"{img.dtype}. Convert the image to uint8 before calling find_in_image."
-            )
+    img = _as_uint8_image(image)
     markers = aruco2.detect_fiducial_markers(img, int(dict_int))
     return [(int(m.id), np.asarray(m.corners, dtype=np.float32)) for m in markers]
 
@@ -113,6 +126,7 @@ def detect_charuco_corners(image, board, dict_int, warn_legacy=None):
         legacy-pattern run still exceeds the disagreement threshold.
     :return: (corner_ids 1D int array, pts (N,2) float32) or (None, None).
     """
+    image = _as_uint8_image(image)
     markers = detect_markers(image, dict_int)
     return interpolate_board_corners(image, board, markers, warn_legacy=warn_legacy)
 
@@ -128,6 +142,7 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
         legacy-pattern run still exceeds the disagreement threshold.
     :return: (corner_ids 1D int array, pts (N,2) float32) or (None, None).
     """
+    image = _as_uint8_image(image)
     square_len = float(board.getSquareLength())
     marker_len = float(board.getMarkerLength())
     inset = (square_len - marker_len) / 2.0
@@ -156,6 +171,9 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
                 _LOG.debug("aruco2: skipping marker id %d not on board", mid)
                 continue
             corners = np.asarray(corners, dtype=np.float32)
+            if corners.shape != (4, 2):
+                _LOG.debug("aruco2: skipping marker id %d with shape %s", mid, corners.shape)
+                continue
             # skip markers with non-finite or zero-area quads, or corners
             # outside the image (R2-P1-2: the old |H(obj)-img| check was
             # tautological because H maps its own sources exactly).

@@ -181,7 +181,9 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     )
 
     init_err = loss_fn(init_params)
-    init_euclid = np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1))
+    init_reprojection, _ = _split_residuals(init_err, param_handler)
+    init_euclid = np.mean(np.linalg.norm(
+        np.reshape(init_reprojection, (-1, 2)), axis=1))
     logging.info(f'found {len(init_params):.2e} parameters')
     logging.info(f'found {len(init_err):.2e} control points')
     logging.info(f'Initial Euclidean error: {init_euclid:.2f} px')
@@ -220,7 +222,9 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
         )
     end = time.time()
 
-    final_euclid = np.mean(np.linalg.norm(np.reshape(optimisation.fun, (-1, 2)), axis=1))
+    final_reprojection, _ = _split_residuals(optimisation.fun, param_handler)
+    final_euclid = np.mean(np.linalg.norm(
+        np.reshape(final_reprojection, (-1, 2)), axis=1))
     logging.info(f'Final Euclidean error: {final_euclid:.2f} px')
     logging.info(f'Optimisation took {end - start: .2f} seconds.')
 
@@ -232,8 +236,11 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     camset.set_calibration_history(optimisation, param_handler)
 
 
-    init_err = loss_fn(optimisation.x)
-    init_euclid = np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1))
-    logging.info(f"Check test with a result of {init_euclid:.2f}")
+    final_err = loss_fn(optimisation.x)
+    final_reprojection, _ = _split_residuals(final_err, param_handler)
+    final_euclid = np.mean(np.linalg.norm(
+        np.reshape(final_reprojection, (-1, 2)), axis=1))
+    logging.info(f"Check test with a result of {final_euclid:.2f}")
 
     return optimisation, camset
+

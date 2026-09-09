@@ -19,7 +19,10 @@ import numpy as np
 
 from pyCamSet.optimisation.camera_lockbox import (
     CameraLockboxPrior,
+    _camera_center,
     append_lockbox_residuals,
+    apply_lockbox_bounds,
+    make_disabled_prior,
 )
 from pyCamSet.optimisation.optimisation_handling import _split_residuals
 
@@ -100,3 +103,25 @@ def test_no_prior_returns_full_vector():
     reproj, priors = _split_residuals(base, _StubHandler(0))
     assert reproj.size == 10
     assert priors is None
+
+
+def test_prior_residual_order_is_parameter_then_centre_suffix():
+    """The RPE prefix and prior suffix retain their documented ordering."""
+    prior = _make_prior(n_cameras=1, center_sigma=1.0)
+    prior.centres[:] = 1.0
+    params = np.arange(6, dtype=float) + 2.0
+    base = np.array([10.0, 11.0], dtype=float)
+
+    full = append_lockbox_residuals(base, params, prior)
+
+    np.testing.assert_array_equal(full[:2], base)
+    np.testing.assert_array_equal(full[2:8], params - 1.0)
+    np.testing.assert_allclose(full[8:11], _camera_center(params, 0), atol=1e-12)
+
+
+def test_disabled_prior_has_unbounded_parameters():
+    """Disabled lockboxes must preserve the unconstrained solver domain."""
+    lower, upper = apply_lockbox_bounds(4, make_disabled_prior(4))
+
+    assert np.all(np.isneginf(lower))
+    assert np.all(np.isposinf(upper))

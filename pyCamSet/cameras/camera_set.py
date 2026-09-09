@@ -28,6 +28,11 @@ from pyCamSet.utils.saving import save_camset
 from pyCamSet.reconstruction.acmmp_utils import ReconParams, write_pair_file, calc_pairs
 
 
+def _require_pyvista() -> None:
+    if not _PYVISTA_OK:
+        raise ImportError("PyVista is required for camera-set visualisation. Install it with: pip install pyCamSet[viz]")
+
+
 def make_cam_dict(camera_names:list, extrinsic_matrices:list, intrinsic_matrices:list,
                   dist_coefs=None, res=None):
     """
@@ -414,6 +419,7 @@ class CameraSet:
         :param points: a numpy array or list of numpy arrays with dimension nx3 to draw.
         :return:
         """
+        _require_pyvista()
         if not isinstance(points, list):
             points = [points]
         pt = [pv.PolyData(point) for point in points]
@@ -425,6 +431,7 @@ class CameraSet:
         :param scale: the scale of the camera models.
         :returns: A list of pyvista mesh objects for every camera in the camera set
         """
+        _require_pyvista()
         if scale is None:
             scale = np.max([np.linalg.norm(cam.position) for cam in self]) * 0.1
 
@@ -447,6 +454,7 @@ class CameraSet:
         :param scene: optionally a scene to which the camera meshes will be added.
         :return: A scene containing the camera meshes.
         """
+        _require_pyvista()
         cam_meshes, v_cones = self.get_camera_meshes(viewcone=0.15, scale=scale_factor)
         positions = np.array([cam.position for cam in self])
         pv.set_plot_theme('Document')
@@ -502,6 +510,7 @@ class CameraSet:
         :param view_cones: whether to draw camera viewcones.
         """
 
+        _require_pyvista()
         cam_meshes, v_cones = self.get_camera_meshes(viewcone=0.15, scale=scale_factor)
         positions = np.array([cam.position for cam in self])
         # view_vectors = np.array([cam.view for cam in self.cam_list])

@@ -1,0 +1,10 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+# Keep both naming conventions used by the maintained test inventory.
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-ra --strict-markers --strict-config"

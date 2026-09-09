@@ -2,9 +2,9 @@ import numpy as np
 import logging
 
 from pyCamSet import CameraSet  
-from pyCamSet.calibration_targets.abstractTarget import AbstractTarget
-from pyCamSet.calibration_targets.targetDetections import TargetDetection
-from pyCamSet.optimisation.base_optimiser import TemplateBundleHandler
+from pyCamSet.calibration_targets.abstract_target import AbstractTarget
+from pyCamSet.calibration_targets.target_detections import TargetDetection
+from pyCamSet.optimisation.template_handler import TemplateBundleHandler
 from pyCamSet.optimisation.compiled_helpers import n_e4x4_flat_INPLACE, n_htform_broadcast_prealloc
 
 from pyCamSet.utils.general_utils import ext_4x4_to_rod

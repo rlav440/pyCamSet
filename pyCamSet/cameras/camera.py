@@ -29,6 +29,13 @@ DEFAULT_CAMERA_MATRIX = np.array(
      [0.0, 0.0, 1.0]])  # mm
 
 
+def _require_pyvista() -> None:
+    """Raise an actionable error when a mesh operation lacks PyVista."""
+    if not _PYVISTA_OK:
+        raise ImportError(
+            "PyVista is required for camera mesh visualisation. "
+            "Install it with: pip install pyCamSet[viz]"
+        )
 
 
 #avoid some cyclic depenecies with some duplication
@@ -305,6 +312,7 @@ class Camera:
         :param scale: the display length of the camera in world coordinates.
         :return mesh: A PV mesh detailing the camera
         """
+        _require_pyvista()
         cam_len = max(scale, 0.03)
         p1 = self.position
 
@@ -349,6 +357,7 @@ class Camera:
         :param triangle: forces the mesh to only use triangular faces.
         :returns mesh: A PV mesh showing the camera object's viewcone
         """
+        _require_pyvista()
         if triangle:
             p1 = self.position
 

@@ -1,4 +1,3 @@
-
 # pyCamSet
 
 pyCamSet is a python library for multi-camera calibration for MVS systems and instrumentation.
@@ -69,6 +68,17 @@ Here is the [link](https://pypi.org/project/pyCamSet/) to our project on PyPI
 ```
 pip install pyCamSet
 ```
+
+Visualisation is optional. Install the viz extra when camera meshes,
+PyVista point clouds, or Open3D diagnostics are required:
+
+```
+pip install "pyCamSet[viz]"
+```
+
+The core package keeps camera geometry and reconstruction imports usable
+without those visualisation libraries; visualisation methods report the
+optional dependency and installation extra when called without it.
 
 ### PuzzleBoard target
 

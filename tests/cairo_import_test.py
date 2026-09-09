@@ -116,7 +116,7 @@ def test_import_and_find_in_image_without_cairo():
     imported as a side effect."""
     result = subprocess.run(
         [sys.executable, "-c", _BLOCK_CAIRO_IMPORT_AND_TEST],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     )
     assert result.returncode == 0, (
@@ -129,3 +129,46 @@ def test_import_and_find_in_image_without_cairo():
     assert "CAIROSVG_NOT_LEAKED" in result.stdout
     assert "FRIENDLY_ERROR_ON_SAVE_TO_PDF_OK" in result.stdout
     assert "ALL_SUBPROCESS_CHECKS_PASSED" in result.stdout
+
+
+
+
+def test_core_imports_without_optional_pyvista():
+    """Core camera and reconstruction imports must not require PyVista."""
+    script = r'''import builtins
+
+original_import = builtins.__import__
+
+def block_optional_visualisation(name, globals=None, locals=None, fromlist=(), level=0):
+    if name in ("pyvista", "open3d"):
+        raise ImportError("optional visualisation dependency blocked")
+    return original_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = block_optional_visualisation
+
+from pyCamSet.cameras.camera import Camera
+from pyCamSet.cameras.camera_set import CameraSet
+from pyCamSet.reconstruction import reconstruction_utils
+from pyCamSet.utils import visualisation
+
+assert visualisation._PYVISTA_OK is False
+assert reconstruction_utils._PYVISTA_OK is False
+Camera()
+camset = CameraSet(camera_dict={})
+for operation in (lambda: Camera().get_mesh(), lambda: camset.get_camera_meshes()):
+    try:
+        operation()
+    except ImportError as exc:
+        assert "pyCamSet[viz]" in str(exc)
+    else:
+        raise AssertionError("PyVista-only operation unexpectedly succeeded")
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    )
+    assert result.returncode == 0, (
+        f"Optional-import subprocess failed (exit {result.returncode}):\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )

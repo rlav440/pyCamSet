@@ -15,6 +15,11 @@ from functools import reduce
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import ext_4x4_to_rod
 
+
+def _require_pyvista() -> None:
+    if not _PYVISTA_OK:
+        raise ImportError("PyVista is required for point-cloud reconstruction output. Install it with: pip install pyCamSet[viz]")
+
 def undistort_im(image, cam: Camera) -> np.ndarray:
     """
     A function to undistort an image using a camera object.
@@ -134,6 +139,7 @@ def disparity_to_ptcld(disp, q) -> tuple[pv.PolyData, np.ndarray]:
     :param q: The q matrix.
     :return:
     """
+    _require_pyvista()
     pt_cloud = cv2.reprojectImageTo3D((disp / 16).astype('float32'), q)
 
     test = np.reshape(pt_cloud, (-1, 3)) * [1, 1, 1]
@@ -201,6 +207,7 @@ def stereo_reconstruct( cam_0:Camera, cam_1:Camera, im_0, im_1, num_disp=256, bl
     :return: the output point cloud.
     """
 
+    _require_pyvista()
     r0, r1, q = rectify_camera_images(cam_0, cam_1, im_0, im_1)
     stacked_im = np.stack([r0, np.zeros_like(r0), r1]).transpose([1,2,0])
     plt.imshow(stacked_im)

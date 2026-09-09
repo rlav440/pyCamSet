@@ -163,7 +163,7 @@ def save_camset(
 
     save_path = Path(f_name)
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(_normalise_windows_open_path(save_path), 'w', encoding="utf-8") as f:
+    with open(_normalise_windows_open_path(save_path), 'w', encoding="utf-8", newline="\n") as f:
         json.dump(save_dict, fp=f, indent=4)
 
     return
@@ -417,7 +417,7 @@ def export_cameras_txt(cams, output_folder: Path):
         lines.append(f"{cam_id} {model} {width} {height} {params}")
 
     cameras_path = output_folder / "cameras.txt"      # target file path
-    with open(cameras_path, "w", encoding="utf-8") as f:
+    with open(cameras_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")              # write all lines
 
     print(f"Wrote cameras.txt with {len(cam_names)} cameras to {output_folder}")
@@ -508,7 +508,7 @@ def export_rig_config(
     rig_config = [{"cameras": rig_cameras}]
 
     output_path = Path(output_path)                   # normalise to Path
-    with open(output_path, "w", encoding="utf-8") as f:
+    with open(output_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(rig_config, f, indent=2)            # write formatted JSON
 
     # --- summary ---

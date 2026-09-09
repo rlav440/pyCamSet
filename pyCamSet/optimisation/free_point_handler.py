@@ -21,8 +21,8 @@ import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.function_block_implementations as fb
 from pyCamSet.optimisation.numba_schur import ParamGroup
 
-from pyCamSet.calibration_targets import TargetDetection
-    
+from pyCamSet.calibration_targets import ImageDetection, TargetDetection
+
 if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
     from pyCamSet.cameras import CameraSet, Camera
@@ -225,12 +225,15 @@ class FreePointBundleHandler(TemplateBundleHandler):
         The previous system must have used a TemplateBundleHandler.
         :param prev_cams: The calibrated camseet to use.
         """
+        # extr_end, not bdpt_end: bdpt_end is the length of the whole vector,
+        # so slicing to it consumed every slot and left the points with an
+        # empty slice to write into.  The camera parameters occupy
+        # [:extr_end] and the free points the remainder.
         self.initial_params = np.empty(self.bundlePrimitive.bdpt_end)
-        self.initial_params[:self.bundlePrimitive.bdpt_end] = prev_cams.calibration_params.copy()
-        self.initial_params[ 
-            self.bundlePrimitive.bdpt_end:
-        ] = init_points.flatten()
-        # print(prev_camsk
+        self.initial_params[:self.bundlePrimitive.extr_end] = prev_cams.calibration_params.copy()
+        self.initial_params[
+            self.bundlePrimitive.extr_end:
+        ] = init_points.flatten()[self.feat_unfixed]
 
     def get_initial_params(self) -> np.ndarray:
         """
@@ -244,25 +247,50 @@ class FreePointBundleHandler(TemplateBundleHandler):
             return self.initial_params
         start_params = self.calc_initial_params()
 
+        # extr_end, not pose_end: FreePointPrimitive has no pose block at all,
+        # so calc_type_inds never defines pose_end and this raised
+        # AttributeError on every unseeded start.
         self.initial_params = np.empty(self.bundlePrimitive.bdpt_end)
-        self.initial_params[:self.bundlePrimitive.pose_end] = start_params
-        self.initial_params[ 
-            self.bundlePrimitive.pose_end:
+        self.initial_params[:self.bundlePrimitive.extr_end] = start_params
+        self.initial_params[
+            self.bundlePrimitive.extr_end:
         ] = self.target.point_data.copy().flatten()[self.feat_unfixed]
         return self.initial_params
 
-    def get_updated_points():
-        _,_, ps = self.bundlePrimitive.return_bundle_primitives(x)
+    def get_updated_points(self, x) -> np.ndarray:
+        """
+        Returns the optimised point geometry for a set of parameters.
+
+        This is the free point analogue of the target poses a fixed-target
+        handler returns: the optimisation solves for the points themselves.
+
+        :param x: the optimisation parameters.
+        :return: the points, as (n, 3)
+        """
+        # Was `def get_updated_points():` -- no self, and a free `x` -- so it
+        # raised TypeError before it could reach the undefined name.
+        _, _, ps = self.bundlePrimitive.return_bundle_primitives(x)
         return ps
 
-    def get_camset(self, x) -> CameraSet:
+    def get_camset(self, x, return_pose=False) -> CameraSet:
         """
         Given a set of parameters, returns a camera set.
 
         :param x: the optimisation parameters.
-        :param return_pose: Optionally also return the poses of the target.
-        :return: Either a CameraSet, or a CameraSet and a list of object poses.
+        :param return_pose: accepted for compatibility with the base handler's
+            signature, but a free point problem has no per-image target pose
+            to return; use get_updated_points to read the solved geometry.
+        :return: A CameraSet
         """
+        # The parameter is declared so that code written against
+        # TemplateBundleHandler.get_camset can call this without a TypeError,
+        # but returning the points here would hand such a caller point
+        # geometry where it expects (n_images, 4, 4) target poses.
+        if return_pose:
+            raise NotImplementedError(
+                "A free point optimisation solves for point geometry, not "
+                "per-image target poses; call get_updated_points(x) instead."
+            )
 
 
         new_cams = copy(self.camset)

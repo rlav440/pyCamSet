@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 
 import matplotlib.pyplot as plt
@@ -6,8 +8,14 @@ import cv2
 import pyvista as pv
 from functools import reduce
 
-from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import ext_4x4_to_rod
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    # Import only for the annotations: cameras.camera_set imports
+    # reconstruction.acmmp_utils, so importing Camera at runtime from a module
+    # that reconstruction/__init__ pulls in closes an import cycle.
+    from pyCamSet.cameras import Camera
 
 def undistort_im(image, cam: Camera) -> np.ndarray:
     """
@@ -49,24 +57,13 @@ def remap_im(im, cam: Camera, new_rot, new_proj, new_size) -> np.ndarray:
     :return: A remappeed image.
     """
 
-    plt.imshow(im)
-    plt.show()
-
-    # print(new_size)
-
     map = cv2.initUndistortRectifyMap(
         cam.intrinsic, cam.distortion_coefs,
         new_rot, new_proj,
-        new_size, #[new_size[2], new_size[3]],
+        new_size,
         cv2.CV_32FC1,
     )
-    new_im0 = cv2.remap(im, *map, cv2.INTER_CUBIC)
-
-    plt.imshow(new_im0)
-    plt.show()
-    # raise ValueError()
-
-    return new_im0
+    return cv2.remap(im, *map, cv2.INTER_CUBIC)
 
 
 def rectify_camera_images(
@@ -115,8 +112,6 @@ def rectify_camera_pair(cam_0: Camera, cam_1:Camera, zero_flag = False):
         newImageSize=np.array(cam_0.res) *10
     )
 
-    print(p0)
-    print(p1)
     return p0, p1, q, r0, r1, s0
 
 

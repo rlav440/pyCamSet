@@ -408,6 +408,39 @@ class CameraSet:
             return reconstructed, reconstructable_data, working_array, uniq
         return reconstructed
 
+    def find_target_pose(self, images: dict[str|int, np.ndarray], target) -> np.ndarray:
+        """
+        Finds the pose of a calibration target seen by this camera set.
+
+        The cameras are held at their calibration and only the target's pose is
+        solved for, so this is a measurement with the rig rather than a
+        recalibration of it.
+
+        :param images: a dict of camera name to the image that camera took
+        :param target: the calibration target to locate
+        :return: the target's pose as a 4x4 homogenous transform
+        """
+        # Imported here rather than at module scope: find_target reaches the
+        # optimisation handlers, which import this module.  Deferring to call
+        # time breaks the cycle without the caller needing to know.
+        from pyCamSet.optimisation.find_target import find_target_pose_at_timestep
+
+        return find_target_pose_at_timestep(images, target, self)
+
+    def find_target_poses(self, image_seq: dict[str|int, list[np.ndarray]], target) -> np.ndarray:
+        """
+        Finds the pose of a calibration target over a sequence of images.
+
+        Every camera's list is indexed by timestep, so entry i of each list
+        must be the same instant.
+
+        :param image_seq: a dict of camera name to that camera's list of images
+        :param target: the calibration target to locate
+        :return: the target's poses as an (n_timesteps, 4, 4) array
+        """
+        from pyCamSet.optimisation.find_target import find_target_poses
+
+        return find_target_poses(image_seq, target, self)
 
     def plot_np_array(self, points: np.ndarray | list):
         """

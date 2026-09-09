@@ -32,7 +32,25 @@ target tracking
 ----------------
 
 Another use of a calibration target is as a well characterised and detectable fiducial marker.
-With a calibrated camera set, the find_target_poses function will return a bundle adjustment based estimate of the positions of the target.
+With a calibrated camera set, the find_target_poses method will return a bundle adjustment based estimate of the positions of the target.
+The cameras are held at their calibration, so only the pose of the target is solved for.
+
+.. code-block:: python
+
+    from pyCamSet import load_CameraSet, ChArUco
+
+    cameras = load_CameraSet("optimised_cameras.camset")
+    target = ChArUco(num_squares_x=10, num_squares_y=10, square_size=4)
+
+    # one instant: a single image from each camera
+    pose = cameras.find_target_pose({name: images[name] for name in cameras.get_names()}, target)
+
+    # a sequence: a list of images per camera, indexed by timestep
+    poses = cameras.find_target_poses(image_sequences, target)
+
+``pose`` is a 4x4 homogenous transform, and ``poses`` an (n_timesteps, 4, 4) array.
+The same functions are available as ``pyCamSet.optimisation.find_target.find_target_pose_at_timestep``
+and ``find_target_poses`` if a CameraSet method is not wanted.
 
 
 

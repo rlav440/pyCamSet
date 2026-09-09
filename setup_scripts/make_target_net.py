@@ -1,3 +1,19 @@
+"""Generates the net (unfolding) transforms for a faced calibration target.
+
+A design-time tool, not library code: ``print_net_tforms`` emits the
+``NET_FORMS`` constant that is checked in at
+``pyCamSet/calibration_targets/target_Ccube.py``, so the output is already
+baked into the package and nothing imports this at runtime.  Run it directly
+to regenerate that constant, alongside calculate_shape_transforms.py.
+
+Careful: as of 2026-09-10 the output is deterministic across runs but its
+second and fourth entries are swapped relative to the NET_FORMS currently
+checked in.  The checked-in order is the one the Ccube tests pass against, so
+pasting a fresh run over it would permute two faces of the drawn net.  Compare
+before replacing, and reorder by hand if needed -- calculate_shape_transforms.py
+does the same thing with its explicit `order` list.
+"""
+
 import pyvista as pv        
 import numpy as np
 from pyCamSet.optimisation.compiled_helpers import n_estimate_rigid_transform

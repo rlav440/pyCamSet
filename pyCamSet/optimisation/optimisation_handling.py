@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.template_handler as th
+from pyCamSet.optimisation.numba_schur import (
+    SchurSolver, levenberg_marquardt, spec_from_groups)
 
 from pyCamSet.calibration_targets import TargetDetection
     
@@ -92,6 +94,66 @@ def check_jacobian_is_not_degenerate(bundle_loss_jac: Callable, init_params: np.
     logging.info("Jacobian degeneracy check passed (no all-zero columns).")
 
 
+def can_use_schur(param_handler) -> tuple[bool, str]:
+    """
+    Whether the Schur complement solver can drive this parameter handler.
+
+    :param param_handler: the handler to check
+    :return: usable, and the reason it is not when it is not
+    """
+    if param_handler.problem_opts.get("solver", "schur") != "schur":
+        return False, f"solver option is {param_handler.problem_opts['solver']!r}"
+    for method in ("parameter_groups", "make_loss_blocks"):
+        if not hasattr(param_handler, method):
+            return False, f"the handler does not implement {method}()"
+    try:
+        groups = param_handler.parameter_groups()
+    except Exception as e:                                   # a custom handler
+        return False, f"parameter_groups() raised {type(e).__name__}: {e}"
+    if len(groups) < 2:
+        return False, "there is no block diagonal group to eliminate"
+    n_free = int(sum(g.n_free for g in groups))
+    n_params = param_handler.get_initial_params().size
+    if n_free != n_params:
+        return False, (f"the parameter groups describe {n_free} free parameters "
+                       f"but the handler has {n_params}")
+    return True, ""
+
+
+def run_schur_bundle_adjustment(param_handler, loss_fn, bundle_jac, init_params,
+                                threads: int) -> OptimizeResult:
+    """
+    Solve with Levenberg-Marquardt on the Schur reduced camera system.
+
+    The parameters split into the ones shared between many residuals and one
+    block diagonal group -- the per image pose, or the per point geometry --
+    which is eliminated, leaving a system the size of the camera parameters
+    alone. See :mod:`pyCamSet.optimisation.numba_schur`.
+
+    :param param_handler: the handler describing the problem
+    :param loss_fn: the residual callable
+    :param bundle_jac: the CSR jacobian, stored on the result for the camera set
+    :param init_params: the starting parameters
+    :param threads: evaluation threads for the compiled kernels
+    """
+    groups = param_handler.parameter_groups()
+    spec = spec_from_groups(groups)
+    solver = SchurSolver(spec)
+    blocks = param_handler.make_loss_blocks(threads)
+    logging.info(
+        f"Schur solver: eliminating {spec.n_elim_blocks} blocks of "
+        f"{spec.elim_size}x{spec.elim_size}, leaving a "
+        f"{int(spec.keep_free.sum())} parameter reduced system "
+        f"(from {init_params.size})"
+    )
+    return levenberg_marquardt(
+        loss_fn, blocks, init_params, solver,
+        max_iter=param_handler.problem_opts["max_nfev"],
+        jac_csr=bundle_jac,
+        verbose=param_handler.problem_opts["verbosity"] > 1,
+    )
+
+
 def run_bundle_adjustment(param_handler: TemplateBundleHandler,
                           threads: int = 1) -> tuple[OptimizeResult, CameraSet]:
     """
@@ -126,20 +188,24 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
             "This can often indicate failure to place a camera or target correctly, giving nonsensical errors.")
         # param_handler.check_params(init_params)
 
-    # bundle_jac = lambda x: approx_fprime(x, loss_fn)
     start = time.time()
-    optimisation = least_squares(
-        loss_fn,
-        init_params,
-        verbose=param_handler.problem_opts['verbosity'],
-        # method="lm",
-        # tr_solver='lsmr',
-        jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
-        max_nfev=param_handler.problem_opts["max_nfev"],
-        # loss = "cauchy"
-        x_scale='jac',
-        xtol=1e-4,
-    )
+    usable, reason = can_use_schur(param_handler)
+    if usable and bundle_jac is not None:
+        optimisation = run_schur_bundle_adjustment(
+            param_handler, loss_fn, bundle_jac, init_params, threads)
+    else:
+        if bundle_jac is not None and param_handler.problem_opts.get(
+                "solver", "schur") == "schur":
+            logging.warning(f"Falling back to the trust region solver: {reason}")
+        optimisation = least_squares(
+            loss_fn,
+            init_params,
+            verbose=param_handler.problem_opts['verbosity'],
+            jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
+            max_nfev=param_handler.problem_opts["max_nfev"],
+            x_scale='jac',
+            xtol=1e-4,
+        )
     end = time.time()
 
     final_euclid = np.mean(np.linalg.norm(np.reshape(optimisation.fun, (-1, 2)), axis=1))

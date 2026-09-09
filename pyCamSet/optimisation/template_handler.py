@@ -16,6 +16,7 @@ import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.function_block_implementations as fb
 import pyCamSet.optimisation.abstract_function_blocks as afb
+from pyCamSet.optimisation.numba_schur import ParamGroup
 from pyCamSet import CameraSet, Camera
 
 from pyCamSet.calibration_targets import TargetDetection
@@ -33,6 +34,10 @@ DEFAULT_OPTIONS = {
     'ref_pose':0,
     'outliers':'ask',
     'max_nfev':100,
+    # 'schur' eliminates the block diagonal parameter group and solves the
+    # reduced camera system with Levenberg-Marquardt; 'trf' is scipy's
+    # trust region solver, kept as an escape hatch and for bounded problems.
+    'solver': 'schur',
 }
 class TemplateBundlePrimitive:
     """
@@ -111,7 +116,9 @@ class TemplateBundleHandler:
                  ):
         
 
-        self.problem_opts = DEFAULT_OPTIONS
+        # copy, or update() below mutates the module level defaults and every
+        # later handler in the process inherits this one's options
+        self.problem_opts = copy(DEFAULT_OPTIONS)
         if options is not None:
             self.problem_opts.update(options)
 
@@ -162,6 +169,66 @@ class TemplateBundleHandler:
     def can_make_jac(self):
         return self.op_fun.can_make_jac() 
 
+    def _flat_detections(self) -> np.ndarray:
+        """The detection rows the compiled kernels are built against."""
+        return self.detection.return_flattened_keys(
+            self.target.point_data.shape[:-1]).get_data()
+
+    def _kernel_extra_args(self) -> tuple:
+        """Extra positional arguments the compiled kernels take.
+
+        The templated chain reads the fixed target geometry from a template
+        array; chains that solve for the geometry carry it in the parameters.
+        """
+        return (self.target.point_data.reshape((-1, 3)),)
+
+    def _kernel_maximums(self):
+        return self.problem_maximums
+
+    def parameter_groups(self) -> list[ParamGroup]:
+        """
+        The parameter blocks of this problem, in ``build_param_list`` order.
+
+        The last group is the one a Schur complement solver eliminates, so it
+        has to be the block diagonal one: the per image pose here, the per
+        point geometry where the target is solved for as well.
+        """
+        dd = self._flat_detections()
+        cam = dd[:, 0].astype(np.int64)
+        img = dd[:, 1].astype(np.int64)
+        bp = self.bundlePrimitive
+        return [
+            ParamGroup("intr", bp.intr, bp.intr_unfixed, cam),
+            ParamGroup("extr", bp.extr, bp.extr_unfixed, cam),
+            ParamGroup("pose", bp.poses, bp.poses_unfixed, img),
+        ]
+
+    def parameter_mask(self) -> np.ndarray:
+        """Boolean mask of the free parameters, in parameter order."""
+        return np.concatenate([g.element_unfixed for g in self.parameter_groups()])
+
+    def make_loss_blocks(self, threads):
+        """
+        A callable giving the per detection jacobian blocks.
+
+        Returns ``(n_det, 2, row_width)``: the derivatives of each residual
+        pair with respect to only the parameters it depends on, which is what
+        a block solver needs and what the CSR form has already discarded.
+        """
+        dd = self._flat_detections()
+        extra = self._kernel_extra_args()
+        kernel = self.op_fun.make_jacobean(
+            dd, threads, unfixed_params=self.parameter_mask(),
+            problem_maximums=self._kernel_maximums(), return_blocks=True)
+        n_det = dd.shape[0]
+        row_width = int(np.sum(self.op_fun.n_params))
+
+        def blocks_fn(params):
+            inps = self.get_bundle_adjustment_inputs(params)
+            param_str = self.op_fun.build_param_list(*inps)
+            return kernel(param_str, *extra).reshape((n_det, 2, row_width))
+        return blocks_fn
+
     def make_loss_fun(self, threads):
         
         #flatten the object shape
@@ -182,17 +249,9 @@ class TemplateBundleHandler:
         obj_data = self.target.point_data.reshape((-1, 3))
         target_shape = self.target.point_data.shape
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
-        mask = np.concatenate(
-            ( 
-                np.repeat(self.bundlePrimitive.intr_unfixed, 9),
-                np.repeat(self.bundlePrimitive.extr_unfixed, 6),
-                np.repeat(self.bundlePrimitive.poses_unfixed, 6),
-            ), axis=0
-        )
-
-        # breakpoint()
-
-        temp_loss = self.op_fun.make_jacobean(dd, threads, unfixed_params=mask, problem_maximums=self.problem_maximums)
+        temp_loss = self.op_fun.make_jacobean(
+            dd, threads, unfixed_params=self.parameter_mask(),
+            problem_maximums=self.problem_maximums)
 
         def jac_fn(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses

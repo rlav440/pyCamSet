@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from pathlib import Path
 import inspect
 from abc import ABC, abstractmethod 
@@ -39,6 +40,38 @@ def get_imports(path):
             continue
         for n in node.names:
             yield Import(module, (n.name,), n.asname)
+
+def _import_generated(module_name: str, freshly_written: bool):
+    """
+    Import a generated template, reloading it if it was just rewritten.
+
+    ``importlib.import_module`` returns whatever is already in ``sys.modules``,
+    so regenerating a template inside a running process used to hand back the
+    previously compiled kernel: the new source sat on disk unused until the
+    next interpreter. Any module the template imports (the matflow helper) has
+    to be reloaded first, or the reloaded template would re-bind the stale one.
+
+    :param module_name: dotted name of the generated module
+    :param freshly_written: whether its source was just rewritten
+    """
+    importlib.invalidate_caches()
+    module = sys.modules.get(module_name)
+    if module is None:
+        return importlib.import_module(module_name)
+    if not freshly_written:
+        return module
+    # Drop the matflow helpers rather than reloading them: their source may
+    # have been deleted or regenerated, and the template's own import will pull
+    # in whatever is on disk once it re-executes.
+    package = module_name.rsplit(".", 1)[0]
+    for name in [n for n in sys.modules if n.startswith(package + ".matflow_")]:
+        sys.modules.pop(name, None)
+    try:
+        return importlib.reload(module)
+    except (ModuleNotFoundError, FileNotFoundError, ImportError):
+        sys.modules.pop(module_name, None)
+        return importlib.import_module(module_name)
+
 
 class key_type(IntEnum):
     PER_CAM = 0
@@ -304,8 +337,7 @@ class optimisation_function:
 
         if write_file.exists() and not overwrite_function:
             file_string = 'pyCamSet.optimisation.template_functions.'  + strings
-            importlib.invalidate_caches()
-            top_module = importlib.import_module(file_string)
+            top_module = _import_generated(file_string, freshly_written=False)
             base_loss_fn: Callable = top_module.make_full_loss(self, detections, threads)
 
             _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
@@ -404,8 +436,7 @@ class optimisation_function:
 
         self._prep_for_computation()
 
-        importlib.invalidate_caches()
-        top_module = importlib.import_module(file_string)
+        top_module = _import_generated(file_string, freshly_written=True)
         base_loss_fn: Callable = top_module.make_full_loss(self, detections, threads)
         
         #now calculate all of the inputs that the loss function needs
@@ -495,7 +526,7 @@ class optimisation_function:
         return valid_c, compressed_rows 
 
 
-    def make_full_jac_template(self, detections, threads, unfixed_params, problem_max_vals, overwrite_function=False) -> Callable:
+    def make_full_jac_template(self, detections, threads, unfixed_params, problem_max_vals, overwrite_function=False, return_blocks=False) -> Callable:
         # overwrite_function = True
 
         #make the matflow
@@ -512,8 +543,7 @@ class optimisation_function:
         write_file = (Path(__file__).parent)/file_name
         if write_file.exists() and not overwrite_function:
             file_string = 'pyCamSet.optimisation.template_functions.'  + strings
-            importlib.invalidate_caches()
-            top_module = importlib.import_module(file_string)
+            top_module = _import_generated(file_string, freshly_written=False)
             base_jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
         else:
             ###### CREATE THE NEEDED DATA
@@ -602,7 +632,10 @@ class optimisation_function:
             ]
 
             postamble = [
-                f"\treturn dense_output.flatten()",
+                # ravel, not flatten: dense_output is C contiguous, so this is a
+                # view rather than a copy of the whole (n_threads, n_lines*2,
+                # param_len) buffer on every evaluation
+                f"\treturn dense_output.ravel()",
                 f"return full_jac",
             ] 
 
@@ -615,8 +648,7 @@ class optimisation_function:
                 f.writelines((un + "\n" for un in un_string))
 
             file_string = 'pyCamSet.optimisation.template_functions.'  + strings
-            importlib.invalidate_caches()
-            top_module = importlib.import_module(file_string)
+            top_module = _import_generated(file_string, freshly_written=True)
             base_jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
 
         _,_, _,_, inp_mem, out_mem, wrk_mem, param_len, n_lines = self.get_constants(detections, threads)
@@ -638,6 +670,20 @@ class optimisation_function:
         n_elements = np.prod(output_shape)
 
         # print("calced param len: ", param_len)
+        if return_blocks:
+            # the raw per residual blocks, before the fixed params are dropped.
+            # A block solver wants these: the CSR form has already thrown away
+            # the structure it needs.
+            def block_fn(param, template=None):
+                data = base_jac_fn(
+                    param, parallel_data, block_param_inds, n_lines,
+                    inp_mem, out_mem, wrk_mem, param_len, threads, d_shape,
+                    param_slices, n_outs, f_outs, grad_outputsize, n_params,
+                    template=template
+                )
+                return data[:n_elements].reshape(output_shape)
+            return block_fn
+
         if np.all(unfixed_params):
             def jac_fn(param, template=None):
                 data = base_jac_fn(
@@ -666,14 +712,17 @@ class optimisation_function:
         self._prep_for_computation()
         return self.make_full_loss_template(detections, threads, problem_max_vals=problem_maximums)
 
-    def make_jacobean(self, detections, threads, unfixed_params=None, problem_maximums=None):
+    def make_jacobean(self, detections, threads, unfixed_params=None, problem_maximums=None,
+                      return_blocks=False):
         if problem_maximums is None:
             problem_maximums = {"max_cams": None , "max_imgs": None, "max_keys": None}
         _, _, _, _, num_inps = make_param_struct(self.function_blocks, detections, **problem_maximums)
         if unfixed_params is None:
             unfixed_params = np.ones(num_inps, dtype=bool)
         self._prep_for_computation()
-        func = self.make_full_jac_template(detections, threads, unfixed_params, problem_max_vals=problem_maximums)
+        func = self.make_full_jac_template(detections, threads, unfixed_params,
+                                           problem_max_vals=problem_maximums,
+                                           return_blocks=return_blocks)
         return func
 
     def build_param_list(self, *args: list[np.ndarray])->np.ndarray:

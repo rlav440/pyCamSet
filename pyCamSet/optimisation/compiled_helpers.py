@@ -199,39 +199,41 @@ def numba_flat_rodrigues_INPLACE(r, blank_rot):
     """
     Converts a 3dof axis angle representation of rotation into a 3x3 rotation matrix
 
+    Written out entry by entry rather than as an outer product loop followed by
+    an in place array scale: this runs twice per detection inside both compiled
+    kernels, where the loop and the temporary cost about twice the arithmetic.
+
     :param r: The rotation vector
     :param blank_rot: the output location, this is a flat memory array
     """
-    theta = math.sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2)
+    x, y, z = r[0], r[1], r[2]
+    theta = math.sqrt(x*x + y*y + z*z)
     if theta < 1e-10:
-        blank_rot[:] = 0
-        blank_rot[0*3 + 0] = 1
-        blank_rot[1*3 + 1] = 1
-        blank_rot[2*3 + 2] = 1
+        for i in range(9):
+            blank_rot[i] = 0.0
+        blank_rot[0] = 1.0
+        blank_rot[4] = 1.0
+        blank_rot[8] = 1.0
         return
 
-    scalar = 1 / theta
-    s2 = scalar ** 2
+    i_theta = 1.0/theta
     ct = math.cos(theta)
-    st = math.sin(theta) * scalar
+    st = math.sin(theta) * i_theta
+    c = (1.0 - ct) * i_theta * i_theta
 
-    #dot product 
-    for i in range(3):
-        for j in range(i,3):
-            blank_rot[3*i + j] = r[i] * r[j]
-            blank_rot[3*j + i] = r[i] * r[j]
+    xx, yy, zz = x*x*c, y*y*c, z*z*c
+    xy, xz, yz = x*y*c, x*z*c, y*z*c
+    sx, sy, sz = x*st, y*st, z*st
 
-
-    blank_rot *= (1 - ct) * s2
-    blank_rot[0*3 +0] += ct
-    blank_rot[1*3 +1] += ct
-    blank_rot[2*3 +2] += ct
-    blank_rot[0*3 +1] -= r[2] * st
-    blank_rot[1*3 +0] += r[2] * st
-    blank_rot[0*3 +2] += r[1] * st
-    blank_rot[2*3 +0] -= r[1] * st
-    blank_rot[1*3 +2] -= r[0] * st
-    blank_rot[2*3 +1] += r[0] * st
+    blank_rot[0] = xx + ct
+    blank_rot[1] = xy - sz
+    blank_rot[2] = xz + sy
+    blank_rot[3] = xy + sz
+    blank_rot[4] = yy + ct
+    blank_rot[5] = yz - sx
+    blank_rot[6] = xz - sy
+    blank_rot[7] = yz + sx
+    blank_rot[8] = zz + ct
     return
 
 @njit(fastmath = True, cache=True)
@@ -239,51 +241,76 @@ def numba_rodrigues_jac(r, out):
     """
     A numba remplementation of the opencv method of defining the jacobean of the rodrigues tform, from:
     https://github.com/opencv/opencv/blob/be1373f01a6bcdc40e4a397cfb266338050cc195/modules/calib3d/src/calibration.cpp#L251
-    """
 
-    theta = math.sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2)
+    The 27 outputs are written out explicitly rather than assembled from the
+    eye/rrt/r_x/drrt/d_r_x_ tables. Building those five Python lists on every
+    call cost ~18x the arithmetic they described, and this runs twice per
+    detection inside the jacobian kernel. The algebra is unchanged: terms whose
+    table entry is zero are simply not emitted.
+    """
+    theta = math.sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2])
 
     if theta < 1e-10:
-        out[:] = 0 
-        out[5] = -1
-        out[15] = -1
-        out[19] = -1
-        out[7] = 1
-        out[11] = 1
-        out[21] = 1
+        for i in range(27):
+            out[i] = 0.0
+        out[5] = -1.0
+        out[15] = -1.0
+        out[19] = -1.0
+        out[7] = 1.0
+        out[11] = 1.0
+        out[21] = 1.0
         return
 
-    i_theta = 0 if theta == 0 else 1/theta
-
+    i_theta = 1.0/theta
     ct = math.cos(theta)
-    ct_1 = 1 - ct
-    st = math.sin(theta) 
+    ct_1 = 1.0 - ct
+    st = math.sin(theta)
 
-    x,y,z = r[0]*i_theta, r[1]*i_theta, r[2]* i_theta
+    x, y, z = r[0]*i_theta, r[1]*i_theta, r[2]*i_theta
+    a2 = ct_1*i_theta
+    a4 = st*i_theta
 
-    rrt = [x*x, x*y, x*z, x*y, y*y, y*z, x*z, y*z, z*z]
-    r_x = [  0, -z,  y, # 
-             z,  0, -x, #
-            -y,  x,  0] #
+    xx, yy, zz = x*x, y*y, z*z
+    xy, xz, yz = x*y, x*z, y*z
 
-    eye = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+    a0 = -st*x
+    a1 = (st - 2.0*ct_1*i_theta)*x
+    a3 = (ct - st*i_theta)*x
+    out[0] = a0 + a1*xx + a2*(x+x)
+    out[1] = a1*xy + a2*y - a3*z
+    out[2] = a1*xz + a2*z + a3*y
+    out[3] = a1*xy + a2*y + a3*z
+    out[4] = a0 + a1*yy
+    out[5] = a1*yz - a3*x - a4
+    out[6] = a1*xz + a2*z - a3*y
+    out[7] = a1*yz + a3*x + a4
+    out[8] = a0 + a1*zz
 
-    drrt = [x+x, y, z, y, 0, 0, z, 0, 0,
-          0,   x, 0, x, y+y, z, 0, z, 0,
-          0,   0, x, 0, 0, y, x, y, z+z]
+    a0 = -st*y
+    a1 = (st - 2.0*ct_1*i_theta)*y
+    a3 = (ct - st*i_theta)*y
+    out[9] = a0 + a1*xx
+    out[10] = a1*xy + a2*x - a3*z
+    out[11] = a1*xz + a3*y + a4
+    out[12] = a1*xy + a2*x + a3*z
+    out[13] = a0 + a1*yy + a2*(y+y)
+    out[14] = a1*yz + a2*z - a3*x
+    out[15] = a1*xz - a3*y - a4
+    out[16] = a1*yz + a2*z + a3*x
+    out[17] = a0 + a1*zz
 
-    d_r_x_ = [0, 0, 0, 0, 0, -1, 0, 1, 0,
-              0, 0, 1, 0, 0, 0, -1, 0, 0,
-              0, -1, 0, 1, 0, 0, 0, 0, 0]
-
-    for i, ri in enumerate([x,y,z]):
-        a0 = -st*ri
-        a1 = (st - 2*ct_1*i_theta)*ri
-        a2 = ct_1*i_theta
-        a3 = (ct - st*i_theta)*ri 
-        a4 = st*i_theta
-        for k in range(9):
-            out[i*9+k] = a0*eye[k]  +  a1*rrt[k] + a2*drrt[i*9+k] + a3*r_x[k] + a4*d_r_x_[i*9+k];
+    a0 = -st*z
+    a1 = (st - 2.0*ct_1*i_theta)*z
+    a3 = (ct - st*i_theta)*z
+    out[18] = a0 + a1*xx
+    out[19] = a1*xy - a3*z - a4
+    out[20] = a1*xz + a2*x + a3*y
+    out[21] = a1*xy + a3*z + a4
+    out[22] = a0 + a1*yy
+    out[23] = a1*yz + a2*y - a3*x
+    out[24] = a1*xz + a2*x - a3*y
+    out[25] = a1*yz + a2*y + a3*x
+    out[26] = a0 + a1*zz + a2*(z+z)
 
 @njit(cache=True)
 def n_e4x4_flat_INPLACE(rog_vec: np.ndarray, blank_tform: np.ndarray) -> None:
@@ -354,10 +381,14 @@ def n_htform_broadcast_prealloc(points: np.ndarray, t_numba: np.ndarray, out, fi
         n_htform_prealloc(points, t_numba, out, fill)
 
 
-@njit(cache=True)
+@njit(cache=True, fastmath=True)
 def n_htform_prealloc(points, t_numba, out, fill=True):
     """
     Does a homogenous transform on a single point to a an ouput array
+
+    The 3x3 multiply is written out rather than handed to np.dot. Dispatching a
+    3 element matrix vector product through BLAS costs ~45x the arithmetic, and
+    this runs twice per detection inside the compiled kernels.
 
     :param points: the point to transform
     :param t_numba: the transform to apply, as a 12x1 array
@@ -365,9 +396,28 @@ def n_htform_prealloc(points, t_numba, out, fill=True):
     :param fill: Whether to add the translation component of the transform (if false only rotates)
     :return:
     """
-    np.dot(points, t_numba[:9].reshape((3, 3)).T, out)
-    if fill:
-        out += t_numba[9:]
+    t0, t1, t2 = t_numba[0], t_numba[1], t_numba[2]
+    t3, t4, t5 = t_numba[3], t_numba[4], t_numba[5]
+    t6, t7, t8 = t_numba[6], t_numba[7], t_numba[8]
+    if points.ndim == 1:
+        x, y, z = points[0], points[1], points[2]
+        out[0] = t0*x + t1*y + t2*z
+        out[1] = t3*x + t4*y + t5*z
+        out[2] = t6*x + t7*y + t8*z
+        if fill:
+            out[0] += t_numba[9]
+            out[1] += t_numba[10]
+            out[2] += t_numba[11]
+    else:
+        for i in range(points.shape[0]):
+            x, y, z = points[i, 0], points[i, 1], points[i, 2]
+            out[i, 0] = t0*x + t1*y + t2*z
+            out[i, 1] = t3*x + t4*y + t5*z
+            out[i, 2] = t6*x + t7*y + t8*z
+            if fill:
+                out[i, 0] += t_numba[9]
+                out[i, 1] += t_numba[10]
+                out[i, 2] += t_numba[11]
 
 
 @njit(cache=True)

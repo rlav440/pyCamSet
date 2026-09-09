@@ -19,6 +19,7 @@ from pyCamSet.optimisation.template_handler import TemplateBundleHandler, DEFAUL
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.function_block_implementations as fb
+from pyCamSet.optimisation.numba_schur import ParamGroup
 
 from pyCamSet.calibration_targets import TargetDetection
     
@@ -185,6 +186,28 @@ class SelfBundleHandler(TemplateBundleHandler):
         self.missing_poses: list | None = missing_poses
         self.op_fun: fb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.rigidTform3d() +  fb.free_point()
 
+    def _kernel_extra_args(self) -> tuple:
+        # the target geometry is a parameter here, not a fixed template
+        return ()
+
+    def _kernel_maximums(self):
+        return None
+
+    def parameter_groups(self) -> list[ParamGroup]:
+        """The blocks of this problem; the free target points are eliminated."""
+        dd = self._flat_detections()
+        cam = dd[:, 0].astype(np.int64)
+        img = dd[:, 1].astype(np.int64)
+        key = dd[:, 2].astype(np.int64)
+        bp = self.bundlePrimitive
+        return [
+            ParamGroup("intr", bp.intr, bp.intr_unfixed, cam),
+            ParamGroup("extr", bp.extr, bp.extr_unfixed, cam),
+            ParamGroup("pose", bp.poses, bp.poses_unfixed, img),
+            ParamGroup("point", np.asarray(bp.bundle_pts).reshape((-1, 3)),
+                       bp.bdpt_unfixed, key),
+        ]
+
     def make_loss_fun(self, threads):
         """
         Describes and writes the loss function of the loss function represented by self.
@@ -212,16 +235,8 @@ class SelfBundleHandler(TemplateBundleHandler):
         """
         target_shape = self.target.point_data.shape
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
-        mask = np.concatenate(
-            ( 
-                np.repeat(self.bundlePrimitive.intr_unfixed, 9),
-                np.repeat(self.bundlePrimitive.extr_unfixed, 6),
-                np.repeat(self.bundlePrimitive.poses_unfixed, 6),
-                np.repeat(self.bundlePrimitive.bdpt_unfixed, 1), #I unrolled feature unfixed
-            ), axis=0
-        )
-
-        temp_loss = self.op_fun.make_jacobean(dd, threads, unfixed_params=mask)
+        temp_loss = self.op_fun.make_jacobean(
+            dd, threads, unfixed_params=self.parameter_mask())
         def jac_fn(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)

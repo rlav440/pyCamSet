@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 import pytest
 
-import aruco2
+aruco2 = pytest.importorskip("aruco2")
 
 from pyCamSet.calibration_targets.backend_registry import (
     ARUCO1_DICT_NAMES,

@@ -72,6 +72,12 @@ class TargetDetection:
 
     @property
     def max_ims(self):
+        # Flush first, like every other accessor: adds go to a buffer, so
+        # reading max_ims straight after add_detection otherwise indexed a
+        # _data that was still None.
+        self._glomp_buffer()
+        if self._data is None:
+            return self._max_ims
         temp_data = int(np.max(self._data[:, 1])) + 1
         self._max_ims = max(temp_data, self._max_ims)
         return self._max_ims
@@ -209,9 +215,11 @@ class TargetDetection:
         :return: A single TargetDetection object containing the detections of both added TargetDetections
         """
         if not self.cam_names == other.cam_names:
+            # cam_names, not names: the latter does not exist, so raising this
+            # error itself raised AttributeError and hid the real problem.
             raise ValueError('To add detections, they must have consistent camera names. \n'
-                             f'Detection 0 names: {self.names}\n'
-                             f'Detection 1 names: {other.names}')
+                             f'Detection 0 names: {self.cam_names}\n'
+                             f'Detection 1 names: {other.cam_names}')
         self._glomp_buffer()
         other._glomp_buffer()
         if self._data is None:
@@ -264,10 +272,21 @@ class TargetDetection:
         """
         if self._update_buffer:
             if self._data is not None:
-                self._data = np.append(self._data, np.concatenate(self._update_buffer, axis=0))
+                # concatenate along axis 0, keeping the
+                # | cam | im_num | key... | x | y | row layout.  np.append with
+                # no axis ravels both operands, so this flattened _data to 1-D
+                # and the max_ims update on the next line then raised
+                # IndexError -- every add onto a non-empty detection failed.
+                self._data = np.concatenate(
+                    [self._data, np.concatenate(self._update_buffer, axis=0)], axis=0
+                )
             else:
                 self._data = np.concatenate(self._update_buffer, axis=0)
-            self.max_ims = int(max(self.max_ims - 1, np.amax(self._data[:, 1])) + 1)
+            # _max_ims directly, not the max_ims property: the property now
+            # flushes the buffer, and the buffer is still un-cleared here, so
+            # going through it would recurse.  This is the same value the
+            # property would have produced.
+            self._max_ims = int(max(np.amax(self._data[:, 1]) + 1, self._max_ims))
             self._update_buffer.clear()
 
     def sort(self, keys_to_sort: str|list[str], inplace=False) -> TargetDetection | None:

@@ -10,3 +10,25 @@ testpaths = ["tests"]
 # their module-level side effects executed) during collection.
 python_files = ["test_*.py"]
 addopts = "-ra --strict-markers --strict-config"
+
+[tool.coverage.run]
+source = ["pyCamSet"]
+omit = [
+    # Generated build output, not source: abstract_function_blocks.make_*
+    # writes these files, and every function in them is an njit kernel whose
+    # body CPython never executes.  Measuring them reports 6-33% forever and
+    # tells you nothing about the tests.
+    "pyCamSet/optimisation/template_functions/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+# Report against the fast suite run under NUMBA_DISABLE_JIT=1 (see
+# .github/workflows/test.yml).  With JIT enabled, every @njit body is compiled
+# rather than interpreted, so coverage sees none of it: 273 of the 291
+# "missing" lines in compiled_helpers.py were kernels the tests do exercise.
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

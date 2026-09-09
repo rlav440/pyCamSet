@@ -179,7 +179,10 @@ class CameraSet:
 
             cam_dict = {key: cam for key, cam in zip(cam_names, cam_list)}
             new_camset._cam_dict = cam_dict
-            new_camset.__update()
+            # _update, not __update: the double underscore mangles to
+            # _CameraSet__update, which does not exist, so every cam_key
+            # subset raised AttributeError.
+            new_camset._update()
             return new_camset
     
     def __len__(self):
@@ -204,8 +207,12 @@ class CameraSet:
         self.n_cams = self.get_n_cams()
 
     def __iter__(self):
-        self.ind = 0
-        return self
+        # A fresh iterator per call, rather than `self`.  Returning self made
+        # the set its own iterator with a single shared cursor, so two
+        # overlapping loops -- `for a in cams: for b in cams:`, the natural way
+        # to walk camera pairs in a rig -- shared `ind` and silently visited
+        # len(cams) pairs instead of len(cams)**2.
+        return iter(self._cam_list)
 
     def __next__(self) -> Camera:
         if self.ind < len(self._cam_list):
@@ -662,7 +669,10 @@ class CameraSet:
         """
         if not in_place:
             temp_camset = deepcopy(self)
-            return temp_camset.transform(transformation_matrix)
+            # Transform the copy, then hand back the copy: the recursive call
+            # runs the in place branch, which returns None.
+            temp_camset.transform(transformation_matrix)
+            return temp_camset
 
         for cam in self._cam_list:
             cam.transform(transformation_matrix)

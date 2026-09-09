@@ -37,6 +37,7 @@ MARKERS = {
     "data": "requires the image corpus in tests/test_data",
     "slow": "takes more than ~10s; runs a full bundle adjustment",
     "gui": "requires the optional PySide6 dependency",
+    "needs_jit": "asserts on numba's compiled behaviour; invalid with NUMBA_DISABLE_JIT",
 }
 
 
@@ -54,13 +55,23 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Skip data-backed tests when the image corpus is absent."""
-    if TEST_DATA.is_dir():
-        return
+    """Skip tests whose prerequisites the current environment does not meet."""
+    have_data = TEST_DATA.is_dir()
     skip_no_data = pytest.mark.skip(reason=f"image corpus not found at {TEST_DATA}")
+
+    # The coverage job runs with NUMBA_DISABLE_JIT=1 so that the @njit kernel
+    # bodies are interpreted, and therefore visible to coverage.  With JIT off,
+    # numba's njit returns the plain function rather than a dispatcher, so
+    # anything reaching for .py_func (the codegen bounds guard) has nothing to
+    # cross-check against and cannot fail the way it is asserted to.
+    jit_disabled = os.environ.get("NUMBA_DISABLE_JIT", "") not in ("", "0")
+    skip_no_jit = pytest.mark.skip(reason="NUMBA_DISABLE_JIT is set; numba is not compiling")
+
     for item in items:
-        if "data" in item.keywords:
+        if not have_data and "data" in item.keywords:
             item.add_marker(skip_no_data)
+        if jit_disabled and "needs_jit" in item.keywords:
+            item.add_marker(skip_no_jit)
 
 
 @pytest.fixture(scope="session")
@@ -96,3 +107,71 @@ def isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """
     monkeypatch.chdir(tmp_path)
     return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# Synthetic cameras
+#
+# Phase 1 of the coverage work tests the pure surface -- containers, geometry,
+# persistence -- which needs cameras but no images.  These fixtures build a
+# small rig analytically so the tests stay in the millisecond range and do not
+# depend on the image corpus.
+# ---------------------------------------------------------------------------
+
+# A plausible 640x480 pinhole camera; f and principal point are distinct in x
+# and y so a test that transposes them fails instead of silently passing.
+REF_INTRINSIC = np.array(
+    [
+        [800.0, 0.0, 320.0],
+        [0.0, 750.0, 240.0],
+        [0.0, 0.0, 1.0],
+    ]
+)
+REF_RES = [640, 480]
+
+
+def make_camera(name="cam", translation=(0.0, 0.0, 0.0), distortion=None, res=None):
+    """One synthetic pinhole camera at *translation*, looking down +z."""
+    from pyCamSet import Camera
+
+    extrinsic = np.eye(4)
+    extrinsic[:3, 3] = translation
+    return Camera(
+        extrinsic=extrinsic,
+        intrinsic=REF_INTRINSIC.copy(),
+        res=list(REF_RES) if res is None else list(res),
+        distortion_coefs=np.zeros(5) if distortion is None else np.asarray(distortion),
+        name=name,
+    )
+
+
+@pytest.fixture
+def synthetic_camset():
+    """A three camera rig, spaced along x, with no distortion.
+
+    Names are deliberately not in sorted order relative to their positions, so
+    a test cannot pass by accidentally relying on dict ordering matching name
+    ordering.
+    """
+    from pyCamSet import CameraSet
+
+    cams = {
+        "left": make_camera("left", translation=(-0.05, 0.0, 0.0)),
+        "centre": make_camera("centre", translation=(0.0, 0.0, 0.0)),
+        "right": make_camera("right", translation=(0.05, 0.0, 0.0)),
+    }
+    return CameraSet(camera_dict=cams)
+
+
+@pytest.fixture
+def world_points():
+    """A fixed cloud of world points that all three synthetic cameras image."""
+    return np.array(
+        [
+            [0.0, 0.0, 1.0],
+            [0.01, 0.0, 1.0],
+            [0.0, 0.01, 1.0],
+            [-0.02, 0.015, 1.2],
+            [0.03, -0.01, 0.9],
+        ]
+    )

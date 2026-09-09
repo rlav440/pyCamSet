@@ -277,14 +277,21 @@ def colourmap_to_colour_list(len, colourmap):
     return [np.array(colourmap(pt, bytes=True))[:3] for pt in pts]
 
 
-def distort_points(pts:np.ndarray, intrinsics: np.ndarray, dist_coef:np.ndarray) -> np.ndarray:
+def distort_points(
+        pts: np.ndarray, intrinsics: np.ndarray, dist_coef: np.ndarray
+) -> tuple[float, float]:
     """
-    Distorts points using the Brown Conway model
+    Distorts a point using the Brown Conrady model
 
-    :param pts: points to distort
-    :param intrinsics. The intrinsics of the imaging camera
-    :param dist_coef: Brown Conway model of the distorting camera
-    :return pts: double numpy array of distorted coordinates
+    Takes one point at a time: x, y = (pts - centre)/focal unpacks the leading
+    axis, so pts must be a single pixel.  Note the layout is the transpose of
+    Camera.project_points, which returns (n, 2); map over its rows to distort
+    many points.
+
+    :param pts: the pixel to distort, as (u, v)
+    :param intrinsics: The intrinsics of the imaging camera
+    :param dist_coef: 5 parameter Brown Conrady model of the distorting camera
+    :return: the distorted (u, v) as a pair of scalars
     """
     #relative coordinates and distances.
     centre = intrinsics[:2, -1]
@@ -403,18 +410,20 @@ def px_array(res=[32, 32], startZero=False,):
     h = np.ones(res)
     return x, y, h
 
-def downsample_valid(inp, d_factor, invalid=None):
+def downsample_valid(inp: np.ndarray, d_factor: int) -> np.ndarray:
     """
-    An averaging downsample using a numpy array indexing.
+    An averaging downsample using numpy array indexing.
 
-    :param inp: The input to be be downsampled
-    :param d_factor: The factor to downsample
-    :param invalid: The value of points to be excluded from the downsampling in the function
+    Averages each d_factor x d_factor block of the first two axes.  Rows and
+    columns past the last whole block are cropped rather than padded, so a
+    (5, 7) input at d_factor 2 returns (2, 3).
 
-    :return  For a point with inputs, returns the average of the valid inputs
-        For a point without valid inputs, returns the value of the invalid inputs
-        Returned object has no singleton dimensions
+    Note that no value is treated as invalid: a NaN in a block propagates to
+    that block's mean.
 
+    :param inp: The input to be downsampled
+    :param d_factor: The factor to downsample by; 1 returns the input unchanged
+    :return: The block averaged array
     """
     if d_factor == 1:
         return inp

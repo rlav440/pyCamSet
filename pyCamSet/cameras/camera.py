@@ -111,10 +111,23 @@ class Camera:
         """
         if not isinstance(other, Camera):
             return False
-        equal_int = np.isclose(self.intrinsic, other.intrinsic)
-        equal_ext = np.isclose(self.extrinsic, other.extrinsic)
-        equal_dst = np.isclose(self.distortion_coefs, other.distortion_coefs)
-        return all([equal_dst, equal_ext, equal_int])
+        # np.allclose, not all(np.isclose(...)): isclose returns an array, and
+        # all() of a list of arrays raises "truth value is ambiguous" -- which
+        # made every comparison of two real cameras an error rather than a
+        # bool, and CameraSet.__eq__ with it.
+        # Compare shapes first: allclose broadcasts, so a (5,) and a (1, 5)
+        # distortion model, or two models of different length, would otherwise
+        # compare equal or raise instead of returning False.
+        pairs = (
+            (self.intrinsic, other.intrinsic),
+            (self.extrinsic, other.extrinsic),
+            (self.distortion_coefs, other.distortion_coefs),
+        )
+        for mine, theirs in pairs:
+            mine, theirs = np.asarray(mine), np.asarray(theirs)
+            if mine.shape != theirs.shape or not np.allclose(mine, theirs):
+                return False
+        return True
 
     def set_minimal(self, minimal: bool):
         """
@@ -513,14 +526,21 @@ class Camera:
         self.intrinsic = scale_mat @ self.intrinsic
         self._update_state()
 
-    def crop_to_roi(self, roi):
+    def crop_to_roi(self, roi: list | np.ndarray) -> None:
         """
         This function alters the intrinsics to mimic camera that takes
         a subset of the calibrated image size.
 
-        :param roi: [xmin, xmax, ymin, ymax]
+        Only the origin of the roi shifts the principal point; xmax and ymax
+        are used to check the crop lies on the sensor.
+
+        :param roi: [xmin, xmax, ymin, ymax], in pixels
         """
-        [ymin, xmin, xmax, ymax] = roi
+        # Grouped by axis, matching the documented order.  This previously
+        # destructured [ymin, xmin, xmax, ymax], so the second element was
+        # read as the x origin and the first as the y origin -- a caller
+        # following the docstring cropped to the wrong place.
+        [xmin, xmax, ymin, ymax] = roi
         if xmax > self.res[0] or ymax > self.res[1]:
             raise ValueError('crop bounds outside of camera viewpoint')
 
@@ -534,7 +554,11 @@ class Camera:
         """
         Returns the camera to the original intrinsic matrix
         """
-        self.intrinsic = self.original_matrix
+        # A copy, not the array itself: crop_to_roi and scale_self_2n mutate
+        # self.intrinsic in place, so handing out the stored original aliased
+        # the two together and the first crop after a reset destroyed the
+        # reference copy -- leaving every later reset returning the crop.
+        self.intrinsic = deepcopy(self.original_matrix)
         self._update_state()
 
     def transform(self, transformation_matrix):

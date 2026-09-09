@@ -162,11 +162,17 @@ def test_read_width_is_declared_not_inferred_from_num_inp():
     assert input_buffer_width([free_point]) == 0
 
 
+@pytest.mark.needs_jit
 def test_bounds_check_rejects_an_undersized_input_buffer():
     """The generic guard: any kernel reading past its buffer must be caught.
 
     numba compiles without bounds checking, so this cross-checks against the
     pure-Python original, which numpy does bounds check.
+
+    Needs JIT: the guard finds that pure-Python original via the dispatcher's
+    ``.py_func``, which only exists when numba is actually compiling.  With
+    NUMBA_DISABLE_JIT the kernel *is* the Python function and numpy bounds
+    checks it directly, so there is nothing for the guard to cross-check.
     """
     from pyCamSet.optimisation.function_block_implementations import (
         free_point,

@@ -42,7 +42,14 @@ jobs:
 
       - name: Fast tests
         # No image corpus, no display, no optional dependencies.
-        run: pytest -m "not data" --timeout=600
+        #
+        # NUMBA_DISABLE_JIT so the @njit kernels are interpreted and therefore
+        # visible to coverage; with JIT on, coverage reports every kernel body
+        # as unexecuted and the number means nothing.  The full suite below
+        # keeps JIT on, because a pure-Python bundle adjustment is far too slow.
+        env:
+          NUMBA_DISABLE_JIT: "1"
+        run: pytest -m "not data" --timeout=600 --cov --cov-report=term-missing
 
       - name: Full suite
         run: pytest --timeout=1800

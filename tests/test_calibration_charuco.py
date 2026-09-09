@@ -14,7 +14,7 @@ MAX_MEAN_REPROJECTION_PX = 1.8
 @pytest.mark.slow
 def test_calibration_charuco(data_dir):
     """A full ChArUco calibration must stay within its reprojection baseline."""
-    target = ChArUco(20, 20, 4, legacy=True)
+    target = ChArUco(20, 20, 4)
 
     cams = calibrate_cameras(
         f_loc=data_dir / "calibration_charuco",

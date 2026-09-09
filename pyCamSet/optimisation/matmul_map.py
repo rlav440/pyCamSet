@@ -246,6 +246,23 @@ def create_optimisable_compute_flow(opfun, out_name:str, in_name:str):
     # Seeded locally so the emitted source is reproducible and independent of
     # the caller's random state.
     rng = np.random.default_rng(SPARSITY_PROBE_SEED)
+
+    # The generated code hands every block a slice of one shared input buffer,
+    # and a template block reads its 3 template coordinates out of it even
+    # though it declares num_inp = 0 (see template_points.compute_jac). Sizing
+    # the probe's buffer from num_inp alone therefore hands such a block a
+    # zero-length array, and its reads run past the end: numba does not bounds
+    # check, so the kernel silently differentiates whatever follows in memory.
+    # On x86_64 that was nonzero and the terms survived by luck; on arm64 it
+    # read zeros, the rotation derivatives were encoded as structural zeros,
+    # and the Ccube calibration lost 3.5 px. Size the buffer like the runtime
+    # one so no kernel can read past it.
+    probe_inp_len = max(
+        [3]
+        + [element.num_inp for element in opfun.function_blocks]
+        + [element.num_out for element in opfun.function_blocks]
+    )
+
     matricies = []
     for ide, element in enumerate(opfun.function_blocks):
         outsize = (element.params.n_params + element.num_inp) * element.num_out
@@ -258,7 +275,7 @@ def create_optimisable_compute_flow(opfun, out_name:str, in_name:str):
             # silently dropped, and the probe stays deterministic.
             output = np.full(outsize, np.nan)
             element.compute_jac(
-                inp=rng.random(element.num_inp),
+                inp=rng.random(probe_inp_len),
                 params=rng.random(element.params.n_params),
                 output=output,
                 memory=np.zeros(element.array_memory),

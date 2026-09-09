@@ -105,6 +105,62 @@ def test_probe_takes_enough_samples_to_be_meaningful():
 
 
 # --------------------------------------------------------------------------
+# Fast: the probe must feed each kernel a full input buffer
+# --------------------------------------------------------------------------
+
+
+def test_template_block_reads_three_inputs_despite_declaring_none():
+    """``template_points`` declares ``num_inp = 0`` but reads ``inp[0:3]``.
+
+    At runtime that is fine: the generated code allocates one shared input
+    buffer and writes the template point into ``inp[:3]``.  But the codegen
+    probe used to size its buffer from ``num_inp``, handing this kernel a
+    zero-length array.  Numba does not bounds check, so the kernel
+    differentiated whatever followed in memory -- nonzero heap garbage on
+    x86_64, zeros on arm64.  The zeros were then encoded as structural zeros
+    and the rotation derivatives vanished from the generated jacobian.
+
+    This pins the behaviour the probe has to respect.
+    """
+    from pyCamSet.optimisation.function_block_implementations import template_points
+
+    params = np.array([0.3, 0.4, 0.5, 1.0, 2.0, 3.0])
+
+    def rotation_block(inp):
+        output = np.full(18, np.nan)
+        template_points.compute_jac(
+            params=params, inp=inp, output=output, memory=np.zeros(27)
+        )
+        return output.reshape(3, 6)[:, :3]
+
+    # A real template point gives real rotation derivatives.
+    assert np.any(rotation_block(np.array([0.7, 0.2, 0.9])) != 0)
+
+    # The failure mode: zeros in, and the whole rotation block reads as
+    # structurally zero.
+    assert np.all(rotation_block(np.zeros(3)) == 0)
+
+
+def test_probe_buffer_is_wide_enough_for_every_block():
+    """The probe's input buffer must cover what the kernels actually read."""
+    from pyCamSet.optimisation.function_block_implementations import (
+        extrinsic3D,
+        projection,
+        template_points,
+    )
+
+    blocks = [projection, extrinsic3D, template_points]
+    probe_inp_len = max(
+        [3] + [b.num_inp for b in blocks] + [b.num_out for b in blocks]
+    )
+    assert probe_inp_len >= 3, (
+        "a template block reads 3 template coordinates from the input buffer"
+    )
+    for block in blocks:
+        assert probe_inp_len >= block.num_inp
+
+
+# --------------------------------------------------------------------------
 # Data-backed: the real generated jacobian
 # --------------------------------------------------------------------------
 

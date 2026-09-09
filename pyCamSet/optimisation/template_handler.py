@@ -20,8 +20,13 @@ from pyCamSet.optimisation.numba_schur import ParamGroup
 from pyCamSet import CameraSet, Camera
 
 from pyCamSet.calibration_targets import TargetDetection
-import pyvista as pv
-    
+try:
+    import pyvista as pv
+    _PYVISTA_OK = True
+except ImportError:  # pragma: no cover - exercised in headless installs
+    pv = None
+    _PYVISTA_OK = False
+
 if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
     from pyCamSet.cameras import CameraSet, Camera

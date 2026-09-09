@@ -138,15 +138,15 @@ class BoundedSliderRow(QWidget):
     def _configure_slider(self) -> None:
         entry = self._entry
         if self._is_float:
-            self._slider.setMinimum(int(float(entry["min"]) * _FLOAT_SCALE))
-            self._slider.setMaximum(int(float(entry["max"]) * _FLOAT_SCALE))
-            self._slider.setValue(int(float(entry["default"]) * _FLOAT_SCALE))
+            self._slider.setMinimum(round(float(entry["min"]) * _FLOAT_SCALE))
+            self._slider.setMaximum(round(float(entry["max"]) * _FLOAT_SCALE))
+            self._slider.setValue(self._slider_value(self._normalise_numeric(entry["default"])))
             step = float(entry.get("step", 0.01) or 0.01)
-            self._slider.setSingleStep(max(1, int(step * _FLOAT_SCALE)))
+            self._slider.setSingleStep(max(1, round(step * _FLOAT_SCALE)))
         else:
             self._slider.setMinimum(int(entry["min"]))
             self._slider.setMaximum(int(entry["max"]))
-            self._slider.setValue(int(entry["default"]))
+            self._slider.setValue(self._slider_value(self._normalise_numeric(entry["default"])))
             self._slider.setSingleStep(int(entry.get("step", 1)) or 1)
 
     # ------------------------------------------------------------------
@@ -177,7 +177,7 @@ class BoundedSliderRow(QWidget):
                 self._fixed_combo.setCurrentIndex(index)
             return
         if self._fixed_spin is not None:
-            self._fixed_spin.setValue(value)
+            self._fixed_spin.setValue(self._normalise_numeric(value))
 
     def set_optimise(self, enabled: bool) -> None:
         self._optimise.setChecked(bool(enabled))
@@ -185,21 +185,28 @@ class BoundedSliderRow(QWidget):
     def set_bounds(self, lower: Any, upper: Any) -> None:
         if self._lower_spin is None or self._upper_spin is None:
             return
-        self._lower_spin.setValue(lower)
-        self._upper_spin.setValue(upper)
+        # Normalise metadata constraints before handing values to Qt.  In
+        # particular, OpenCV adaptive-threshold windows marked ``odd`` must
+        # remain odd even when a caller supplies a profile with an even edge.
+        self._lower_spin.setValue(self._normalise_numeric(lower))
+        self._upper_spin.setValue(self._normalise_numeric(upper))
 
     # ------------------------------------------------------------------
 
     def _on_fixed_changed(self, _value) -> None:
         if self._slider is None or self._fixed_spin is None:
             return
+        fixed_value = self._normalise_numeric(self._fixed_spin.value())
+        if fixed_value != self._fixed_spin.value():
+            self._fixed_spin.blockSignals(True)
+            try:
+                self._fixed_spin.setValue(fixed_value)
+            finally:
+                self._fixed_spin.blockSignals(False)
         # Sync the slider without re-triggering the signal loop.
         self._slider.blockSignals(True)
         try:
-            if self._is_float:
-                self._slider.setValue(int(float(self._fixed_spin.value()) * _FLOAT_SCALE))
-            else:
-                self._slider.setValue(int(self._fixed_spin.value()))
+            self._slider.setValue(self._slider_value(fixed_value))
         finally:
             self._slider.blockSignals(False)
         self.valueChanged.emit(self._key, self.fixed_value())
@@ -210,14 +217,20 @@ class BoundedSliderRow(QWidget):
     def _on_slider_changed(self, slider_value: int) -> None:
         if self._fixed_spin is None:
             return
+        value = slider_value / _FLOAT_SCALE if self._is_float else int(slider_value)
+        value = self._normalise_numeric(value)
         self._fixed_spin.blockSignals(True)
         try:
-            if self._is_float:
-                self._fixed_spin.setValue(slider_value / _FLOAT_SCALE)
-            else:
-                self._fixed_spin.setValue(int(slider_value))
+            self._fixed_spin.setValue(value)
         finally:
             self._fixed_spin.blockSignals(False)
+        # A mouse click can land on an even slider position despite a step of
+        # two; snap the slider back to the valid odd value as well as the spin.
+        self._slider.blockSignals(True)
+        try:
+            self._slider.setValue(self._slider_value(value))
+        finally:
+            self._slider.blockSignals(False)
         self.valueChanged.emit(self._key, self.fixed_value())
 
     def _on_optimise_toggled(self, checked: bool) -> None:
@@ -230,7 +243,42 @@ class BoundedSliderRow(QWidget):
     def _on_bounds_changed(self, _value) -> None:
         if self._lower_spin is None or self._upper_spin is None:
             return
-        self.boundsChanged.emit(self._key, self._lower_spin.value(), self._upper_spin.value())
+        lower = self._normalise_numeric(self._lower_spin.value())
+        upper = self._normalise_numeric(self._upper_spin.value())
+        if lower != self._lower_spin.value() or upper != self._upper_spin.value():
+            self._lower_spin.blockSignals(True)
+            self._upper_spin.blockSignals(True)
+            try:
+                self._lower_spin.setValue(lower)
+                self._upper_spin.setValue(upper)
+            finally:
+                self._lower_spin.blockSignals(False)
+                self._upper_spin.blockSignals(False)
+        self.boundsChanged.emit(self._key, lower, upper)
+
+    def _normalise_numeric(self, value: Any) -> Any:
+        """Return a value inside the declared range and metadata constraints."""
+        if self._is_float:
+            return min(max(float(value), float(self._entry["min"])), float(self._entry["max"]))
+        result = int(round(float(value)))
+        minimum = int(self._entry["min"])
+        maximum = int(self._entry["max"])
+        result = min(max(result, minimum), maximum)
+        if self._entry.get("odd") and result % 2 == 0:
+            candidates = [
+                candidate
+                for candidate in (result - 1, result + 1)
+                if minimum <= candidate <= maximum
+            ]
+            if candidates:
+                result = min(candidates, key=lambda candidate: abs(candidate - result))
+        return result
+
+    def _slider_value(self, value: Any) -> int:
+        """Convert a normalised control value to the integer slider domain."""
+        if self._is_float:
+            return round(float(value) * _FLOAT_SCALE)
+        return int(value)
 
 
 __all__ = ["BoundedSliderRow"]

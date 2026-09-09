@@ -28,16 +28,20 @@ class ImageDetection:
         if not isinstance(image_points, np.ndarray) and image_points is not None:
             image_points = np.array(image_points)
 
-        kp = keys.size != 0 
+        kp = keys.size != 0
         ip = image_points.size != 0
         if kp and ip:
-            assert len(keys) == len(image_points), "Detected keys must be the same length as detected points"
+            if len(keys) != len(image_points):
+                raise ValueError("Detected keys must be the same length as detected points")
             self.keys = keys
             self.image_points = image_points
             self.has_data = True
             self.data_len = len(keys)
         elif not kp and not ip:
+            self.keys = keys
+            self.image_points = image_points
             self.has_data = False
+            self.data_len = 0
         else:
             raise ValueError("A detection requires both identifying keys and detected image points.")
 
@@ -177,7 +181,10 @@ class TargetDetection:
         """
         :return: a list of target detections containing a unique index
         """
-        unique_keys = np.unique(self.get_data()[:, 2:-2], axis=0)
+        data = self.get_data()
+        if data is None or data.size == 0:
+            return []
+        unique_keys = np.unique(data[:, 2:-2], axis=0)
         return [self.get(key=k) for k in unique_keys]
 
     def _get_cam(self, cam):
@@ -244,8 +251,8 @@ class TargetDetection:
         """
         if not self.cam_names == other.cam_names:
             raise ValueError('To add detections, they must have consistent camera names. \n'
-                             f'Detection 0 names: {self.names}\n'
-                             f'Detection 1 names: {other.names}')
+                             f'Detection 0 names: {self.cam_names}\n'
+                             f'Detection 1 names: {other.cam_names}')
         self._glomp_buffer()
         other._glomp_buffer()
         if self._data is None:
@@ -278,18 +285,25 @@ class TargetDetection:
         """
         ind = self.cam_names.index(cam_name)
 
-        if detection.has_data:
-            if detection.keys.ndim == 1:
-                keys = detection.keys[..., None]
-            else:
-                keys = detection.keys
-            try:
-                observation = np.concatenate(
-                    [np.ones((detection.data_len, 2))*[ind, global_im_num], keys, detection.image_points]
-                    , axis=1)
-            except:
-                print(detection.image_points)
-            self._update_buffer.append(observation)
+        if not detection.has_data:
+            return
+        if detection.keys.ndim == 1:
+            keys = detection.keys[..., None]
+        else:
+            keys = detection.keys
+        image_points = np.asarray(detection.image_points)
+        if image_points.ndim != 2 or image_points.shape[1] != 2:
+            raise ValueError("Image detection points must have shape (n, 2).")
+        if keys.shape[0] != image_points.shape[0]:
+            raise ValueError("Detected keys must be the same length as detected points")
+        observation = np.concatenate(
+            [np.full((detection.data_len, 1), ind),
+             np.full((detection.data_len, 1), global_im_num),
+             keys,
+             image_points],
+            axis=1,
+        )
+        self._update_buffer.append(observation)
 
 
     def _glomp_buffer(self) -> None:
@@ -297,11 +311,12 @@ class TargetDetection:
         Incorporates the update buffer before use.
         """
         if self._update_buffer:
+            pending = np.concatenate(self._update_buffer, axis=0)
             if self._data is not None:
-                self._data = np.append(self._data, np.concatenate(self._update_buffer, axis=0))
+                self._data = np.concatenate((self._data, pending), axis=0)
             else:
-                self._data = np.concatenate(self._update_buffer, axis=0)
-            self.max_ims = int(max(self.max_ims - 1, np.amax(self._data[:, 1])) + 1)
+                self._data = pending
+            self._max_ims = max(self._max_ims, int(np.max(self._data[:, 1])) + 1)
             self._update_buffer.clear()
 
     def sort(self, keys_to_sort: str|list[str], inplace=False) -> TargetDetection | None:

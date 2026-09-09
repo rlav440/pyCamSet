@@ -620,6 +620,23 @@ class Ccube(AbstractTarget):
 
         """
 
+        image = np.asarray(image)
+        if image.dtype != np.uint8:
+            convertible = (
+                np.issubdtype(image.dtype, np.floating)
+                and image.size > 0
+                and np.all(np.isfinite(image))
+                and np.allclose(image, np.round(image))
+                and float(np.min(image)) >= 0.0
+                and float(np.max(image)) <= 255.0
+            )
+            if not convertible:
+                raise ValueError(
+                    "Ccube detection requires a uint8 image or an integral floating-point image "
+                    f"in the range 0..255; got dtype {image.dtype}."
+                )
+            image = image.astype(np.uint8)
+
         if self.board_detectors is None:
             self.board_detectors = [
                 construct_charuco_detector(

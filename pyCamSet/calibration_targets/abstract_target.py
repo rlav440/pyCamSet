@@ -138,8 +138,8 @@ class AbstractTarget(ABC):
         im_locs = [str(x) for x in glob_ims(file)]
 
         if len(im_locs) == 0:
-            ValueError(f"No images were found in the given folder {file}")
-            
+            raise ValueError(f"No images were found in the given folder {file}")
+
 
         im_locs = natsorted(im_locs)
         if n_lim is not None:

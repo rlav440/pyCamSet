@@ -708,6 +708,15 @@ class abstract_function_block(ABC):
 
     array_memory: int = 0 #amount of array memory required to compute - default 0, meaning the computation doesn't "need" array mem
     template = False #if the class pulls from a calibration template for some params
+
+    # Number of entries the compute kernels read from the shared input buffer.
+    # This is NOT always num_inp: num_inp counts the *differentiable* inputs
+    # arriving from the upstream block, while a template block additionally
+    # reads its template coordinates out of the same buffer without
+    # differentiating them. Leave as None to default to num_inp; set it
+    # explicitly whenever a kernel indexes further into inp than num_inp.
+    # Getting this wrong is an out-of-bounds read that numba does not report.
+    n_inp_read: int | None = None
     # best example of this is calibration targets, where the location of a feature is 
     # treated as a given and isn't optimised.
 

@@ -188,6 +188,9 @@ class extrinsic3D(rigidTform3d):
 class template_points(rigidTform3d):
     template = True
     num_inp = 0
+    # compute_jac reads the 3 template coordinates from inp even though none of
+    # them is a differentiable input, so the read width is wider than num_inp.
+    n_inp_read = 3
     num_out = 3
     params = param_type(key_type.PER_IMG, 6)
   

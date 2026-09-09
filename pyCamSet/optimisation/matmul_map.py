@@ -175,6 +175,57 @@ def map_outputs_to_jac(output, jac, param_slices, n_blocks, ide, m2i, output_off
                 m2i[ide][(output_var, idv)] = idc * ll + + n_param + ids + output_offsets[ide]
 
 
+def input_buffer_width(blocks) -> int:
+    """
+    Return the number of input-buffer entries the widest block reads.
+
+    :param blocks: the function blocks making up the optimisation
+    """
+    return max(
+        (block.n_inp_read if block.n_inp_read is not None else block.num_inp)
+        for block in blocks
+    )
+
+
+def check_block_stays_in_bounds(element, probe_inp_len: int):
+    """
+    Raises when a block's kernel reads past the input buffer it is given.
+
+    numba compiles with bounds checking off, so a kernel that indexes past its
+    input silently differentiates adjacent memory instead of failing.  That is
+    invisible on a platform where the adjacent bytes happen to be nonzero and
+    catastrophic where they are zero.  The pure-Python original of the same
+    kernel is bounds checked by numpy, so running it once per code generation
+    turns the whole class of mistake into an immediate, portable error.
+
+    :param element: the function block to check
+    :param probe_inp_len: the width of the buffer the probe will pass
+    """
+    py_jac = getattr(element.compute_jac, "py_func", None)
+    if py_jac is None:  # not an njit dispatcher; nothing to cross-check
+        return
+
+    outsize = (element.params.n_params + element.num_inp) * element.num_out
+    try:
+        py_jac(
+            params=np.zeros(element.params.n_params),
+            inp=np.zeros(probe_inp_len),
+            output=np.zeros(outsize),
+            memory=np.zeros(element.array_memory),
+        )
+    except IndexError as err:
+        # function_blocks holds instances, but accept a class too.
+        name = getattr(element, "__name__", None) or type(element).__name__
+        raise RuntimeError(
+            f"{name}.compute_jac reads outside the "
+            f"{probe_inp_len}-entry input buffer it is given ({err}). Declare "
+            f"how many entries the kernel reads with n_inp_read on the block; "
+            f"num_inp counts only the differentiable inputs. Left unfixed, "
+            f"numba would not report this and the generated jacobian would "
+            f"differentiate unrelated memory."
+        ) from err
+
+
 def check_all_params_reach_the_output(out_mat, param_len, n_outputs=2):
     """
     Raises when a parameter has no surviving derivative path to the residuals.
@@ -247,21 +298,17 @@ def create_optimisable_compute_flow(opfun, out_name:str, in_name:str):
     # the caller's random state.
     rng = np.random.default_rng(SPARSITY_PROBE_SEED)
 
-    # The generated code hands every block a slice of one shared input buffer,
-    # and a template block reads its 3 template coordinates out of it even
-    # though it declares num_inp = 0 (see template_points.compute_jac). Sizing
-    # the probe's buffer from num_inp alone therefore hands such a block a
-    # zero-length array, and its reads run past the end: numba does not bounds
-    # check, so the kernel silently differentiates whatever follows in memory.
-    # On x86_64 that was nonzero and the terms survived by luck; on arm64 it
-    # read zeros, the rotation derivatives were encoded as structural zeros,
-    # and the Ccube calibration lost 3.5 px. Size the buffer like the runtime
-    # one so no kernel can read past it.
-    probe_inp_len = max(
-        [3]
-        + [element.num_inp for element in opfun.function_blocks]
-        + [element.num_out for element in opfun.function_blocks]
-    )
+    # The generated code hands every block a slice of one shared input buffer.
+    # Size the probe's buffer from each block's declared read width, not from
+    # num_inp: a template block reads its template coordinates out of the same
+    # buffer without differentiating them, so num_inp understates what the
+    # kernel touches. Getting this wrong hands the kernel a short array and its
+    # reads run past the end -- numba does not bounds check, so it silently
+    # differentiates whatever follows in memory. That is what cost the Ccube
+    # calibration 3.5 px on arm64 (zeros there, nonzero heap on x86_64).
+    probe_inp_len = input_buffer_width(opfun.function_blocks)
+    for element in opfun.function_blocks:
+        check_block_stays_in_bounds(element, probe_inp_len)
 
     matricies = []
     for ide, element in enumerate(opfun.function_blocks):

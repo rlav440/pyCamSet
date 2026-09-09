@@ -141,23 +141,45 @@ def test_template_block_reads_three_inputs_despite_declaring_none():
     assert np.all(rotation_block(np.zeros(3)) == 0)
 
 
-def test_probe_buffer_is_wide_enough_for_every_block():
-    """The probe's input buffer must cover what the kernels actually read."""
+def test_read_width_is_declared_not_inferred_from_num_inp():
+    """``n_inp_read`` must cover what the kernel reads, even alone.
+
+    Without it ``template_points`` reports a width of 0, which is what handed
+    the probe a zero-length buffer.
+    """
     from pyCamSet.optimisation.function_block_implementations import (
         extrinsic3D,
+        free_point,
         projection,
         template_points,
     )
+    from pyCamSet.optimisation.matmul_map import input_buffer_width
 
-    blocks = [projection, extrinsic3D, template_points]
-    probe_inp_len = max(
-        [3] + [b.num_inp for b in blocks] + [b.num_out for b in blocks]
+    assert input_buffer_width([template_points]) >= 3
+    assert input_buffer_width([projection, extrinsic3D, template_points]) >= 3
+    # free_point never touches inp, so it needs nothing -- which is why the
+    # self-calibration composition was unaffected by this bug.
+    assert input_buffer_width([free_point]) == 0
+
+
+def test_bounds_check_rejects_an_undersized_input_buffer():
+    """The generic guard: any kernel reading past its buffer must be caught.
+
+    numba compiles without bounds checking, so this cross-checks against the
+    pure-Python original, which numpy does bounds check.
+    """
+    from pyCamSet.optimisation.function_block_implementations import (
+        free_point,
+        template_points,
     )
-    assert probe_inp_len >= 3, (
-        "a template block reads 3 template coordinates from the input buffer"
-    )
-    for block in blocks:
-        assert probe_inp_len >= block.num_inp
+    from pyCamSet.optimisation.matmul_map import check_block_stays_in_bounds
+
+    for too_narrow in (0, 2):
+        with pytest.raises(RuntimeError, match="reads outside"):
+            check_block_stays_in_bounds(template_points, too_narrow)
+
+    check_block_stays_in_bounds(template_points, 3)  # wide enough
+    check_block_stays_in_bounds(free_point, 0)  # never reads inp
 
 
 # --------------------------------------------------------------------------

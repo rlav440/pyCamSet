@@ -43,10 +43,53 @@ def make_optimisation_function(
     if param_handler.can_make_jac():
         logging.info("Compiling the jacobian")
         bundle_loss_jac = param_handler.make_loss_jac(threads)
+        check_jacobian_is_not_degenerate(bundle_loss_jac, init_params)
     else: 
         bundle_loss_jac = None
 
     return bundle_loss_fun, bundle_loss_jac, init_params
+
+
+def check_jacobian_is_not_degenerate(bundle_loss_jac: Callable, init_params: np.ndarray):
+    """
+    Raises when the analytic jacobian cannot move some of the parameters.
+
+    The jacobian is generated Python source cached on disk, so a bad one is
+    reused silently: the optimiser converges to a worse answer with no error.
+    On macos-14 this cost the Ccube calibration 3.5 px of reprojection error
+    (6.17 px against 2.62 px on x86_64) and was only found by comparing against
+    a numeric jacobian.
+
+    matmul_map.check_all_params_reach_the_output catches this when the template
+    is generated. This second check runs on the jacobian actually in use, so it
+    also catches a template cached by an older version of pyCamSet or generated
+    on a different machine sharing the install.
+
+    :param bundle_loss_jac: the compiled jacobian callable
+    :param init_params: the parameters to evaluate it at
+    """
+    jac = bundle_loss_jac(init_params)
+    jac = np.asarray(jac.todense()) if hasattr(jac, "todense") else np.asarray(jac)
+
+    if jac.ndim != 2 or jac.shape[1] != init_params.size:
+        logging.warning(
+            "Skipping the jacobian degeneracy check: expected a "
+            f"(n_residuals, {init_params.size}) jacobian, got shape {jac.shape}."
+        )
+        return
+
+    dead = np.flatnonzero(np.all(jac == 0, axis=0))
+    if dead.size:
+        raise RuntimeError(
+            f"The compiled jacobian is degenerate: {dead.size} of "
+            f"{init_params.size} parameters have an all-zero column, so the "
+            f"optimiser cannot adjust them. Columns: {dead.tolist()}.\n"
+            "This is a code generation fault. Delete the cached templates in "
+            "pyCamSet/optimisation/template_functions/ to force a rebuild; if "
+            "it recurs, please report it with your platform and "
+            "numpy/numba versions."
+        )
+    logging.info("Jacobian degeneracy check passed (no all-zero columns).")
 
 
 def run_bundle_adjustment(param_handler: TemplateBundleHandler,

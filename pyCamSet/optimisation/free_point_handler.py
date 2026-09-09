@@ -288,8 +288,3 @@ class FreePointBundleHandler(TemplateBundleHandler):
             temp_cam._update_state()
         return new_cams
         
-
-
-
-
-

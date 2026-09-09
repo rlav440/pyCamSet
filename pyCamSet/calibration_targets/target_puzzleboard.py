@@ -301,8 +301,3 @@ if __name__ == "__main__":
     test = PuzzleBoard()  # Preview the A4 2 mm default target when run directly.
     test.save_to_svg()  # Save a normal SVG beside the current working directory.
     # test.plot()  # Uncomment for an interactive preview.
-
-
-
-
-

@@ -804,4 +804,3 @@ def get_v_vec(ext):
     :param ext: The extrinsic matrix of a camera.
     """
     return ext[:3,:3] @ np.array([0,0,1])
-

@@ -954,12 +954,3 @@ if __name__ == "__main__":
     test = PuzzleBoardCube()  # Construct the deterministic default cube.
     test.save_to_svg()  # Save a printable SVG net in the current directory.
     # test.plot()  # Uncomment for an interactive 3-D preview.
-
-
-
-
-
-
-
-
-

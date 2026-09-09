@@ -990,4 +990,3 @@ def render_calibration_pyvista_png(
 
     except Exception as exc:
         return False, f"PyVista offscreen render failed: {exc}"
-

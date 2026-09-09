@@ -19,5 +19,3 @@ def make_cube_tforms():
 
 if __name__ == "__main__":
     make_cube_tforms() 
-
-

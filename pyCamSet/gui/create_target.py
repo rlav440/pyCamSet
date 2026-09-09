@@ -594,5 +594,3 @@ class CreateTargetTab(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "Visualise Failed", str(exc))
             self._terminal.append_line(f"ERROR: {exc}")
-
-

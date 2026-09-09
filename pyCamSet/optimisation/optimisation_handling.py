@@ -225,4 +225,3 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     logging.info(f"Check test with a result of {init_euclid:.2f}")
 
     return optimisation, camset
-

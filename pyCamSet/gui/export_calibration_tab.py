@@ -152,4 +152,3 @@ class ExportCalibrationTab(QWidget):
                 self._terminal.append_line(f"FAIL {run_id}: {exc}")
 
         self._status_lbl.setText(f"Export completed. Success: {success}, Failures: {failures}")
-

@@ -67,4 +67,3 @@ except ModuleNotFoundError as _e:
 except Exception:
     # PuzzleBoardCube generation shares the same optional Cairo/native-graphics dependency.
     PuzzleBoardCube = None  # type: ignore[assignment,misc]
-

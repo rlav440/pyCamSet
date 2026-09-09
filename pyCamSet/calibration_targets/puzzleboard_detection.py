@@ -24,5 +24,3 @@ def detect_puzzleboard_image(
     """Detect PuzzleBoard grid points from a pyCamSet/OpenCV image."""
     detector_image = prepare_puzzleboard_image(image)  # Normalise the image before external detection.
     return detect_puzzleboard(detector_image, min_width=int(min_width))  # Preserve the original detector output.
-
-

@@ -1004,4 +1004,3 @@ class Phase4DiagnosticsTab(QWidget):
     def visualise_from_primary(self) -> None:
         self._sub_tabs.setCurrentWidget(self._visual_widget)
         self._run_visualise_target()
-

@@ -1890,4 +1890,3 @@ class Phase2DiagnosticsTab(QWidget):
             if self._notebook.tabText(i) == TAB_PHASE3:
                 self._notebook.setCurrentIndex(i)
                 return
-

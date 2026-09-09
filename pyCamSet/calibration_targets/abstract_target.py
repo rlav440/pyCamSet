@@ -540,4 +540,3 @@ class AbstractTarget(ABC):
             return ext # from target -> cam coordinates
         else: 
             raise NotImplementedError
-

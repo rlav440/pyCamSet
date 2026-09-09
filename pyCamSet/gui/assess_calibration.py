@@ -227,5 +227,3 @@ def launch_save_pyvista_png_for_run(run: dict, file_path: Path) -> tuple[bool, s
         return False, "Loaded camset does not contain calibration optimisation results."
 
     return render_calibration_pyvista_png(o_results, handler, output_path=str(file_path))
-
-

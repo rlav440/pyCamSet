@@ -164,8 +164,3 @@ if __name__ == "__main__":
 
     plt.gca().set_aspect("equal")
     plt.show()
-
-
-
-
-

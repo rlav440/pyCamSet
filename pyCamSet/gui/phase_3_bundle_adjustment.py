@@ -2360,4 +2360,3 @@ class Phase3DiagnosticsTab(QWidget):
         )
         if self._info_cb.isChecked():
             QMessageBox.information(self, "Handoff written", "handoff.json written for Phase 3.")
-

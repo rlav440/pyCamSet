@@ -77,49 +77,36 @@ TAB_PRINT_TARGET = TAB_CREATE_TARGET
 TAB_EXPORT_CALIBRATION = "Export Calibration"
 
 # ---------------------------------------------------------------------------
-# Marker backend (ArUco 1 / ArUco 2) shared GUI constants
+# Marker-backend compatibility boundary
 # ---------------------------------------------------------------------------
-# Plan v4 D8/D9/D10: every target section exposes a "Marker backend" combo
-# whose item data is one of these values. The dictionary combo repopulates
-# per backend: aruco1 = 22 names (OpenCV ints 0-21), aruco2 = 24 names
-# (adds DICT_ALVAR_5X5_256 and DICT_ALVAR_7X7_1000, ints 22-23).
-MARKER_BACKEND_LABELS = {
-    "ArUco 1 (OpenCV)": "aruco1",
-    "ArUco 2 (aruco2)": "aruco2",
-}
-ARUCO1_DICT_NAMES = [
-    "DICT_4X4_50",
-    "DICT_4X4_100",
-    "DICT_4X4_250",
-    "DICT_4X4_1000",
-    "DICT_5X5_50",
-    "DICT_5X5_100",
-    "DICT_5X5_250",
-    "DICT_5X5_1000",
-    "DICT_6X6_50",
-    "DICT_6X6_100",
-    "DICT_6X6_250",
-    "DICT_6X6_1000",
-    "DICT_7X7_50",
-    "DICT_7X7_100",
-    "DICT_7X7_250",
-    "DICT_7X7_1000",
-    "DICT_ARUCO_ORIGINAL",
-    "DICT_APRILTAG_16h5",
-    "DICT_APRILTAG_25h9",
-    "DICT_APRILTAG_36h10",
-    "DICT_APRILTAG_36h11",
-    "DICT_ARUCO_MIP_36h12",
-]
-ARUCO2_DICT_NAMES = ARUCO1_DICT_NAMES + ["DICT_ALVAR_5X5_256", "DICT_ALVAR_7X7_1000"]
-_DICT_FALLBACK_NAME = "DICT_4X4_1000"
+# Persisted backend identifiers and dictionary catalogues belong to the
+# headless target package, not this presentation-layer module. The dynamic
+# bridge keeps later GUI imports working until their dedicated campaign cards
+# move those consumers to the registry directly.
+_REGISTRY_EXPORTS = frozenset(
+    {
+        "ARUCO1_BACKEND",
+        "ARUCO2_BACKEND",
+        "SUPPORTED_MARKER_BACKENDS",
+        "MARKER_BACKEND_LABELS",
+        "ARUCO1_DICT_NAMES",
+        "ARUCO2_DICT_NAMES",
+        "available_marker_backends",
+        "dict_names_for_backend",
+        "marker_backend_available",
+        "marker_backend_availability_text",
+        "validate_marker_backend",
+    }
+)
 
 
-def dict_names_for_backend(marker_backend: str) -> list[str]:
-    """Return the dictionary-name list for a marker backend (plan v4 R1-P2)."""
-    if marker_backend == "aruco2":
-        return list(ARUCO2_DICT_NAMES)
-    return list(ARUCO1_DICT_NAMES)
+def __getattr__(name: str):
+    """Resolve legacy marker imports from the headless registry on demand."""
+    if name in _REGISTRY_EXPORTS:
+        from pyCamSet.calibration_targets import backend_registry
+
+        return getattr(backend_registry, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def repopulate_dict_combo(combo, marker_backend: str) -> None:
@@ -131,6 +118,8 @@ def repopulate_dict_combo(combo, marker_backend: str) -> None:
     the new list, the combo falls back to ``DICT_4X4_1000``. Signals are
     blocked for the whole repopulation and restored in ``finally``.
     """
+    from pyCamSet.calibration_targets.backend_registry import dict_names_for_backend
+
     current_name = combo.currentText()
     combo.blockSignals(True)
     try:
@@ -142,37 +131,6 @@ def repopulate_dict_combo(combo, marker_backend: str) -> None:
             combo.setCurrentText(_DICT_FALLBACK_NAME)
     finally:
         combo.blockSignals(False)
-
-
-def marker_backend_availability_text(marker_backend: str) -> str:
-    """Return the short availability label for a marker backend (plan v4 D12).
-
-    Used by the small status label near each backend combo; the label is
-    refreshed on combo change so availability is honoured immediately, not
-    only at save/start.
-    """
-    if marker_backend != "aruco2":
-        return "backend: built-in OpenCV ArUco"
-    if marker_backend_available("aruco2"):
-        return "aruco2: available"
-    return "aruco2: not installed - pip install aruco2"
-
-
-def marker_backend_available(marker_backend: str) -> bool:
-    """Return whether the requested marker backend is usable.
-
-    aruco1 is always available (OpenCV). aruco2 availability is read from the
-    module-level ``ARUCO2_AVAILABLE`` flag in
-    :mod:`pyCamSet.calibration_targets.aruco2_detection` (lazy import so the
-    GUI never hard-depends on the optional aruco2 package).
-    """
-    if marker_backend != "aruco2":
-        return True
-    try:
-        from pyCamSet.calibration_targets.aruco2_detection import ARUCO2_AVAILABLE
-        return bool(ARUCO2_AVAILABLE)
-    except Exception:  # pragma: no cover - defensive; module is importable
-        return False
 
 
 # ---------------------------------------------------------------------------

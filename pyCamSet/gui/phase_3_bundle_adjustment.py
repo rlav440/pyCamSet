@@ -80,6 +80,8 @@ from pyCamSet.gui.assess_calibration import (
 )
 from pyCamSet.gui.phase_3_lockbox_editor import Phase3LockboxEditor
 
+_LOG = logging.getLogger(__name__)
+
 try:
     from pyCamSet.optimisation.camera_lockbox import CameraLockboxConfig
     from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment_with_stats
@@ -87,13 +89,18 @@ try:
     from pyCamSet.utils.saving import load_CameraSet, load_pickle
 
     _PYCAMSET_OK = True
-except ImportError:
+except ImportError as exc:
     CameraLockboxConfig = None
     run_bundle_adjustment_with_stats = None
     TemplateBundleHandler = None
     load_CameraSet = None
     load_pickle = None
     _PYCAMSET_OK = False
+    # Said out loud, because collapsing the cause into a boolean is how a
+    # renamed backend symbol came to look to the user like a broken install:
+    # the tab reports the modules as unavailable, and nothing says which one
+    # or why.
+    _LOG.warning("Phase 3 optimisation backend unavailable: %s", exc)
 
 _TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
 

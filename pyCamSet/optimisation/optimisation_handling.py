@@ -176,14 +176,102 @@ def run_schur_bundle_adjustment(param_handler, loss_fn, bundle_jac, init_params,
         )
 
 
-def run_bundle_adjustment(param_handler: TemplateBundleHandler,
-                          threads: int = 1) -> tuple[OptimizeResult, CameraSet]:
+def get_bundle_adjustment_stats(
+        optimisation: OptimizeResult,
+        init_params: np.ndarray,
+        init_err: np.ndarray,
+        elapsed_sec: float,
+        param_handler=None,
+) -> dict:
     """
-    A function that takes an abstract parameter handler, turns it into a cost function, and returns the
-    optimisation results and the camera set that minimises the optimisation problem defined by the parameter handler.
+    A finished solve as a flat dictionary, for the GUI and the study driver.
+
+    :class:`~pyCamSet.utils.calibration_report.CalibrationReport` is the
+    richer view of the same run and is what a person reads.  This is the
+    machine-readable one: the study driver ranks trials on ``final_euclid``
+    and the phase tabs write these keys straight into their run metadata,
+    so the names here are a contract with those callers.
+
+    Reprojection residuals are separated from any lockbox priors first, so
+    the two error figures stay comparable with each other and with the
+    initial error logged by the solve.
+
+    :param optimisation: the scipy style result the solver returned
+    :param init_params: the parameters the solve started from
+    :param init_err: the residuals at ``init_params``
+    :param elapsed_sec: wall clock seconds the solve took
+    :param param_handler: the handler that defined the problem.  When it
+        exposes the per pose diagnostics filled in by ``calc_initial_params``
+        and ``find_and_exclude_transform_outliers``, the per pose breakdowns
+        are added; when it does not, those keys are simply absent.
+    :return: the statistics, keyed as described above
+    """
+    init_reprojection, _ = _split_residuals(init_err, param_handler)
+    init_euclid = float(np.mean(np.linalg.norm(
+        np.reshape(init_reprojection, (-1, 2)), axis=1)))
+    final_reprojection, final_priors = _split_residuals(
+        optimisation.fun, param_handler)
+    final_euclid = float(np.mean(np.linalg.norm(
+        np.reshape(final_reprojection, (-1, 2)), axis=1)))
+
+    stats = {
+        "initial_euclid": init_euclid,
+        "final_euclid": final_euclid,
+        "param_count": int(np.size(init_params)),
+        "observation_count": int(np.size(final_reprojection) // 2),
+        "prior_residual_count": (
+            int(np.size(final_priors)) if final_priors is not None else 0),
+        "elapsed_sec": float(elapsed_sec),
+        "status": _stat_int(getattr(optimisation, "status", None)),
+        "success": bool(getattr(optimisation, "success", False)),
+        "message": str(getattr(optimisation, "message", "")),
+        "nfev": _stat_int(getattr(optimisation, "nfev", None)),
+    }
+
+    if param_handler is None:
+        return stats
+
+    # These are indexed by "global_im_num", a pose index shared across every
+    # camera in the rig, so there is no one camera to attribute them to and
+    # the pose index is the identifier.
+    per_pose_error = getattr(param_handler, "initial_per_im_error", None)
+    if per_pose_error is not None:
+        stats["per_pose_initial_error_px"] = [
+            {"pose": int(i), "initial_error_px": float(v)}
+            for i, v in enumerate(np.asarray(per_pose_error, dtype=float))
+        ]
+    for key, attr in (
+            ("outlier_poses_before_rejection",
+             "missing_poses_before_outlier_rejection"),
+            ("outlier_poses_after_rejection",
+             "missing_poses_after_outlier_rejection"),
+    ):
+        missing = getattr(param_handler, attr, None)
+        if missing is not None:
+            stats[key] = [int(i) for i in np.where(np.asarray(missing))[0]]
+
+    return stats
+
+
+def _stat_int(value) -> int:
+    """A solver field as an int, with the 0 the metadata writers expect."""
+    return 0 if value is None else int(value)
+
+
+def _solve_bundle_adjustment(
+        param_handler: TemplateBundleHandler,
+        threads: int = 1,
+) -> tuple[OptimizeResult, CameraSet, dict]:
+    """
+    The solve behind both public entry points.
+
+    Kept as one path so a run reports the same numbers whether it was
+    started from the library or from a GUI phase: the two wrappers differ
+    only in how much of the result they hand back.
 
     :param param_handler: The parameter handler that represents the optimisation
-    :return: The output of the calibration and the argmin defined CameraSet
+    :param threads: evaluation threads for the compiled kernels
+    :return: the optimisation, the argmin defined CameraSet, and the statistics
     """
     logger.info("Making optimisation problem")
     loss_fn, bundle_jac, init_params = make_optimisation_function(
@@ -251,5 +339,42 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     camset = param_handler.get_camset(optimisation.x)
     camset.set_calibration_history(optimisation, param_handler, report=report)
 
+    stats = get_bundle_adjustment_stats(
+        optimisation, init_params, init_err, end - start,
+        param_handler=param_handler,
+    )
+    return optimisation, camset, stats
+
+
+def run_bundle_adjustment(param_handler: TemplateBundleHandler,
+                          threads: int = 1) -> tuple[OptimizeResult, CameraSet]:
+    """
+    A function that takes an abstract parameter handler, turns it into a cost function, and returns the
+    optimisation results and the camera set that minimises the optimisation problem defined by the parameter handler.
+
+    :param param_handler: The parameter handler that represents the optimisation
+    :return: The output of the calibration and the argmin defined CameraSet
+    """
+    optimisation, camset, _stats = _solve_bundle_adjustment(
+        param_handler, threads)
     return optimisation, camset
+
+
+def run_bundle_adjustment_with_stats(
+        param_handler: TemplateBundleHandler,
+        threads: int = 1,
+) -> tuple[OptimizeResult, CameraSet, dict]:
+    """
+    :func:`run_bundle_adjustment`, and the run statistics alongside it.
+
+    The GUI phases and the optimisation study need the solve's numbers as
+    data rather than as a logged report, and they need them without solving
+    twice.
+
+    :param param_handler: The parameter handler that represents the optimisation
+    :param threads: evaluation threads for the compiled kernels
+    :return: the optimisation, the argmin defined CameraSet, and the
+        statistics described in :func:`get_bundle_adjustment_stats`
+    """
+    return _solve_bundle_adjustment(param_handler, threads)
 

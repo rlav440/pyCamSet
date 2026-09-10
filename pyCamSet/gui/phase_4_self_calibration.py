@@ -66,17 +66,21 @@ from pyCamSet.gui.assess_calibration import (
     select_latest_visualisation_run,
 )
 
+_LOG = logging.getLogger(__name__)
+
 try:
     from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment_with_stats
     from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
     from pyCamSet.utils.saving import load_CameraSet
 
     _PYCAMSET_OK = True
-except ImportError:
+except ImportError as exc:
     run_bundle_adjustment_with_stats = None
     SelfBundleHandler = None
     load_CameraSet = None
     _PYCAMSET_OK = False
+    # See the note on the same guard in phase_3_bundle_adjustment.
+    _LOG.warning("Phase 4 optimisation backend unavailable: %s", exc)
 
 _TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
 

@@ -16,8 +16,18 @@ import cv2
 import numpy as np
 import pytest
 
-import aruco2
+aruco2 = pytest.importorskip("aruco2")
 
+from pyCamSet.calibration_targets.backend_registry import (
+    ARUCO1_DICT_NAMES,
+    ARUCO2_DICT_NAMES,
+    MARKER_BACKEND_LABELS,
+    SUPPORTED_MARKER_BACKENDS,
+    available_marker_backends,
+    dict_names_for_backend,
+    marker_backend_available,
+    validate_marker_backend,
+)
 from pyCamSet.calibration_targets.target_charuco import ChArUco
 from pyCamSet.calibration_targets.target_Ccube import Ccube
 from pyCamSet.calibration_targets.charuco_detection import (
@@ -30,6 +40,69 @@ def _count(det):
     if det.keys is None or len(det.keys) == 0:
         return 0
     return len(det.keys)
+
+
+def test_headless_backend_registry_has_stable_backend_contract():
+    assert SUPPORTED_MARKER_BACKENDS == ("aruco1", "aruco2")
+    assert MARKER_BACKEND_LABELS["ArUco 1 (OpenCV)"] == "aruco1"
+    assert MARKER_BACKEND_LABELS["ArUco 2 (aruco2)"] == "aruco2"
+    assert dict_names_for_backend("aruco1") == ARUCO1_DICT_NAMES
+    assert dict_names_for_backend("aruco2") == ARUCO2_DICT_NAMES
+    assert len(ARUCO1_DICT_NAMES) == 22
+    assert ARUCO2_DICT_NAMES[-2:] == ["DICT_ALVAR_5X5_256", "DICT_ALVAR_7X7_1000"]
+
+
+def test_headless_backend_registry_validates_and_reports_optional_backend():
+    assert validate_marker_backend("aruco1") == "aruco1"
+    assert validate_marker_backend("aruco2") == "aruco2"
+    assert marker_backend_available("aruco1") is True
+    assert marker_backend_available("aruco2") is True
+    assert available_marker_backends() == ("aruco1", "aruco2")
+    with pytest.raises(ValueError, match="marker_backend"):
+        validate_marker_backend("aruco3")
+    with pytest.raises(ValueError, match="marker_backend"):
+        dict_names_for_backend("aruco3")
+
+
+def test_headless_backend_registry_checks_real_optional_import(monkeypatch):
+    import pyCamSet.calibration_targets.backend_registry as registry
+
+    def broken_import(_name):
+        raise OSError("missing native extension")
+
+    monkeypatch.setattr(registry.importlib, "import_module", broken_import)
+    assert registry.marker_backend_available("aruco2") is False
+    assert registry.available_marker_backends() == ("aruco1",)
+    assert registry.marker_backend_availability_text("aruco2") == (
+        "aruco2: not installed - pip install aruco2"
+    )
+
+
+def test_dictionary_resolution_validates_backend_before_dictionary_type():
+    from pyCamSet.calibration_targets.aruco2_detection import resolve_dictionary
+
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
+    with pytest.raises(ValueError, match="marker_backend"):
+        resolve_dictionary(dictionary, marker_backend="aruco3")
+
+
+def test_aruco2_detection_rejects_non_uint8_values_outside_byte_range():
+    from pyCamSet.calibration_targets.aruco2_detection import detect_markers
+
+    with pytest.raises(ValueError, match="uint8"):
+        detect_markers(np.full((8, 8), 256.0, dtype=np.float64), 0)
+
+
+def test_interpolation_skips_malformed_marker_quads():
+    from pyCamSet.calibration_targets.aruco2_detection import interpolate_board_corners
+
+    board = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0).board
+    ids, points = interpolate_board_corners(
+        np.zeros((100, 100), dtype=np.uint8),
+        board,
+        [(0, np.array([[10, 10], [30, 10], [20, 30]], dtype=np.float32))],
+    )
+    assert ids is None and points is None
 
 
 def test_default_backend_is_aruco1_exactly():

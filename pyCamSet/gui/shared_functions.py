@@ -30,6 +30,7 @@ import copy
 import io
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -889,6 +890,182 @@ def build_target(
             detection_options=charuco_detection_options,
         )
     raise ValueError(f"Unknown target type: {target_type!r}")
+
+
+# ---------------------------------------------------------------------------
+# Matching a phase's target to the run whose detections it reuses
+# ---------------------------------------------------------------------------
+
+# The target fields that decide the point layout, per target type.  A
+# detection stores its keys as indices into that layout, so detections made
+# against a different one address points that do not exist: reusing them
+# fails deep in the target as "index 80 is out of bounds for axis 1 with
+# size 25" rather than as anything about targets.
+#
+# Fields that only affect how markers are read -- the backend, the ArUco
+# dictionary, the detector tuning -- are deliberately absent.  They change
+# which points are found, not what a found key means.
+TARGET_IDENTITY_KEYS: dict[str, tuple[str, ...]] = {
+    "Ccube": ("n_points", "length", "border_fraction"),
+    "ChArUco": ("n_points", "length", "marker_fraction"),
+    "PuzzleBoard": (
+        "num_squares_x", "num_squares_y", "square_size",
+        "start_x", "start_y", "paper_width", "paper_height", "min_width",
+    ),
+    "PuzzleBoardCube": ("pbc_n_points", "pbc_length", "min_width"),
+}
+
+# What each identity key is called in the interface, for the message a
+# person reads when the two disagree.
+TARGET_KEY_LABELS: dict[str, str] = {
+    "n_points": "n_points",
+    "length": "length",
+    "border_fraction": "border fraction",
+    "marker_fraction": "marker fraction",
+    "num_squares_x": "squares across",
+    "num_squares_y": "squares down",
+    "square_size": "square size",
+    "start_x": "start x",
+    "start_y": "start y",
+    "paper_width": "paper width",
+    "paper_height": "paper height",
+    "min_width": "min width",
+    "pbc_n_points": "n_points",
+    "pbc_length": "length",
+}
+
+
+def target_params_of_run(run: dict | None) -> dict:
+    """
+    The target settings a saved run was produced with.
+
+    :param run: a run metadata dictionary, or None
+    :return: the run's parameters, empty when there is no run
+    """
+    if not run:
+        return {}
+    return dict(run.get("params") or {})
+
+
+def _same_value(left: Any, right: Any) -> bool:
+    """Whether two target settings agree, comparing numbers as numbers."""
+    try:
+        return math.isclose(float(left), float(right), rel_tol=1e-9, abs_tol=1e-12)
+    except (TypeError, ValueError):
+        return str(left) == str(right)
+
+
+def describe_target_mismatch(
+        run_params: dict, current_params: dict) -> list[str]:
+    """
+    Where a saved run's target and the current settings disagree.
+
+    Only the fields that decide the point layout are compared, and only the
+    ones that matter for the target type in question.
+
+    :param run_params: the parameters of the run supplying the detections
+    :param current_params: the target settings a phase is about to use
+    :return: one sentence per disagreement, empty when they match
+    """
+    if not run_params or not current_params:
+        return []
+
+    run_type = str(run_params.get("target_type", "") or "")
+    current_type = str(current_params.get("target_type", "") or "")
+    if not run_type or not current_type:
+        return []
+    if run_type != current_type:
+        return [f"target type: the run used {run_type}, "
+                f"these settings say {current_type}"]
+
+    differences = []
+    for key in TARGET_IDENTITY_KEYS.get(run_type, ()):
+        if key not in run_params or key not in current_params:
+            continue
+        if not _same_value(run_params[key], current_params[key]):
+            label = TARGET_KEY_LABELS.get(key, key)
+            differences.append(
+                f"{label}: the run used {run_params[key]}, "
+                f"these settings say {current_params[key]}")
+    return differences
+
+
+def target_mismatch_message(run_id: str, differences: list[str]) -> str:
+    """
+    The dialog text for a target that does not match its detections.
+
+    :param run_id: the run supplying the detections
+    :param differences: the output of :func:`describe_target_mismatch`
+    :return: the message to show
+    """
+    listed = "\n".join(f"  - {d}" for d in differences)
+    return (
+        f"The target settings do not match run {run_id}, which produced the "
+        f"detections this phase would use:\n\n{listed}\n\n"
+        f"Detections are stored as indices into the target's points, so a "
+        f"target of a different size cannot read them. Either set the target "
+        f"to match the run, or choose a run detected with this target."
+    )
+
+
+def apply_target_params_to_widgets(tab: Any, params: dict) -> None:
+    """
+    Set a phase tab's target controls from a saved run's parameters.
+
+    Phases 2 and 3 build their own target and pair it with detections made
+    by an earlier run, so the default that is right almost always is the
+    one the detections were made with.  Only the fields present in
+    ``params`` are touched.
+
+    Spin boxes clamp to their own ranges, so a value the interface cannot
+    represent is silently narrowed here; :func:`describe_target_mismatch`
+    is what catches that before it reaches the solver.
+
+    :param tab: the phase tab, holding the target widgets
+    :param params: the run parameters to adopt
+    """
+    if not params:
+        return
+
+    def _spin(name: str, key: str, cast=int) -> None:
+        widget = getattr(tab, name, None)
+        if widget is not None and params.get(key) is not None:
+            widget.setValue(cast(params[key]))
+
+    def _text(name: str, key: str) -> None:
+        widget = getattr(tab, name, None)
+        if widget is not None and params.get(key) is not None:
+            widget.setText(f"{float(params[key]):g}")
+
+    target_type = params.get("target_type")
+    combo = getattr(tab, "_target_combo", None)
+    if combo is not None and target_type:
+        combo.setCurrentText(str(target_type))
+
+    _spin("_npts_spin", "n_points")
+    _text("_length_edit", "length")
+    _spin("_border_spin", "border_fraction", float)
+    _spin("_marker_spin", "marker_fraction", float)
+
+    _spin("_pb_x_spin", "num_squares_x")
+    _spin("_pb_y_spin", "num_squares_y")
+    _text("_pb_square_edit", "square_size")
+    _spin("_pb_start_x_spin", "start_x")
+    _spin("_pb_start_y_spin", "start_y")
+    _text("_pb_paper_w_edit", "paper_width")
+    _text("_pb_paper_h_edit", "paper_height")
+    _spin("_pb_min_width_spin", "min_width")
+
+    _spin("_pbc_size_spin", "pbc_n_points")
+    _text("_pbc_square_edit", "pbc_length")
+    _spin("_pbc_min_width_spin", "min_width")
+
+    backend = params.get("marker_backend")
+    backend_combo = getattr(tab, "_marker_backend_combo", None)
+    if backend_combo is not None and backend:
+        index = backend_combo.findData(str(backend))
+        if index >= 0:
+            backend_combo.setCurrentIndex(index)
 
 
 def extract_detection_and_cam_res(payload):

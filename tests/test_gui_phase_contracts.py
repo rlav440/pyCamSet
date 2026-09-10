@@ -390,3 +390,247 @@ def test_the_stats_agree_with_the_calibration_report(short_charuco_handler):
     assert stats["param_count"] == report.n_parameters
     assert stats["observation_count"] == report.n_control_points
     assert stats["nfev"] == report.n_function_evals
+
+
+# --------------------------------------------------------------------------
+# The target a phase uses, against the run whose detections it reads
+# --------------------------------------------------------------------------
+#
+# Phases 2 and 3 build their own target from their own fields and pair it
+# with detections made by an earlier Phase 1 run.  Nothing tied the two
+# together, so selecting a run detected with a different target produced
+#
+#     IndexError: index 80 is out of bounds for axis 1 with size 25
+#
+# from inside the target: a detection stores its keys as indices into the
+# target's points, and key 80 is real in an 11x11 face and absent from a
+# 5x5 one.  The tabs now adopt the run's target when the run changes, and
+# refuse the run when the two still disagree.
+
+from pyCamSet.gui.shared_functions import (  # noqa: E402
+    TARGET_IDENTITY_KEYS,
+    apply_target_params_to_widgets,
+    describe_target_mismatch,
+    target_mismatch_message,
+    target_params_of_run,
+)
+
+# The two Ccube targets behind the reported failure.
+CCUBE_12 = {"target_type": "Ccube", "n_points": 12, "length": 80.0,
+            "border_fraction": 0.1, "marker_backend": "aruco1"}
+CCUBE_6 = {"target_type": "Ccube", "n_points": 6, "length": 30.0,
+           "border_fraction": 0.1, "marker_backend": "aruco1"}
+
+
+def _run(params, run_id="20260910_180530_fe4431"):
+    return {"run_id": run_id, "phase": "phase1", "params": dict(params)}
+
+
+def test_a_run_and_matching_settings_do_not_disagree():
+    assert describe_target_mismatch(CCUBE_12, dict(CCUBE_12)) == []
+
+
+def test_the_reported_mismatch_is_caught():
+    """The exact case: n_points=12 detections against an n_points=6 target."""
+    differences = describe_target_mismatch(CCUBE_12, CCUBE_6)
+
+    assert len(differences) == 2
+    assert any("n_points" in d and "12" in d and "6" in d for d in differences)
+    assert any("length" in d and "80" in d and "30" in d for d in differences)
+
+
+def test_a_different_target_type_is_reported_on_its_own():
+    """No point listing field differences between incomparable targets."""
+    differences = describe_target_mismatch(
+        CCUBE_12, {**CCUBE_12, "target_type": "ChArUco"})
+
+    assert len(differences) == 1
+    assert "target type" in differences[0]
+
+
+def test_detection_only_settings_are_not_a_mismatch():
+    """The backend changes which points are found, not what a key means."""
+    other_backend = {**CCUBE_12, "marker_backend": "aruco2"}
+
+    assert describe_target_mismatch(CCUBE_12, other_backend) == []
+
+
+def test_numbers_are_compared_as_numbers():
+    """Run metadata round-trips through JSON, so 80 may arrive as "80.0"."""
+    as_text = {**CCUBE_12, "n_points": "12", "length": "80"}
+
+    assert describe_target_mismatch(CCUBE_12, as_text) == []
+
+
+def test_only_the_fields_that_matter_for_the_type_are_compared():
+    """Phase 1 records every field, whichever target was actually used."""
+    # PuzzleBoard fields differ, but a Ccube run does not use them
+    noisy = {**CCUBE_12, "num_squares_x": 999, "paper_width": 1.0}
+
+    assert describe_target_mismatch(CCUBE_12, noisy) == []
+    assert "num_squares_x" not in TARGET_IDENTITY_KEYS["Ccube"]
+
+
+def test_a_missing_run_is_not_a_mismatch():
+    """A pickle override or a first run has nothing to compare against."""
+    assert describe_target_mismatch({}, CCUBE_6) == []
+    assert describe_target_mismatch(CCUBE_12, {}) == []
+    assert target_params_of_run(None) == {}
+    assert target_params_of_run({}) == {}
+
+
+def test_the_run_parameters_come_off_the_run():
+    assert target_params_of_run(_run(CCUBE_12)) == CCUBE_12
+
+
+def test_the_message_names_the_run_and_every_difference():
+    differences = describe_target_mismatch(CCUBE_12, CCUBE_6)
+
+    message = target_mismatch_message("20260910_180530_fe4431", differences)
+
+    assert "20260910_180530_fe4431" in message
+    for difference in differences:
+        assert difference in message
+    assert "choose a run detected with this target" in message
+
+
+# --- adopting a run's target -----------------------------------------------
+
+
+class _Spin:
+    def __init__(self, value=0, lo=None, hi=None):
+        self.value_ = value
+        self._lo, self._hi = lo, hi
+
+    def setValue(self, value):
+        if self._lo is not None:
+            value = max(self._lo, min(self._hi, value))
+        self.value_ = value
+
+
+class _Edit:
+    def __init__(self, text=""):
+        self.text_ = text
+
+    def setText(self, text):
+        self.text_ = text
+
+
+class _Combo:
+    def __init__(self, text="", data=()):
+        self.text_ = text
+        self._data = list(data)
+        self.index_ = -1
+
+    def setCurrentText(self, text):
+        self.text_ = text
+
+    def findData(self, value):
+        return self._data.index(value) if value in self._data else -1
+
+    def setCurrentIndex(self, index):
+        self.index_ = index
+
+
+class _FakeTab:
+    """The target widgets of a phase tab, without Qt.
+
+    Same attribute names as Phases 2 and 3, which are identical to each
+    other -- that is what lets one helper serve both.
+    """
+
+    def __init__(self):
+        self._target_combo = _Combo("Ccube")
+        self._npts_spin = _Spin(6, 2, 30)
+        self._length_edit = _Edit("30.0")
+        self._border_spin = _Spin(0.1)
+        self._marker_spin = _Spin(0.8)
+        self._marker_backend_combo = _Combo("", ["aruco1", "aruco2"])
+        self._pb_x_spin = _Spin(105)
+        self._pb_y_spin = _Spin(148)
+        self._pb_square_edit = _Edit("2.0")
+        self._pbc_size_spin = _Spin(20)
+        self._pbc_square_edit = _Edit("200.0")
+
+
+def test_adopting_a_run_sets_the_target_to_match_it():
+    tab = _FakeTab()
+
+    apply_target_params_to_widgets(tab, CCUBE_12)
+
+    assert tab._target_combo.text_ == "Ccube"
+    assert tab._npts_spin.value_ == 12
+    assert tab._length_edit.text_ == "80"
+    assert describe_target_mismatch(
+        CCUBE_12,
+        {"target_type": tab._target_combo.text_,
+         "n_points": tab._npts_spin.value_,
+         "length": tab._length_edit.text_,
+         "border_fraction": tab._border_spin.value_},
+    ) == []
+
+
+def test_adopting_selects_the_marker_backend_by_value():
+    tab = _FakeTab()
+
+    apply_target_params_to_widgets(tab, {**CCUBE_12, "marker_backend": "aruco2"})
+
+    assert tab._marker_backend_combo.index_ == 1
+
+
+def test_adopting_nothing_changes_nothing():
+    tab = _FakeTab()
+
+    apply_target_params_to_widgets(tab, {})
+
+    assert tab._npts_spin.value_ == 6
+    assert tab._length_edit.text_ == "30.0"
+
+
+def test_adopting_ignores_widgets_a_tab_does_not_have():
+    """Not every tab carries every target's fields."""
+    class _Sparse:
+        def __init__(self):
+            self._npts_spin = _Spin(6, 2, 30)
+
+    tab = _Sparse()
+    apply_target_params_to_widgets(tab, CCUBE_12)
+
+    assert tab._npts_spin.value_ == 12
+
+
+def test_a_value_the_interface_cannot_hold_is_still_caught():
+    """Spin boxes clamp silently; the mismatch check is the backstop."""
+    tab = _FakeTab()  # n_points range is 2..30
+
+    apply_target_params_to_widgets(tab, {**CCUBE_12, "n_points": 99})
+
+    assert tab._npts_spin.value_ == 30
+    assert describe_target_mismatch(
+        {**CCUBE_12, "n_points": 99},
+        {"target_type": "Ccube", "n_points": tab._npts_spin.value_,
+         "length": 80.0, "border_fraction": 0.1},
+    ) != []
+
+
+@pytest.mark.data
+def test_the_mismatch_is_exactly_what_breaks_the_solve():
+    """Ties the check to the failure it stands in for.
+
+    The two targets' point layouts differ, so a key valid in one indexes
+    off the end of the other -- which is the IndexError the guard exists
+    to pre-empt.
+    """
+    from pyCamSet import Ccube
+
+    big = Ccube(n_points=12, length=80.0, border_fraction=0.1)
+    small = Ccube(n_points=6, length=30.0, border_fraction=0.1)
+
+    assert big.point_local.shape[1] == 121   # 11 x 11 per face
+    assert small.point_local.shape[1] == 25  # 5 x 5 per face
+
+    # a key the big target produces, indexed into the small one
+    with pytest.raises(IndexError):
+        small.point_local[(np.array([0]), np.array([80]))]
+
+    assert describe_target_mismatch(CCUBE_12, CCUBE_6) != []

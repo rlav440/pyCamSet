@@ -65,6 +65,10 @@ from pyCamSet.gui.shared_functions import (
     ensure_directory,
     render_predecessor_chain_section,
     resolve_phase1_pickle_artifact,
+    apply_target_params_to_widgets,
+    describe_target_mismatch,
+    target_mismatch_message,
+    target_params_of_run,
     resolve_phase2_camset_artifact,
     resolve_phase3_camset_artifact,
     path_exists,
@@ -121,6 +125,7 @@ class Phase3Tab(QWidget):
         self._diagnostics_tab: Optional["Phase3DiagnosticsTab"] = None
         self._worker: Optional[PhaseWorker] = None
         self._preferred_phase2_run_id: Optional[str] = None
+        self._adopted_target_run_id: Optional[str] = None
         self._preferred_phase2_camset_path: Optional[str] = None
         self._edited_lockbox_camset_path: Optional[str] = None
         self._edited_lockbox_metadata_path: Optional[str] = None
@@ -957,6 +962,20 @@ class Phase3Tab(QWidget):
         p = str(resolved) if resolved is not None else (run.get("artifacts") or {}).get("initial_camset")
         mode = "selected" if self._preferred_phase2_run_id else "auto"
         self._src_lbl.setText(f"Inputs: {mode} Phase 2 {rid} + linked Phase 1 {phase1_id} -> {p or 'missing camset artifact'}")
+        self._adopt_target_from_phase1_run(self._load_phase1_run_for_phase2(run))
+
+    def _adopt_target_from_phase1_run(self, run: Optional[dict]) -> None:
+        """Match the target to the run whose detections Phase 3 will read.
+
+        Phase 3 chooses a Phase 2 run; the detections come from the Phase 1
+        run linked to it.  Only applied when that resolved run changes, so a
+        target edited after choosing a run survives the next refresh.
+        """
+        run_id = (run or {}).get("run_id")
+        if run_id is None or run_id == self._adopted_target_run_id:
+            return
+        self._adopted_target_run_id = run_id
+        apply_target_params_to_widgets(self, target_params_of_run(run))
 
     def _load_phase2_run(self) -> Optional[dict]:
         runs = self._workspace_mgr.load_runs("phase2")
@@ -1030,6 +1049,19 @@ class Phase3Tab(QWidget):
         if phase1_run is None:
             if self._info_cb.isChecked():
                 QMessageBox.information(self, "No Phase 1 run", "No Phase 1 run found for detections.")
+            return
+
+        # The detections index into the target's points, so a target of a
+        # different size cannot read them.  Caught here, where the two can
+        # still be named, rather than as an IndexError inside the target.
+        differences = describe_target_mismatch(
+            target_params_of_run(phase1_run), params)
+        if differences:
+            QMessageBox.critical(
+                self, "Target does not match the detections",
+                target_mismatch_message(
+                    str(phase1_run.get("run_id", "unknown")), differences),
+            )
             return
 
         selected_cameras = list(

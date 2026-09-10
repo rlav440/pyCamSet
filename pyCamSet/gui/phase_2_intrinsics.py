@@ -66,6 +66,10 @@ from pyCamSet.gui.shared_functions import (
     path_exists,
     render_predecessor_chain_section,
     resolve_phase1_pickle_artifact,
+    apply_target_params_to_widgets,
+    describe_target_mismatch,
+    target_mismatch_message,
+    target_params_of_run,
     resolve_phase2_camset_artifact,
 )
 
@@ -270,6 +274,7 @@ class Phase2Tab(QWidget):
         self._workspace_mgr = workspace_mgr
         self._diagnostics_tab: Optional["Phase2DiagnosticsTab"] = None
         self._worker: Optional[PhaseWorker] = None
+        self._adopted_target_run_id: Optional[str] = None
         self._build_ui(terminal_cb)
         self._refresh_phase1_sources()
 
@@ -768,6 +773,19 @@ class Phase2Tab(QWidget):
 
         return runs[-1]
 
+    def _adopt_target_from_phase1_run(self, run: Optional[dict]) -> None:
+        """Match the target to the run whose detections Phase 2 will read.
+
+        Only when the resolved run actually changes, so that a target
+        deliberately edited after choosing a run is not overwritten on the
+        next refresh.
+        """
+        run_id = (run or {}).get("run_id")
+        if run_id is None or run_id == self._adopted_target_run_id:
+            return
+        self._adopted_target_run_id = run_id
+        apply_target_params_to_widgets(self, target_params_of_run(run))
+
     def _update_detection_source_label(self) -> None:
         override = self._det_pickle_edit.text().strip() if hasattr(self, "_det_pickle_edit") else ""
         if override:
@@ -776,6 +794,7 @@ class Phase2Tab(QWidget):
             return
 
         run = self._load_phase1_run()
+        self._adopt_target_from_phase1_run(run)
         ws = self._workspace_mgr.workspace_path
         if run is None or ws is None:
             self._phase1_lbl.setText("Detection source: auto (no Phase 1 run found)")
@@ -824,6 +843,21 @@ class Phase2Tab(QWidget):
         if phase1_run is None and override_pickle is None:
             QMessageBox.information(self, "No Phase 1 run", "Run Phase 1 first or choose a detection pickle override.")
             return
+
+        # The detections index into the target's points, so a target of a
+        # different size cannot read them.  Caught here, where the two can
+        # still be named, rather than as an IndexError inside the target.
+        if override_pickle is None:
+            differences = describe_target_mismatch(
+                target_params_of_run(phase1_run), params)
+            if differences:
+                QMessageBox.critical(
+                    self, "Target does not match the detections",
+                    target_mismatch_message(
+                        str((phase1_run or {}).get("run_id", "unknown")),
+                        differences),
+                )
+                return
 
         selected_cameras = []
         if phase1_run is not None:

@@ -189,14 +189,15 @@ def run_initial_calibration(detection: TargetDetection,
     return cams, poses, per_im
 
 
-def outlier_rejection(results, params) -> tuple[TargetDetection | None, bool]:
+def outlier_rejection(results, params, draw: bool = True) -> tuple[TargetDetection | None, bool]:
     """
     Takes a set of results from the optimisation and performs outlier rejection on them.
     Will identify which images are outliers, raise a warning, and return a detection set without this data.
 
-    :param results:
-    :param params:
-    :return: A target detection without the outliers.
+    :param results: the per detection residuals of the optimisation
+    :param params: the parameter handler the residuals came from
+    :param draw: whether to show the per image error boxplot
+    :return: A target detection without the outliers, and whether any were found.
     """
     # outliers = mad_outlier_detection(results)
 
@@ -209,15 +210,15 @@ def outlier_rejection(results, params) -> tuple[TargetDetection | None, bool]:
     per_im_outliers = mad_outlier_detection([np.mean(datum) for datum in d_list if datum],
                                             draw=False,
                                             out_thresh=5)
-    if per_im_outliers is not None:
+    # Only draw when someone is there to look: plt.show() from a batch run or
+    # a test is at best wasted work and at worst a blocking window.
+    if draw:
         plt.boxplot(d_list)
         plt.ylabel("Average Pixels Reprojection error")
-        plt.title(f"Images {list([per_im_outliers][0])} are likely outliers")
-        plt.show()
-    else:
-        plt.boxplot(d_list)
-        plt.ylabel("Average Pixels Reprojection error")
-        plt.title("Reprojection error per image")
+        if per_im_outliers is not None:
+            plt.title(f"Images {list([per_im_outliers][0])} are likely outliers")
+        else:
+            plt.title("Reprojection error per image")
         plt.show()
 
     if per_im_outliers is None:
@@ -313,8 +314,6 @@ def detect_datapoints_in_imfile(
     if not (f_loc / cache_name).exists() or not caching:
         logging.info('Not caching, starting detection')
         detected_sub_folders = get_subfolder_names(f_loc, return_full_path=True)
-
-        print(multiprocessing.current_process().name)
 
         if not detected_sub_folders:
             raise ValueError(f'no subfolders were found in {f_loc}')

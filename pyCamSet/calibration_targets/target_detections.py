@@ -261,8 +261,16 @@ class TargetDetection:
                 observation = np.concatenate(
                     [np.ones((detection.data_len, 2))*[ind, im_num], keys, detection.image_points]
                     , axis=1)
-            except:
-                print(detection.image_points)
+            except ValueError as err:
+                # Previously this printed the points and fell through to append
+                # an `observation` that was never assigned, so a shape mismatch
+                # surfaced as UnboundLocalError with the real cause on stdout.
+                raise ValueError(
+                    f"Could not add the detection from camera {cam_name} image "
+                    f"{im_num}: {detection.data_len} keys of shape {keys.shape} "
+                    f"and points of shape {np.shape(detection.image_points)} do "
+                    f"not form a row block ({err})."
+                ) from err
             self._update_buffer.append(observation)
 
 

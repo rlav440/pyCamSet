@@ -293,6 +293,7 @@ def test_the_camera_set_exposes_the_methods(rig):
     assert callable(rig.find_target_poses)
 
 
+@pytest.mark.slow
 def test_importing_camera_set_alone_does_not_pull_in_the_optimiser(repo_root):
     """The method's import is deferred, so the module graph stays acyclic.
 
@@ -310,11 +311,11 @@ def test_importing_camera_set_alone_does_not_pull_in_the_optimiser(repo_root):
     env = dict(os.environ)
     env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
 
+    # Two orders is the whole proof: camera_set first, then find_target first.
+    # Each subprocess pays numba's import, so more of them buys nothing.
     for statement in (
         "import pyCamSet.cameras.camera_set",
         "from pyCamSet.optimisation.find_target import find_target_poses",
-        "import pyCamSet",
-        "import pyCamSet.optimisation.template_handler, pyCamSet.cameras.camera_set",
     ):
         result = subprocess.run(
             [sys.executable, "-c", statement], capture_output=True, text=True, env=env

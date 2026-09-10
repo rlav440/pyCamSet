@@ -15,7 +15,7 @@ import dill
 import os
 import signal
 
-from pyCamSet.utils.general_utils import glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
+from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.calibration_targets.target_detections import TargetDetection, ImageDetection
 
@@ -245,15 +245,18 @@ class AbstractTarget(ABC):
 
         cyclic_outlier_detection = True
         num_loops = 0
-        print("Begining outlier detection")
+        logging.info("Begining outlier detection")
         while cyclic_outlier_detection and num_loops < 10:
             ans = mad_outlier_detection([np.linalg.norm(p[:3,3] - mloc) for p in poses], out_thresh=5)
             inds = np.arange(len(p_detected))[p_detected][ans]
             if ans is not None:
                 user_in = "g"
                 while not (user_in == 'y' or user_in == 'n'):
-                    print(f"Outliers detected in iteration {num_loops}.")
-                    user_in = input("Do you wish to remove these outliers?: \n y/n: ")
+                    user_in = ask_yes_no(
+                        f"Outliers detected in iteration {num_loops}.",
+                        "Do you wish to remove these outliers?",
+                        default='n',
+                    )
 
                 if user_in == 'y':
                     def del_list_numpy(l, id_to_del):
@@ -265,7 +268,7 @@ class AbstractTarget(ABC):
                 if user_in == 'n':
                     cyclic_outlier_detection = False
             else:
-                print(f"No outliers detected in iteration {num_loops}.")
+                logging.info(f"No outliers detected in iteration {num_loops}.")
                 cyclic_outlier_detection = False
             num_loops += 1
 

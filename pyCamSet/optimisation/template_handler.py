@@ -334,8 +334,11 @@ class TemplateBundleHandler:
             
             if condensed_outlier_inds is not None:
                 while not (user_in == 'y' or user_in == 'n'):
-                    print(f"Outliers detected in iteration {num_loops}.")
-                    user_in = input("Do you wish to remove these outlier poses: \n y/n: ")
+                    user_in = gu.ask_yes_no(
+                        f"Outliers detected in iteration {num_loops}.",
+                        "Do you wish to remove these outlier poses",
+                        default='n',
+                    )
                 if user_in == 'y':
                     # max_loc = np.argmax(per_im_error[outlier_inds])
                     self.missing_poses[outlier_inds] = True
@@ -572,97 +575,17 @@ def estimate_camera_relative_poses(
     Mat_ac_cost = np.array(Mat_ac_cost)
 
     check_for_target_misalignment(Mat_ac, ref_cam) #TODO, refactor this to a single summary.
-    ref_pose, try_graph = check_feasiblity_and_update_refpose(Mat_ac, ref_pose) 
-    try_graph = True
-    if try_graph:
-        return graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection, cost_mat=Mat_ac_cost)
-
-    
-    Mrt_ac = Mat_ac[:, ref_pose]
-    Mac_rt = np.array([np.linalg.inv(Mrt_c) for Mrt_c in Mrt_ac])
-
-    
-    Mat_rt_ac = Mac_rt[:, None, ...] @ Mat_ac
-    
-
-    # build the projection matrix as an input to the target.
-    dists = np.array([cam.distortion_coefs for cam in cams]).squeeze()
-    ints = np.array([cam.intrinsic for cam in cams])
-    proj = ints @ Mrt_ac[:, :3, :]
-
-    # run a bundle adjustment over the possible target positions.
-    ps = calibration_target.point_data.reshape((-1, 3)) #could the flattening be failing for things that aren't flat
-    target_shape = calibration_target.point_data.shape
-    dd = detection.return_flattened_keys(target_shape[:-1]).get_data() #maybe this isn't in order.
-
-    lookups =  []
-    for i in range(detection.max_ims):
-        lookups.append(dd[:,1] == i)
-
-    # cameras_converged = False
-    # while not cameras_converged:
-    
-    errors = []
-    for Mat_rt_c in Mat_rt_ac: #project the 
-        nanform = np.isnan(Mat_rt_c[:, 0,0])
-        # print(np.sum(nanform), 'nan poses')
-        # Mat_rt_c[nanform] = np.eye(4)#
-        for idn, wasnan in enumerate(nanform):
-            if idn==0 and wasnan:
-                raise ValueError("No pose in first image")
-            if wasnan:
-                Mat_rt_c[idn] = Mat_rt_c[idn - 1]
-
-
-        imlocs = np.array([gu.h_tform(ps,Mt_rt_c) for Mt_rt_c in Mat_rt_c]) 
-        try:
-            costs = ch.bundle_adjustment_costfn(
-                dd,
-                imlocs,
-                proj,
-                ints,
-                dists,           
-            )
-        except ZeroDivisionError:
-            costs = ch.numpy_bundle_adjustment_costfn(
-                dd,
-                imlocs,
-                proj,
-                ints,
-                dists,           
-            )
-
-        costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
-        im_costs = []
-        for l, wasnan in zip(lookups, nanform):
-            total_costs = np.sum(costs[l])
-            reasonable_bound = np.prod(costs[l].shape) * 1000 
-            # if total_costs > reasonable_bound: # or wasnan:
-            #     total_costs = np.nan
-            im_costs.append(total_costs)
-        errors.append(im_costs)
-
-    errors = np.array(errors)
-
-    estimate_locs = np.argmin(errors, axis=0)
-    Mat_rt = np.array([Mt_rt_ac[e] for e, Mt_rt_ac in zip(estimate_locs, Mat_rt_ac.transpose((1,0,2,3)))])
-
-    imlocs = np.array([gu.h_tform(ps,Mt_rt) for Mt_rt in Mat_rt]) 
-    costs = ch.bundle_adjustment_costfn(
-        dd,
-        imlocs,
-        proj,
-        ints,
-        dists,           
+    # try_graph was unconditionally overwritten to True immediately below
+    # this call, so the direct (non graph) estimate that followed had been
+    # unreachable; it is gone.  The flag is still returned because the
+    # function logs why it wants the graph method, but the graph method is
+    # what runs either way.
+    ref_pose, _ = check_feasiblity_and_update_refpose(Mat_ac, ref_pose)
+    return graph_estimate_initial_pose(
+        Mat_ac, cams, img_detections, ref_pose, calibration_target, detection,
+        cost_mat=Mat_ac_cost,
     )
-    costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
-    for l in lookups:
-        im_costs.append(np.sum(costs[l]))
 
-    init_per_im_reproj_err = np.array(im_costs)
-
-    Mat_rt[ref_pose] = np.eye(4)
-    return Mrt_ac, Mat_rt, init_per_im_reproj_err
 
 def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection, cost_mat=None):
 
@@ -733,7 +656,7 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
     dist_sums = np.sum(dist_vec[len(cams):, :], axis=1) # distance matrix is symmetric
     # pick pose as the pose with the lowest total distance to all neighbours.
     starting_seed = int(np.nanargmin(dist_sums) + len(cams)) #the pose with the lowest distance score
-    print(starting_seed)
+    logging.debug(f"graph pose seed: {starting_seed}")
     # starting_seed=50
     #use this to index the starting point
     # dist_vec = np.round(dist_vec[:, starting_seed], 0)

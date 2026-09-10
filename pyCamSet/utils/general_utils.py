@@ -1,6 +1,7 @@
 import functools
 import logging
 import math as m
+import sys
 import time
 from itertools import zip_longest, chain
 from pathlib import Path
@@ -17,6 +18,40 @@ from tqdm import tqdm
 from uniplot import histogram
 
 from scipy.spatial.transform import Rotation as R
+
+def ask_yes_no(context: str, question: str, default: str = 'n') -> str:
+    """
+    Asks a yes/no question, falling back to *default* when nobody can answer.
+
+    A bare input() call blocks forever when there is no terminal attached,
+    which turns an outlier detected during an automated run -- a test suite, a
+    CI job, a batch script -- into a hang that only ends at the timeout.  This
+    checks for an interactive stdin first and returns the default otherwise,
+    saying so in the log rather than silently.
+
+    :param context: what has been found, logged either way
+    :param question: the question to put to the user
+    :param default: the answer to assume when running unattended
+    :return: 'y' or 'n'
+    """
+    logging.info(context)
+    try:
+        interactive = sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError):  # closed or replaced stdin
+        interactive = False
+
+    if not interactive:
+        logging.warning(
+            f"{context} Not running interactively, so assuming '{default}'. "
+            f"Set the handler's 'outliers' option to 'y' or 'n' to choose."
+        )
+        return default
+
+    answer = ''
+    while answer not in ('y', 'n'):
+        answer = input(f"{question}: \n y/n: ").strip().lower()
+    return answer
+
 
 def list_dict_to_np_array(d) -> dict:
     if isinstance(d, dict):
@@ -111,14 +146,18 @@ def mad_outlier_detection(data: np.ndarray|list, out_thresh = 3, draw=True) -> n
     :param data: The data to process
     :param out_thresh: The outlier threshold to reject
     :param draw: Whether to draw the results
-    :return: A boolean array of the outliers.
+    :return: The indices of the outliers, or None when there are none.
     """
     n_mdn = np.median(data)
     n_mad = np.median(np.absolute(np.array(data) - n_mdn))
     outliers = np.abs(np.array(data) - n_mdn) / n_mad > out_thresh
 
     if np.any(outliers):
-        w_out = np.nonzero(outliers)
+        # [0] to unwrap np.nonzero's tuple into a plain index array.  Callers
+        # that index with the result tolerate either, but delete_row does not:
+        # handed the tuple it fell through to a broadcast comparison and
+        # deleted a single arbitrary row instead of the flagged images.
+        w_out = np.nonzero(outliers)[0]
         listout = functools.reduce(lambda x, y: x+y, [f" {w}" for w in w_out])
 
         logging.critical(f'found outliers in indicies:{listout}')

@@ -402,7 +402,7 @@ class SelfBundleHandler(TemplateBundleHandler):
         else:
             raise ValueError("The target.valid_map property either needs to be true, for all comparisons being valid, or a nx2 list of index pairs.")
         s = np.mean(ref_map/new_map)
-        print(f"Scale factor found {s}")
+        logging.info(f"Scale factor found {s}")
 
         new_points = s * point_estimate
         if np.isnan(s):
@@ -416,7 +416,6 @@ class SelfBundleHandler(TemplateBundleHandler):
             logging.critical("Failed to find an acceptable gauge transform, returning the identity")
             logging.critical(f"Gave error: {e}")
             update_tform = np.eye(4)
-            breakpoint()
 
         inv_update = np.linalg.inv(update_tform)
         # inv_update = np.eye(4)
@@ -477,7 +476,7 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         scale = 5
         descale = 1000//scale
-        print(f"found a mean difference of {np.mean(np.linalg.norm(diff[vm], axis=-1)):.2f} mm")
+        logging.info(f"found a mean difference of {np.mean(np.linalg.norm(diff[vm], axis=-1)):.2f} mm")
         s = pv.Plotter()
         s.title = "Target Self-calibration Results."
         s.add_arrows(

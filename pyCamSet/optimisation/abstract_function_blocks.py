@@ -431,7 +431,7 @@ class optimisation_function:
             + t(param_slicing) + t(mid_amble) + t(loss_calc) + t(postamble)
         str_fn = "\n".join(fn).replace("\t", "    ")
 
-        with open(write_file, 'w', encoding="utf-8") as f:
+        with open(write_file, 'w', encoding="utf-8", newline="\n") as f:
             f.write(str_fn)
         file_string = 'pyCamSet.optimisation.template_functions.'  + strings
 
@@ -645,7 +645,7 @@ class optimisation_function:
             
             un_string = [f.replace("\t", "    ") for f in fn]
 
-            with open(write_file, 'w', encoding="utf-8") as f:
+            with open(write_file, 'w', encoding="utf-8", newline="\n") as f:
                 f.writelines((un + "\n" for un in un_string))
 
             file_string = 'pyCamSet.optimisation.template_functions.'  + strings

@@ -191,9 +191,14 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     )
 
     init_err = loss_fn(init_params)
-    init_euclid = np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1))
+    # split before measuring: with a lockbox the residual vector carries
+    # prior terms after the reprojections, and averaging over both reports
+    # an initial error that is neither one nor the other.
+    init_reprojection, _ = _split_residuals(init_err, param_handler)
+    init_euclid = np.mean(np.linalg.norm(
+        np.reshape(init_reprojection, (-1, 2)), axis=1))
     logger.info(f'found {len(init_params)} parameters')
-    logger.info(f'found {len(init_err) // 2} control points')
+    logger.info(f'found {len(init_reprojection) // 2} control points')
     logger.info(f'Initial Euclidean error: {init_euclid:.2f} px')
 
     # raise ValueError
@@ -247,3 +252,4 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     camset.set_calibration_history(optimisation, param_handler, report=report)
 
     return optimisation, camset
+

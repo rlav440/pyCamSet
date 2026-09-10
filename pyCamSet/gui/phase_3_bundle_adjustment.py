@@ -72,6 +72,7 @@ from pyCamSet.gui.shared_functions import (
     resolve_phase2_camset_artifact,
     resolve_phase3_camset_artifact,
     path_exists,
+    show_tab,
     suppress_matplotlib_gui,
 )
 from pyCamSet.gui.assess_calibration import (
@@ -1337,7 +1338,7 @@ class Phase3Tab(QWidget):
     def _open_diagnostics(self) -> None:
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
-            self._notebook.setCurrentWidget(self._diagnostics_tab)
+            show_tab(self._notebook, self._diagnostics_tab)
 
     def _continue_to_phase4(self) -> None:
         runs = self._workspace_mgr.load_runs("phase3")
@@ -1392,7 +1393,7 @@ class Phase3Tab(QWidget):
         if self._diagnostics_tab is None:
             return
         self._diagnostics_tab.refresh()
-        self._notebook.setCurrentWidget(self._diagnostics_tab)
+        show_tab(self._notebook, self._diagnostics_tab)
         self._diagnostics_tab.visualise_from_primary()
 
     def _continue_to_next(self) -> None:

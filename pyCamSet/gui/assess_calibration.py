@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover
     visualise_calibration_open3d = None
     render_calibration_pyvista_png = None
 
-from pyCamSet.gui.viewer_process import spawn_viewer
+from pyCamSet.gui.viewer_process import run_viewer, spawn_viewer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -241,4 +241,14 @@ def launch_save_pyvista_png_for_run(run: dict, file_path: Path) -> tuple[bool, s
     if o_results is None:
         return False, "Loaded camset does not contain calibration optimisation results."
 
-    return render_calibration_pyvista_png(o_results, handler, output_path=str(file_path))
+    # Rendered out of process like everything else that touches VTK.
+    # off_screen=True still builds a vtkCocoaRenderWindow on macOS, so it is
+    # no safer inside the GUI than a visible one; this one is waited on
+    # because the caller wants the file, not a window.
+    ok, detail = run_viewer(
+        "pyCamSet.utils.visualise_camset",
+        [str(camset_path), "--png", str(file_path)],
+    )
+    if not ok:
+        return False, detail
+    return True, detail or f"Saved {file_path}."

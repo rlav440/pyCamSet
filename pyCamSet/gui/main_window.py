@@ -85,6 +85,10 @@ class PyCamSetApp(QMainWindow):
         self._terminal_cb = QCheckBox("Show Terminal Output")
         self._terminal_cb.setChecked(True)
 
+        # Tab-bar indices of the diagnostics pages, which are hidden
+        # until something navigates to one.  See show_tab().
+        self._diagnostics_indices: list[int] = []
+
         # Lazy workspace manager: do not create any workspace dir at startup.
         self._workspace_mgr = WorkspaceManager(None)
 
@@ -160,6 +164,7 @@ class PyCamSetApp(QMainWindow):
         )
         diag1_idx = self._notebook.addTab(self.phase1_diag_tab, TAB_PHASE1_DIAG)
         self._notebook.tabBar().setTabVisible(diag1_idx, False)
+        self._diagnostics_indices.append(diag1_idx)
 
         self.phase2_tab = Phase2Tab(
             notebook=self._notebook,
@@ -176,6 +181,7 @@ class PyCamSetApp(QMainWindow):
         )
         diag2_idx = self._notebook.addTab(self.phase2_diag_tab, TAB_PHASE2_DIAG)
         self._notebook.tabBar().setTabVisible(diag2_idx, False)
+        self._diagnostics_indices.append(diag2_idx)
 
         self.phase3_tab = Phase3Tab(
             notebook=self._notebook,
@@ -192,6 +198,7 @@ class PyCamSetApp(QMainWindow):
         )
         diag3_idx = self._notebook.addTab(self.phase3_diag_tab, TAB_PHASE3_DIAG)
         self._notebook.tabBar().setTabVisible(diag3_idx, False)
+        self._diagnostics_indices.append(diag3_idx)
 
         self.phase4_tab = Phase4Tab(
             notebook=self._notebook,
@@ -208,6 +215,7 @@ class PyCamSetApp(QMainWindow):
         )
         diag4_idx = self._notebook.addTab(self.phase4_diag_tab, TAB_PHASE4_DIAG)
         self._notebook.tabBar().setTabVisible(diag4_idx, False)
+        self._diagnostics_indices.append(diag4_idx)
 
         self.export_calibration_tab = ExportCalibrationTab(
             notebook=self._notebook,
@@ -547,6 +555,7 @@ class PyCamSetApp(QMainWindow):
                         pass
 
     def _on_tab_changed(self, index: int) -> None:
+        self._enforce_tab_visibility(index)
         name = self._notebook.tabText(index)
         if name == TAB_PHASE3:
             self._apply_phase3_handoff()
@@ -558,6 +567,31 @@ class PyCamSetApp(QMainWindow):
             self._normalize_outlier_combos(self.phase2_tab)
         elif name == TAB_EXPORT_CALIBRATION:
             self.export_calibration_tab.refresh()
+
+    def _enforce_tab_visibility(self, current: int) -> None:
+        """Keep the current tab visible in the bar, and the rest put away.
+
+        A hidden tab must never be the current one.  Qt never arranges
+        that itself -- ``setTabVisible`` moves the current tab along when
+        it hides one -- and when it does happen the tab bar paints a
+        current tab with no geometry:
+
+            QPainter::begin: Paint device returned engine == 0, type: 3
+
+        which is the null the macOS style then dereferences in
+        ``QMacCGContext``.  Every crash report from this GUI was that,
+        under ``QTabBar::paintEvent``, on whatever repaint came next.
+
+        Enforced here rather than at the call sites because
+        ``currentChanged`` is the one place every route arrives at:
+        ``setCurrentWidget``, ``setCurrentIndex``, and the keyboard.
+        """
+        bar = self._notebook.tabBar()
+        if 0 <= current < bar.count() and not bar.isTabVisible(current):
+            bar.setTabVisible(current, True)
+        for index in self._diagnostics_indices:
+            if index != current and bar.isTabVisible(index):
+                bar.setTabVisible(index, False)
 
     def _on_info_toggle(self) -> None:
         """Enable or disable all Qt tool-tips application-wide."""

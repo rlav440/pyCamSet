@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
+    show_tab,
             as_io_path,
     TAB_PHASE2,
     TAB_PHASE3,
@@ -1107,7 +1108,7 @@ class Phase2Tab(QWidget):
     def _open_diagnostics(self) -> None:
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
-            self._notebook.setCurrentWidget(self._diagnostics_tab)
+            show_tab(self._notebook, self._diagnostics_tab)
 
     def _continue_to_next(self) -> None:
         runs = self._workspace_mgr.load_runs("phase2")

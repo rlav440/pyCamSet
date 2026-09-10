@@ -42,6 +42,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-show", action="store_true",
         help="write the figures without opening any window")
+    parser.add_argument(
+        "--png", type=Path, default=None,
+        help="render the offscreen three-panel assessment to this file "
+             "instead of drawing the figures")
     args = parser.parse_args(argv)
 
     if not args.camset.is_file():
@@ -64,6 +68,26 @@ def main(argv: list[str] | None = None) -> int:
         print("That camset carries no calibration results, so there is "
               "nothing to draw.", file=sys.stderr)
         return 1
+
+    if args.png is not None:
+        # Off screen is not the same as safe: on macOS pyvista still builds a
+        # vtkCocoaRenderWindow, which is exactly what must not happen inside
+        # the GUI process.
+        from pyCamSet.gui.assess_calibration import _build_o_results
+        from pyCamSet.utils.visualisation import render_calibration_pyvista_png
+
+        o_results = _build_o_results(cams)
+        if o_results is None:
+            print("That camset carries no calibration results, so there is "
+                  "nothing to render.", file=sys.stderr)
+            return 1
+        ok, detail = render_calibration_pyvista_png(
+            o_results, cams.calibration_handler, str(args.png))
+        if not ok:
+            print(detail, file=sys.stderr)
+            return 1
+        print(detail)
+        return 0
 
     try:
         cams.visualise_calibration(

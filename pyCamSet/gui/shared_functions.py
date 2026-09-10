@@ -1156,6 +1156,34 @@ class TerminalWidget(QTextEdit):
 # ---------------------------------------------------------------------------
 
 
+def show_tab(notebook, widget) -> None:
+    """
+    Make a widget's tab the current one, showing it in the bar first.
+
+    The diagnostics tabs are hidden in the tab bar to keep it short, and
+    were then made current anyway.  Qt never leaves a hidden tab current
+    by itself -- ``QTabBar::setTabVisible`` moves the current tab along
+    when it hides one -- so that combination is a state Qt does not
+    expect: the tab bar paints a current tab that has no geometry, and on
+    macOS the native style dereferences a null context doing it.
+
+    Every crash report from the GUI landed in
+    ``QMacCGContext::QMacCGContext`` under ``QTabBar::paintEvent``, with
+    the repaint driven by whatever happened to come next -- a window
+    opening, the application losing focus.
+
+    :param notebook: the ``QTabWidget`` holding the tab
+    :param widget: the page to switch to
+    """
+    index = notebook.indexOf(widget)
+    if index < 0:
+        return
+    bar = notebook.tabBar()
+    if not bar.isTabVisible(index):
+        bar.setTabVisible(index, True)
+    notebook.setCurrentWidget(widget)
+
+
 class WorkspaceManager:
     """Manages workspace directory and run metadata.
 

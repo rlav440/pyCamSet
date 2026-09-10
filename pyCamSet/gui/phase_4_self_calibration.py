@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
+    show_tab,
     as_io_path,
     IMAGE_FOLDER_SCHEMATIC,
     TAB_PHASE4,
@@ -733,13 +734,13 @@ class Phase4Tab(QWidget):
     def _open_diagnostics(self) -> None:
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
-            self._notebook.setCurrentWidget(self._diagnostics_tab)
+            show_tab(self._notebook, self._diagnostics_tab)
 
     def _open_assess_calibration(self) -> None:
         """Open the Phase 4 diagnostics tab and trigger Assess Calibration."""
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
-            self._notebook.setCurrentWidget(self._diagnostics_tab)
+            show_tab(self._notebook, self._diagnostics_tab)
             self._diagnostics_tab.visualise_from_primary()
 
 

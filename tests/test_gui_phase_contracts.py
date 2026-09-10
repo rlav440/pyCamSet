@@ -1351,3 +1351,110 @@ def test_the_guard_stops_a_real_plot_call(monkeypatch, charuco_problem):
 
     with pytest.raises(RuntimeError, match="native window"):
         cams.plot()
+
+
+# --------------------------------------------------------------------------
+# A hidden tab must never be the current tab
+# --------------------------------------------------------------------------
+#
+# The diagnostics pages are hidden in the tab bar to keep it short, and
+# were then made current anyway.  Qt never arranges that itself --
+# setTabVisible moves the current tab along when it hides one -- and when
+# it does happen the tab bar paints a current tab that has no geometry:
+#
+#     QPainter::begin: Paint device returned engine == 0, type: 3
+#
+# which is the null the macOS style dereferences in QMacCGContext.  Every
+# crash report from this GUI was exactly that, under QTabBar::paintEvent,
+# on whatever repaint came next: a viewer window opening, the application
+# losing focus.  It is why the app died "while the plots were shown" even
+# once the drawing itself had been moved out of process.
+#
+# These assert the invariant rather than forcing a repaint: a regression
+# should fail a test, not take the suite down with a segmentation fault.
+
+
+@pytest.fixture
+def qt_app_for_tabs():
+    """The real main window, for the tab-bar invariant."""
+    pytest.importorskip("PySide6", reason="the GUI is Qt")
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.main_window import PyCamSetApp
+    from pyCamSet.gui.shared_functions import show_tab as _show_tab
+
+    QApplication.instance() or QApplication([])
+    globals()["show_tab"] = _show_tab
+    return PyCamSetApp()
+
+@pytest.mark.gui
+def test_no_tab_is_ever_current_while_hidden(qt_app_for_tabs):
+    """Every route in: setCurrentIndex, setCurrentWidget, the keyboard."""
+    window = qt_app_for_tabs
+    notebook = window._notebook
+    bar = notebook.tabBar()
+
+    for index in range(notebook.count()):
+        notebook.setCurrentIndex(index)
+        current = notebook.currentIndex()
+        assert bar.isTabVisible(current), (
+            f"tab {current} is current while hidden; the tab bar will paint "
+            f"a current tab with no geometry and the macOS style will "
+            f"dereference the null it gets."
+        )
+
+
+@pytest.mark.gui
+def test_the_diagnostics_tabs_start_hidden(qt_app_for_tabs):
+    """The point of hiding them: the bar stays short until one is used."""
+    window = qt_app_for_tabs
+    bar = window._notebook.tabBar()
+
+    assert window._diagnostics_indices
+    assert not any(bar.isTabVisible(i) for i in window._diagnostics_indices)
+
+
+@pytest.mark.gui
+def test_opening_a_diagnostics_tab_reveals_it(qt_app_for_tabs):
+    window = qt_app_for_tabs
+    notebook = window._notebook
+    bar = notebook.tabBar()
+
+    show_tab(notebook, window.phase4_diag_tab)
+
+    current = notebook.currentIndex()
+    assert notebook.currentWidget() is window.phase4_diag_tab
+    assert bar.isTabVisible(current)
+
+
+@pytest.mark.gui
+def test_leaving_a_diagnostics_tab_puts_it_away(qt_app_for_tabs):
+    window = qt_app_for_tabs
+    notebook = window._notebook
+    bar = notebook.tabBar()
+    show_tab(notebook, window.phase3_diag_tab)
+    revealed = notebook.indexOf(window.phase3_diag_tab)
+
+    notebook.setCurrentWidget(window.phase3_tab)
+
+    assert not bar.isTabVisible(revealed)
+    assert bar.isTabVisible(notebook.currentIndex())
+
+
+@pytest.mark.gui
+def test_a_tab_made_current_by_index_is_revealed(qt_app_for_tabs):
+    """The choke point is currentChanged, so even a raw index works.
+
+    This is the exact call that segmentation faulted: nothing routes it
+    through show_tab, so the invariant cannot live at the call sites.
+    """
+    window = qt_app_for_tabs
+    notebook = window._notebook
+    bar = notebook.tabBar()
+    hidden = window._diagnostics_indices[0]
+    assert not bar.isTabVisible(hidden)
+
+    notebook.setCurrentIndex(hidden)
+
+    assert notebook.currentIndex() == hidden
+    assert bar.isTabVisible(hidden)

@@ -72,7 +72,7 @@ def test_an_empty_image_detection_has_no_data():
 
 
 def test_image_detection_rejects_mismatched_lengths():
-    with pytest.raises(AssertionError, match="same length"):
+    with pytest.raises(ValueError, match="same length"):
         ImageDetection(keys=[0, 1, 2], image_points=[[1.0, 2.0]])
 
 

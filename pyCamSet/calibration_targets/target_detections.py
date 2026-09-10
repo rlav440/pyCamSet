@@ -28,16 +28,20 @@ class ImageDetection:
         if not isinstance(image_points, np.ndarray) and image_points is not None:
             image_points = np.array(image_points)
 
-        kp = keys.size != 0 
+        kp = keys.size != 0
         ip = image_points.size != 0
         if kp and ip:
-            assert len(keys) == len(image_points), "Detected keys must be the same length as detected points"
+            if len(keys) != len(image_points):
+                raise ValueError("Detected keys must be the same length as detected points")
             self.keys = keys
             self.image_points = image_points
             self.has_data = True
             self.data_len = len(keys)
         elif not kp and not ip:
+            self.keys = keys
+            self.image_points = image_points
             self.has_data = False
+            self.data_len = 0
         else:
             raise ValueError("A detection requires both identifying keys and detected image points.")
 
@@ -181,7 +185,10 @@ class TargetDetection:
         """
         :return: a list of target detections containing a unique index
         """
-        unique_keys = np.unique(self.get_data()[:, 2:-2], axis=0)
+        data = self.get_data()
+        if data is None or data.size == 0:
+            return []
+        unique_keys = np.unique(data[:, 2:-2], axis=0)
         return [self.get(key=k) for k in unique_keys]
 
     def _get_cam(self, cam):
@@ -284,26 +291,39 @@ class TargetDetection:
         """
         ind = self.cam_names.index(cam_name)
 
-        if detection.has_data:
-            if detection.keys.ndim == 1:
-                keys = detection.keys[..., None]
-            else:
-                keys = detection.keys
-            try:
-                observation = np.concatenate(
-                    [np.ones((detection.data_len, 2))*[ind, global_im_num], keys, detection.image_points]
-                    , axis=1)
-            except ValueError as err:
-                # Previously this printed the points and fell through to append
-                # an `observation` that was never assigned, so a shape mismatch
-                # surfaced as UnboundLocalError with the real cause on stdout.
-                raise ValueError(
-                    f"Could not add the detection from camera {cam_name} image "
-                    f"{global_im_num}: {detection.data_len} keys of shape {keys.shape} "
-                    f"and points of shape {np.shape(detection.image_points)} do "
-                    f"not form a row block ({err})."
-                ) from err
-            self._update_buffer.append(observation)
+        if not detection.has_data:
+            return
+
+        if detection.keys.ndim == 1:
+            keys = detection.keys[..., None]
+        else:
+            keys = detection.keys
+        image_points = np.asarray(detection.image_points)
+
+        # Checked before the concatenate rather than after: a shape mismatch
+        # used to surface as UnboundLocalError from an `observation` that was
+        # never assigned, with the real cause printed to stdout.
+        if image_points.ndim != 2 or image_points.shape[1] != 2:
+            raise ValueError(
+                f"Could not add the detection from camera {cam_name} image "
+                f"{global_im_num}: image points must have shape (n, 2), not "
+                f"{image_points.shape}."
+            )
+        if keys.shape[0] != image_points.shape[0]:
+            raise ValueError(
+                f"Could not add the detection from camera {cam_name} image "
+                f"{global_im_num}: {keys.shape[0]} keys of shape {keys.shape} "
+                f"and {image_points.shape[0]} points do not form a row block."
+            )
+
+        observation = np.concatenate(
+            [np.full((detection.data_len, 1), ind),
+             np.full((detection.data_len, 1), global_im_num),
+             keys,
+             image_points],
+            axis=1,
+        )
+        self._update_buffer.append(observation)
 
 
     def _glomp_buffer(self) -> None:
@@ -311,22 +331,21 @@ class TargetDetection:
         Incorporates the update buffer before use.
         """
         if self._update_buffer:
+            pending = np.concatenate(self._update_buffer, axis=0)
             if self._data is not None:
                 # concatenate along axis 0, keeping the
                 # | cam | im_num | key... | x | y | row layout.  np.append with
                 # no axis ravels both operands, so this flattened _data to 1-D
                 # and the max_ims update on the next line then raised
                 # IndexError -- every add onto a non-empty detection failed.
-                self._data = np.concatenate(
-                    [self._data, np.concatenate(self._update_buffer, axis=0)], axis=0
-                )
+                self._data = np.concatenate((self._data, pending), axis=0)
             else:
-                self._data = np.concatenate(self._update_buffer, axis=0)
+                self._data = pending
             # _max_ims directly, not the max_ims property: the property now
             # flushes the buffer, and the buffer is still un-cleared here, so
             # going through it would recurse.  This is the same value the
             # property would have produced.
-            self._max_ims = int(max(np.amax(self._data[:, 1]) + 1, self._max_ims))
+            self._max_ims = max(self._max_ims, int(np.max(self._data[:, 1])) + 1)
             self._update_buffer.clear()
 
     def sort(self, keys_to_sort: str|list[str], inplace=False) -> TargetDetection | None:

@@ -82,15 +82,15 @@ def generate_ccube_target(
     out_path = out_dir / file_name
 
     if export_kind == "pdf_raster":
-        cube.save_to_pdf(out_path)
+        saved_path = cube.save_to_pdf(out_path)
     elif export_kind == "pdf_vector":
-        cube.save_to_pdf(out_path, data_format="vector")
+        saved_path = cube.save_to_pdf(out_path, data_format="vector")
     elif export_kind == "svg":
-        cube.save_to_svg(out_path)
+        saved_path = cube.save_to_svg(out_path)
     else:
         raise ValueError("export_kind must be one of: pdf_raster, pdf_vector, svg")
 
-    return cube, out_path
+    return cube, saved_path
 
 
 def main() -> None:

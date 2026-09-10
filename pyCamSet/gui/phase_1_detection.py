@@ -21,6 +21,7 @@ D1.7 Minimum features in any image–camera pair.
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Callable, Optional
@@ -34,6 +35,11 @@ import numpy as np
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
+from pyCamSet.calibration_targets.backend_registry import (
+    MARKER_BACKEND_LABELS,
+    marker_backend_availability_text,
+    marker_backend_available,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -68,13 +74,10 @@ from pyCamSet.gui.shared_functions import (
     TerminalWidget,
     WorkspaceManager,
     CHARUCO_DETECTION_OPTION_METADATA,
-    MARKER_BACKEND_LABELS,
     build_charuco_option_tooltip,
     build_target,
     collect_charuco_detection_options,
     copy_file,
-    marker_backend_availability_text,
-    marker_backend_available,
     count_images_in_folder,
     get_camera_subfolders,
     make_blue_button,
@@ -95,7 +98,7 @@ try:
         validate_detections,
     )
     _PYCAMSET_OK = True
-except ImportError:
+except (ImportError, OSError):
     detect_datapoints_in_imfile = None
     validate_detections = None
     _PYCAMSET_OK = False
@@ -699,8 +702,10 @@ class Phase1Tab(QWidget):
         if self._nlim_edit.text().strip():
             try:
                 n_lim = int(self._nlim_edit.text().strip())
+                if n_lim <= 0:
+                    raise ValueError
             except ValueError:
-                QMessageBox.critical(self, "Validation Error", "n_lim must be an integer.")
+                QMessageBox.critical(self, "Validation Error", "n_lim must be a positive integer.")
                 return None
 
         try:
@@ -708,13 +713,18 @@ class Phase1Tab(QWidget):
         except ValueError:
             QMessageBox.critical(self, "Validation Error", "Length must be a number.")
             return None
+        if not math.isfinite(length) or length <= 0.0:
+            QMessageBox.critical(self, "Validation Error", "Length must be finite and greater than zero.")
+            return None
 
         threads = None
         if self._threads_edit.text().strip():
             try:
                 threads = int(self._threads_edit.text().strip())
+                if threads <= 0:
+                    raise ValueError
             except ValueError:
-                QMessageBox.critical(self, "Validation Error", "Threads must be an integer.")
+                QMessageBox.critical(self, "Validation Error", "Threads must be a positive integer.")
                 return None
 
         import json
@@ -725,6 +735,9 @@ class Phase1Tab(QWidget):
             except json.JSONDecodeError as exc:
                 QMessageBox.critical(self, "Validation Error", f"Fixed params JSON: {exc}")
                 return None
+            if not isinstance(fixed_params, dict):
+                QMessageBox.critical(self, "Validation Error", "Fixed params JSON must be an object.")
+                return None
 
         problem_options = None
         if self._po_edit.text().strip():
@@ -732,6 +745,9 @@ class Phase1Tab(QWidget):
                 problem_options = json.loads(self._po_edit.text().strip())
             except json.JSONDecodeError as exc:
                 QMessageBox.critical(self, "Validation Error", f"Problem options JSON: {exc}")
+                return None
+            if not isinstance(problem_options, dict):
+                QMessageBox.critical(self, "Validation Error", "Problem options JSON must be an object.")
                 return None
 
         charuco_detection_options = None

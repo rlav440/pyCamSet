@@ -56,7 +56,7 @@ try:
     from pyCamSet.utils.general_utils import get_subfolder_names, glob_ims
     from pyCamSet.calibration.camera_calibrator import sanitise_input_images
     _PYCAMSET_OK = True
-except ImportError:
+except (ImportError, OSError):
     _PYCAMSET_OK = False
 
 
@@ -259,6 +259,13 @@ class Phase0Tab(QWidget):
 
     def _on_floc_change(self, text: str) -> None:
         floc = text.strip()
+        # A changed path invalidates the previous confirmation; otherwise the
+        # Continue button could hand Phase 1 a stale, already-validated folder.
+        if not floc or self._confirmed_floc != floc:
+            self._confirmed_floc = None
+            self._ok_lbl.setText("")
+            self._continue_btn.setEnabled(False)
+            self._status_lbl.setText("Folder changed; confirm its validity again." if floc else "")
         self._ws_edit.setText(str(Path(floc) / ".pycamset_workspace") if floc else "")
 
     def _confirm_image_folder_validity(self) -> None:

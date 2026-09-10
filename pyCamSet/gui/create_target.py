@@ -4,6 +4,7 @@ Thin GUI wrapper around printable target generators.
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -29,9 +30,13 @@ from pyCamSet.calibration_targets.create_charuco import build_charuco, generate_
 from pyCamSet.calibration_targets.create_puzzleboard import build_puzzleboard, generate_puzzleboard_target
 from pyCamSet.calibration_targets.create_puzzleboard_cube import build_puzzleboard_cube, generate_puzzleboard_cube_target
 from pyCamSet.calibration_targets.target_puzzleboard_cube import MAX_FACE_SQUARES
-from pyCamSet.gui.shared_functions import (
-    ARUCO1_DICT_NAMES,
+from pyCamSet.calibration_targets.backend_registry import (
     MARKER_BACKEND_LABELS,
+    dict_names_for_backend,
+    marker_backend_availability_text,
+    marker_backend_available,
+)
+from pyCamSet.gui.shared_functions import (
     TerminalWidget,
     WorkspaceManager,
     make_blue_button,
@@ -51,7 +56,13 @@ _TARGET_CCUBE = "Ccube"
 _TARGET_CHARUCO = "ChArUco"
 _TARGET_PUZZLEBOARD = "PuzzleBoard"
 _TARGET_PUZZLEBOARD_CUBE = "PuzzleBoard Cube"
-_ARUCO_DICT_CHOICES = ARUCO1_DICT_NAMES
+_ARUCO_DICT_CHOICES = dict_names_for_backend("aruco1")
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+    "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³",
+}
 
 
 class CreateTargetTab(QWidget):
@@ -395,7 +406,16 @@ class CreateTargetTab(QWidget):
                 )
                 return None
 
+        if target_type == _TARGET_CCUBE and (
+            not math.isfinite(payload["length"]) or payload["length"] <= 0.0
+        ):
+            QMessageBox.critical(self, "Validation Error", "length must be a finite value greater than zero.")
+            return None
+
         if target_type == _TARGET_CHARUCO:
+            if not math.isfinite(payload["square_size"]) or payload["square_size"] <= 0.0:
+                QMessageBox.critical(self, "Validation Error", "square_size must be a finite value greater than zero.")
+                return None
             marker_fraction = float(payload.get("marker_fraction", 0.8))
             if marker_fraction <= 0.0 or marker_fraction >= 1.0:
                 QMessageBox.critical(self, "Validation Error", "marker_fraction must be between 0 and 1.")
@@ -430,6 +450,19 @@ class CreateTargetTab(QWidget):
         file_name = self._name_edit.text().strip()
         if not file_name:
             QMessageBox.critical(self, "Validation Error", "Output filename is required.")
+            return None
+        if (
+            "\x00" in file_name
+            or "/" in file_name
+            or "\\" in file_name
+            or file_name in {".", ".."}
+            or Path(file_name).stem.upper() in _WINDOWS_RESERVED_NAMES
+        ):
+            QMessageBox.critical(
+                self,
+                "Validation Error",
+                "Output filename must be a single, non-reserved filename.",
+            )
             return None
 
         export_label = self._format_combo.currentText()

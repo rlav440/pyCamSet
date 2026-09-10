@@ -10,6 +10,8 @@ tests/test_data/**/*.camset
 tests/test_data/*.camset
 tests/test_data/**/detected_datapoints*.pickle
 tests/test_data/cam_test_cache.pkl
+bin/
+dump/
 .coverage
 .coverage.*
 htmlcov/

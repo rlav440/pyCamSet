@@ -14,7 +14,6 @@ before replacing, and reorder by hand if needed -- calculate_shape_transforms.py
 does the same thing with its explicit `order` list.
 """
 
-import pyvista as pv        
 import numpy as np
 from pyCamSet.optimisation.compiled_helpers import n_estimate_rigid_transform
 
@@ -181,8 +180,3 @@ if __name__ == "__main__":
 
     plt.gca().set_aspect("equal")
     plt.show()
-
-
-
-
-

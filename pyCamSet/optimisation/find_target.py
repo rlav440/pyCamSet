@@ -152,7 +152,7 @@ def find_target_pose_at_timestep(
     # name out of them either raised or silently shredded the array.
     for cam_name, image in images.items():
         datum = target.find_in_image(image, camera=cameras[cam_name])
-        detection.add_detection(detection=datum, cam_name=cam_name, im_num=0)
+        detection.add_detection(detection=datum, cam_name=cam_name, global_im_num=0)
 
     if not detection.has_data():
         raise ValueError("The target was not detected in any of the given images")
@@ -182,9 +182,9 @@ def find_target_poses(
     for cam_name, image_list in image_seq.items():
         # enumerate, not iteration: image_list holds images, so unpacking an
         # index out of each one was never going to work.
-        for id_im, im in enumerate(image_list):
+        for global_im_num, im in enumerate(image_list):
             datum = target.find_in_image(im, camera=cameras[cam_name])
-            detection.add_detection(detection=datum, cam_name=cam_name, im_num=id_im)
+            detection.add_detection(detection=datum, cam_name=cam_name, global_im_num=global_im_num)
 
     if not detection.has_data():
         raise ValueError("The target was not detected in any of the given images")

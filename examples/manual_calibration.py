@@ -22,5 +22,3 @@ param_handler = TemplateBundleHandler(
 optimisation, optimised_cameras = run_bundle_adjustment(
     param_handler=param_handler,
 )
-
-

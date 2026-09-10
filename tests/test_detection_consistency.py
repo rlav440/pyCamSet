@@ -258,7 +258,7 @@ def test_threaded_detection_matches_serial(session_data_dir, charuco_target):
     )
 
     # sort both, since the pool may return cameras in any order
-    order = ["cam", "im_num", "key"]
+    order = ["cam", "global_im_num", "key"]
     assert np.allclose(
         serial.sort(order).get_data(), threaded.sort(order).get_data()
     )

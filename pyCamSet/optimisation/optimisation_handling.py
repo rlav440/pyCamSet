@@ -28,6 +28,18 @@ if TYPE_CHECKING:
     from pyCamSet.cameras import CameraSet, Camera
 
 
+def _split_residuals(fun, param_handler):
+    """Separate reprojection residuals from optional lockbox priors."""
+    residuals = np.asarray(fun)
+    base_count = 0
+    if param_handler is not None:
+        base_count = int(getattr(
+            param_handler, "get_base_residual_count", lambda: 0)())
+    if base_count <= 0 or base_count >= residuals.size:
+        return residuals, None
+    return residuals[:base_count], residuals[base_count:]
+
+
 def make_optimisation_function(
         param_handler: th.TemplateBundleHandler,
         threads: int = 1,
@@ -235,4 +247,3 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     camset.set_calibration_history(optimisation, param_handler, report=report)
 
     return optimisation, camset
-

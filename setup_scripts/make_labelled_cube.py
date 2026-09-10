@@ -34,4 +34,3 @@ scene.add_point_labels(corners, labels)
 edges = [str(i) for i in range(6)]
 scene.add_point_labels(pv.PolyData(centres), edges)
 scene.show()
-

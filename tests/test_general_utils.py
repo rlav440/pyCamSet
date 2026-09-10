@@ -385,19 +385,44 @@ def test_colourmap_to_colour_list_length():
     assert len(colours) == 5
 
 
+def _camera_folder(root, name):
+    """A folder that counts as a camera: a directory with an image in it."""
+    folder = root / name
+    folder.mkdir()
+    (folder / "im_0.png").write_bytes(b"")
+    return folder
+
+
 def test_get_subfolder_names_is_naturally_sorted(tmp_path):
     """Camera names come from folder names, so cam_10 must follow cam_9."""
     for name in ["cam_10", "cam_2", "cam_1"]:
-        (tmp_path / name).mkdir()
+        _camera_folder(tmp_path, name)
     (tmp_path / "a_file.txt").write_text("not a folder")
 
     assert get_subfolder_names(tmp_path) == ["cam_1", "cam_2", "cam_10"]
 
 
 def test_get_subfolder_names_can_return_full_paths(tmp_path):
-    (tmp_path / "cam_1").mkdir()
+    _camera_folder(tmp_path, "cam_1")
     paths = get_subfolder_names(tmp_path, return_full_path=True)
     assert paths == [tmp_path / "cam_1"]
+
+
+def test_get_subfolder_names_skips_folders_without_images(tmp_path):
+    """
+    A camera folder is one with images in it.  The GUI writes its workspace
+    into the image folder, so a plain directory listing would offer
+    .pycamset_workspace as a camera to calibrate.
+    """
+    _camera_folder(tmp_path, "cam_1")
+    (tmp_path / "empty").mkdir()
+    (tmp_path / ".pycamset_workspace").mkdir()
+
+    assert get_subfolder_names(tmp_path) == ["cam_1"]
+
+
+def test_get_subfolder_names_on_a_missing_folder_is_empty(tmp_path):
+    assert get_subfolder_names(tmp_path / "nope") == []
 
 
 def test_glob_ims_finds_images_of_several_extensions(tmp_path):

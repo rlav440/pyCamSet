@@ -140,7 +140,7 @@ def test_get_by_cam(detection):
 
 
 def test_get_by_im_num(detection):
-    data = detection.get(im_num=1).get_data()
+    data = detection.get(global_im_num=1).get_data()
 
     assert data.shape[0] == 2
     assert np.all(data[:, COL_IM] == 1)
@@ -159,14 +159,14 @@ def test_get_preserves_the_camera_names(detection):
 
 def test_get_with_no_matches_returns_an_empty_detection(detection):
     """A camera that saw nothing must come back empty, not raise."""
-    empty = detection.get(cam="cam_2").get(im_num=1)
+    empty = detection.get(cam="cam_2").get(global_im_num=1)
     assert empty.get_data() is None
     assert empty.has_data() is False
 
 
 def test_get_rejects_more_than_one_direction(detection):
     with pytest.raises(ValueError, match="only get one item at a time"):
-        detection.get(cam="cam_0", im_num=1)
+        detection.get(cam="cam_0", global_im_num=1)
 
 
 def test_get_rejects_an_unknown_direction(detection):
@@ -233,7 +233,7 @@ def test_delete_row_by_a_list_of_cams(detection):
 
 
 def test_delete_row_by_im_num(detection):
-    remaining = detection.delete_row(im_num=0)
+    remaining = detection.delete_row(global_im_num=0)
     assert remaining.get_data().shape[0] == 2
     assert np.all(remaining.get_data()[:, COL_IM] == 1)
 
@@ -256,7 +256,7 @@ def test_delete_row_rejects_an_unknown_direction(detection):
 
 def test_delete_row_rejects_more_than_one_direction(detection):
     with pytest.raises(ValueError, match="only get one item at a time"):
-        detection.delete_row(cam="cam_0", im_num=1)
+        detection.delete_row(cam="cam_0", global_im_num=1)
 
 
 def test_delete_col_removes_a_column(detection):
@@ -370,7 +370,7 @@ def test_sort_by_cam(detection):
 
 
 def test_sort_by_im_num(detection):
-    data = detection.sort("im_num").get_data()
+    data = detection.sort("global_im_num").get_data()
     assert np.all(np.diff(data[:, COL_IM]) >= 0)
 
 
@@ -381,7 +381,7 @@ def test_sort_by_key(detection):
 
 def test_sort_by_several_keys_respects_the_order(detection):
     """List order is sort priority: cam first, then image within a camera."""
-    data = detection.sort(["cam", "im_num"]).get_data()
+    data = detection.sort(["cam", "global_im_num"]).get_data()
 
     assert np.all(np.diff(data[:, COL_CAM]) >= 0)
     for cam_index in range(len(CAMS)):

@@ -72,7 +72,7 @@ class DetectionReport:
         :param detected: the TargetDetection to describe
         :param target: the calibration target, for its features per face
         """
-        corners_per_face = target.point_data.shape[-2]
+        corners_per_face = _features_per_face(target)
         n_images = int(detected.max_ims)
         per_camera = []
 
@@ -144,6 +144,25 @@ class DetectionReport:
 
     def __str__(self) -> str:
         return self.summary()
+
+
+def _features_per_face(target) -> int:
+    """
+    How many features one face of the target carries.
+
+    This is the denominator of the completeness figure, so it has to be the
+    count that is actually printed.  For every target but the flat
+    PuzzleBoard that is what ``point_data`` holds.  A PuzzleBoard's
+    ``point_data`` spans the whole 501x501 virtual code field rather than the
+    printed window, so using it would divide by 251,001 and report a
+    completeness of a fraction of a percent for a board that was seen whole.
+
+    :param target: the calibration target the detection was found with
+    :return: features on one face
+    """
+    if target.__class__.__name__ == "PuzzleBoard":
+        return int(target.num_squares_x * target.num_squares_y)
+    return int(target.point_data.shape[-2])
 
 
 def _camera_detection_stats(detected, index: int, name: str,

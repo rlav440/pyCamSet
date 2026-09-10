@@ -10,6 +10,7 @@ window unless asked.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -86,6 +87,8 @@ class _Plotter:
         self.off_screen = False
         self.shown_with = None
         self.closed = False
+        self.key_events = {}
+        self.screenshots = []
 
     def show(self, screenshot=None):
         if self.fail:
@@ -97,6 +100,14 @@ class _Plotter:
 
     def close(self):
         self.closed = True
+
+    def add_key_event(self, key, callback):
+        self.key_events[key] = callback
+
+    def screenshot(self, path):
+        self.screenshots.append(path)
+        with open(path, "wb") as handle:
+            handle.write(b"png")
 
 
 class TestFinalisePlotter:
@@ -127,6 +138,25 @@ class TestFinalisePlotter:
                          save_dir=tmp_path)
 
         assert plotter.off_screen is False
+
+    def test_showing_binds_the_screenshot_key(self, tmp_path):
+        """The reason to open a window is to find a view worth keeping."""
+        plotter = _Plotter()
+
+        finalise_plotter(plotter, "reconstruction", show=True, save_dir=tmp_path)
+
+        assert "s" in plotter.key_events
+        plotter.key_events["s"]()
+        assert len(plotter.screenshots) == 1
+        assert Path(plotter.screenshots[0]).parent == tmp_path
+
+    def test_off_screen_does_not_bind_the_screenshot_key(self):
+        """Nobody is at the keyboard, so there is nothing to bind."""
+        plotter = _Plotter()
+
+        finalise_plotter(plotter, "x", show=False, save_dir=None)
+
+        assert plotter.key_events == {}
 
     def test_it_closes_the_plotter_when_neither_showing_nor_saving(self):
         plotter = _Plotter()

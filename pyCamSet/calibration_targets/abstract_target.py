@@ -45,11 +45,13 @@ def init_worker(detector_class, input_args): #: Optional['AbstractTarget']):
     global worker_detector
     worker_detector = detector_class(**input_args)
 
-def _process_image(im_file:Path, cam_name:str, idx:int, draw:bool, camera:Camera):
+def _process_image(im_file:Path, cam_name:str, idx:int, draw:bool, camera:Camera, upscale_factor:int=1):
     """
     Helper function to process a single image.
     """
     im = cv2.imread(im_file)
+    if upscale_factor > 1:
+        im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
     # Use the globally available detector in this worker process
     detection = worker_detector.find_in_image(im, draw=draw, camera=camera)
     return cam_name, idx, detection
@@ -119,7 +121,7 @@ class AbstractTarget(ABC):
         """
         raise NotImplementedError
 
-    def find_in_imfolder(self, file:Path, cam_names, draw=False, n_lim=None, camera: Camera=None, threads=12) -> TargetDetection:
+    def find_in_imfolder(self, file:Path, cam_names, draw=False, n_lim=None, camera: Camera=None, threads=12, upscale_factor:int=1) -> TargetDetection:
         """
         Notes: A function to detect the camera results in the image folder.
         generally a process wrapper around the previous function
@@ -157,6 +159,8 @@ class AbstractTarget(ABC):
             detections = TargetDetection(cam_names=cam_names)
             for idx, im_file in enumerate(im_locs):
                 im = cv2.imread(im_file)
+                if upscale_factor > 1:
+                    im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
                 detection = self.find_in_image(im, draw=draw, camera=camera)
                 detections.add_detection(cam_name, idx, detection)
             return detections
@@ -169,7 +173,7 @@ class AbstractTarget(ABC):
         os.environ['Detection_PID'] = str(os.getpid())
 
         # prepare arguments for the worker processes
-        tasks = [(im_file, cam_name, idx, draw, camera) for idx, im_file in enumerate(im_locs)]
+        tasks = [(im_file, cam_name, idx, draw, camera, upscale_factor) for idx, im_file in enumerate(im_locs)]
         # use a Pool of worker processes.
         if not (processname := multiprocessing.current_process().name) == "MainProcess":
             # print(processname)
@@ -325,7 +329,9 @@ class AbstractTarget(ABC):
 
     def initial_calibration(self, cam_name, detection: TargetDetection,
                             res: list, pose_im: int=0,
-                            fixed_params: dict|None =None, return_poses=False) -> Camera | tuple[Camera, np.ndarray, np.ndarray]:
+                            fixed_params: dict|None =None,
+                            return_poses=False,
+                            min_detections_per_board: int = 12) -> Camera | tuple[Camera, np.ndarray, np.ndarray]:
         """
         Takes a single camera's detections, and performs an initial
         calibration on them.
@@ -339,6 +345,8 @@ class AbstractTarget(ABC):
         :param pose_im: The image in which the Target's pose sets the coordinate system
         :param fixed_params: A dict containing any fixed params of the camera to calibrate
             accepted options are "ext", "int", and "dst" respectively.
+        :param min_detections_per_board: Minimum number of detected corners required
+            for a board observation to contribute to the initial OpenCV calibration.
         :return: A camera object.
         """
 
@@ -368,15 +376,29 @@ class AbstractTarget(ABC):
 
             for board in boards[mask]:
                 key_mask = np.squeeze(keys[:, :-1] == board)
-                if np.sum(key_mask) > 12: 
-                    if np.sum(key_mask) < 12:
-                        logger.warning("Trying to calibrate with a small number of detections on a board.")
+                num_detections = np.sum(key_mask)
+                if num_detections >= min_detections_per_board:
+                    if num_detections < 12:
+                        logger.warning(
+                            f"Trying to calibrate with {num_detections} detections on a board. <12 may be an issue."
+                        )
                     board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')
                     board_im = data[key_mask, -2:][None, ...].astype('float32')
                     object_points.append(board_obj)
                     image_points.append(board_im)
+                else:
+                    logger.warning(
+                        f"Trying to calibrate with <{min_detections_per_board} detections ({num_detections}) on a board. Dropping."
+                    )
 
         start = time.time()
+        if len(object_points) == 0:
+            raise ValueError(
+                f"Camera {cam_name} has zero valid board detections "
+                f"(after the {min_detections_per_board}-detection-per-board "
+                f"minimum) — cannot run initial calibration. Check Phase 1 "
+                f"detection results for this camera."
+            )
         ic = cv2.calibrateCameraExtended(
             object_points,
             image_points,
@@ -411,8 +433,8 @@ class AbstractTarget(ABC):
         if not return_poses:
             return init_cam
 
-        poses = [make_4x4h_tform(rot, tran) for rot, tran in zip(ic[3], ic[4])]
-        per_im_reproj = ic[-1]
+        poses = np.stack([make_4x4h_tform(rot, tran) for rot, tran in zip(ic[3], ic[4])]).astype(float)
+        per_im_reproj = np.asarray(ic[-1], dtype=float)
         return init_cam, poses, per_im_reproj
 
     def target_pose_in_cam_image(
@@ -500,12 +522,12 @@ class AbstractTarget(ABC):
 
         
         max_err = np.argmax(err_list)
-        min_err = np.argmax(err_list)
+        min_err = np.argmin(err_list)
         if (err := err_list[max_err].squeeze()) > 5:
-            logger.warning(f"Initial error of {err: .2f} found for a pose detection.")
+            logger.warning(f"Initial error of {err: .2f} found for a pose detection (camera={cam.name}, pose={n_im[0]}).")
 
         if (err := err_list[max_err].squeeze()) > 20:
-            logger.warning(f"Past 10 pixel error for failed detection - counting detection as a failure ")
+            logger.warning(f"Past 20 pixel error for failed detection - counting detection as a failure (camera={cam.name}, pose={n_im[0]}) ")
             if mode == "nan":
                 if give_error:
                     return np.ones((4,4)) * np.nan, np.nan
@@ -523,4 +545,3 @@ class AbstractTarget(ABC):
             return ext # from target -> cam coordinates
         else: 
             raise NotImplementedError
-

@@ -11,7 +11,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.sparse import csr_array
-import pyvista as pv
+try:
+    import pyvista as pv
+    _PYVISTA_OK = True
+except ImportError:  # pragma: no cover - exercised in headless installs
+    pv = None
+    _PYVISTA_OK = False
 from itertools import combinations
 
 from typing import TYPE_CHECKING
@@ -447,6 +452,11 @@ class SelfBundleHandler(TemplateBundleHandler):
         An additional plot called to visualise the calibration. 
         Visualises the error in the calibration target that was recovered.
         """
+        if not _PYVISTA_OK:
+            raise ImportError(
+                "PyVista is required for self-calibration visualisation. "
+                "Install it with: pip install pyCamSet[viz]"
+            )
         og_data = self.target.point_data.reshape((-1,3))
         n_points = np.prod(self.point_data.shape[:2])
         cd = np.arange(n_points)//(n_points//6)

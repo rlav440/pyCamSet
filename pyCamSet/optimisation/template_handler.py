@@ -23,8 +23,14 @@ from pyCamSet import CameraSet, Camera
 
 from pyCamSet.calibration_targets import TargetDetection
 from pyCamSet.utils.setup_reports import RigConsistencyReport
-import pyvista as pv
-    
+
+try:
+    import pyvista as pv
+    _PYVISTA_OK = True
+except ImportError:  # pragma: no cover - exercised in headless installs
+    pv = None
+    _PYVISTA_OK = False
+
 if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
     from pyCamSet.cameras import CameraSet, Camera
@@ -483,7 +489,7 @@ class TemplateBundleHandler:
                 logger.info("Missing poses required removing detected data from the optimisation")
                 # delete any inds with missing pose numbers.
                 missing_poses = np.where(self.missing_poses)[0]
-                detection = self.detection.delete_row(im_num=missing_poses)
+                detection = self.detection.delete_row(global_im_num=missing_poses)
         if flatten:
             return detection.return_flattened_keys(dims).get_data()
         return detection.get_data()

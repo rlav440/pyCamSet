@@ -226,5 +226,3 @@ class free_point(abstract_function_block):
         output[0] = 1
         output[4] = 1
         output[8] = 1
-
-

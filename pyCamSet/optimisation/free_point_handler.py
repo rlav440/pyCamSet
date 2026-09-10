@@ -8,7 +8,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.sparse import csr_array
-import pyvista as pv
+try:
+    import pyvista as pv
+    _PYVISTA_OK = True
+except ImportError:  # pragma: no cover
+    pv = None
+    _PYVISTA_OK = False
 from itertools import combinations
 
 from typing import TYPE_CHECKING
@@ -311,8 +316,3 @@ class FreePointBundleHandler(TemplateBundleHandler):
             temp_cam._update_state()
         return new_cams
         
-
-
-
-
-

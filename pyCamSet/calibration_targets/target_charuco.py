@@ -1,21 +1,43 @@
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 import cv2
 import numpy as np
+import svgwrite
+from PIL import Image
 from cv2 import aruco
 from matplotlib import pyplot as plt
-import logging
 
 logger = logging.getLogger(__name__)
 
 from pyCamSet.calibration_targets.abstract_target import AbstractTarget
+from pyCamSet.calibration_targets.aruco2_detection import (
+    detect_charuco_corners,
+    resolve_dictionary,
+)
+from pyCamSet.calibration_targets.charuco_detection import (
+    build_charuco_detector_components,
+    construct_charuco_detector,
+)
 from pyCamSet.calibration_targets.target_detections import ImageDetection
 from pyCamSet.cameras import Camera
-from pyCamSet.utils.general_utils import downsample_valid, adaptive_decimated_charuco_detection_stereo
+from pyCamSet.utils.general_utils import downsample_valid
 
 
 class ChArUco(AbstractTarget):
-    def __init__(self, num_squares_x, num_squares_y, square_size, marker_fraction = 0.8, a_dict=cv2.aruco.DICT_4X4_1000, legacy=False):
+    def __init__(
+        self,
+        num_squares_x,
+        num_squares_y,
+        square_size,
+        marker_fraction=0.8,
+        a_dict=cv2.aruco.DICT_4X4_1000,
+        legacy=False,
+        marker_backend: str = "aruco1",
+        detection_options: dict | None = None,
+    ):
         """
         Initialises a ChArUco board in mm.
 
@@ -23,32 +45,266 @@ class ChArUco(AbstractTarget):
         :param num_squares_y: number of squares in the y direction
         :param square_size: the size of a square in mm! mm!
         :param marker_fraction: the percentage of a chessboard square occupied by a marker
-        :param a_dict: the aruco dictionairy to use.
+        :param a_dict: the aruco dictionary to use.
+        :param marker_backend: the marker backend to use, "aruco1" (OpenCV) or
+            "aruco2" (aruco2 package). Defaults to "aruco1".
         """
         super().__init__(inputs=locals())
 
         # define checker and marker size
-      
+
         self.square_size = square_size / 1000
         marker_size = marker_fraction * self.square_size  # 80% of the square size
         # convert to meters
 
-        # Create the dictionary for the Charuco board
-        self.a_dict = cv2.aruco.getPredefinedDictionary(a_dict)
+        # Validate the marker backend and resolve the dictionary per D3.
+        if marker_backend not in ("aruco1", "aruco2"):
+            raise ValueError(
+                f"marker_backend must be 'aruco1' or 'aruco2', got {marker_backend!r}"
+            )
+        self.marker_backend = marker_backend
+        self._aruco_dict_int = int(a_dict)
+        # Create the dictionary for the Charuco board (backend-specific bytes).
+        self.a_dict = resolve_dictionary(a_dict, marker_backend)
         # Create the Charuco board
         self.board = cv2.aruco.CharucoBoard((num_squares_x, num_squares_y),self.square_size, marker_size, self.a_dict)
         if legacy:
             self.board.setLegacyPattern(True)
-        self.point_data = self.board.getChessboardCorners().squeeze().astype(np.float64)
+        self.point_data = np.asarray(self.board.getChessboardCorners(), dtype=np.float64).squeeze()
 
-        self.detection_params = aruco.CharucoParameters()
-        self.detection_params.tryRefineMarkers = True
-        # params.minMarkerPerimeterRate = 0.01
-        #params.adaptiveThreshConstant = 1 # for low light, but lowers accuracy
-        self.board_detectors = aruco.CharucoDetector(self.board, self.detection_params)
+        self.detection_options = detection_options or {}  # Store the normalised detection overrides for reuse.
+        if marker_backend == "aruco2" and self.detection_options:
+            if not getattr(self, "_warned_detection_options", False):
+                logger.warning(
+                    "ChArUco: detection_options are OpenCV-only and are ignored "
+                    "with marker_backend='aruco2'."
+                )
+                self._warned_detection_options = True
+        self.detection_params, self.detector_params, self.refine_params = build_charuco_detector_components(
+            self.detection_options
+        )  # Build the shared OpenCV parameter objects in one place.
+        self.board_detectors = construct_charuco_detector(
+            self.board,
+            self.detection_params,
+            self.detector_params,
+            self.refine_params,
+        )  # Create the board detector with the shared fallback logic.
         self.given_legacy_warning = False
 
         self._process_data()
+
+    def _warn_legacy_once(self) -> None:
+        """Warn once per target when aruco2 interpolation still disagrees."""
+        if not self.given_legacy_warning:
+            logger.warning(
+                "ChArUco (aruco2): cross-marker disagreement remains above 5px "
+                "after the legacy-pattern toggle. Verify your physical board "
+                f"matches legacy={self.board.getLegacyPattern()}."
+            )
+            self.given_legacy_warning = True
+
+    def _board_size_mm(self) -> tuple[float, float]:
+        n_x, n_y = self.board.getChessboardSize()
+        side_mm = float(self.square_size) * 1000.0
+        return float(n_x) * side_mm, float(n_y) * side_mm
+
+    def _render_board(self, px_per_mm: float = 12.0) -> np.ndarray:
+        width_mm, height_mm = self._board_size_mm()
+        width_px = max(1, int(round(width_mm * px_per_mm)))
+        height_px = max(1, int(round(height_mm * px_per_mm)))
+        return self.board.generateImage((width_px, height_px))
+
+    def save_to_pdf(
+            self,
+            f_out: Path | str | None = None,
+            data_format: str = "raster",
+            dpi: int = 300,
+    ) -> Path:
+        if f_out is None:
+            f_out = Path(
+                f"charuco_{self.board.getChessboardSize()[0]}x{self.board.getChessboardSize()[1]}_"
+                f"square_{self.square_size * 1000:.2f}mm.pdf"
+            )
+        else:
+            f_out = Path(f_out)
+
+        f_out = f_out.expanduser().with_suffix(".pdf").resolve()
+        f_out.parent.mkdir(parents=True, exist_ok=True)
+
+        if data_format == "vector":
+            try:
+                import cairosvg
+            except OSError as _cairo_err:
+                raise OSError(
+                    f"{_cairo_err}\n\n"
+                    "pyCamSet's ChArUco/Ccube target code requires the native 'cairo' "
+                    "library, which cairosvg requires but pip cannot install on its own.\n"
+                    "Install the native cairo library for your platform, then re-import pyCamSet:\n"
+                    "  - conda (Windows/Linux/macOS):  conda install -c conda-forge cairo\n"
+                    "  - Debian/Ubuntu:                 apt install libcairo2\n"
+                    "  - macOS (Homebrew):              brew install cairo\n"
+                    "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
+                ) from _cairo_err
+            svg_out = f_out.with_suffix(".svg")
+            self.save_to_svg(svg_out, suppress_svg_log=True)
+            cairosvg.svg2pdf(url=str(svg_out), write_to=str(f_out))
+            logger.info("Saved ChArUco Vector PDF: %s", f_out)
+            return f_out
+
+        if data_format != "raster":
+            raise ValueError("data_format must be one of: raster, vector")
+
+        image = self._render_board()
+        with Image.fromarray(image) as im:
+            im.save(fp=f_out, resolution=float(dpi))
+
+        logger.info("Saved ChArUco Raster PDF: %s", f_out)
+        return f_out
+
+    @staticmethod
+    def _bilinear_quad(q: np.ndarray, u: float, v: float) -> np.ndarray:
+        # q order: tl, tr, br, bl
+        p00 = q[0]
+        p10 = q[1]
+        p11 = q[2]
+        p01 = q[3]
+        return (1 - u) * (1 - v) * p00 + u * (1 - v) * p10 + u * v * p11 + (1 - u) * v * p01
+
+    @staticmethod
+    def aruco_marker_grid_for_id(dictionary: cv2.aruco.Dictionary, marker_id: int) -> np.ndarray:
+        """Returns full marker grid (payload + one-cell border), with 1=black and 0=white."""
+        marker_size = int(dictionary.markerSize)
+        n_cells = marker_size + 2
+        cell_px = 24
+        side = n_cells * cell_px
+
+        marker_img = np.zeros((side, side), dtype=np.uint8)
+        cv2.aruco.generateImageMarker(dictionary, int(marker_id), side, marker_img, 1)
+
+        grid = np.zeros((n_cells, n_cells), dtype=np.uint8)
+        for r in range(n_cells):
+            for c in range(n_cells):
+                block = marker_img[r * cell_px:(r + 1) * cell_px, c * cell_px:(c + 1) * cell_px]
+                grid[r, c] = 1 if float(block.mean()) < 127.5 else 0
+        return grid
+
+    def iter_marker_slots(self):
+        ids = np.asarray(self.board.getIds()).reshape(-1).astype(int)
+        obj_points = self.board.getObjPoints()
+
+        if len(ids) != len(obj_points):
+            raise ValueError(f"Mismatch between ids ({len(ids)}) and obj_points ({len(obj_points)}) in Charuco board.")
+
+        for marker_id, corners in zip(ids, obj_points):
+            c = np.asarray(corners, dtype=float)
+            if c.ndim == 3:
+                c = c.reshape(-1, c.shape[-1])
+
+            if c.shape[0] != 4 or c.shape[1] < 2:
+                raise ValueError(f"Unexpected marker corner shape: {c.shape}")
+
+            yield int(marker_id), c[:, :2]
+
+    def save_to_svg(
+            self,
+            f_out: Path | str | None = None,
+            border_width: float = 10,
+            suppress_svg_log: bool = False,
+    ) -> Path:
+        if f_out is None:
+            n_x, n_y = self.board.getChessboardSize()
+            f_out = Path(
+                f"charuco_{n_x}x{n_y}_square_{self.square_size * 1000:.2f}mm_true_vector.svg"
+            )
+        else:
+            f_out = Path(f_out)
+
+        f_out = f_out.expanduser().with_suffix(".svg").resolve()
+        f_out.parent.mkdir(parents=True, exist_ok=True)
+
+        n_cols, n_rows = self.board.getChessboardSize()
+        n_cols = int(n_cols)
+        n_rows = int(n_rows)
+        sq = float(self.square_size)
+        black_polys: list[np.ndarray] = []
+
+        # Draw black chessboard squares.
+        for r in range(n_rows):
+            for c in range(n_cols):
+                if (r + c) % 2 != 0:
+                    continue
+                x0 = c * sq
+                y0 = r * sq
+                black_polys.append(
+                    np.array(
+                        [[x0, y0], [x0 + sq, y0], [x0 + sq, y0 + sq], [x0, y0 + sq]],
+                        dtype=float,
+                    )
+                )
+
+        dct = self.board.getDictionary()
+        for marker_id, q in self.iter_marker_slots():
+            grid = self.aruco_marker_grid_for_id(dct, marker_id)
+            g_rows, g_cols = grid.shape
+
+            for r in range(g_rows):
+                v0 = r / g_rows
+                v1 = (r + 1) / g_rows
+                for c in range(g_cols):
+                    if grid[r, c] != 1:
+                        continue
+                    u0 = c / g_cols
+                    u1 = (c + 1) / g_cols
+                    black_polys.append(
+                        np.array(
+                            [
+                                self._bilinear_quad(q, u0, v0),
+                                self._bilinear_quad(q, u1, v0),
+                                self._bilinear_quad(q, u1, v1),
+                                self._bilinear_quad(q, u0, v1),
+                            ],
+                            dtype=float,
+                        )
+                    )
+
+        if not black_polys:
+            raise RuntimeError("No vector marker polygons were generated for SVG export.")
+
+        all_pts = np.vstack(black_polys)
+        min_xy = all_pts.min(axis=0)
+        max_xy = all_pts.max(axis=0)
+
+        border_m = float(border_width) * 0.001
+        min_xy -= border_m
+        max_xy += border_m
+        canvas_w = float(max_xy[0] - min_xy[0])
+        canvas_h = float(max_xy[1] - min_xy[1])
+
+        dwg = svgwrite.Drawing(
+            str(f_out),
+            size=(f"{canvas_w * 1000.0:.6f}mm", f"{canvas_h * 1000.0:.6f}mm"),
+            viewBox=f"0 0 {canvas_w:.6f} {canvas_h:.6f}",
+        )
+        dwg.add(dwg.rect(insert=(0, 0), size=(canvas_w, canvas_h), fill="white"))
+
+        offset = -min_xy
+        for poly in black_polys:
+            p = poly + offset
+            dwg.add(dwg.polygon(points=[tuple(xy) for xy in p], fill="black", stroke="none"))
+
+        svg_text = dwg.tostring()
+        with open(f_out, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(svg_text)
+            fh.flush()
+            import os
+            os.fsync(fh.fileno())
+
+        if (not f_out.exists()) or f_out.stat().st_size == 0:
+            raise IOError(f"SVG write failed: {f_out}")
+
+        if not suppress_svg_log:
+            logger.info("Saved ChArUco SVG: %s", f_out)
+        return f_out
 
 
     def find_in_image(self, image, draw=False, camera: Camera|None = None, wait_len=1) -> ImageDetection:
@@ -59,30 +315,50 @@ class ChArUco(AbstractTarget):
         :param draw: Whether or not the detected corners should be drawn.
         :param camera: optional. A camera target for more accurate detection.
         :param wait_len: time to pause to allow drawing of detections. -1 waits for key press.
-        
+
         :return ImageDetection: a data class wrapping the data detected in the image.
         """
-        # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
-        # _, _, mloc, mid = self.board_detectors.detectBoard(image)
-        c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image) #, markerCorners=mloc, markerIds=mid)
+        if self.marker_backend == "aruco2":
+            # aruco2 branch (D4): detect markers with aruco2 and interpolate
+            # ChArUco corners; the legacy-pattern toggle runs inside the module.
+            # D4 step 10 returns (corner_ids 1D, pts (N,2)); unpack ids first.
+            c_ids, c_corners = detect_charuco_corners(
+                image,
+                self.board,
+                self._aruco_dict_int,
+                warn_legacy=self._warn_legacy_once,
+            )
+            if c_ids is None:
+                return ImageDetection()  # return an empty detection
+            # normalise to the aruco1 shapes used below: (N,1,2) and (N,1)
+            c_corners = np.asarray(c_corners, dtype=np.float32).reshape(-1, 1, 2)
+            c_ids = np.asarray(c_ids, dtype=np.int32).reshape(-1, 1)
+            mloc, mid = None, None
+        else:
+            # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
+            # _, _, mloc, mid = self.board_detectors.detectBoard(image)
+            c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image)
         if c_corners is None and mloc is not None:
             if not self.given_legacy_warning:
-                logger.warning("Found markers, but no corners, trying using alternative board detection")
+                pattern_type = "legacy" if self.board.getLegacyPattern() else "new"
+                logger.warning(f"ChArUco: Found ArUco markers but no ChArUco corners with {pattern_type} pattern. "
+                                f"If detections are consistently low, verify your physical board matches legacy={self.board.getLegacyPattern()}.")
                 self.given_legacy_warning = True
-            am_legacy = self.board.getLegacyPattern()
-            self.board.setLegacyPattern(not am_legacy)
-            c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image, markerCorners=mloc, markerIds=mid)
+            # Retry under the opposite pattern convention.  A board printed to
+            # the other convention detects all of its markers and none of its
+            # corners, so without this the whole image is silently dropped.
+            self.board.setLegacyPattern(not self.board.getLegacyPattern())
+            c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(
+                image, markerCorners=mloc, markerIds=mid)
 
         od = 1
-        c_corners
-        # breakpoint()
 
         if c_corners is None:
             return ImageDetection() # return an empty detection
 
             # aruco.drawDetectedMarkers(display_im, np.array(corners)/d_f, ids)
 
-        if draw:           
+        if draw:
             display_im = image.copy()
             target_size = [480, 640]
             d_f = int(max((min(np.array(display_im.shape[:2]) / target_size)), 1))
@@ -113,4 +389,10 @@ class ChArUco(AbstractTarget):
         Draws the target as a matplotlib plot.
         """
         plt.imshow(self.board.generateImage(imres), cmap='gray')
-        plt.show()  
+        plt.show()
+
+
+if __name__ == '__main__':
+    test = ChArUco(num_squares_x=7, num_squares_y=7, square_size=4)
+    test.plot()
+    # test.get_printable_texture()

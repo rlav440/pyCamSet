@@ -109,7 +109,11 @@ class Ccube(AbstractTarget):
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 1.5
             thickness = int(t.shape[0]/500)
-            cv2.putText(t, f"{idb}", (t.shape[0]//100, t.shape[0]//100 * 99 ), font, font_scale, 0, thickness)
+            # OpenCV 5's putText asserts an 8-bit image, and these textures are
+            # float; label a uint8 copy and write it back to keep the dtype.
+            labelled = t.astype(np.uint8)
+            cv2.putText(labelled, f"{idb}", (t.shape[0]//100, t.shape[0]//100 * 99 ), font, font_scale, 0, thickness)
+            t[...] = labelled
 
             # debug_t.append(board.draw(draw_res)) #DEBUG
         # self.textures = debug_t
@@ -230,11 +234,18 @@ class Ccube(AbstractTarget):
                 c_corners, c_ids, mloc, mid = bd.detectBoard(image, markerCorners=mloc, markerIds=mid)
 
             if c_ids is not None:
-                for cid, corner in zip(c_ids[:, 0], c_corners[:, 0, :]):
+                # OpenCV 5 squeezes detectBoard's singleton axis; normalise.
+                ids_flat = np.asarray(c_ids).reshape(-1)
+                corners_flat = np.asarray(c_corners).reshape(-1, 2)
+                for cid, corner in zip(ids_flat, corners_flat):
                     seen_keys.append([idb, cid])
                     seen_data.append(corner)
                 if draw:
-                    aruco.drawDetectedCornersCharuco(im_idea, c_corners/d_f, c_ids)
+                    aruco.drawDetectedCornersCharuco(
+                        im_idea,
+                        np.asarray(c_corners).reshape(-1, 1, 2) / d_f,
+                        np.asarray(c_ids).reshape(-1, 1),
+                    )
 
         if draw:
             cv2.imshow('detections', im_idea)

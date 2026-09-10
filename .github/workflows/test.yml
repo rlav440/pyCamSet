@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   test:
-    name: ${{ matrix.os }} · py${{ matrix.python }}
+    name: ${{ matrix.os }} · py${{ matrix.python }} · cv${{ matrix.opencv }}
     runs-on: ${{ matrix.os }}
     strategy:
       # Report every platform's result, not just the first failure: the point
@@ -20,6 +20,15 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-14]
         python: ["3.11", "3.12"]
+        # opencv-python carries no upper bound, so pip resolves it to 5.x
+        # everywhere.  Pin the major version per job instead of letting the
+        # resolver decide: without the explicit 4.x entries below, the
+        # supported floor would stop being exercised the day 5.x shipped.
+        opencv: [">=5"]
+        include:
+          - {os: ubuntu-latest, python: "3.12", opencv: "<5"}
+          - {os: windows-latest, python: "3.12", opencv: "<5"}
+          - {os: macos-14, python: "3.12", opencv: "<5"}
 
     steps:
       - uses: actions/checkout@v4
@@ -30,12 +39,15 @@ jobs:
           cache: pip
 
       - name: Install
-        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install "opencv-python${{ matrix.opencv }}"
 
       - name: Record the resolved native dependencies
-        # opencv-python is unpinned upstream and resolves differently per
-        # platform and per Python version; log what we actually got so a
-        # platform-only failure can be traced to it.
+        # The OpenCV major version is pinned per job, but the exact build still
+        # differs per platform and per Python version; log what we actually got
+        # so a platform-only failure can be traced to it.
         run: |
           python -c "import sys, numpy, cv2, numba; print('python', sys.version)"
           python -c "import numpy, cv2, numba; print('numpy', numpy.__version__); print('cv2', cv2.__version__); print('numba', numba.__version__)"

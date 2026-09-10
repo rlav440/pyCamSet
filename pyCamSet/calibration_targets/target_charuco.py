@@ -88,17 +88,23 @@ class ChArUco(AbstractTarget):
             # d_f=1
             if display_im.ndim == 2:
                 display_im = np.tile(display_im[..., None], (1, 1, 3))
+            # drawDetectedCornersCharuco still wants the un-squeezed shapes on
+            # both major versions, so feed it those rather than the flat arrays.
             aruco.drawDetectedCornersCharuco(
                 display_im,
-                np.array(c_corners) / d_f,
-                c_ids,
+                np.asarray(c_corners).reshape(-1, 1, 2) / d_f,
+                np.asarray(c_ids).reshape(-1, 1),
             )
 
             cv2.imshow('detections', display_im)
             cv2.waitKey(wait_len)
 
 
-        return ImageDetection(c_ids[:, 0], c_corners[:, 0])
+        # OpenCV 4 returns (N, 1, 2) corners and (N, 1) ids; OpenCV 5 squeezes
+        # both.  Normalise so the detection is shaped the same either way.
+        return ImageDetection(
+            np.asarray(c_ids).reshape(-1), np.asarray(c_corners).reshape(-1, 2)
+        )
         
     def plot(self,imres=(1000,1000)):                           
         """

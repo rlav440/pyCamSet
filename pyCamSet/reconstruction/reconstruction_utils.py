@@ -106,7 +106,9 @@ def rectify_camera_pair(cam_0: Camera, cam_1:Camera, zero_flag = False):
         cam_0.intrinsic, np.zeros(5) if zero_flag else cam_0.distortion_coefs,
         cam_1.intrinsic, np.zeros(5) if zero_flag else cam_1.distortion_coefs,
         cam_0.res,
-        rot, trans,
+        # OpenCV 5 requires the translation as a column vector; a flat (3,)
+        # fails with an opaque gemm assertion.  (3, 1) is accepted by both.
+        rot, np.asarray(trans).reshape(3, 1),
         # cv2.CALIB_ZERO_DISPARITY,
         # alpha=1,
         newImageSize=np.array(cam_0.res) *10

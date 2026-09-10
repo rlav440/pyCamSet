@@ -535,37 +535,45 @@ def adaptive_decimated_charuco_detection_stereo(frame_L, charuco_board, aruco_di
     '''
     This function runs through a series of decimation numbers on the input images and runs corner detections on the decimated image.
     It will find the optimal decimation factor that would yield the most number of corners detected on either images
-        
-    :param frame_L: original res image 
-    :param rescale_corners_to_original: if True will corners will multiply with optimal decimation factor (default = True) 
+
+    :param frame_L: original res image
+    :param charuco_board: the cv2.aruco.CharucoBoard to detect.
+    :param aruco_dict: retained for backwards compatibility. The board already
+        carries its own dictionary, which is what the detector uses.
+    :param rescale_corners_to_original: if True will corners will multiply with optimal decimation factor (default = True)
     :return charuco_corners_L - charuco corners detected from downsampled image
     :return optimal_decimation - optimal downsampled factor
     '''
-    
+
+    # This used cv2.aruco.detectMarkers + interpolateCornersCharuco, which
+    # OpenCV removed in 4.7 -- below the supported floor, so the old body
+    # raised AttributeError on every version this package allows.
+    # CharucoDetector.detectBoard replaces both: it detects the markers and
+    # interpolates the chessboard corners in one call.
+    detector = cv2.aruco.CharucoDetector(charuco_board)
+
     # Initialize variables to store the best decimation factor and maximum corners detected in either image and the charuco corners detected in both the left and right image
     optimal_decimation = 1
     max_corners_detected = 0
-    charuco_corners_L = None # variable to store corners from cv2.aruco.interpolateCornersCharuco
+    charuco_corners_L = None
     charuco_ids = None
     # adaptive down sampling to account for large resolution images
-    for decimation_factor in range(1, 12):    
+    for decimation_factor in range(1, 12):
         decimated_image_L = frame_L[::decimation_factor, ::decimation_factor]
-        marker_corners_L, ids_L, rejected_L = cv2.aruco.detectMarkers(decimated_image_L, aruco_dict)
-        # if markers found find corner
-        if len(marker_corners_L) > 0:
-            ret_L, all_charuco_corners_L, all_charuco_ids_L = cv2.aruco.interpolateCornersCharuco(marker_corners_L, ids_L, decimated_image_L, charuco_board)
-            if ret_L:
-                num_corners_detected_L = len(all_charuco_corners_L)
-                if num_corners_detected_L > max_corners_detected:
-                    if num_corners_detected_L > max_corners_detected:
-                        max_corners_detected = num_corners_detected_L
-                        optimal_decimation = decimation_factor
-                        charuco_corners_L = all_charuco_corners_L
-                        charuco_ids = all_charuco_ids_L
-    if charuco_corners_L is not None: 
-        if rescale_corners_to_original == True:
-            charuco_corners_L = charuco_corners_L * optimal_decimation   
-    else:
-        charuco_corners_L = None
-        charuco_ids = None
+        all_charuco_corners_L, all_charuco_ids_L, _, _ = detector.detectBoard(decimated_image_L)
+        if all_charuco_corners_L is None:
+            continue
+        num_corners_detected_L = len(all_charuco_corners_L)
+        if num_corners_detected_L > max_corners_detected:
+            max_corners_detected = num_corners_detected_L
+            optimal_decimation = decimation_factor
+            # OpenCV 5 squeezes the singleton axis off both returns; reshape so
+            # this function keeps handing back the (N, 1, 2) / (N, 1) arrays it
+            # always has.
+            charuco_corners_L = np.asarray(all_charuco_corners_L).reshape(-1, 1, 2)
+            charuco_ids = np.asarray(all_charuco_ids_L).reshape(-1, 1)
+
+    if charuco_corners_L is not None and rescale_corners_to_original:
+        charuco_corners_L = charuco_corners_L * optimal_decimation
+
     return charuco_corners_L, charuco_ids, optimal_decimation

@@ -10,10 +10,12 @@ here so the convention is a test failure rather than a debugging session.
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 
 from pyCamSet.utils.general_utils import (
+    adaptive_decimated_charuco_detection_stereo,
     average_tforms,
     colourmap_to_colour_list,
     distort_points,
@@ -421,3 +423,72 @@ def test_write_colour_ply_writes_a_parsable_header(tmp_path):
     body = lines[lines.index("end_header") + 1 :]
     assert len([line for line in body if line.strip()]) == 2
     assert body[1].startswith("1.00000000 2.00000000 3.00000000 0 255 0")
+
+
+# --------------------------------------------------------------------------
+# adaptive_decimated_charuco_detection_stereo
+#
+# This wrapped cv2.aruco.detectMarkers + interpolateCornersCharuco, both of
+# which OpenCV removed in 4.7 -- so it raised AttributeError on every version
+# this package supports, and its one call site had been commented out.  It is
+# now built on CharucoDetector.detectBoard, whose returns are shaped
+# differently on OpenCV 4 and 5.  These pin the shapes it hands back, which is
+# the part a caller depends on and the part that silently differs by version.
+# --------------------------------------------------------------------------
+
+BOARD_SQUARES = (8, 8)
+BOARD_CORNERS = (BOARD_SQUARES[0] - 1) * (BOARD_SQUARES[1] - 1)
+
+
+@pytest.fixture
+def synthetic_charuco():
+    """A ChArUco board and a clean render of it, detectable at full scale."""
+    a_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
+    board = cv2.aruco.CharucoBoard(BOARD_SQUARES, 0.02, 0.016, a_dict)
+    return board, a_dict, board.generateImage((900, 900))
+
+
+def test_adaptive_decimated_charuco_returns_unsqueezed_shapes(synthetic_charuco):
+    """The (N, 1, 2) / (N, 1) contract must hold on OpenCV 4 and 5 alike."""
+    board, a_dict, image = synthetic_charuco
+
+    corners, ids, decimation = adaptive_decimated_charuco_detection_stereo(
+        image, board, a_dict
+    )
+
+    assert corners.shape == (BOARD_CORNERS, 1, 2)
+    assert ids.shape == (BOARD_CORNERS, 1)
+    assert decimation == 1, "a clean full-scale render needs no decimation"
+    assert np.all((corners[:, 0, :] >= 0) & (corners[:, 0, :] <= 900))
+
+
+def test_adaptive_decimated_charuco_reports_nothing_on_a_blank_image(
+    synthetic_charuco,
+):
+    board, a_dict, _ = synthetic_charuco
+    blank = np.full((600, 600), 255, dtype=np.uint8)
+
+    corners, ids, decimation = adaptive_decimated_charuco_detection_stereo(
+        blank, board, a_dict
+    )
+
+    assert corners is None
+    assert ids is None
+    assert decimation == 1
+
+
+def test_adaptive_decimated_charuco_rescale_flag_scales_by_the_decimation(
+    synthetic_charuco,
+):
+    """Rescaling maps corners back onto the original resolution."""
+    board, a_dict, image = synthetic_charuco
+
+    scaled, _, decimation = adaptive_decimated_charuco_detection_stereo(
+        image, board, a_dict, rescale_corners_to_original=True
+    )
+    unscaled, _, _ = adaptive_decimated_charuco_detection_stereo(
+        image, board, a_dict, rescale_corners_to_original=False
+    )
+
+    assert np.allclose(scaled, unscaled * decimation)
+

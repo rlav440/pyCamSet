@@ -44,8 +44,10 @@ def _detect_board(image_dir):
 
         corners, ids, _, _ = detector.detectBoard(gray)
         if corners is not None and len(corners) > MIN_CORNERS_PER_VIEW:
-            all_corners.append(corners)
-            all_ids.append(ids)
+            # OpenCV 5 squeezes detectBoard's singleton axis; normalise so the
+            # rest of the test sees one shape on both major versions.
+            all_corners.append(np.asarray(corners).reshape(-1, 1, 2))
+            all_ids.append(np.asarray(ids).reshape(-1, 1))
 
     return all_corners, all_ids, im_size, board
 

@@ -34,6 +34,8 @@ from typing import Callable, Sequence
 
 import logging
 
+logger = logging.getLogger(__name__)
+
 import numpy as np
 from numba import njit, prange
 from scipy.optimize import OptimizeResult
@@ -392,6 +394,7 @@ def levenberg_marquardt(
     xtol: float = 1e-10,
     jac_csr: Callable | None = None,
     verbose: bool = False,
+    callback: Callable[[int, float, np.ndarray], None] | None = None,
 ) -> OptimizeResult:
     """
     Minimise ``0.5 * ||loss(x)||^2`` with the Schur complement step.
@@ -406,6 +409,8 @@ def levenberg_marquardt(
     :param solver: the :class:`SchurSolver` for this structure
     :param jac_csr: optional ``x -> csr_array`` used only to populate the
         ``jac`` field of the result, which pyCamSet stores on the camera set
+    :param callback: called after each accepted step with the iteration
+        number, the cost, and the residuals, for progress reporting
     :returns: a :class:`scipy.optimize.OptimizeResult`
     """
     x = np.array(x0, dtype=np.float64)
@@ -421,7 +426,7 @@ def levenberg_marquardt(
             status, message = 5, (
                 "the jacobian is not finite at the current parameters, which "
                 "usually means a point has moved onto or behind a camera plane")
-            logging.warning(message)
+            logger.warning(message)
             break
         B, E, C, v, w = solver.normal_equations(blocks, r.reshape((-1, 2)))
         g_free = -np.concatenate([
@@ -451,7 +456,15 @@ def levenberg_marquardt(
                 lam = max(lam * max(1.0 / 3.0, 1.0 - (2.0 * rho - 1.0) ** 3), lam_min)
                 accepted = True
                 if verbose:
-                    print(f"    it {nit:3d} cost {cost:.9e} lam {lam:.2e} rho {rho:.3f}")
+                    # debug, not info: the progress bar carries this for a
+                    # person watching and the summary carries the outcome, so
+                    # the raw trace is for diagnosis. Ask for it with the
+                    # 'verbosity' option at 3.
+                    logger.debug(
+                        f"    it {nit:3d} cost {cost:.9e} "
+                        f"lam {lam:.2e} rho {rho:.3f}")
+                if callback is not None:
+                    callback(nit, cost, r)
                 if dcost < ftol * cost:
                     status, message = 2, "ftol reached"
                 elif dx_norm < xtol * (xtol + float(np.linalg.norm(x))):

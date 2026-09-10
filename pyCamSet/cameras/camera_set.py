@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 import numbers
 from typing import overload
 import cv2
@@ -12,7 +16,8 @@ from matplotlib import pyplot as plt
 
 
 from pyCamSet.cameras.camera import Camera
-from pyCamSet.utils.visualisation import visualise_calibration
+from pyCamSet.utils.visualisation import (
+    visualise_calibration, finalise_figure)
 from pyCamSet.utils.general_utils import get_subfolder_names
 from pyCamSet.utils.general_utils import get_close_square_tuple, glob_ims_local
 
@@ -20,6 +25,7 @@ from pyCamSet.utils.general_utils import get_close_square_tuple, glob_ims_local
 from pyCamSet.optimisation.compiled_helpers import nb_triangulate_full
 import pyCamSet.optimisation.compiled_helpers as ch
 from pyCamSet.utils.saving import save_camset
+from pyCamSet.utils.calibration_report import CalibrationReport
 from pyCamSet.reconstruction.acmmp_utils import ReconParams, write_pair_file, calc_pairs
 
 
@@ -85,7 +91,8 @@ class CameraSet:
         self.calibration_result = None
         self.calibration_handler = None
         self.calibration_jac = None
-        self.calibration_params = None 
+        self.calibration_params = None
+        self.calibration_report: CalibrationReport | None = None
         self._cam_list: list = None
         self._cam_dict: dict = None
         self.n_cams = None
@@ -291,7 +298,7 @@ class CameraSet:
                    for cam in self]
 
         for i in range(len(v_cones) - 1):
-            logging.info(f"performing {i + 1}th intersection of {len(v_cones)}")
+            logger.info(f"performing {i + 1}th intersection of {len(v_cones)}")
 
             plot_intersection = True
             if plot_intersection:
@@ -303,7 +310,7 @@ class CameraSet:
             mesh = v_cones[i + 1].boolean_union(v_cones[i])
 
             if mesh.n_points == 0:
-                logging.info(f"Zero point mesh output, skipping viewcone "
+                logger.info(f"Zero point mesh output, skipping viewcone "
                              f"{i - 1}")
                 v_cones[i + 1] = v_cones[i - 1]
             else:
@@ -623,15 +630,21 @@ class CameraSet:
 
         scene.show()
 
-    def draw_camera_distortions(self):
+    def draw_camera_distortions(self, show: bool = True,
+                                save_dir: Path | str | None = None):
         """
         Draws a quiver plot of the distortion of all cameras in the camera set.
+
+        :param show: open the figure in a window
+        :param save_dir: a directory to write the figure into
+        :return: where it was written, if it was
         """
         to_draw = get_close_square_tuple(self.n_cams)
-        fix, axes = plt.subplots(*to_draw)
+        figure, axes = plt.subplots(*to_draw)
         for ax, cam in zip(axes.flatten(), self):
             cam.view_sensor_distortion(ax)
-        plt.show()
+        figure.suptitle("Per Camera Sensor Distortion")
+        return finalise_figure(figure, "camera_distortions", show, save_dir)
 
     def get_cam_dict(self):
         """
@@ -734,6 +747,7 @@ class CameraSet:
     def set_calibration_history(self,
                                 optimisation_results,
                                 param_handler,
+                                report: CalibrationReport | None = None,
         ):
         """
         Camera sets are representations of data, so provides methods to store the data
@@ -741,15 +755,27 @@ class CameraSet:
 
         :param optimisation_results: the results of the optimisation from scipy lsq
         :param param_handler: the parameter handler used to manage the optimisation
+        :param report: the summary of the run, if one was built
         """
         self.calibration_params = optimisation_results['x']
         self.calibration_result = optimisation_results['fun']
         self.calibration_jac = optimisation_results['jac']
         self.calibration_handler = param_handler
+        self.calibration_report = report
 
-    def visualise_calibration(self):
+    def visualise_calibration(self, show: bool = True,
+                              save_dir: Path | str | None = None):
         """
         Displays the calibration results of the camera set.
+
+        The numbers behind these plots are on ``calibration_report``; this is
+        the per point, per camera and per image detail underneath them. Pass
+        ``save_dir`` with ``show=False`` to keep the figures from a run that
+        has nobody watching it.
+
+        :param show: open the figures in windows
+        :param save_dir: a directory to write the figures into
+        :return: the files written, if any
         """
         if self.calibration_params is None:
             raise ValueError('The camera set has no calibration data saved')
@@ -758,9 +784,11 @@ class CameraSet:
                 'err':self.calibration_result
             }
 
-        visualise_calibration(
+        return visualise_calibration(
             optim_results,
             self.calibration_handler,
+            show=show,
+            save_dir=save_dir,
         )
 
     def get_calibration_points(self):

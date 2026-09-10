@@ -2,6 +2,8 @@ from __future__ import annotations
 from tqdm import tqdm
 from scipy.sparse import csgraph
 import logging
+
+logger = logging.getLogger(__name__)
 from copy import copy, deepcopy
 from uniplot import plot as uplot, uniplot
 
@@ -20,6 +22,7 @@ from pyCamSet.optimisation.numba_schur import ParamGroup
 from pyCamSet import CameraSet, Camera
 
 from pyCamSet.calibration_targets import TargetDetection
+from pyCamSet.utils.setup_reports import RigConsistencyReport
 import pyvista as pv
     
 if TYPE_CHECKING:
@@ -318,7 +321,7 @@ class TemplateBundleHandler:
             raise ValueError("missing poses should be initialised before calling this function")
         cyclic_outlier_detection = True
         num_loops = 0
-        logging.info("Begining outlier detection")
+        logger.info("Begining outlier detection")
         user_in = self.problem_opts['outliers']
         while cyclic_outlier_detection and num_loops < 10:
             not_missing = np.where(~np.array(self.missing_poses))[0]
@@ -345,7 +348,7 @@ class TemplateBundleHandler:
                 if user_in == 'n':
                     cyclic_outlier_detection = False
             else:
-                logging.info(f"No outliers detected in iteration {num_loops}.")
+                logger.info(f"No outliers detected in iteration {num_loops}.")
                 cyclic_outlier_detection = False
             num_loops += 1
 
@@ -368,7 +371,13 @@ class TemplateBundleHandler:
 
         if self.initial_params is not None:
             return self.initial_params
-        return self.calc_initial_params()
+        # cached, as both subclasses already do: calc_initial_params runs the
+        # whole graph pose estimate, the misalignment check and the
+        # interactive outlier prompt, and run_bundle_adjustment asks for the
+        # params twice -- once to build the loss and once to size the schur
+        # groups -- so without this all of that happened twice per run.
+        self.initial_params = self.calc_initial_params()
+        return self.initial_params
 
     def calc_initial_params(self) -> np.ndarray:
         """
@@ -471,7 +480,7 @@ class TemplateBundleHandler:
         detection = self.detection
         if self.missing_poses is not None:
             if np.any(self.missing_poses):
-                logging.info("Missing poses required removing detected data from the optimisation")
+                logger.info("Missing poses required removing detected data from the optimisation")
                 # delete any inds with missing pose numbers.
                 missing_poses = np.where(self.missing_poses)[0]
                 detection = self.detection.delete_row(im_num=missing_poses)
@@ -498,33 +507,27 @@ class TemplateBundleHandler:
         
 
 
-def check_for_target_misalignment(tforms:  np.ndarray, ref_cam:int = 0):
+def check_for_target_misalignment(tforms: np.ndarray, ref_cam: int = 0,
+                                  cam_names: list[str] | None = None
+                                  ) -> RigConsistencyReport:
     """
-    Checks for misalignment in the viewed target by looking at the variances of the relative transformations to the first camera, which is treated as a reference.
+    Reports whether the cameras agree on where the target was.
 
-    :param tforms: the set of transformations to evaluate. c x p x 4 x 4 array where c is the number of cameras and p the number of poses/images
+    Treats the reference camera's view of the target as the truth and measures
+    how much every other camera's relative view moves across the images. A
+    rigid rig looking at one target at one instant holds that near zero, so
+    scatter means the images being compared are not of the same instant.
+
+    :param tforms: c x p x 4 x 4 target poses, per camera per image
+    :param ref_cam: the camera to measure against
+    :param cam_names: the camera names, defaulting to their indices
+    :return: the report, which is also logged
     """
-    
-    Mrc_at = [np.linalg.inv(p) for p in tforms[ref_cam]]
-    Marc_ac = np.array([
-        [(Mt_c @ Mrc_t) for Mrc_t, Mt_c in zip(Mrc_at, Mat_c)] 
-        for Mat_c in tforms
-    ])
+    report = RigConsistencyReport.from_transforms(
+        tforms, ref_cam=ref_cam, cam_names=cam_names)
+    logger.info("\n" + report.summary())
+    return report
 
-    for ic, Marc_c in enumerate(Marc_ac):
-        if ic == ref_cam:
-            continue
-        angs = np.array([np.arccos((np.trace(t[:3,:3]) - 1)/2) for t in Marc_c])
-        mags = [np.linalg.norm(t[:3,-1]) for t in Marc_c]
-        std_ang = np.nanstd(angs)
-        std_mag = np.nanstd(mags)
-        logging.info(f"found a variation in location of cam {ic} of {std_mag}")
-        if std_mag > 0.010:
-            logging.critical(f"Found inconsistent relative translation positions (stdev = {std_mag:.2f} m) for camera index {ic}")
-            logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
-        if std_ang > 5 / 180 * np.pi:
-            logging.critical(f"Found inconsistent relative angle magnitudes (stdev = {std_ang/np.pi*180:.2f} degrees) for camera index {ic}")
-            logging.warning(f"This may indicate misordered images, temporal misalignment, or very bad detections, and is likely to cause calibration difficulties.") 
 
 def check_feasiblity_and_update_refpose(Mat_ac, ref_pose: int) -> tuple[int, bool]:
     """
@@ -536,7 +539,7 @@ def check_feasiblity_and_update_refpose(Mat_ac, ref_pose: int) -> tuple[int, boo
     if not vrf_pose:
         f_index = np.argmax(visible_pose)
         if f_index == 0 and not np.all(visibility[0]):
-            logging.warning("Couldn't find an initial pose for all cameras, trying a graph based method")
+            logger.warning("Couldn't find an initial pose for all cameras, trying a graph based method")
             return -1, True
 
         ref_pose = f_index
@@ -574,7 +577,7 @@ def estimate_camera_relative_poses(
     Mat_ac = np.array(Mat_ac)
     Mat_ac_cost = np.array(Mat_ac_cost)
 
-    check_for_target_misalignment(Mat_ac, ref_cam) #TODO, refactor this to a single summary.
+    check_for_target_misalignment(Mat_ac, ref_cam, cams.get_names())
     # try_graph was unconditionally overwritten to True immediately below
     # this call, so the direct (non graph) estimate that followed had been
     # unreachable; it is gone.  The flag is still returned because the
@@ -656,7 +659,7 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
     dist_sums = np.sum(dist_vec[len(cams):, :], axis=1) # distance matrix is symmetric
     # pick pose as the pose with the lowest total distance to all neighbours.
     starting_seed = int(np.nanargmin(dist_sums) + len(cams)) #the pose with the lowest distance score
-    logging.debug(f"graph pose seed: {starting_seed}")
+    logger.debug(f"graph pose seed: {starting_seed}")
     # starting_seed=50
     #use this to index the starting point
     # dist_vec = np.round(dist_vec[:, starting_seed], 0)
@@ -671,7 +674,7 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
     accumulated_tforms = np.array([np.eye(4) for _ in range(num_nodes)])
 
     # for _ in tqdm(range(np.ceil(max_iters/2).astype(int)), desc="Pathfinding graph"):
-    logging.info("Pathfinding Graph")
+    logger.info("Pathfinding Graph")
     while True:
         # cam step
         do_step = (current_loc != goal_loc) & viable_nodes
@@ -739,7 +742,7 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
         im_costs_1 = [np.mean(costs[l]) if v else np.nan for l,v in zip(lookups_1, viable_nodes[len(cams):])]
         init_per_im_reproj_err_1 = np.array(im_costs_1)
 
-        logging.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
+        logger.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
         uplot([init_per_im_reproj_err_0, init_per_im_reproj_err_1], height=10, title="Per image initial reproj error", color=['blue', 'red'])
 
     else:
@@ -749,7 +752,7 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
 
         init_per_im_reproj_err = np.array(im_costs)
 
-        logging.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
+        logger.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
         uplot(init_per_im_reproj_err, height=10, title="Per image initial reproj error", color=['blue', 'red'])
     lookups = [(dd[:,1] == i) for i in range(detection.max_ims)]
     im_costs = [np.sum(costs[l]) if v else np.nan for l,v in zip(lookups, viable_nodes[len(cams):])]

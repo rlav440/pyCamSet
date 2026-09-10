@@ -1,5 +1,7 @@
 from __future__ import annotations
 import logging
+
+logger = logging.getLogger(__name__)
 import time
 from copy import copy
 from typing import Callable
@@ -17,6 +19,9 @@ from pyCamSet.optimisation.numba_schur import (
     SchurSolver, levenberg_marquardt, spec_from_groups)
 
 from pyCamSet.calibration_targets import TargetDetection
+from pyCamSet.utils.calibration_report import (
+    CalibrationReport, HIGH_INITIAL_ERROR_PX)
+from pyCamSet.utils.progress import OptimisationProgress
     
 if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
@@ -36,14 +41,17 @@ def make_optimisation_function(
     :return fn: the cost function
     """
     #
-    logging.info("getting initial params")
+    logger.info("getting initial params")
     init_params = param_handler.get_initial_params()
     base_data = param_handler.get_detection_data(flatten=True)
-    logging.info("Compiling the loss function")
+    logger.info("Compiling the loss function")
     bundle_loss_fun = param_handler.make_loss_fun(threads)
 
     if param_handler.can_make_jac():
-        logging.info("Compiling the jacobian")
+        logger.info(
+            "Compiling the jacobian. The generated source is cached under "
+            "optimisation/template_functions, so this is slow only the first "
+            "time a problem of this shape is solved.")
         bundle_loss_jac = param_handler.make_loss_jac(threads)
         check_jacobian_is_not_degenerate(bundle_loss_jac, init_params)
     else: 
@@ -74,7 +82,7 @@ def check_jacobian_is_not_degenerate(bundle_loss_jac: Callable, init_params: np.
     jac = np.asarray(jac.todense()) if hasattr(jac, "todense") else np.asarray(jac)
 
     if jac.ndim != 2 or jac.shape[1] != init_params.size:
-        logging.warning(
+        logger.warning(
             "Skipping the jacobian degeneracy check: expected a "
             f"(n_residuals, {init_params.size}) jacobian, got shape {jac.shape}."
         )
@@ -91,7 +99,7 @@ def check_jacobian_is_not_degenerate(bundle_loss_jac: Callable, init_params: np.
             "it recurs, please report it with your platform and "
             "numpy/numba versions."
         )
-    logging.info("Jacobian degeneracy check passed (no all-zero columns).")
+    logger.info("Jacobian degeneracy check passed (no all-zero columns).")
 
 
 def can_use_schur(param_handler) -> tuple[bool, str]:
@@ -140,18 +148,20 @@ def run_schur_bundle_adjustment(param_handler, loss_fn, bundle_jac, init_params,
     spec = spec_from_groups(groups)
     solver = SchurSolver(spec)
     blocks = param_handler.make_loss_blocks(threads)
-    logging.info(
+    logger.info(
         f"Schur solver: eliminating {spec.n_elim_blocks} blocks of "
         f"{spec.elim_size}x{spec.elim_size}, leaving a "
         f"{int(spec.keep_free.sum())} parameter reduced system "
         f"(from {init_params.size})"
     )
-    return levenberg_marquardt(
-        loss_fn, blocks, init_params, solver,
-        max_iter=param_handler.problem_opts["max_nfev"],
-        jac_csr=bundle_jac,
-        verbose=param_handler.problem_opts["verbosity"] > 1,
-    )
+    with OptimisationProgress() as progress:
+        return levenberg_marquardt(
+            loss_fn, blocks, init_params, solver,
+            max_iter=param_handler.problem_opts["max_nfev"],
+            jac_csr=bundle_jac,
+            verbose=param_handler.problem_opts["verbosity"] > 1,
+            callback=progress.update,
+        )
 
 
 def run_bundle_adjustment(param_handler: TemplateBundleHandler,
@@ -163,16 +173,16 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     :param param_handler: The parameter handler that represents the optimisation
     :return: The output of the calibration and the argmin defined CameraSet
     """
-    logging.info("Making optimisation problem")
+    logger.info("Making optimisation problem")
     loss_fn, bundle_jac, init_params = make_optimisation_function(
         param_handler, threads
     )
 
     init_err = loss_fn(init_params)
     init_euclid = np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1))
-    logging.info(f'found {len(init_params):.2e} parameters')
-    logging.info(f'found {len(init_err):.2e} control points')
-    logging.info(f'Initial Euclidean error: {init_euclid:.2f} px')
+    logger.info(f'found {len(init_params)} parameters')
+    logger.info(f'found {len(init_err) // 2} control points')
+    logger.info(f'Initial Euclidean error: {init_euclid:.2f} px')
 
     # raise ValueError
     # test = lambda : loss_fn(init_params)
@@ -182,21 +192,25 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
     # test = lambda : bundle_jac(init_params)
     # gu.benchmark(test, repeats=100)
 
-    if (init_euclid > 100) or (init_euclid == np.nan):
-        logging.critical("Found worryingly high/NaN initial error: check that the initial parametisation is sensible")
-        logging.info(
-            "This can often indicate failure to place a camera or target correctly, giving nonsensical errors.")
+    if (init_euclid > HIGH_INITIAL_ERROR_PX) or np.isnan(init_euclid):
+        logger.warning(
+            f"Initial error of {init_euclid:.2f} px is above the "
+            f"{HIGH_INITIAL_ERROR_PX:.0f} px this check expects: verify the "
+            f"initial parametisation is sensible. This usually indicates a "
+            f"camera or the target has been placed incorrectly.")
         # param_handler.check_params(init_params)
 
     start = time.time()
     usable, reason = can_use_schur(param_handler)
     if usable and bundle_jac is not None:
+        solver = "schur"
         optimisation = run_schur_bundle_adjustment(
             param_handler, loss_fn, bundle_jac, init_params, threads)
     else:
+        solver = "trf"
         if bundle_jac is not None and param_handler.problem_opts.get(
                 "solver", "schur") == "schur":
-            logging.warning(f"Falling back to the trust region solver: {reason}")
+            logger.warning(f"Falling back to the trust region solver: {reason}")
         optimisation = least_squares(
             loss_fn,
             init_params,
@@ -208,21 +222,17 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
         )
     end = time.time()
 
-    final_euclid = np.mean(np.linalg.norm(np.reshape(optimisation.fun, (-1, 2)), axis=1))
-    logging.info(f'Final Euclidean error: {final_euclid:.2f} px')
-    logging.info(f'Optimisation took {end - start: .2f} seconds.')
-
-    if final_euclid > 5:
-        logging.critical("Remaining error is very large: please check the output results")
-        # param_handler.check_params(optimisation.x)
+    report = CalibrationReport.from_optimisation(
+        optimisation, param_handler,
+        initial_error_px=init_euclid, duration_s=end - start, solver=solver,
+    )
+    # the summary carries the final error, the timing and any concern that
+    # would otherwise be a line of its own, so it is the whole report of the
+    # solve rather than a footer under one.
+    logger.info("\n" + report.summary())
 
     camset = param_handler.get_camset(optimisation.x)
-    camset.set_calibration_history(optimisation, param_handler)
-
-
-    init_err = loss_fn(optimisation.x)
-    init_euclid = np.mean(np.linalg.norm(np.reshape(init_err, (-1, 2)), axis=1))
-    logging.info(f"Check test with a result of {init_euclid:.2f}")
+    camset.set_calibration_history(optimisation, param_handler, report=report)
 
     return optimisation, camset
 

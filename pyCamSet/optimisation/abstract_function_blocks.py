@@ -13,6 +13,8 @@ from datetime import datetime
 from matplotlib import pyplot as plt
 import logging
 
+logger = logging.getLogger(__name__)
+
 import numpy as np
 from numba import njit, prange
 from numba.typed import List
@@ -533,7 +535,7 @@ class optimisation_function:
         mat_scriptname = matmul_get_name(self)
         matmul_loc = (Path(__file__).parent)/("template_functions/" + mat_scriptname + ".py")
         if not matmul_loc.exists() or overwrite_function:
-            logging.warning("Compiling the matrix flow for this calibration.")
+            logger.warning("Compiling the matrix flow for this calibration.")
             lines = create_optimisable_compute_flow(self, in_name="output_block", out_name="write_data")
             write_fun(self, lines, input_name="output_block", output_name="write_data")
 
@@ -547,7 +549,7 @@ class optimisation_function:
             base_jac_fn: Callable = top_module.make_full_jac(self, detections, threads)
         else:
             ###### CREATE THE NEEDED DATA
-            logging.warning(f"Compiling the jacobian definition for the {strings} calibration")
+            logger.warning(f"Compiling the jacobian definition for the {strings} calibration")
             def t(l):
                 return ["\t" + li for li in l]
 
@@ -586,7 +588,6 @@ class optimisation_function:
                 f"samples={SPARSITY_PROBE_SAMPLES}. Deterministic -- "
                 f"regenerating must reproduce this file byte for byte.",
             ]
-            print(block_slices)
             function_def = [
                 f"@njit(parallel=True,fastmath=True,cache=True)",
                 f"def full_jac(inp_params, d_data, block_param_inds, n_lines, inp_mem, out_mem, wrk_mem, param_len, n_threads, d_shape, param_slices, n_outs, f_outs, grad_outputsize, n_params, template = None):",

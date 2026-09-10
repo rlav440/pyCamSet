@@ -289,18 +289,18 @@ def test_no_commonly_visible_pose_asks_for_the_graph_method():
     assert try_graph is True
 
 
-def test_consistent_transforms_raise_no_misalignment_warning(caplog):
-    """A rigid rig produces identical relative transforms, so nothing is logged."""
+def test_consistent_transforms_raise_no_misalignment_warning():
+    """A rigid rig produces identical relative transforms, so nothing is flagged."""
     stack = _visible_stack(n_cams=2, n_poses=5)
     stack[1] = np.tile(make_4x4h_tform(np.zeros(3), np.array([0.1, 0, 0])), (5, 1, 1))
 
-    with caplog.at_level(logging.CRITICAL):
-        check_for_target_misalignment(stack, ref_cam=0)
+    report = check_for_target_misalignment(stack, ref_cam=0)
 
-    assert "inconsistent" not in caplog.text.lower()
+    assert report.flags == []
+    assert report.per_camera[0].translation_stdev_mm == pytest.approx(0.0)
 
 
-def test_inconsistent_translations_are_reported(caplog):
+def test_inconsistent_translations_are_reported():
     """A camera that appears to move between images is the classic symptom
     of misordered or temporally misaligned images, and must be flagged."""
     stack = _visible_stack(n_cams=2, n_poses=5)
@@ -308,10 +308,30 @@ def test_inconsistent_translations_are_reported(caplog):
         # a metre of drift per image: far past the 10mm threshold
         stack[1, pose] = make_4x4h_tform(np.zeros(3), np.array([pose * 1.0, 0, 0]))
 
-    with caplog.at_level(logging.CRITICAL):
+    report = check_for_target_misalignment(stack, ref_cam=0)
+
+    assert any("mm relative to camera" in f for f in report.flags)
+    assert report.per_camera[0].translation_stdev_mm > 10.0
+
+
+def test_the_reference_camera_is_not_measured_against_itself():
+    """It is the datum, so it has no relative scatter to report."""
+    stack = _visible_stack(n_cams=3, n_poses=4)
+
+    report = check_for_target_misalignment(
+        stack, ref_cam=1, cam_names=["a", "b", "c"])
+
+    assert report.reference_camera == "b"
+    assert [c.name for c in report.per_camera] == ["a", "c"]
+
+
+def test_the_consistency_block_is_logged(caplog):
+    stack = _visible_stack(n_cams=2, n_poses=4)
+
+    with caplog.at_level(logging.INFO):
         check_for_target_misalignment(stack, ref_cam=0)
 
-    assert "inconsistent relative translation" in caplog.text.lower()
+    assert "Rig consistency" in caplog.text
 
 
 # --------------------------------------------------------------------------

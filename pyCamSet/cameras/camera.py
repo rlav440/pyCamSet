@@ -1,5 +1,7 @@
 from __future__ import annotations
 import logging
+
+logger = logging.getLogger(__name__)
 import math as m
 from copy import deepcopy
 from pathlib import Path
@@ -499,7 +501,7 @@ class Camera:
         if depth_im is not None:
             length = depth_im[cord[:, 1], cord[:, 0]]
             if np.any(np.isnan(length)):
-                logging.warning('Nan length found in depth image used for ray')
+                logger.warning('Nan length found in depth image used for ray')
             rays *= length[:, None]
 
         return rays + self.position

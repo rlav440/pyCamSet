@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 import logging
+
+logger = logging.getLogger(__name__)
 import numpy as np
 import time
 from pathlib import Path
@@ -160,7 +162,7 @@ class AbstractTarget(ABC):
             return detections
 
         if not multiprocessing.current_process().name == "MainProcess":
-            logging.error("Multiprocessing Image Detections requires use of the __name__ = '__main__': idiom in your script")
+            logger.error("Multiprocessing Image Detections requires use of the __name__ = '__main__': idiom in your script")
             os.kill(int(os.environ['Detection_PID']), signal.SIGTERM)
             raise RuntimeError
 
@@ -171,7 +173,7 @@ class AbstractTarget(ABC):
         # use a Pool of worker processes.
         if not (processname := multiprocessing.current_process().name) == "MainProcess":
             # print(processname)
-            logging.critical("Python multiprocessing attempted to start an infinite loop. Use the if __name__ == '__main__' idiom in your calling script to prevent this")
+            logger.critical("Python multiprocessing attempted to start an infinite loop. Use the if __name__ == '__main__' idiom in your calling script to prevent this")
             # multiprocessing.parent_process().terminate()
             raise RuntimeError()
 
@@ -245,7 +247,7 @@ class AbstractTarget(ABC):
 
         cyclic_outlier_detection = True
         num_loops = 0
-        logging.info("Begining outlier detection")
+        logger.info("Begining outlier detection")
         while cyclic_outlier_detection and num_loops < 10:
             ans = mad_outlier_detection([np.linalg.norm(p[:3,3] - mloc) for p in poses], out_thresh=5)
             inds = np.arange(len(p_detected))[p_detected][ans]
@@ -268,7 +270,7 @@ class AbstractTarget(ABC):
                 if user_in == 'n':
                     cyclic_outlier_detection = False
             else:
-                logging.info(f"No outliers detected in iteration {num_loops}.")
+                logger.info(f"No outliers detected in iteration {num_loops}.")
                 cyclic_outlier_detection = False
             num_loops += 1
 
@@ -351,7 +353,7 @@ class AbstractTarget(ABC):
             fixed_param = fixed_params.get(cam_name, {})
             if "int" in fixed_param and "dst" in fixed_param:
                 init_cam = Camera(intrinsic=fixed_param['int'], distortion_coefs=fixed_param['dst'], res=res, name=cam_name)
-                logging.info(f'Camera {cam_name} was pre determined. Skipping opencv calibration')
+                logger.info(f'Camera {cam_name} was pre determined. Skipping opencv calibration')
                 return init_cam
 
 
@@ -368,7 +370,7 @@ class AbstractTarget(ABC):
                 key_mask = np.squeeze(keys[:, :-1] == board)
                 if np.sum(key_mask) > 12: 
                     if np.sum(key_mask) < 12:
-                        logging.warning("Trying to calibrate with a small number of detections on a board.")
+                        logger.warning("Trying to calibrate with a small number of detections on a board.")
                     board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')
                     board_im = data[key_mask, -2:][None, ...].astype('float32')
                     object_points.append(board_obj)
@@ -390,7 +392,7 @@ class AbstractTarget(ABC):
         )
         end = time.time()
 
-        logging.info(f'{cam_name} took {end - start:.1f} seconds'
+        logger.info(f'{cam_name} took {end - start:.1f} seconds'
             f', leftover error of {ic[0]:.2f} pixels')
 
         # perform an initial pose estimate on the first images
@@ -463,7 +465,7 @@ class AbstractTarget(ABC):
             raise ValueError("Inadequate number of corners for pose estimation")
 
         if len(object_points) < 12:
-            logging.warning("Low number of points used for pose estimation")
+            logger.warning("Low number of points used for pose estimation")
 
 
         try:
@@ -500,10 +502,10 @@ class AbstractTarget(ABC):
         max_err = np.argmax(err_list)
         min_err = np.argmax(err_list)
         if (err := err_list[max_err].squeeze()) > 5:
-            logging.warning(f"Initial error of {err: .2f} found for a pose detection.")
+            logger.warning(f"Initial error of {err: .2f} found for a pose detection.")
 
         if (err := err_list[max_err].squeeze()) > 20:
-            logging.warning(f"Past 10 pixel error for failed detection - counting detection as a failure ")
+            logger.warning(f"Past 10 pixel error for failed detection - counting detection as a failure ")
             if mode == "nan":
                 if give_error:
                     return np.ones((4,4)) * np.nan, np.nan

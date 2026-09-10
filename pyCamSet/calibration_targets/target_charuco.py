@@ -6,6 +6,8 @@ from cv2 import aruco
 from matplotlib import pyplot as plt
 import logging
 
+logger = logging.getLogger(__name__)
+
 from pyCamSet.calibration_targets.abstract_target import AbstractTarget
 from pyCamSet.calibration_targets.target_detections import ImageDetection
 from pyCamSet.cameras import Camera
@@ -65,7 +67,7 @@ class ChArUco(AbstractTarget):
         c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image) #, markerCorners=mloc, markerIds=mid)
         if c_corners is None and mloc is not None:
             if not self.given_legacy_warning:
-                logging.warning("Found markers, but no corners, trying using alternative board detection")
+                logger.warning("Found markers, but no corners, trying using alternative board detection")
                 self.given_legacy_warning = True
             am_legacy = self.board.getLegacyPattern()
             self.board.setLegacyPattern(not am_legacy)

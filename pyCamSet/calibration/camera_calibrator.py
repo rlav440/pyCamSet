@@ -16,13 +16,17 @@ from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
 # from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, TemplateBundleHandler
 from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment
-from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+from pyCamSet.optimisation.template_handler import (
+    TemplateBundleHandler, DEFAULT_OPTIONS)
 from pyCamSet.utils.saving import save_pickle, load_pickle, load_CameraSet
 from pyCamSet.utils.general_utils import average_tforms, get_subfolder_names, glob_ims, mad_outlier_detection
 
-import coloredlogs, logging
+import logging
 
-coloredlogs.install(level=logging.INFO)
+from pyCamSet.utils.logs import setup_logging_from_verbosity
+from pyCamSet.utils.setup_reports import DetectionReport
+
+logger = logging.getLogger(__name__)
 
 
 def calibrate_cameras(
@@ -50,6 +54,9 @@ def calibrate_cameras(
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
     :param high_distortion: Implements an iterative scheme for high distortion cameras.
     """
+
+    setup_logging_from_verbosity(
+        (problem_options or {}).get("verbosity", DEFAULT_OPTIONS["verbosity"]))
 
     if isinstance(f_loc, str):
         f_loc = Path(f_loc)
@@ -102,13 +109,15 @@ def calibrate_cameras(
                 save_loc=save_loc / ('initial_cameras_high_distortion' + string_tail),
                 )
 
-            initial_cams.draw_camera_distortions()
+            # as outlier_rejection already does: only open a window when
+            # someone is there to close it
+            initial_cams.draw_camera_distortions(show=draw)
     else:
-        logging.info("Using the provided initial cameras.")
+        logger.info("Using the provided initial cameras.")
 
     initial_cams.set_resolutions_from_file(floc=f_loc)
     if len(initial_cams) == 1:
-        logging.warning("Only found and calibrated one camera - returning single camera calibration")
+        logger.warning("Only found and calibrated one camera - returning single camera calibration")
         return initial_cams
 
 
@@ -147,7 +156,7 @@ def run_initial_calibration(detection: TargetDetection,
     """
 
     if save_loc.exists() and save:
-        logging.info(f"Loading a previously saved initial calib from {save_loc}")
+        logger.info(f"Loading a previously saved initial calib from {save_loc}")
         cams = load_CameraSet(save_loc)
         if return_poses_and_costs is False:
             return cams
@@ -163,7 +172,7 @@ def run_initial_calibration(detection: TargetDetection,
     pose_im = np.argmax(score * mask)
     # create a lambda based on the inputs
 
-    logging.info("Pulling calibration method from target")
+    logger.info("Pulling calibration method from target")
     work_fn = lambda datum: calibration_target.initial_calibration(
             cam_name=datum[0],
             detection=datum[1],
@@ -223,7 +232,7 @@ def outlier_rejection(results, params, draw: bool = True) -> tuple[TargetDetecti
 
     if per_im_outliers is None:
         return None, False
-    logging.info("deleting datum associated with the above outliers")
+    logger.info("deleting datum associated with the above outliers")
     data = params.detection
     return data.delete_row(im_num=per_im_outliers), True
 
@@ -251,7 +260,7 @@ def run_stereo_calibration(
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
     :param floc: the location of the images, used to update the camera resolutions
     """
-    logging.info("Running the full multiview calibration")
+    logger.info("Running the full multiview calibration")
 
     if save_loc is None:
         save_loc = Path('optimised_cameras.camset')
@@ -306,13 +315,13 @@ def detect_datapoints_in_imfile(
     :return: A target detection.
     """
 
-    logging.info('starting image detection')
+    logger.info('starting image detection')
 
     if camset is not None:
         cache_name = cache_name.split('.')[0] + "_with_calib.pickle"
 
     if not (f_loc / cache_name).exists() or not caching:
-        logging.info('Not caching, starting detection')
+        logger.info('Not caching, starting detection')
         detected_sub_folders = get_subfolder_names(f_loc, return_full_path=True)
 
         if not detected_sub_folders:
@@ -346,55 +355,26 @@ def detect_datapoints_in_imfile(
         if caching:
             save_pickle((detected, cam_res), f_loc / cache_name)
     else:
-        logging.info('loading cached detection')
+        logger.info('loading cached detection')
         detected, cam_res = load_pickle(f_loc / cache_name)
     return detected, cam_res
 
-def validate_detections(detected:TargetDetection, target:AbstractTarget):
+def validate_detections(detected: TargetDetection,
+                        target: AbstractTarget) -> DetectionReport:
     """
-    This function checks the detections for each camera, and prints a warning if the detection is poor.
+    Reports how well each camera saw the target, before anything is solved.
+
+    A calibration can only be as good as its detections, and this is the
+    earliest point at which a bad set is visible, so it is worth reading
+    before waiting for the per camera calibration that follows.
+
+    :param detected: the detections to describe
+    :param target: the calibration target they were found with
+    :return: the report, which is also logged
     """
-    n_detected = {}
-
-    board_fraction = {}
-
-    corners_per_face = target.point_data.shape[-2]
-    cam_names = detected.cam_names
-
-    for cam_list in detected.get_cam_list():
-        cam_ind = int(cam_list.get_data()[0,0])
-        cam_name = cam_names[cam_ind]
-
-        board_detected = 0
-        im_lists = cam_list.get_image_list()
-        for im_list in im_lists:
-            datum = im_list.get_data()
-            if datum is not None:
-                total_seen = datum.shape[0]
-                board_detected += 1
-                n_keys = datum.shape[1] - 4
-                seen = board_fraction.setdefault(cam_name, [])
-                if n_keys == 1:
-                    seen.append(total_seen / corners_per_face)
-                else:
-                    n_boards = len(
-                        np.unique(datum[:, 2:-3], axis=0)
-                    )
-                    seen.append(
-                        total_seen / corners_per_face / n_boards
-                    )
-        n_detected[cam_name] = board_detected / detected.max_ims
-
-    for cam in cam_names:
-        metric0 = n_detected[cam] * 100
-        metric1 = np.mean(board_fraction[cam]) * 100
-        logging.info(f'\tCamera "{cam}" detected boards: {metric0: .1f}%,'
-                     f' board completeness: {metric1: .1f}%')
-        if metric0 < 90:
-            logging.warning(f'\tCamera "{cam}" has a high number of failed detections')
-        if metric1 < 50:
-            logging.warning(f'\tCamera "{cam}" struggled to detect full complete boards')
-    return
+    report = DetectionReport.from_detection(detected, target)
+    logger.info("\n" + report.summary())
+    return report
 
 
 def sanitise_input_images(detected_sub_folders:list[Path], optmode:str='na'):

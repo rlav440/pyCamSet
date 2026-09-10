@@ -11,6 +11,10 @@ from pathlib import Path
 import importlib
 from copy import copy
 
+from pyCamSet.utils.calibration_report import CalibrationReport
+
+logger = logging.getLogger(__name__)
+
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -142,6 +146,11 @@ def save_camset(
     except AttributeError:
         pass
 
+    # plain json rather than a compressed blob: the point of the report is
+    # that a person can read it, including straight out of the file.
+    if getattr(cams, 'calibration_report', None) is not None:
+        optim_dict['report'] = cams.calibration_report.to_dict()
+
     with open(f_name, 'w') as f:
         json.dump(save_dict, fp=f, indent=4)
 
@@ -193,7 +202,7 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
             dtct['dtct_module'], dtct['dtct_name'], **input_args
         )
     except Exception as e:
-        logging.warning(f"Failed to load detections with reason {e} \n returning just the CameraSet")
+        logger.warning(f"Failed to load detections with reason {e} \n returning just the CameraSet")
         return camset
 
     try:
@@ -203,7 +212,7 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
             **target_config['input']
         )
     except Exception as e:
-        logging.warning(f"Failed to load calibration target with reason {e}, returning just the CameraSet")
+        logger.warning(f"Failed to load calibration target with reason {e}, returning just the CameraSet")
         return camset
 
     try:
@@ -221,7 +230,7 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
             handler_config['handler_module'], handler_config['handler_name'], **input_args
         )
     except Exception as e:
-        logging.warning(f"Failed to intialise the Parameterhandler with reason {e}, returning just the CameraSet")
+        logger.warning(f"Failed to intialise the Parameterhandler with reason {e}, returning just the CameraSet")
         return camset
 
     try:
@@ -229,8 +238,16 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
         # camset.calibration_jac = decompress(optim['jac'])
         camset.calibration_params = np.array(optim['params'])
     except:
-        logging.warning("Failed to load calibration data, returning just the CameraSet")
+        logger.warning("Failed to load calibration data, returning just the CameraSet")
         return camset
+
+    # a file written before the report existed simply has no report
+    if 'report' in optim:
+        try:
+            camset.calibration_report = CalibrationReport.from_dict(
+                optim['report'])
+        except Exception as e:
+            logger.warning(f"Failed to load the calibration report: {e}")
 
     camset.calibration_handler = handler
     return camset

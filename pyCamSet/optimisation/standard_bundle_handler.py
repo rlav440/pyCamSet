@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 import logging
+
+logger = logging.getLogger(__name__)
 import time
 from copy import copy
 from typing import Callable
@@ -139,7 +141,7 @@ class SelfBundleHandler(TemplateBundleHandler):
 
 
         # if bundle_points_unfixed is not None:
-        #     logging.warning(
+        #     logger.warning(
         #         """
         #         A list of unfixed bundle points was provided. The calibration fixes arbitrary points to break gauge symmetries. 
         #         Unless overridden with the always_correct_gauge=True, the optimisation will no longer attempt to return the output geometry to the provided scale. 
@@ -402,7 +404,7 @@ class SelfBundleHandler(TemplateBundleHandler):
         else:
             raise ValueError("The target.valid_map property either needs to be true, for all comparisons being valid, or a nx2 list of index pairs.")
         s = np.mean(ref_map/new_map)
-        logging.info(f"Scale factor found {s}")
+        logger.info(f"Scale factor found {s}")
 
         new_points = s * point_estimate
         if np.isnan(s):
@@ -413,8 +415,8 @@ class SelfBundleHandler(TemplateBundleHandler):
                 ref_points[self.visible_feature_mask & good_face_mask])
             ) #this mapping from used points to a reference space
         except Exception as e:
-            logging.critical("Failed to find an acceptable gauge transform, returning the identity")
-            logging.critical(f"Gave error: {e}")
+            logger.critical("Failed to find an acceptable gauge transform, returning the identity")
+            logger.critical(f"Gave error: {e}")
             update_tform = np.eye(4)
 
         inv_update = np.linalg.inv(update_tform)
@@ -476,7 +478,7 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         scale = 5
         descale = 1000//scale
-        logging.info(f"found a mean difference of {np.mean(np.linalg.norm(diff[vm], axis=-1)):.2f} mm")
+        logger.info(f"found a mean difference of {np.mean(np.linalg.norm(diff[vm], axis=-1)):.2f} mm")
         s = pv.Plotter()
         s.title = "Target Self-calibration Results."
         s.add_arrows(
@@ -507,24 +509,11 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         labels = np.arange(len(og_data))
         s.add_point_labels(descale * og_data[vm], labels[vm])
-        s.show()
-        raise ValueError()
-        # rms1 = rms_plane(np1, cp1, final_data[vm & m1]*descale)
-        # rms4 = rms_plane(np4, cp4, final_data[vm & m4]*descale)
-        # rms5 = rms_plane(np5, cp5, final_data[vm & m5]*descale)
-        # print(rms1, rms4, rms5)
-        # # s.add_mesh(pv.PolyData(final_data[vm & m2]), point_size=6)
+        # s.add_mesh(pv.PolyData(final_data[vm & m2]), point_size=6)
         # s.add_mesh(p1, color='lightblue', opacity=0.7)
         # s.add_mesh(p4, color='lightblue', opacity=0.7)
         # s.add_mesh(p5, color='lightblue', opacity=0.7)
         s.add_legend(bcolor='w', border=True)
-        
-    
-        a14 = angle_between_planes(cp1, cp4)
-        a15 = angle_between_planes(cp1, cp5)
-        a45 = angle_between_planes(cp4, cp5)
-
-        print(a14, a15, a45)
 
         camera = s.camera
         camera.position = (-60, -60, -36)

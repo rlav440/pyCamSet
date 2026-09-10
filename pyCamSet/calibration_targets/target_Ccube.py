@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 import numpy as np
 from cv2 import aruco
@@ -227,7 +229,7 @@ class Ccube(AbstractTarget):
             c_corners, c_ids, mloc, mid =  bd.detectBoard(image)
             if c_corners is None and mloc is not None:
                 if not self.given_legacy_warning:
-                    logging.warning("Found markers, but no corners, trying using alternative board detection")
+                    logger.warning("Found markers, but no corners, trying using alternative board detection")
                     self.given_legacy_warning = True
                 am_legacy = self.boards[idb].getLegacyPattern()
                 self.boards[idb].setLegacyPattern(not am_legacy)

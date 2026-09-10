@@ -14,12 +14,14 @@ little more than the detection it already pays for elsewhere.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 
 import numpy as np
 import pytest
 
 from pyCamSet import CameraSet
+from pyCamSet.utils import report_format as fmt
 from pyCamSet.calibration.camera_calibrator import (
     detect_datapoints_in_imfile,
     outlier_rejection,
@@ -175,28 +177,49 @@ class _FlatTarget:
         self.point_data = np.zeros((1, corners, 3))
 
 
+def _cell_colours(report) -> list[dict[str, int | None]]:
+    """The colour of each graded cell, read back off the rendered table.
+
+    Asserting on the rendered output rather than on the statistics is what
+    pins the grading actually reaching the page.
+    """
+    rows = report.summary(colour=True).split("\n")
+    # anchored on the whole header: "cameras" in the count grid above also
+    # begins with "camera"
+    start = next(i for i, line in enumerate(rows)
+                 if all(word in line
+                        for word in ("camera", "detected", "complete"))) + 2
+    out = []
+    for line in rows[start:]:
+        if not line.strip() or line.strip().startswith("!"):
+            break
+        found = re.findall(r"\x1b\[38;5;(\d+)m", line)
+        out.append({"detected": int(found[0]) if found else None,
+                    "complete": int(found[1]) if len(found) > 1 else None})
+    return out
+
+
 @pytest.mark.parametrize("fraction", [1.0, 0.75])
-def test_good_detections_pass_quietly(fraction, caplog):
-    detection = _detection_with_completeness(fraction)
+def test_good_detections_pass_quietly(fraction):
+    report = validate_detections(
+        _detection_with_completeness(fraction), _FlatTarget())
 
-    with caplog.at_level(logging.WARNING):
-        validate_detections(detection, _FlatTarget())
-
-    assert "struggled" not in caplog.text
+    assert report.flags == []
 
 
-def test_incomplete_boards_are_reported(caplog):
-    """Under half a board per image is worth warning about."""
-    detection = _detection_with_completeness(0.25)
+def test_incomplete_boards_show_red():
+    """A quarter of a board per image is under the 60% band, so the cell is
+    red rather than a paragraph of prose."""
+    report = validate_detections(
+        _detection_with_completeness(0.25), _FlatTarget())
 
-    with caplog.at_level(logging.WARNING):
-        validate_detections(detection, _FlatTarget())
+    assert report.per_camera[0].completeness == pytest.approx(0.25, abs=0.02)
+    assert report.flags == []
+    assert _cell_colours(report)[0]["complete"] == fmt.SOLARIZED["red"]
 
-    assert "struggled to detect full complete boards" in caplog.text
 
-
-def test_failed_detections_are_reported(caplog):
-    """A camera that only saw the target in a few images is flagged."""
+def test_failed_detections_show_red():
+    """A camera that only saw the target in a few images is graded red."""
     detection = TargetDetection(cam_names=["a"])
     detection.max_ims = 20
     for im_num in range(3):  # 3 of 20 images
@@ -206,31 +229,86 @@ def test_failed_detections_are_reported(caplog):
             ImageDetection(keys=np.arange(16), image_points=np.tile([1.0, 2.0], (16, 1))),
         )
 
-    with caplog.at_level(logging.WARNING):
+    report = validate_detections(detection, _FlatTarget())
+
+    assert report.per_camera[0].detection_rate == pytest.approx(0.15)
+    assert _cell_colours(report)[0]["detected"] == fmt.SOLARIZED["red"]
+
+
+def test_the_three_bands_are_graded_green_orange_and_red():
+    """The scheme as asked for: 90%+ green, 60-89% orange, under 60% red."""
+    detection = TargetDetection(cam_names=["good", "fair", "poor"])
+    detection.max_ims = 10
+    for name, n_ims in (("good", 10), ("fair", 7), ("poor", 4)):
+        for im_num in range(n_ims):
+            detection.add_detection(
+                name,
+                im_num,
+                ImageDetection(keys=np.arange(16),
+                               image_points=np.tile([1.0, 2.0], (16, 1))),
+            )
+
+    report = validate_detections(detection, _FlatTarget())
+    detected = [row["detected"] for row in _cell_colours(report)]
+
+    assert detected == [fmt.SOLARIZED["green"],    # 100%
+                        fmt.SOLARIZED["orange"],   # 70%
+                        fmt.SOLARIZED["red"]]      # 40%
+
+
+def test_a_camera_that_saw_nothing_is_reported_not_raised():
+    """The worst detection failure used to be the least legible one: the
+    per camera loop indexed the empty camera's data and raised
+    TypeError: 'NoneType' object is not subscriptable."""
+    detection = TargetDetection(cam_names=["sees", "blind"])
+    detection.max_ims = 4
+    for im_num in range(4):
+        detection.add_detection(
+            "sees",
+            im_num,
+            ImageDetection(keys=np.arange(16), image_points=np.tile([1.0, 2.0], (16, 1))),
+        )
+
+    report = validate_detections(detection, _FlatTarget())
+
+    blind = [c for c in report.per_camera if c.name == "blind"][0]
+    assert blind.n_features == 0
+    assert blind.detection_rate == 0.0
+    assert any("detected the target in none of" in f for f in report.flags)
+
+
+def test_the_detection_block_is_logged(caplog):
+    """The report is the run's first output, so it has to reach the log."""
+    detection = _detection_with_completeness(1.0)
+
+    with caplog.at_level(logging.INFO):
         validate_detections(detection, _FlatTarget())
 
-    assert "high number of failed detections" in caplog.text
+    assert "Detection summary" in caplog.text
 
 
 @pytest.mark.data
 def test_the_real_corpus_reports_per_camera_metrics(charuco_detections, charuco_target, caplog):
-    """Validation must produce a line per camera on the real corpus.
+    """Validation must produce a row per camera on the real corpus.
 
-    This corpus does trip the completeness warning -- the boards are seen at
+    This corpus does trip the completeness flag -- the boards are seen at
     an angle and no camera resolves a full 19x19 in every frame -- and camera
-    "1" trips the failed-detection one too.  That is the expected state of
+    "1" trips the detection rate one too.  That is the expected state of
     these images, not a fault: the calibration still converges inside its
-    reprojection baseline.  Pinned so the warnings appearing or vanishing is a
+    reprojection baseline.  Pinned so the flags appearing or vanishing is a
     visible change rather than a silent one.
     """
     detections, _ = charuco_detections
 
     with caplog.at_level(logging.INFO):
-        validate_detections(detections, charuco_target)
+        report = validate_detections(detections, charuco_target)
 
+    assert [c.name for c in report.per_camera] == list(detections.cam_names)
     for name in detections.cam_names:
-        assert f'Camera "{name}" detected boards' in caplog.text
-    assert "struggled to detect full complete boards" in caplog.text
+        assert name in caplog.text
+    # every camera resolves well under half a board on this corpus
+    assert all(row["complete"] == fmt.SOLARIZED["red"]
+               for row in _cell_colours(report))
 
 
 # --------------------------------------------------------------------------

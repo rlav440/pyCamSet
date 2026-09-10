@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+logger = logging.getLogger(__name__)
+
 import matplotlib.pyplot as plt
 import numpy as np
 import cv2
@@ -162,7 +164,7 @@ def matlab_stereo(im0, im1, disp_range = (128, 256), uniqueness_thresh=25, plot=
     try:
         from matlab.engine import start_matlab
     except ImportError as e:
-        logging.info("matlab engine not installed")
+        logger.info("matlab engine not installed")
         raise e
 
     m = start_matlab()

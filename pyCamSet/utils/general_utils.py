@@ -1,5 +1,7 @@
 import functools
 import logging
+
+logger = logging.getLogger(__name__)
 import math as m
 import sys
 import time
@@ -34,14 +36,14 @@ def ask_yes_no(context: str, question: str, default: str = 'n') -> str:
     :param default: the answer to assume when running unattended
     :return: 'y' or 'n'
     """
-    logging.info(context)
+    logger.info(context)
     try:
         interactive = sys.stdin is not None and sys.stdin.isatty()
     except (AttributeError, ValueError):  # closed or replaced stdin
         interactive = False
 
     if not interactive:
-        logging.warning(
+        logger.warning(
             f"{context} Not running interactively, so assuming '{default}'. "
             f"Set the handler's 'outliers' option to 'y' or 'n' to choose."
         )
@@ -160,8 +162,8 @@ def mad_outlier_detection(data: np.ndarray|list, out_thresh = 3, draw=True) -> n
         w_out = np.nonzero(outliers)[0]
         listout = functools.reduce(lambda x, y: x+y, [f" {w}" for w in w_out])
 
-        logging.critical(f'found outliers in indicies:{listout}')
-        logging.critical(f'These may prevent calibration conversion')
+        logger.critical(f'found outliers in indicies:{listout}')
+        logger.critical(f'These may prevent calibration conversion')
         if draw:
             fig, ax = plt.subplots(1, 1)
             ax.plot(np.abs(np.array(data) - n_mdn) / n_mad, '.')

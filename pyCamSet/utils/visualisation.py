@@ -8,10 +8,78 @@ import numpy as np
 import pyvista as pv
 from matplotlib.colors import LogNorm, LinearSegmentedColormap
 
+from pathlib import Path
+import logging
+
 from pyCamSet.utils.general_utils import h_tform, get_close_square_tuple
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc, n_inv_pose
 
+logger = logging.getLogger(__name__)
+
 blues_with_white = LinearSegmentedColormap.from_list('Blues_with_white', [(1, 1, 1), *plt.cm.Blues(np.linspace(0, 1, 1024)[:900])])
+
+
+def finalise_figure(figure, name: str, show: bool = True,
+                    save_dir: Path | str | None = None) -> Path | None:
+    """
+    Save a matplotlib figure, show it, or both, and then let it go.
+
+    A bare ``plt.show()`` is fine at a desk and useless anywhere else: from a
+    batch run it blocks on a window nobody will close, and the figure it was
+    going to draw is the diagnostic the run most needed to keep. This writes
+    the figure where it can be looked at later instead.
+
+    :param figure: the figure to dispose of
+    :param name: the file stem to save it under
+    :param show: open a window
+    :param save_dir: a directory to write ``<name>.png`` into
+    :return: where it was written, if it was
+    """
+    written = None
+    if save_dir is not None:
+        written = Path(save_dir) / f"{name}.png"
+        written.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(written, dpi=150, bbox_inches="tight")
+    if show:
+        plt.show()
+    else:
+        plt.close(figure)
+    return written
+
+
+def finalise_plotter(plotter, name: str, show: bool = True,
+                     save_dir: Path | str | None = None) -> Path | None:
+    """
+    The same, for a pyvista plotter.
+
+    :param plotter: the plotter to dispose of
+    :param name: the file stem to save it under
+    :param show: open a window
+    :param save_dir: a directory to write ``<name>.png`` into
+    :return: where it was written, if it was
+    """
+    if save_dir is None:
+        if show:
+            plotter.show()
+        else:
+            plotter.close()
+        return None
+
+    written = Path(save_dir) / f"{name}.png"
+    written.parent.mkdir(parents=True, exist_ok=True)
+    if not show:
+        # otherwise this waits for a window to be closed before it will
+        # hand over the screenshot
+        plotter.off_screen = True
+    try:
+        plotter.show(screenshot=str(written))
+        return written
+    except Exception as e:
+        # a diagnostic that cannot be rendered must not take the calibration
+        # down with it, but it should say so rather than vanish
+        logger.warning(f"Could not save the {name} view: {e}")
+        plotter.close()
+        return None
 
 
 def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
@@ -88,8 +156,8 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
             ax.set_title(title + f'\nMean euclidean error = {m_1:.2f} '
                             f'px',
                             )
-        ax.set_ylabel('$\it{y}$ error (px)')
-        ax.set_xlabel('$\it{x}$ error (px)')
+        ax.set_ylabel(r'$\it{y}$ error (px)')
+        ax.set_xlabel(r'$\it{x}$ error (px)')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.locator_params(nbins=5)
@@ -99,6 +167,8 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
 
     if save is not None:
         plt.savefig(save)
+
+    return fig
 
 
 def fancy_confidence_contours(x,y, ax, ranges):
@@ -169,15 +239,24 @@ def fancy_confidence_contours(x,y, ax, ranges):
 #from pyCamera.optimisers.base_optimiser import AbstractParamHandler
 def visualise_calibration(
         o_results:dict,
-        param_handler#: AbstractParamHandler
-    ):
+        param_handler,#: AbstractParamHandler
+        show: bool = True,
+        save_dir: Path | str | None = None,
+    ) -> list[Path]:
     """
     A function to draw and plot the errors in a calibration given the results.
 
+    With ``save_dir`` set the figures are written there as PNGs, which is what
+    makes this usable from a script: with ``show=False`` as well, nothing
+    blocks and the whole diagnostic set survives the run.
+
     :param o_results: The optimisation results
     :param param_handler: The parameter handler that organised the optimisation.
-    :return:
+    :param show: open the figures in windows
+    :param save_dir: a directory to write the figures into
+    :return: the files written, if any
     """
+    written: list[Path] = []
     euclidean_err = np.linalg.norm(np.reshape(o_results['err'], (-1,2)), axis=1)
     e_lim = np.median(euclidean_err) * 3
     # print("Calibration Standard Deviation of euclidean Error:", np.std(euclidean_err))
@@ -186,7 +265,7 @@ def visualise_calibration(
     detection = param_handler.get_detection()
     cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
 
-    cluster_plot([o_results['err']], alphas=[0.1])
+    error_figure = cluster_plot([o_results['err']], alphas=[0.1])
 
     # the coverage for each camera
     n_cams = cams.get_n_cams()
@@ -233,7 +312,14 @@ def visualise_calibration(
     cbar = fig.colorbar(im, ax=axes.ravel().tolist())
     cbar.set_label("Polarised Reprojection Error (px)")
     fig.suptitle("Per Camera Coverage")
-    plt.show()
+
+    # the error distribution is finalised alongside the coverage plot because
+    # plt.show() is global: showing either shows both
+    written += [path for path in (
+        finalise_figure(error_figure, "error_distribution",
+                        show=False, save_dir=save_dir),
+        finalise_figure(fig, "per_camera_coverage", show, save_dir),
+    ) if path is not None]
 
     #err_buff = copy.copy(euclidean_err)
     to_reconstruct = detection.sort(['key', 'im_num']).get_data()
@@ -329,8 +415,23 @@ def visualise_calibration(
     else:
 
         plotter.add_text("n/a for single timestep images", position='upper_edge', font='times')
-    plotter.show()
-    param_handler.special_plots(o_results['x'])
+
+    reconstruction = finalise_plotter(
+        plotter, "reconstruction", show, save_dir)
+    if reconstruction is not None:
+        written.append(reconstruction)
+
+    # special_plots opens and drives its own window, and its signature is part
+    # of the parameter handler API that lives outside this repository, so it
+    # is not asked to save anything -- it is simply skipped when nobody is
+    # there to look.
+    if show:
+        param_handler.special_plots(o_results['x'])
+
+    if written:
+        logger.info(f"Wrote {len(written)} calibration figures to "
+                    f"{Path(written[0]).parent}")
+    return written
 
 
 

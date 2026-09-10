@@ -39,6 +39,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from pyCamSet.gui.recent_folders import remember_folder
+
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
@@ -1236,6 +1238,13 @@ class WorkspaceManager:
         metadata.setdefault("created_at", datetime.now().isoformat())
         with open(_as_windows_extended_path(meta_path), "w", encoding="utf-8") as fh:
             json.dump(metadata, fh, indent=2, default=str)
+
+        # A run has just been written here, so this workspace is real and
+        # worth offering next time.  Recorded from the save rather than from
+        # the folder field, which changes on every keystroke.  The workspace
+        # is always <image folder>/.pycamset_workspace, so its parent is the
+        # folder someone would pick again.
+        remember_folder(self.workspace_path.parent)
         return meta_path
 
     def load_runs(self, phase: str) -> list[dict]:

@@ -14,9 +14,11 @@ shell for:
    and skips rather than errors when the data is not present (shallow clones,
    sdist installs).
 
-3. **No writes into the repository.** Tests run in a per-test temporary
-   directory, so a test that writes a cache or a target PDF cannot make the
-   next run test something different from the last one.
+3. **No writes into the repository, or into the developer's settings.**
+   Tests run in a per-test temporary directory, so a test that writes a
+   cache or a target PDF cannot make the next run test something different
+   from the last one, and the GUI's per-user configuration is redirected
+   there too.
 
 4. **Optional-environment gates.** Two regression tests depend on optional
    runtime capabilities rather than library code: ``test_aruco2_backend.py``
@@ -169,6 +171,20 @@ def isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Keep test-generated files out of the checkout on every platform."""
     monkeypatch.chdir(tmp_path)
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def isolated_user_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep test-generated files out of the developer's own settings.
+
+    The GUI remembers recently used image folders under the per-user
+    configuration directory, and ``WorkspaceManager.save_run`` records one
+    every time a run is written.  Without this, any test that saves a run
+    would edit the real list on the machine running the suite.
+    """
+    config = tmp_path / "user_config"
+    monkeypatch.setenv("PYCAMSET_CONFIG_DIR", str(config))
+    return config
 
 
 # ---------------------------------------------------------------------------

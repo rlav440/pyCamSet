@@ -21,6 +21,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -36,6 +37,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.recent_folders import (
+    forget_folder,
+    load_recent_folders,
+    remember_folder,
+)
 from pyCamSet.gui.shared_functions import (
     BLUE_BTN_STYLE,
     IMAGE_FOLDER_SCHEMATIC,
@@ -86,6 +92,7 @@ class Phase0Tab(QWidget):
         self._cam_checkboxes: dict[str, QCheckBox] = {}
         self._rebuilding_cameras = False
         self._build_ui(terminal_cb)
+        self.refresh_recent_folders()
 
     def set_phase1_path_callback(self, cb: Callable[[str], None]) -> None:
         self._phase1_path_cb = cb
@@ -180,6 +187,22 @@ class Phase0Tab(QWidget):
 
         form.addRow(make_section_label("Paths"))
 
+        recent_row = QHBoxLayout()
+        self._recent_combo = QComboBox()
+        self._recent_combo.setToolTip(
+            "Image folders this machine has calibrated before.  Picking one "
+            "fills in the folder below, which populates every later phase "
+            "from the runs already saved in its workspace."
+        )
+        self._recent_combo.activated.connect(self._on_recent_selected)
+        recent_forget_btn = QPushButton("Forget")
+        recent_forget_btn.setFixedWidth(70)
+        recent_forget_btn.setToolTip("Remove the selected folder from this list.")
+        recent_forget_btn.clicked.connect(self._forget_selected_recent)
+        recent_row.addWidget(self._recent_combo)
+        recent_row.addWidget(recent_forget_btn)
+        form.addRow("Recent folders:", recent_row)
+
         floc_row = QHBoxLayout()
         self._floc_edit = QLineEdit()
         self._floc_edit.setPlaceholderText("Root folder with per-camera sub-folders")
@@ -257,6 +280,47 @@ class Phase0Tab(QWidget):
         if path:
             self._floc_edit.setText(path)
 
+    def refresh_recent_folders(self) -> None:
+        """Reload the recent list, keeping whatever is currently selected."""
+        if not hasattr(self, "_recent_combo"):
+            return
+        current = self._recent_combo.currentData()
+        self._recent_combo.blockSignals(True)
+        self._recent_combo.clear()
+        folders = load_recent_folders()
+        if folders:
+            self._recent_combo.addItem("Select a recent folder…", None)
+            for folder in folders:
+                self._recent_combo.addItem(str(folder), str(folder))
+        else:
+            self._recent_combo.addItem("No folders remembered yet", None)
+        if current is not None:
+            index = self._recent_combo.findData(current)
+            if index >= 0:
+                self._recent_combo.setCurrentIndex(index)
+        self._recent_combo.blockSignals(False)
+
+    def _on_recent_selected(self, _index: int) -> None:
+        """Fill in a remembered folder, and let the later phases follow.
+
+        Setting the field is all that is needed: every phase tab watches it
+        and rebuilds its own run list from the workspace inside.  The
+        validation is run quietly so the Continue button is live without a
+        dialog interrupting a selection the person only just made.
+        """
+        folder = self._recent_combo.currentData()
+        if not folder:
+            return
+        self._floc_edit.setText(str(folder))
+        self._confirm_image_folder_validity(quiet=True)
+
+    def _forget_selected_recent(self) -> None:
+        folder = self._recent_combo.currentData()
+        if not folder:
+            return
+        forget_folder(folder)
+        self.refresh_recent_folders()
+
     def _on_floc_change(self, text: str) -> None:
         floc = text.strip()
         # A changed path invalidates the previous confirmation; otherwise the
@@ -268,15 +332,27 @@ class Phase0Tab(QWidget):
             self._status_lbl.setText("Folder changed; confirm its validity again." if floc else "")
         self._ws_edit.setText(str(Path(floc) / ".pycamset_workspace") if floc else "")
 
-    def _confirm_image_folder_validity(self) -> None:
+    def _confirm_image_folder_validity(self, quiet: bool = False) -> None:
+        """
+        Check the folder, and set the workspace when it holds up.
+
+        :param quiet: report through the status line only.  Choosing a
+            remembered folder should not be answered with a dialog: the
+            folder may simply have moved, and the person is mid-selection.
+        """
         floc = self._floc_edit.text().strip()
         if not floc:
-            QMessageBox.critical(self, "Validation Error", "Image folder (f_loc) is required.")
+            if not quiet:
+                QMessageBox.critical(self, "Validation Error", "Image folder (f_loc) is required.")
             return
 
         f_loc = Path(floc)
         if not f_loc.exists() or not f_loc.is_dir():
-            QMessageBox.critical(self, "Validation Error", "Selected image folder does not exist.")
+            if quiet:
+                self._status_lbl.setText(
+                    f"{f_loc} is no longer there; it may have moved or been removed.")
+            else:
+                QMessageBox.critical(self, "Validation Error", "Selected image folder does not exist.")
             return
 
         cam_folders = get_camera_subfolders(f_loc)
@@ -296,6 +372,11 @@ class Phase0Tab(QWidget):
             self._ok_lbl.setText("")
             self._continue_btn.setEnabled(False)
             self._status_lbl.setText("")
+            if quiet:
+                self._status_lbl.setText(
+                    "That folder no longer looks like a calibration set; "
+                    "confirm it to see why.")
+                return
             QMessageBox.warning(
                 self,
                 "Image Folder Not Valid",
@@ -323,6 +404,9 @@ class Phase0Tab(QWidget):
         old_states = {n: cb.isChecked() for n, cb in self._cam_checkboxes.items()}
         self._camera_names = [p.name for p in cam_folders]
         self._rebuild_camera_checkboxes(restore_states=old_states)
+
+        remember_folder(f_loc)
+        self.refresh_recent_folders()
 
         if self._phase1_path_cb is not None:
             self._phase1_path_cb(str(f_loc))

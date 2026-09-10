@@ -65,20 +65,56 @@ After installing the native library, `pip install cairosvg` (or
 ###  Installing via PyPI
 
 Here is the [link](https://pypi.org/project/pyCamSet/) to our project on PyPI
+
 ```
 pip install pyCamSet
 ```
 
-Visualisation is optional. Install the viz extra when camera meshes,
-PyVista point clouds, or Open3D diagnostics are required:
+This is the full install: the library, plotting, and the graphical
+calibration workflow, which is launched with
+
+```
+pycamset
+```
+
+#### The lean install
+
+The GUI toolkit (PySide6) is by a wide margin the largest dependency --
+around 1.2 GB, more than everything else combined. On a server, in CI, or
+anywhere the GUI will not be opened, install without it:
+
+```
+pip install pyCamSet --no-deps
+pip install -r requirements-core.txt
+```
+
+Everything except the GUI works from that install, plotting included;
+`pycamset` reports what to install if it is run. `requirements-core.txt`
+is generated from `pyproject.toml` by
+`setup_scripts/write_core_requirements.py`.
+
+This cannot be an extra: pip extras only ever add packages to an install,
+never remove them, so the smaller install has to be the one that opts out.
+
+#### Optional extras
+
+Open3D powers the lockbox editor's viewport and one visualisation path;
+everything it draws has a PyVista equivalent, and PyVista is included by
+default, so it is kept separate:
 
 ```
 pip install "pyCamSet[viz]"
 ```
 
-The core package keeps camera geometry and reconstruction imports usable
-without those visualisation libraries; visualisation methods report the
-optional dependency and installation extra when called without it.
+Optuna, for the optimisation study workflow:
+
+```
+pip install "pyCamSet[optimisation]"
+```
+
+Camera geometry and reconstruction imports stay usable without either;
+methods that need one report the missing dependency and the extra that
+provides it when called.
 
 ### PuzzleBoard target
 

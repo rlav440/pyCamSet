@@ -38,21 +38,20 @@ jobs:
           cache: pip
 
       - name: Install
+        # The lean install: the suite is headless, and PySide6 is a 1.2 GB
+        # download that none of it exercises.  This is also the path
+        # requirements-core.txt documents, so CI keeps it honest.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e . --no-deps
+          pip install -r requirements-core.txt
+          pip install pytest>=7.0 pytest-timeout pytest-cov
           pip install "opencv-python${{ matrix.opencv }}"
 
       - name: Record the resolved native dependencies
         # The OpenCV major version is pinned per job, but the exact build still
         # differs per platform and per Python version; log what we actually got
         # so a platform-only failure can be traced to it.
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-
-      - name: Record resolved runtime dependencies
-        # Log native versions so platform-only failures are attributable.
         run: |
           python -c "import sys, numpy, cv2, numba; print('python', sys.version); print('numpy', numpy.__version__); print('cv2', cv2.__version__); print('numba', numba.__version__)"
 

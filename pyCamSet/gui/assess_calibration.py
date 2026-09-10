@@ -11,8 +11,6 @@ from typing import Any, Optional
 
 import numpy as np
 import logging
-import subprocess
-import sys
 import warnings
 
 try:
@@ -31,11 +29,9 @@ except ImportError:  # pragma: no cover
     visualise_calibration_open3d = None
     render_calibration_pyvista_png = None
 
-_LOGGER = logging.getLogger(__name__)
+from pyCamSet.gui.viewer_process import spawn_viewer
 
-# Kept only so the viewers are not garbage collected into zombies while
-# they are still on screen; nothing waits on them.
-_VIEWER_PROCESSES: list[subprocess.Popen] = []
+_LOGGER = logging.getLogger(__name__)
 
 _IGNORED_VISUALISATION_WARNING_MODULES = (
     r"numpy\._core\.",
@@ -179,40 +175,10 @@ def spawn_calibration_viewer(camset_path: Path) -> tuple[bool, str]:
     """
     Draw a calibration in a process of its own.
 
-    pyvista's Cocoa render window runs ``[NSRunLoop runUntilDate:]`` while
-    it is open.  Called from a Qt slot, that nested loop re-enters Qt's
-    event delivery and repaints the widget tree from inside an event Qt has
-    not finished dispatching, which segmentation faults in
-    ``QMacCGContext``.  matplotlib's ``plt.show()`` has the same shape of
-    problem, and reports it as "the event loop is already running".
-
-    Neither is a bug in the visualisation: both are asking for an event
-    loop the GUI already owns.  A separate process gives them one.
-
     :param camset_path: the ``.camset`` file to draw
     :return: whether the viewer was started, and what to say if it was not
     """
-    command = [
-        sys.executable, "-m", "pyCamSet.utils.visualise_camset",
-        str(camset_path),
-    ]
-    try:
-        # not waited on: the viewer owns its window for as long as the
-        # person wants it, and the GUI carries on meanwhile
-        process = subprocess.Popen(command)
-    except OSError as exc:
-        return False, f"Could not start the calibration viewer: {exc}"
-
-    _VIEWER_PROCESSES.append(process)
-    _reap_finished_viewers()
-    return True, ""
-
-
-def _reap_finished_viewers() -> None:
-    """Drop viewers that have exited, so they are not left as zombies."""
-    for process in list(_VIEWER_PROCESSES):
-        if process.poll() is not None:
-            _VIEWER_PROCESSES.remove(process)
+    return spawn_viewer("pyCamSet.utils.visualise_camset", [str(camset_path)])
 
 
 def launch_visualise_calibration_open3d_for_run(

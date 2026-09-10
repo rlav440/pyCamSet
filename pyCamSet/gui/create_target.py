@@ -4,6 +4,7 @@ Thin GUI wrapper around printable target generators.
 """
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 from typing import Optional
@@ -36,6 +37,8 @@ from pyCamSet.calibration_targets.backend_registry import (
     marker_backend_availability_text,
     marker_backend_available,
 )
+from pyCamSet.gui.viewer_process import spawn_viewer
+from pyCamSet.utils.visualise_target import TARGET_ARGUMENTS
 from pyCamSet.gui.shared_functions import (
     TerminalWidget,
     WorkspaceManager,
@@ -581,49 +584,31 @@ class CreateTargetTab(QWidget):
         self._terminal.append_line(f"Saved target: {out_path}")
 
     def _visualise_target(self) -> None:
+        """Show the target described by the form, in a process of its own.
+
+        ``Ccube`` and ``PuzzleBoardCube`` draw through pyvista, which
+        cannot open a window inside the GUI: see
+        :mod:`pyCamSet.gui.viewer_process`.  The other two draw through
+        matplotlib, which cannot either, and says so less fatally.
+        """
         collected = self._collect()
         if collected is None:
             return
 
-        try:
-            if collected["target_type"] == _TARGET_CCUBE:
-                cube = build_ccube(
-                    n_points=int(collected["n_points"]),
-                    length=float(collected["length"]),
-                    aruco_dict=str(collected["aruco_dict"]),
-                    marker_backend=collected.get("marker_backend", "aruco1"),
-                )
-                cube.plot()  # External pyvista/matplotlib window
-            elif collected["target_type"] == _TARGET_CHARUCO:
-                board = build_charuco(
-                    num_squares_x=int(collected["num_squares_x"]),
-                    num_squares_y=int(collected["num_squares_y"]),
-                    square_size=float(collected["square_size"]),
-                    marker_fraction=float(collected.get("marker_fraction", 0.8)),
-                    aruco_dict=str(collected["aruco_dict"]),
-                    marker_backend=collected.get("marker_backend", "aruco1"),
-                )
-                board.plot()
-            elif collected["target_type"] == _TARGET_PUZZLEBOARD:
-                board = build_puzzleboard(
-                    num_squares_x=int(collected["num_squares_x"]),
-                    num_squares_y=int(collected["num_squares_y"]),
-                    square_size=float(collected["square_size"]),
-                    start_x=int(collected["start_x"]),
-                    start_y=int(collected["start_y"]),
-                    paper_width=float(collected["paper_width"]),
-                    paper_height=float(collected["paper_height"]),
-                    min_width=int(collected["min_width"]),
-                )
-                board.plot()
-            else:
-                cube = build_puzzleboard_cube(
-                    n_points=int(collected["n_points"]),
-                    length=float(collected["length"]),
-                    min_width=int(collected["min_width"]),
-                )
-                cube.plot()
-            self._terminal.append_line("Opened external target visualisation window.")
-        except Exception as exc:
-            QMessageBox.critical(self, "Visualise Failed", str(exc))
-            self._terminal.append_line(f"ERROR: {exc}")
+        target_type = collected["target_type"]
+        params = {"target_type": target_type}
+        for name in TARGET_ARGUMENTS.get(target_type, ()):
+            if name in collected:
+                params[name] = collected[name]
+        params.setdefault("marker_backend",
+                          collected.get("marker_backend", "aruco1"))
+
+        ok, detail = spawn_viewer(
+            "pyCamSet.utils.visualise_target",
+            [json.dumps(params, default=str)],
+        )
+        if not ok:
+            QMessageBox.critical(self, "Visualise Failed", detail)
+            self._terminal.append_line(f"ERROR: {detail}")
+            return
+        self._terminal.append_line("Opened the target in a separate window.")

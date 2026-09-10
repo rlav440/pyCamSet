@@ -1084,10 +1084,12 @@ def test_a_marking_of_the_wrong_length_is_refused(charuco_problem):
 #
 # So the GUI starts a viewer process instead, and these hold that line.
 
+import pathlib  # noqa: E402
 import subprocess  # noqa: E402
 import sys  # noqa: E402
 
 from pyCamSet.gui import assess_calibration  # noqa: E402
+from pyCamSet.gui import viewer_process  # noqa: E402
 from pyCamSet.utils import visualise_camset  # noqa: E402
 
 
@@ -1130,7 +1132,7 @@ def test_the_launcher_starts_a_process_instead_of_drawing(monkeypatch, tmp_path)
             "the nested Cocoa run loop that crashes Qt."
         )
 
-    monkeypatch.setattr(assess_calibration.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(viewer_process.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(
         assess_calibration, "visualise_calibration", _must_not_run)
 
@@ -1151,7 +1153,7 @@ def test_a_viewer_that_will_not_start_is_reported(monkeypatch, tmp_path):
     def _refuse(command, *args, **kwargs):
         raise OSError("no exec for you")
 
-    monkeypatch.setattr(assess_calibration.subprocess, "Popen", _refuse)
+    monkeypatch.setattr(viewer_process.subprocess, "Popen", _refuse)
 
     ok, detail = assess_calibration.spawn_calibration_viewer(
         tmp_path / "run.camset")
@@ -1167,13 +1169,13 @@ def test_finished_viewers_are_not_left_behind(monkeypatch, tmp_path):
             return 0
 
     monkeypatch.setattr(
-        assess_calibration.subprocess, "Popen", lambda *a, **k: _Exited())
-    assess_calibration._VIEWER_PROCESSES.clear()
+        viewer_process.subprocess, "Popen", lambda *a, **k: _Exited())
+    viewer_process._VIEWER_PROCESSES.clear()
 
     assess_calibration.spawn_calibration_viewer(tmp_path / "a.camset")
     assess_calibration.spawn_calibration_viewer(tmp_path / "b.camset")
 
-    assert assess_calibration._VIEWER_PROCESSES == []
+    assert viewer_process._VIEWER_PROCESSES == []
 
 
 @pytest.mark.data
@@ -1211,3 +1213,141 @@ def test_a_camset_with_no_calibration_says_so(charuco_problem, tmp_path, capsys)
 
     assert visualise_camset.main([str(camset_path), "--no-show"]) == 1
     assert "nothing to draw" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Every native window the GUI opens, and the net under the next one
+# --------------------------------------------------------------------------
+#
+# Assess Calibration was the first pyvista window to crash Qt.  Create
+# Target was the second: Ccube.plot() and PuzzleBoardCube.plot() reach
+# pv.Plotter().show() the same way.  The crash arrives either under
+# vtkCocoaRenderWindow::Render() or on whichever repaint follows, so a
+# window that appeared to work is not evidence that it was safe.
+#
+# Both now run out of process.  refuse_window_inside_qt is the net under
+# whatever is found next: the same mistake three times is enough to stop
+# diagnosing it from crash reports.
+
+from pyCamSet.gui import create_target as create_target_module  # noqa: E402
+from pyCamSet.utils import gui_safety, visualise_target  # noqa: E402
+
+
+def test_create_target_no_longer_draws_in_process():
+    """The regression: the Visualise button must not call .plot() here."""
+    source = pathlib.Path(
+        create_target_module.__file__).read_text(encoding="utf-8")
+
+    assert ".plot()" not in source, (
+        "Create Target draws in the GUI process again; Ccube.plot() opens a "
+        "pyvista window, which is the crash."
+    )
+    assert "spawn_viewer" in source
+
+
+def test_the_target_viewer_runs_as_a_module():
+    result = subprocess.run(
+        [sys.executable, "-m", "pyCamSet.utils.visualise_target", "--help"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0
+
+
+@pytest.mark.parametrize("target_type", sorted(visualise_target.TARGET_ARGUMENTS))
+def test_every_target_type_can_be_built_from_its_payload(target_type):
+    """What the tab sends has to be enough to rebuild the target."""
+    payload = {
+        "target_type": target_type,
+        "n_points": 4, "length": 20.0,
+        "num_squares_x": 4, "num_squares_y": 5, "square_size": 10.0,
+        "marker_fraction": 0.8, "aruco_dict": "DICT_4X4_1000",
+        "marker_backend": "aruco1",
+        "start_x": 0, "start_y": 0,
+        "paper_width": 210.0, "paper_height": 297.0, "min_width": 4,
+    }
+
+    target = visualise_target.build_target(payload)
+
+    assert target is not None
+
+
+def test_a_payload_missing_a_field_says_which():
+    with pytest.raises(ValueError, match="needs n_points"):
+        visualise_target.build_target({"target_type": "Ccube", "length": 1.0})
+
+
+def test_an_unknown_target_type_is_refused():
+    with pytest.raises(ValueError, match="Unknown target type"):
+        visualise_target.build_target({"target_type": "Trapezoid"})
+
+
+def test_bad_json_is_reported_not_raised(capsys):
+    assert visualise_target.main(["{not json"]) == 2
+    assert "Could not read the target settings" in capsys.readouterr().err
+
+
+# --- the net --------------------------------------------------------------
+
+
+def test_the_guard_is_quiet_when_no_qt_is_running():
+    """The viewer processes and plain scripts must be unaffected."""
+    assert gui_safety.qt_application_is_running() is False
+    gui_safety.refuse_window_inside_qt("anything")   # must not raise
+
+
+@pytest.mark.gui
+def test_the_guard_names_the_call_under_a_qt_application(monkeypatch):
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(gui_safety.sys, "platform", "darwin")
+    monkeypatch.delenv(gui_safety._OVERRIDE, raising=False)
+
+    assert gui_safety.qt_application_is_running() is True
+    with pytest.raises(RuntimeError, match="CameraSet.plot"):
+        gui_safety.refuse_window_inside_qt("CameraSet.plot")
+
+
+@pytest.mark.gui
+def test_the_guard_can_be_overridden(monkeypatch):
+    """Someone embedding pyCamSet may have arranged things differently."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(gui_safety.sys, "platform", "darwin")
+    monkeypatch.setenv(gui_safety._OVERRIDE, "1")
+
+    gui_safety.refuse_window_inside_qt("CameraSet.plot")   # must not raise
+
+
+@pytest.mark.gui
+def test_the_guard_only_enforces_where_the_crash_happens(monkeypatch):
+    """X11 and Windows survive a second native loop; refusing there would
+    break setups that work today."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.delenv(gui_safety._OVERRIDE, raising=False)
+    monkeypatch.setattr(gui_safety.sys, "platform", "linux")
+
+    gui_safety.refuse_window_inside_qt("CameraSet.plot")   # must not raise
+
+
+@pytest.mark.gui
+@pytest.mark.data
+def test_the_guard_stops_a_real_plot_call(monkeypatch, charuco_problem):
+    """End to end: the crash becomes an exception naming the call."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(gui_safety.sys, "platform", "darwin")
+    monkeypatch.delenv(gui_safety._OVERRIDE, raising=False)
+
+    _target, _detections, cams = charuco_problem
+
+    with pytest.raises(RuntimeError, match="native window"):
+        cams.plot()

@@ -1,4 +1,6 @@
 import numpy as np
+
+from pyCamSet.utils.gui_safety import refuse_window_inside_qt
 from PIL import Image, ImageDraw
 import cv2
 from pyCamSet.utils.general_utils import h_tform
@@ -137,6 +139,7 @@ class FaceToShape:
                 point_v=new_mesh.points[3], inplace=True)
             meshes.append(new_mesh)
          
+        refuse_window_inside_qt("Drawing a target with pyvista")
         scene = pv.Plotter()
         for mesh, texture in zip(meshes, face_images):
             scene.add_mesh(mesh, 

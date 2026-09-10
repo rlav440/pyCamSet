@@ -19,6 +19,7 @@ from matplotlib.colors import LogNorm, LinearSegmentedColormap
 from pathlib import Path
 
 from pyCamSet.utils.general_utils import h_tform, get_close_square_tuple
+from pyCamSet.utils.gui_safety import refuse_window_inside_qt
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc, n_inv_pose
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,8 @@ def finalise_plotter(plotter, name: str, show: bool = True,
     :param save_dir: a directory to write ``<name>.png`` into
     :return: where it was written, if it was
     """
+    if show:
+        refuse_window_inside_qt("Showing a pyvista plotter")
     if save_dir is None:
         if show:
             _bind_screenshot_key(plotter)

@@ -23,6 +23,7 @@ from matplotlib import pyplot as plt
 from pyCamSet.cameras.camera import Camera
 from pyCamSet.utils.visualisation import (
     visualise_calibration, finalise_figure, _target_mean_distance)
+from pyCamSet.utils.gui_safety import refuse_window_inside_qt
 from pyCamSet.utils.general_utils import get_subfolder_names
 from pyCamSet.utils.general_utils import get_close_square_tuple, glob_ims_local
 
@@ -300,6 +301,7 @@ class CameraSet:
         """
         :return: A meshed, overlapping set of view cones
         """
+        refuse_window_inside_qt("CameraSet.return_view_overlaps")
         raise NotImplementedError('Mesh intersections fail on large camera '
                                   'numbers')
 
@@ -556,6 +558,7 @@ class CameraSet:
         :param additional_mesh: a mesh or list of meshes to add to the scene
         :param view_cones: whether to draw camera viewcones.
         """
+        refuse_window_inside_qt("CameraSet.plot")
 
         _require_pyvista()
         cam_meshes, v_cones = self.get_camera_meshes(viewcone=0.15, scale=scale_factor)

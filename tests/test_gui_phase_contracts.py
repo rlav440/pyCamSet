@@ -634,3 +634,246 @@ def test_the_mismatch_is_exactly_what_breaks_the_solve():
         small.point_local[(np.array([0]), np.array([80]))]
 
     assert describe_target_mismatch(CCUBE_12, CCUBE_6) != []
+
+
+# --------------------------------------------------------------------------
+# The camera lockbox, as Phase 3 constructs it
+# --------------------------------------------------------------------------
+#
+# Phase 3 passes lockbox_config, lockbox_source_camset and
+# lockbox_warm_start to TemplateBundleHandler.  The handler's whole lockbox
+# integration went out in the same merge that took
+# run_bundle_adjustment_with_stats, so the tab failed with
+#
+#     TypeError: TemplateBundleHandler.__init__() got an unexpected
+#     keyword argument 'lockbox_config'
+#
+# while camera_lockbox.py, and every defensive getattr for
+# get_base_residual_count, stayed behind.
+
+LOCKBOX_HANDLER_KWARGS = (
+    "lockbox_config", "lockbox_source_camset", "lockbox_warm_start")
+
+
+def test_the_handler_accepts_the_lockbox_arguments():
+    """Signature-level, so it reports even without a problem to solve."""
+    import inspect
+
+    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+
+    parameters = inspect.signature(TemplateBundleHandler.__init__).parameters
+    missing = [k for k in LOCKBOX_HANDLER_KWARGS if k not in parameters]
+
+    assert not missing, (
+        f"TemplateBundleHandler does not accept {missing}; Phase 3 passes "
+        f"these on every run and fails with TypeError without them."
+    )
+
+
+@pytest.fixture
+def lockbox_source_camset(charuco_problem):
+    """A solved camset, which is what Phase 3 locks onto.
+
+    ``run_initial_calibration`` fits intrinsics only and leaves every
+    extrinsic at the identity, so its output is not a usable source -- a
+    lockbox needs poses to hold cameras near.  A short bundle adjustment
+    is the cheapest thing that produces them.
+    """
+    from copy import deepcopy
+
+    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+
+    target, detections, cams = charuco_problem
+    _optimisation, solved = backend.run_bundle_adjustment(
+        TemplateBundleHandler(
+            camset=deepcopy(cams), target=target, detection=detections,
+            options={"outliers": "n", "max_nfev": 2, "verbosity": 0},
+        ),
+        threads=1,
+    )
+    return solved
+
+
+@pytest.fixture
+def lockbox_problem(charuco_problem, lockbox_source_camset):
+    """A handler factory over a real problem, lockbox on or off."""
+    from copy import deepcopy
+
+    from pyCamSet.optimisation.camera_lockbox import CameraLockboxConfig
+    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+
+    target, detections, cams = charuco_problem
+
+    def make(enabled: bool, warm_start: bool = True):
+        return TemplateBundleHandler(
+            camset=deepcopy(cams), target=target, detection=detections,
+            fixed_params=None,
+            options={"outliers": "n", "max_nfev": 2, "verbosity": 0},
+            lockbox_config=CameraLockboxConfig(enabled=enabled),
+            # not copied: the handler only reads extrinsics off the source,
+            # and a solved camset carries a target holding a cv2 aruco
+            # dictionary, which cannot be deep-copied.
+            lockbox_source_camset=lockbox_source_camset if enabled else None,
+            lockbox_warm_start=warm_start,
+        )
+
+    return make
+
+
+@pytest.mark.data
+def test_an_intrinsics_only_camset_is_refused_as_a_source(charuco_problem):
+    """Its cameras are all still at the identity, so it pins them to origin.
+
+    With the warm start on it also overwrites the estimated extrinsics the
+    solve would have started from, and the run dies on a NaN residual
+    instead of on anything that names the source.
+    """
+    from pyCamSet.optimisation.camera_lockbox import CameraLockboxConfig
+    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+
+    target, detections, cams = charuco_problem
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detections,
+        options={"outliers": "n", "verbosity": 0},
+        lockbox_config=CameraLockboxConfig(enabled=True),
+        lockbox_source_camset=cams,  # straight out of Phase 2
+    )
+
+    with pytest.raises(ValueError, match="no extrinsics"):
+        handler.get_initial_params()
+
+
+@pytest.mark.data
+def test_no_lockbox_leaves_the_residuals_alone(lockbox_problem):
+    handler = lockbox_problem(enabled=False)
+    loss = handler.make_loss_fun(1)
+
+    residuals = loss(handler.get_initial_params())
+
+    assert handler.get_base_residual_count() == residuals.size
+    assert not handler.has_lockbox_priors()
+
+
+@pytest.mark.data
+def test_a_lockbox_appends_priors_after_the_reprojections(lockbox_problem):
+    """One residual per constrained parameter, after the reprojection block."""
+    handler = lockbox_problem(enabled=True)
+    loss = handler.make_loss_fun(1)
+    params = handler.get_initial_params()
+
+    residuals = loss(params)
+    base = handler.get_base_residual_count()
+    prior = handler._ensure_lockbox_prior(len(params))
+
+    assert handler.has_lockbox_priors()
+    assert base % 2 == 0                       # whole (x, y) pairs
+    assert residuals.size == base + prior.indices.size
+    assert prior.indices.size > 0
+
+
+@pytest.mark.data
+def test_the_jacobian_grows_with_the_residuals(lockbox_problem):
+    """A mismatch here is a shape error inside the solver."""
+    handler = lockbox_problem(enabled=True)
+    params = handler.get_initial_params()
+
+    residuals = handler.make_loss_fun(1)(params)
+    jacobian = handler.make_loss_jac(1)(params)
+
+    assert jacobian.shape == (residuals.size, params.size)
+
+
+@pytest.mark.data
+def test_the_schur_solver_refuses_a_lockbox(lockbox_problem):
+    """It is built from the reprojection blocks; priors are invisible to it.
+
+    Left usable, it would optimise a different problem from the one the
+    residuals report.
+    """
+    usable, reason = backend.can_use_schur(lockbox_problem(enabled=True))
+    assert usable is False
+    assert "lockbox" in reason
+
+    usable_without, _ = backend.can_use_schur(lockbox_problem(enabled=False))
+    assert usable_without is True
+
+
+@pytest.mark.data
+def test_the_bounds_reach_the_solver(lockbox_problem):
+    """A lockbox constrains by bounding; unbounded, the priors only pull."""
+    handler = lockbox_problem(enabled=True)
+    params = handler.get_initial_params()
+
+    lower, upper = handler.get_lockbox_bounds(len(params))
+    prior = handler._ensure_lockbox_prior(len(params))
+
+    assert lower.shape == upper.shape == params.shape
+    assert np.all(np.isfinite(lower[prior.indices]))
+    assert np.all(np.isfinite(upper[prior.indices]))
+    assert np.all(lower[prior.indices] <= params[prior.indices])
+    assert np.all(params[prior.indices] <= upper[prior.indices])
+    # everything else stays free
+    free = np.setdiff1d(np.arange(params.size), prior.indices)
+    assert np.all(np.isneginf(lower[free]))
+    assert np.all(np.isposinf(upper[free]))
+
+
+@pytest.mark.data
+def test_the_warm_start_begins_at_the_source_calibration(lockbox_problem):
+    """The centre of a bound is the safest place to start inside it."""
+    warm = lockbox_problem(enabled=True, warm_start=True)
+    warm_params = warm.get_initial_params()
+    prior = warm._ensure_lockbox_prior(len(warm_params))
+
+    assert np.allclose(warm_params[prior.indices], prior.centres)
+
+
+@pytest.mark.data
+def test_priors_stay_out_of_the_reported_error(lockbox_problem):
+    """The study ranks trials on final_euclid; a prior is not a reprojection."""
+    _optimisation, _camset, stats = backend.run_bundle_adjustment_with_stats(
+        lockbox_problem(enabled=True), threads=1)
+
+    assert stats["prior_residual_count"] > 0
+    assert stats["observation_count"] * 2 + stats["prior_residual_count"] > 0
+    assert np.isfinite(stats["final_euclid"])
+    # the error is the mean over reprojection pairs alone
+    assert stats["observation_count"] > stats["prior_residual_count"]
+
+
+@pytest.mark.data
+def test_an_enabled_lockbox_without_a_source_says_so(charuco_problem):
+    from pyCamSet.optimisation.camera_lockbox import CameraLockboxConfig
+    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+
+    target, detections, cams = charuco_problem
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detections,
+        options={"outliers": "n", "verbosity": 0},
+        lockbox_config=CameraLockboxConfig(enabled=True),
+        lockbox_source_camset=None,
+    )
+
+    with pytest.raises(ValueError, match="no source CameraSet"):
+        handler._ensure_lockbox_prior(10)
+
+
+@pytest.mark.data
+def test_the_diagnostics_name_what_was_constrained(lockbox_problem):
+    handler = lockbox_problem(enabled=True)
+    params = handler.get_initial_params()
+
+    diagnostics = handler.get_lockbox_diagnostics(params)
+
+    assert diagnostics["enabled"] is True
+    assert diagnostics["constrained_parameter_count"] > 0
+    assert diagnostics["constrained_camera_names"]
+    assert "final_parameter_deltas" in diagnostics
+
+
+@pytest.mark.data
+def test_a_disabled_lockbox_reports_itself_disabled(lockbox_problem):
+    diagnostics = lockbox_problem(enabled=False).get_lockbox_diagnostics()
+
+    assert diagnostics["enabled"] is False
+    assert diagnostics["constrained_parameter_count"] == 0

@@ -19,6 +19,15 @@ import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.function_block_implementations as fb
 import pyCamSet.optimisation.abstract_function_blocks as afb
 from pyCamSet.optimisation.numba_schur import ParamGroup
+from pyCamSet.optimisation.camera_lockbox import (
+    CameraLockboxConfig,
+    CameraLockboxPrior,
+    make_disabled_prior,
+    build_extrinsic_parameter_lockbox,
+    apply_lockbox_bounds,
+    append_lockbox_residuals,
+    append_lockbox_jacobian,
+)
 from pyCamSet import CameraSet, Camera
 
 from pyCamSet.calibration_targets import TargetDetection
@@ -121,7 +130,10 @@ class TemplateBundleHandler:
                  camset: CameraSet, target: AbstractTarget, detection: TargetDetection,
                  fixed_params: dict|None = None,
                  options: dict | None = None,
-                 missing_poses: list | None =None
+                 missing_poses: list | None =None,
+                 lockbox_config: Optional[CameraLockboxConfig] = None,
+                 lockbox_source_camset: Optional[CameraSet] = None,
+                 lockbox_warm_start: bool = True,
                  ):
         
 
@@ -142,6 +154,14 @@ class TemplateBundleHandler:
         self.point_data = deepcopy(target.point_data)
         self.target_point_shape = np.array(target.point_data.shape)
         self.initial_params = None
+        # reprojection residuals only, two per observation; set in
+        # make_loss_fun.  Lockbox priors are appended after them, so anything
+        # reshaping residuals into (x, y) pairs must stop at this count.
+        self._base_residual_count = 0
+        self.lockbox_config = lockbox_config or CameraLockboxConfig(enabled=False)
+        self.lockbox_source_camset = lockbox_source_camset
+        self.lockbox_warm_start = bool(lockbox_warm_start)
+        self.lockbox_prior: CameraLockboxPrior | None = None
 
         n_poses = detection.max_ims
         n_cams = camset.get_n_cams()
@@ -174,6 +194,130 @@ class TemplateBundleHandler:
         self.problem_maximums = {"max_cams": self.camset.get_n_cams() , "max_imgs": self.detection.max_ims, "max_keys": None}
 
 
+
+    # ------------------------------------------------------------------
+    # Camera lockbox: priors that hold extrinsics near a source calibration
+    # ------------------------------------------------------------------
+
+    def _get_lockbox_source_extrinsics(self) -> np.ndarray | None:
+        """The source camera extrinsics as Rodrigues plus translation."""
+        if not self.lockbox_config.enabled:
+            return None
+        if self.lockbox_source_camset is None:
+            raise ValueError(
+                "Camera lockbox is enabled, but no source CameraSet was supplied")
+
+        source_names = set(self.lockbox_source_camset.get_names())
+        missing_names = [n for n in self.cam_names if n not in source_names]
+        if missing_names:
+            raise ValueError(
+                f"Camera lockbox source CameraSet is missing cameras: {missing_names}")
+
+        source_extrinsics = []
+        for cam_name in self.cam_names:
+            rot_vec, trans_vec = gu.ext_4x4_to_rod(
+                self.lockbox_source_camset[cam_name].extrinsic)
+            source_extrinsics.append(np.concatenate((rot_vec, trans_vec), axis=0))
+        source_extrinsics = np.asarray(source_extrinsics, dtype=float)
+
+        # A rig whose every extrinsic is still the identity has not been
+        # solved for pose -- run_initial_calibration returns exactly that,
+        # since it fits intrinsics only.  Locking onto it would pin every
+        # camera to the origin, and with the warm start on it also
+        # overwrites the estimated extrinsics this solve was going to
+        # start from; the result is a NaN residual and a scipy complaint
+        # about the initial point.
+        if len(self.cam_names) > 1 and not np.any(source_extrinsics):
+            raise ValueError(
+                "The camera lockbox source has no extrinsics: every camera "
+                "in it is still at the identity pose. This is what an "
+                "intrinsics-only calibration looks like, so the source is "
+                "most likely a Phase 2 camset. Use a camset from a "
+                "completed bundle adjustment instead."
+            )
+        return source_extrinsics
+
+    def _ensure_lockbox_prior(self, param_len: int) -> CameraLockboxPrior:
+        """
+        The prior for a given parameter length, built once and reused.
+
+        :param param_len: the number of free parameters
+        :return: the prior, disabled when no lockbox is configured
+        """
+        if self.lockbox_prior is not None and self.lockbox_prior.param_len == param_len:
+            return self.lockbox_prior
+        if not self.lockbox_config.enabled:
+            self.lockbox_prior = make_disabled_prior(param_len)
+        else:
+            self.lockbox_prior = build_extrinsic_parameter_lockbox(
+                cam_names=self.cam_names,
+                extr_unfixed=self.bundlePrimitive.extr_unfixed,
+                source_extrinsics=self._get_lockbox_source_extrinsics(),
+                intr_end=self.bundlePrimitive.intr_end,
+                param_len=param_len,
+                config=self.lockbox_config,
+            )
+        return self.lockbox_prior
+
+    def has_lockbox_priors(self) -> bool:
+        """
+        Whether this solve carries prior residuals beyond the reprojections.
+
+        The block solvers describe the reprojection structure alone, so a
+        problem answering yes here cannot be solved on the Schur reduced
+        system: see :func:`~pyCamSet.optimisation.optimisation_handling.can_use_schur`.
+        """
+        return bool(self.lockbox_config.enabled)
+
+    def get_lockbox_bounds(self, param_len: int | None = None) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Parameter bounds for ``scipy.optimize.least_squares``.
+
+        :param param_len: the number of free parameters, defaulting to the
+            length of the initial parameters
+        :return: the lower and upper bounds
+        """
+        if param_len is None:
+            if self.initial_params is None:
+                return apply_lockbox_bounds(0, make_disabled_prior(0))
+            param_len = len(self.initial_params)
+        prior = self._ensure_lockbox_prior(int(param_len))
+        return apply_lockbox_bounds(int(param_len), prior)
+
+    def get_lockbox_diagnostics(self, params: np.ndarray | None = None) -> dict:
+        """
+        What the lockbox constrained, for the phase tab's run metadata.
+
+        :param params: the finished parameters, for the achieved deltas
+        :return: the diagnostics
+        """
+        if params is not None:
+            param_len = len(params)
+        elif self.initial_params is not None:
+            param_len = len(self.initial_params)
+        else:
+            param_len = 0
+        prior = self._ensure_lockbox_prior(param_len) if param_len else make_disabled_prior(0)
+        diagnostics = {
+            "enabled": bool(prior.enabled),
+            "implementation_mode": prior.implementation_mode,
+            "constrained_parameter_count": int(prior.indices.size),
+            "constrained_camera_names": sorted(set(prior.camera_names)),
+        }
+        if params is not None and prior.enabled:
+            diagnostics["final_parameter_deltas"] = (
+                np.asarray(params)[prior.indices] - prior.centres).tolist()
+        return diagnostics
+
+    def get_base_residual_count(self) -> int:
+        """
+        How many residuals are reprojections, before any lockbox priors.
+
+        Anything reshaping residuals into ``(x, y)`` pairs must use only
+        this prefix: the priors are one residual each, so folding them in
+        both skews the per point error and can make the total length odd.
+        """
+        return int(self._base_residual_count)
 
     def can_make_jac(self):
         return self.op_fun.can_make_jac() 
@@ -246,11 +390,15 @@ class TemplateBundleHandler:
         target_shape = self.target.point_data.shape
         dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
 
+        self._base_residual_count = 2 * int(dd.shape[0])  # two per observation
+
         temp_loss = self.op_fun.make_full_loss_fn(dd, threads, self.problem_maximums) 
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
-            return temp_loss(param_str, obj_data).flatten()
+            base_residuals = temp_loss(param_str, obj_data).flatten()
+            return append_lockbox_residuals(
+                base_residuals, params, self._ensure_lockbox_prior(len(params)))
         return loss_fun
 
     def make_loss_jac(self, threads): 
@@ -266,7 +414,11 @@ class TemplateBundleHandler:
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
             d, c, rp = temp_loss(param_str, obj_data)
-            return csr_array((d,c,rp), shape=(2*dd.shape[0], params.shape[0]))
+            base_jacobian = csr_array(
+                (d,c,rp), shape=(2*dd.shape[0], params.shape[0]))
+            return append_lockbox_jacobian(
+                base_jacobian, len(params),
+                self._ensure_lockbox_prior(len(params)), params)
         return jac_fn
 
     def special_plots(self, params):
@@ -431,6 +583,11 @@ class TemplateBundleHandler:
                 param_array.append(ext[1])
 
         param_array = np.concatenate(param_array, axis=0)
+        if self.lockbox_config.enabled and self.lockbox_warm_start:
+            # the source calibration is the safest start for a bounded entry:
+            # it is the centre of its own bound.
+            prior = self._ensure_lockbox_prior(len(param_array))
+            param_array[prior.indices] = prior.centres
         return param_array
 
     def get_camset(self, x, return_pose=False) -> CameraSet | tuple[CameraSet, np.ndarray]:

@@ -123,6 +123,12 @@ def can_use_schur(param_handler) -> tuple[bool, str]:
     """
     if param_handler.problem_opts.get("solver", "schur") != "schur":
         return False, f"solver option is {param_handler.problem_opts['solver']!r}"
+    # The block solver is built from parameter_groups()/make_loss_blocks(),
+    # which describe the reprojection residuals alone.  Prior rows appended
+    # to the loss are invisible to it, so it would quietly optimise a
+    # different problem from the one the residuals report.
+    if getattr(param_handler, "has_lockbox_priors", lambda: False)():
+        return False, "the problem carries lockbox prior residuals"
     for method in ("parameter_groups", "make_loss_blocks"):
         if not hasattr(param_handler, method):
             return False, f"the handler does not implement {method}()"
@@ -316,6 +322,12 @@ def _solve_bundle_adjustment(
         if bundle_jac is not None and param_handler.problem_opts.get(
                 "solver", "schur") == "schur":
             logger.warning(f"Falling back to the trust region solver: {reason}")
+        # A lockbox constrains parameters by bounding them, so the bounds
+        # have to reach the solver: without them the priors pull, but
+        # nothing holds.
+        bounds = (-np.inf, np.inf)
+        if hasattr(param_handler, "get_lockbox_bounds"):
+            bounds = param_handler.get_lockbox_bounds(len(init_params))
         optimisation = least_squares(
             loss_fn,
             init_params,
@@ -324,6 +336,7 @@ def _solve_bundle_adjustment(
             max_nfev=param_handler.problem_opts["max_nfev"],
             x_scale='jac',
             xtol=1e-4,
+            bounds=bounds,
         )
     end = time.time()
 

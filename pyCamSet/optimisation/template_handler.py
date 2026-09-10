@@ -322,9 +322,26 @@ class TemplateBundleHandler:
     def can_make_jac(self):
         return self.op_fun.can_make_jac() 
 
+    def _optimised_detection(self) -> TargetDetection:
+        """
+        The detections the optimiser is allowed to fit.
+
+        A pose marked missing -- by the caller, by the NaN scan, or by
+        outlier rejection -- has to be excluded from the residuals, not
+        merely recorded.  Recording it alone is what let outlier rejection
+        report an exclusion it never made, and left the reported error
+        measured over data the solve had already been told to ignore.
+        """
+        if self.missing_poses is None:
+            return self.detection
+        missing = np.asarray(self.missing_poses, dtype=bool)
+        if not np.any(missing):
+            return self.detection
+        return self.detection.delete_row(global_im_num=np.where(missing)[0])
+
     def _flat_detections(self) -> np.ndarray:
         """The detection rows the compiled kernels are built against."""
-        return self.detection.return_flattened_keys(
+        return self._optimised_detection().return_flattened_keys(
             self.target.point_data.shape[:-1]).get_data()
 
     def _kernel_extra_args(self) -> tuple:
@@ -387,8 +404,7 @@ class TemplateBundleHandler:
         #flatten the object shape
         obj_data = self.target.point_data.reshape((-1, 3)) #maybe this is wrong. 
 
-        target_shape = self.target.point_data.shape
-        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        dd = self._flat_detections()
 
         self._base_residual_count = 2 * int(dd.shape[0])  # two per observation
 
@@ -404,8 +420,9 @@ class TemplateBundleHandler:
     def make_loss_jac(self, threads): 
         #TODO implement proper culling
         obj_data = self.target.point_data.reshape((-1, 3))
-        target_shape = self.target.point_data.shape
-        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        # the same rows the loss uses, or the jacobian describes a
+        # different problem from the residuals being minimised
+        dd = self._flat_detections()
         temp_loss = self.op_fun.make_jacobean(
             dd, threads, unfixed_params=self.parameter_mask(),
             problem_maximums=self.problem_maximums)
@@ -555,8 +572,32 @@ class TemplateBundleHandler:
             detection=self.detection, cams=self.camset, calibration_target=self.target
         )
 
-        self.missing_poses = np.array([np.isnan(t[0,0]) for t in target_poses])
+        # A pose with no recoverable transform is missing whatever the
+        # caller said; a pose the caller marked stays marked whatever the
+        # scan found.  Assigning the scan straight over the top, as this
+        # did, silently discarded everything passed to the constructor.
+        unposed = np.array([np.isnan(t[0, 0]) for t in target_poses])
+        if self.missing_poses is None:
+            self.missing_poses = unposed
+        else:
+            marked = np.asarray(self.missing_poses, dtype=bool)
+            if marked.shape != unposed.shape:
+                raise ValueError(
+                    f"missing_poses has {marked.size} entries for "
+                    f"{unposed.size} poses")
+            self.missing_poses = marked | unposed
         self.find_and_exclude_transform_outliers(per_im_error)
+
+        # Excluding a pose's observations leaves its six pose parameters
+        # with nothing to constrain them: every jacobian column for them is
+        # zero, which the degeneracy check rejects and the Schur
+        # elimination would divide by.  A pose the solve cannot see is not
+        # a pose the solve can solve for, so it stops being free.
+        if np.any(self.missing_poses):
+            self.bundlePrimitive.poses_unfixed = (
+                self.bundlePrimitive.poses_unfixed
+                & ~np.asarray(self.missing_poses, dtype=bool))
+            self.bundlePrimitive.calc_free_poses()
         
         for idc, intr_unfixed in enumerate(self.bundlePrimitive.intr_unfixed):
             if intr_unfixed:

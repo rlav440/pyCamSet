@@ -877,3 +877,194 @@ def test_a_disabled_lockbox_reports_itself_disabled(lockbox_problem):
 
     assert diagnostics["enabled"] is False
     assert diagnostics["constrained_parameter_count"] == 0
+
+
+# --------------------------------------------------------------------------
+# Marking a pose missing must change the solve, not just the record
+# --------------------------------------------------------------------------
+#
+# missing_poses reached exactly two places: find_and_exclude_transform_outliers
+# set it, and get_detection_data dropped the rows.  The loss and its jacobian
+# were built from self.detection unfiltered, so marking a pose changed the
+# reported detection count and nothing else -- outlier rejection detected
+# outliers, logged them, wrote them into run metadata, and then fitted them
+# anyway.  calc_initial_params also assigned over whatever the caller had
+# passed in, so a marking made at construction never survived to be ignored.
+
+
+@pytest.fixture
+def marking_problem(charuco_problem):
+    """A handler factory over a real problem, with poses marked or not."""
+    from copy import deepcopy
+
+    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+
+    target, detections, cams = charuco_problem
+
+    def make(marked=None, solver="schur", max_nfev=3):
+        missing = None
+        if marked is not None:
+            flags = np.zeros(int(detections.max_ims), dtype=bool)
+            flags[marked] = True
+            missing = list(flags)
+        return TemplateBundleHandler(
+            camset=deepcopy(cams), target=target, detection=detections,
+            options={"outliers": "n", "max_nfev": max_nfev,
+                     "verbosity": 0, "solver": solver},
+            missing_poses=missing,
+        )
+
+    return make
+
+
+def _worst_pose(handler):
+    """The image contributing the most error, which is worth excluding."""
+    params = handler.get_initial_params()
+    residuals = handler.make_loss_fun(1)(params).reshape(-1, 2)
+    rows = handler._flat_detections()
+    per_image = {
+        int(i): float(np.mean(np.linalg.norm(residuals[rows[:, 1] == i], axis=1)))
+        for i in np.unique(rows[:, 1])
+    }
+    return max(per_image, key=per_image.get)
+
+
+@pytest.mark.data
+def test_marking_a_pose_reduces_the_calibration_loss(marking_problem):
+    """The point of marking a pose: the solve stops fitting it."""
+    worst = _worst_pose(marking_problem())
+
+    _op, _cams, unmarked = backend.run_bundle_adjustment_with_stats(
+        marking_problem(), threads=1)
+    _op, _cams, marked = backend.run_bundle_adjustment_with_stats(
+        marking_problem(marked=worst), threads=1)
+
+    assert marked["observation_count"] < unmarked["observation_count"]
+    assert marked["final_euclid"] < unmarked["final_euclid"], (
+        f"marking pose {worst} left the error at "
+        f"{marked['final_euclid']:.4f} px against "
+        f"{unmarked['final_euclid']:.4f} px unmarked: the marking is being "
+        f"recorded but not applied to the residuals."
+    )
+
+
+@pytest.mark.data
+def test_a_marking_made_at_construction_survives(marking_problem):
+    """calc_initial_params assigned the NaN scan straight over the top."""
+    handler = marking_problem(marked=3)
+
+    handler.get_initial_params()
+
+    assert handler.missing_poses[3], (
+        "the marking passed to the constructor was discarded by "
+        "calc_initial_params"
+    )
+
+
+@pytest.mark.data
+def test_the_scan_can_still_add_to_what_the_caller_marked(marking_problem):
+    """Merged, not replaced, in either direction."""
+    handler = marking_problem(marked=3)
+    handler.get_initial_params()
+
+    # nothing in this corpus is unposed, so the merge is the caller's set
+    assert int(np.sum(handler.missing_poses)) >= 1
+
+
+@pytest.mark.data
+def test_the_excluded_pose_leaves_the_residuals(marking_problem):
+    """Its rows, and only its rows."""
+    plain = marking_problem()
+    plain.get_initial_params()
+    before = plain._flat_detections()
+
+    handler = marking_problem(marked=3)
+    handler.get_initial_params()
+    after = handler._flat_detections()
+
+    assert not np.any(after[:, 1] == 3)
+    assert after.shape[0] == int(np.sum(before[:, 1] != 3))
+
+
+@pytest.mark.data
+def test_an_excluded_pose_stops_being_a_free_parameter(marking_problem):
+    """Six parameters with no observations are six all-zero jacobian columns.
+
+    The degeneracy check rejects those outright, and the Schur elimination
+    would divide by the empty block, so excluding a pose has to fix it.
+    """
+    plain = marking_problem()
+    free_before = plain.get_initial_params().size
+
+    handler = marking_problem(marked=3)
+    free_after = handler.get_initial_params().size
+
+    assert free_after == free_before - 6
+    assert not handler.bundlePrimitive.poses_unfixed[3]
+
+
+@pytest.mark.data
+def test_the_jacobian_stays_square_with_the_residuals_when_marking(marking_problem):
+    handler = marking_problem(marked=3)
+    params = handler.get_initial_params()
+
+    residuals = handler.make_loss_fun(1)(params)
+    jacobian = handler.make_loss_jac(1)(params)
+
+    assert jacobian.shape == (residuals.size, params.size)
+
+
+@pytest.mark.data
+@pytest.mark.parametrize("solver", ["schur", "trf"])
+def test_both_solvers_handle_a_marked_pose(marking_problem, solver):
+    """The block solver is the one that would divide by the empty block."""
+    worst = _worst_pose(marking_problem())
+
+    optimisation, _cams, stats = backend.run_bundle_adjustment_with_stats(
+        marking_problem(marked=worst, solver=solver), threads=1)
+
+    assert np.all(np.isfinite(optimisation.x))
+    assert np.isfinite(stats["final_euclid"])
+
+
+@pytest.mark.data
+def test_what_the_handler_reports_is_what_it_fitted(marking_problem):
+    """get_detection_data and the loss must agree on the row count.
+
+    They disagreed: the handler reported the exclusion while the optimiser
+    fitted everything, so the run metadata described a solve that never
+    happened.
+    """
+    handler = marking_problem(marked=3)
+    params = handler.get_initial_params()
+
+    reported = handler.get_detection_data().shape[0]
+    fitted = handler.make_loss_fun(1)(params).size // 2
+
+    assert reported == fitted
+
+
+@pytest.mark.data
+def test_marking_nothing_changes_nothing(marking_problem):
+    """The unmarked path has to be untouched by all of this."""
+    handler = marking_problem()
+    params = handler.get_initial_params()
+
+    assert not np.any(handler.missing_poses)
+    assert handler._flat_detections().shape[0] * 2 == \
+        handler.make_loss_fun(1)(params).size
+
+
+def test_a_marking_of_the_wrong_length_is_refused(charuco_problem):
+    """Silently mismatched flags would exclude the wrong images."""
+    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+
+    target, detections, cams = charuco_problem
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detections,
+        options={"outliers": "n", "verbosity": 0},
+        missing_poses=[True, False],  # far too short
+    )
+
+    with pytest.raises(ValueError, match="missing_poses has 2 entries"):
+        handler.get_initial_params()

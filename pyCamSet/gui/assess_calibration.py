@@ -11,6 +11,8 @@ from typing import Any, Optional
 
 import numpy as np
 import logging
+import subprocess
+import sys
 import warnings
 
 try:
@@ -30,6 +32,10 @@ except ImportError:  # pragma: no cover
     render_calibration_pyvista_png = None
 
 _LOGGER = logging.getLogger(__name__)
+
+# Kept only so the viewers are not garbage collected into zombies while
+# they are still on screen; nothing waits on them.
+_VIEWER_PROCESSES: list[subprocess.Popen] = []
 
 _IGNORED_VISUALISATION_WARNING_MODULES = (
     r"numpy\._core\.",
@@ -159,31 +165,54 @@ def launch_visualise_calibration_for_run(run: dict) -> tuple[bool, str]:
         return False, "Loaded camset does not contain calibration optimisation results."
 
     run_id = run.get("run_id", "unknown")
-    success_message = f"Opened Assess Calibration for run {run_id}."
-    try:
-        with warnings.catch_warnings():
-            for module_pattern in _IGNORED_VISUALISATION_WARNING_MODULES:
-                warnings.filterwarnings(
-                    "ignore",
-                    category=RuntimeWarning,
-                    module=module_pattern,
-                )
-            # Intentionally launches external matplotlib/pyvista windows.
-            visualise_calibration(o_results, handler)
-    except Exception as exc:
-        msg = str(exc).strip()
-        msg_lower = msg.lower() if msg else ""
-        if not msg or ("event loop" in msg_lower and "already running" in msg_lower):
-            _LOGGER.debug(
-                "Suppressed visualise_calibration exception for run %s (%s).",
-                run_id,
-                msg or "<blank>",
-                exc_info=True,
-            )
-            return True, success_message
-        return False, f"Could not run visualise_calibration: {msg or str(exc)}"
 
-    return True, success_message
+    # Everything above is checked here, in the GUI process, so the usual
+    # failures still reach the user as a dialog.  The drawing itself is not:
+    # see visualise_camset for why it cannot share a process with Qt.
+    ok, detail = spawn_calibration_viewer(camset_path)
+    if not ok:
+        return False, detail
+    return True, f"Opened Assess Calibration for run {run_id} in a new window."
+
+
+def spawn_calibration_viewer(camset_path: Path) -> tuple[bool, str]:
+    """
+    Draw a calibration in a process of its own.
+
+    pyvista's Cocoa render window runs ``[NSRunLoop runUntilDate:]`` while
+    it is open.  Called from a Qt slot, that nested loop re-enters Qt's
+    event delivery and repaints the widget tree from inside an event Qt has
+    not finished dispatching, which segmentation faults in
+    ``QMacCGContext``.  matplotlib's ``plt.show()`` has the same shape of
+    problem, and reports it as "the event loop is already running".
+
+    Neither is a bug in the visualisation: both are asking for an event
+    loop the GUI already owns.  A separate process gives them one.
+
+    :param camset_path: the ``.camset`` file to draw
+    :return: whether the viewer was started, and what to say if it was not
+    """
+    command = [
+        sys.executable, "-m", "pyCamSet.utils.visualise_camset",
+        str(camset_path),
+    ]
+    try:
+        # not waited on: the viewer owns its window for as long as the
+        # person wants it, and the GUI carries on meanwhile
+        process = subprocess.Popen(command)
+    except OSError as exc:
+        return False, f"Could not start the calibration viewer: {exc}"
+
+    _VIEWER_PROCESSES.append(process)
+    _reap_finished_viewers()
+    return True, ""
+
+
+def _reap_finished_viewers() -> None:
+    """Drop viewers that have exited, so they are not left as zombies."""
+    for process in list(_VIEWER_PROCESSES):
+        if process.poll() is not None:
+            _VIEWER_PROCESSES.remove(process)
 
 
 def launch_visualise_calibration_open3d_for_run(

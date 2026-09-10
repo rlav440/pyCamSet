@@ -1068,3 +1068,146 @@ def test_a_marking_of_the_wrong_length_is_refused(charuco_problem):
 
     with pytest.raises(ValueError, match="missing_poses has 2 entries"):
         handler.get_initial_params()
+
+
+# --------------------------------------------------------------------------
+# Drawing a calibration must not share a process with Qt
+# --------------------------------------------------------------------------
+#
+# visualise_calibration opens native matplotlib and pyvista windows.  Called
+# from a Qt slot, pyvista's Cocoa render window runs
+# [NSRunLoop runUntilDate:] -- a nested event loop that re-enters Qt's event
+# delivery and repaints the widget tree from inside an event Qt has not
+# finished dispatching.  The crash report put the fault at
+# QMacCGContext::QMacCGContext with vtkCocoaRenderWindow::Render() sixteen
+# frames below it and QTabBar::paintEvent in between.
+#
+# So the GUI starts a viewer process instead, and these hold that line.
+
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+
+from pyCamSet.gui import assess_calibration  # noqa: E402
+from pyCamSet.utils import visualise_camset  # noqa: E402
+
+
+def test_the_viewer_runs_as_a_module():
+    """The GUI starts it with -m, so it needs a __main__ and a main()."""
+    assert callable(visualise_camset.main)
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pyCamSet.utils.visualise_camset", "--help"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0
+    assert "camset" in result.stdout
+
+
+def test_a_missing_camset_is_reported_not_raised(capsys):
+    assert visualise_camset.main(["/no/such/file.camset"]) == 2
+    assert "No such camset" in capsys.readouterr().err
+
+
+def test_the_launcher_starts_a_process_instead_of_drawing(monkeypatch, tmp_path):
+    """The regression: nothing may draw in the Qt process.
+
+    A viewer that draws here is the segfault, so this fails if the drawing
+    call ever comes back into the launcher.
+    """
+    started = []
+
+    class _FakeProcess:
+        def poll(self):
+            return None
+
+    def _fake_popen(command, *args, **kwargs):
+        started.append(command)
+        return _FakeProcess()
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError(
+            "visualise_calibration was called in the GUI process; this is "
+            "the nested Cocoa run loop that crashes Qt."
+        )
+
+    monkeypatch.setattr(assess_calibration.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(
+        assess_calibration, "visualise_calibration", _must_not_run)
+
+    camset = tmp_path / "run.camset"
+    camset.write_bytes(b"not read here")
+
+    ok, detail = assess_calibration.spawn_calibration_viewer(camset)
+
+    assert ok, detail
+    assert len(started) == 1
+    command = started[0]
+    assert command[0] == sys.executable
+    assert command[1:3] == ["-m", "pyCamSet.utils.visualise_camset"]
+    assert command[3] == str(camset)
+
+
+def test_a_viewer_that_will_not_start_is_reported(monkeypatch, tmp_path):
+    def _refuse(command, *args, **kwargs):
+        raise OSError("no exec for you")
+
+    monkeypatch.setattr(assess_calibration.subprocess, "Popen", _refuse)
+
+    ok, detail = assess_calibration.spawn_calibration_viewer(
+        tmp_path / "run.camset")
+
+    assert ok is False
+    assert "no exec for you" in detail
+
+
+def test_finished_viewers_are_not_left_behind(monkeypatch, tmp_path):
+    """Nothing waits on them, so they have to be reaped somewhere."""
+    class _Exited:
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(
+        assess_calibration.subprocess, "Popen", lambda *a, **k: _Exited())
+    assess_calibration._VIEWER_PROCESSES.clear()
+
+    assess_calibration.spawn_calibration_viewer(tmp_path / "a.camset")
+    assess_calibration.spawn_calibration_viewer(tmp_path / "b.camset")
+
+    assert assess_calibration._VIEWER_PROCESSES == []
+
+
+@pytest.mark.data
+def test_the_viewer_draws_a_real_calibration(charuco_problem, tmp_path):
+    """End to end, with no window: the figures have to actually come out."""
+    from copy import deepcopy
+
+    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+
+    target, detections, cams = charuco_problem
+    _optimisation, solved = backend.run_bundle_adjustment(
+        TemplateBundleHandler(
+            camset=deepcopy(cams), target=target, detection=detections,
+            options={"outliers": "n", "max_nfev": 2, "verbosity": 0},
+        ),
+        threads=1,
+    )
+    camset_path = tmp_path / "solved.camset"
+    solved.save(str(camset_path))
+
+    figures = tmp_path / "figures"
+    assert visualise_camset.main(
+        [str(camset_path), "--no-show", "--save-dir", str(figures)]) == 0
+
+    written = sorted(p.name for p in figures.glob("*.png"))
+    assert written, "the viewer drew nothing"
+
+
+@pytest.mark.data
+def test_a_camset_with_no_calibration_says_so(charuco_problem, tmp_path, capsys):
+    """A Phase 2 camset has cameras but no solve to draw."""
+    _target, _detections, cams = charuco_problem
+    camset_path = tmp_path / "uncalibrated.camset"
+    cams.save(str(camset_path))
+
+    assert visualise_camset.main([str(camset_path), "--no-show"]) == 1
+    assert "nothing to draw" in capsys.readouterr().err

@@ -7,7 +7,6 @@ Future:  Replace the static 3D preview with an interactive viewport and drag han
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -565,9 +564,9 @@ class Phase3LockboxEditor(QDialog):
         """Restore edited centres, extrinsics, and intrinsics."""
         for name, snap in snapshot.items():
             cam = self.working_camset[name]
-            cam.extrinsic = snap['extrinsic'].copy()  # restores orientation + position
+            cam.set_extrinsic(snap['extrinsic'].copy())  # refreshes derived pose state
             cam.intrinsic = snap['intrinsic'].copy()  # restores intrinsic (viewcone shape)
-            cam._update_state()                        # recompute all derived properties
+            cam._update_state()                        # recompute state after intrinsic restore
             self.states[name].edited_center = snap['center'].copy()
         self._refresh_table()
         self._refresh_preview()
@@ -1506,8 +1505,7 @@ class Phase3LockboxEditor(QDialog):
             ctw[:3, 3] = pos            # W column: camera position
 
             new_ext = np.linalg.inv(ctw)  # world-to-camera extrinsic
-            cam.extrinsic = new_ext
-            cam._update_state()  # recompute derived properties (position, view, u_axis …)
+            cam.set_extrinsic(new_ext)  # recompute position, view, u_axis and cam_to_world
 
         self.edit_history.append(f"Oriented to centre {sel_names}")
         self._refresh_table()

@@ -116,6 +116,26 @@ def _build_o_results(cam_set: Any) -> Optional[dict[str, np.ndarray]]:
     return {"err": err_arr, "x": x_arr}
 
 
+def observation_residual_xy(residuals: Any, handler: Any) -> np.ndarray:
+    """Return only the two-scalar-per-observation residual segment.
+
+    The optimisation backend may append one-dimensional lockbox-prior
+    residuals after the reprojection residuals. Diagnostics must not reshape
+    those priors into pixel pairs: odd camera counts would crash and even
+    counts would contaminate the reported per-camera reprojection metric.
+    """
+    values = np.asarray(residuals, dtype=float).reshape(-1)
+    base_count = int(getattr(handler, "get_base_residual_count", lambda: 0)())
+    if base_count <= 0:
+        base_count = values.size
+    if base_count > values.size or base_count % 2:
+        raise ValueError(
+            "Invalid reprojection residual segment length: "
+            f"base_count={base_count}, total_count={values.size}"
+        )
+    return values[:base_count].reshape(-1, 2)
+
+
 def launch_visualise_calibration_for_run(run: dict) -> tuple[bool, str]:
     """Launch native matplotlib/pyvista windows via visualise_calibration()."""
     if load_CameraSet is None or visualise_calibration is None:

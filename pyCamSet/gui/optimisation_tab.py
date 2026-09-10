@@ -720,8 +720,10 @@ class OptimisationTab(QWidget):
         seed_text = self._seed_edit.text().strip()
         try:
             seed = int(seed_text) if seed_text else None
-        except ValueError:
-            seed = None
+        except ValueError as exc:
+            # Refuse malformed seeds instead of silently changing the study's
+            # reproducibility contract by falling back to an unseeded run.
+            raise ValueError(f"Random seed must be an integer, got {seed_text!r}.") from exc
         out = self._outdir_edit.text().strip()
         return RunConfig(
             f_loc=Path(self._floc_edit.text().strip()),

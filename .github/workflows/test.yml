@@ -1,12 +1,21 @@
 name: tests
 
 on:
+  # Branches only: a tag runs this matrix once, through the release
+  # workflow, which will not publish what the matrix has not passed.
   push:
+    branches: ["**"]
   pull_request:
+  workflow_call:
 
-# A new push to the same branch supersedes the run in flight.
+permissions:
+  contents: read
+
+# A new push to the same branch supersedes the run in flight.  The workflow
+# name is part of the group so a release calling this does not cancel, or
+# get cancelled by, a run of its own.
 concurrency:
-  group: tests-${{ github.ref }}
+  group: tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -36,9 +45,9 @@ jobs:
           - {os: ubuntu-latest, python: "3.11", opencv: ">=5", lean: true}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip

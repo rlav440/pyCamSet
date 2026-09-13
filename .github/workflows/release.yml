@@ -1,93 +1,145 @@
-name: Publish Python build of pyCamset to PyPI
+name: release
 
-on: push
+# Building the distributions is cheap and catches a pyproject.toml that
+# installs but does not package, so it runs on the long-lived branches and
+# on pull requests.  Everything that leaves this repository -- the upload to
+# PyPI, the signatures, the GitHub release -- happens only for a tag.
+on:
+  push:
+    branches: [master, development]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Supersede a build on a branch; never cancel a release in flight.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  tests:
+    name: Tests
+    # A tag must not publish what the matrix has not passed.  On a branch or
+    # a pull request the tests workflow runs on its own, so this fires for
+    # tags only -- and the publish job below needs it, so a skip here stops
+    # the release rather than waving it through.
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/test.yml
+
   build:
-    name: Build distribution 📦
+    name: Build the distributions 📦
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.x"
+      - uses: actions/checkout@v7
 
-    - name: Install pypa/build
-      run: >-
-        python3 -m
-        pip install
-        build
-        --user
-    - name: Build a binary wheel and a source tarball
-      run: python3 -m build
-    - name: Store the distribution packages
-      uses: actions/upload-artifact@v4
-      with:
-        name: python-package-distributions
-        path: dist/
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the build tools
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Build a wheel and an sdist
+        run: python -m build
+
+      - name: Check the metadata
+        run: python -m twine check --strict dist/*
+
+      - name: Refuse a direct URL dependency
+        # PyPI rejects any distribution whose Requires-Dist carries a direct
+        # URL, and it rejects it at upload -- after the build, after the
+        # signing, at the last step of the release.  Fail here instead,
+        # naming the dependency.  Tags only: a direct URL is a perfectly
+        # good way to depend on something that is not on PyPI, right up
+        # until you try to publish.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          python - <<'PY'
+          import pathlib, sys, zipfile
+
+          offenders = []
+          for wheel in sorted(pathlib.Path("dist").glob("*.whl")):
+              with zipfile.ZipFile(wheel) as archive:
+                  metadata = next(n for n in archive.namelist()
+                                  if n.endswith(".dist-info/METADATA"))
+                  for line in archive.read(metadata).decode().splitlines():
+                      if not line.startswith("Requires-Dist:"):
+                          continue
+                      # the marker after ';' may legitimately contain '@'
+                      if "@" in line.split(";")[0]:
+                          offenders.append(f"{wheel.name}: {line}")
+
+          if offenders:
+              print("::error::PyPI will reject this release: a dependency is "
+                    "a direct URL. Give it a version specifier, or drop the "
+                    "extra and document the install instead.")
+              print("\n".join(offenders))
+              sys.exit(1)
+          print("no direct URL dependencies")
+          PY
+
+      - name: Keep the distributions for the jobs below
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-package-distributions
+          path: dist/
 
   publish-to-pypi:
-    name: >-
-      Publish Python 🐍 distribution 📦 to PyPI
-    if: startsWith(github.ref, 'refs/tags/')  # only publish to PyPI on tag pushes
-    needs:
-    - build
+    name: Publish to PyPI 🐍
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [tests, build]
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/pyCamSet  # Replace <package-name> with your PyPI project name
+      url: https://pypi.org/p/pyCamSet
     permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
+      id-token: write   # mandatory for trusted publishing
     steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        name: python-package-distributions
-        path: dist/
-    - name: Publish distribution 📦 to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Fetch the distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
-    name: >-
-      Sign the Python 🐍 distribution 📦 with Sigstore
-      and upload them to GitHub Release
-    needs:
-    - publish-to-pypi
+    name: Sign and release on GitHub
+    needs: publish-to-pypi
     runs-on: ubuntu-latest
-
     permissions:
-      contents: write  # IMPORTANT: mandatory for making GitHub Releases
-      id-token: write  # IMPORTANT: mandatory for sigstore
-
+      contents: write   # mandatory for making a GitHub release
+      id-token: write   # mandatory for sigstore
     steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        name: python-package-distributions
-        path: dist/
-    - name: Sign the dists with Sigstore
-      uses: sigstore/gh-action-sigstore-python@v1.2.3
-      with:
-        inputs: >-
-          ./dist/*.tar.gz
-          ./dist/*.whl
-    - name: Create GitHub Release
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-      run: >-
-        gh release create
-        '${{ github.ref_name }}'
-        --repo '${{ github.repository }}'
-        --notes ""
-    - name: Upload artifact signatures to GitHub Release
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-      # Upload to GitHub Release using the `gh` CLI.
-      # `dist/` contains the built packages, and the
-      # sigstore-produced signatures and certificates.
-      run: >-
-        gh release upload
-        '${{ github.ref_name }}' dist/**
-        --repo '${{ github.repository }}'
+      - name: Fetch the distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Sign them with Sigstore
+        uses: sigstore/gh-action-sigstore-python@v3.5.0
+        with:
+          inputs: >-
+            ./dist/*.tar.gz
+            ./dist/*.whl
+
+      - name: Create the release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create '${{ github.ref_name }}'
+          --repo '${{ github.repository }}'
+          --generate-notes
+
+      - name: Attach the distributions and their signatures
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          gh release upload '${{ github.ref_name }}' dist/**
+          --repo '${{ github.repository }}'

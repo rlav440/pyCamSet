@@ -416,6 +416,26 @@ def build_detection_option_tooltip(meta) -> str:
     )
 
 
+def detector_parameterisation_for(target_type: str, backend: str | None):
+    """
+    The detector a form's target selection names.
+
+    One detector combo serves every target on a form, so only a target with
+    a choice of detector takes its selection from it; the rest are read with
+    the one they have.
+
+    :param target_type: the selected target, as :data:`TARGET_NAMES` keys it
+    :param backend: what the form's detector combo holds
+    :raises ValueError: for an unknown target, or a detector it cannot use
+    """
+    from pyCamSet.calibration_targets.target_registry import target_class
+
+    cls = target_class(target_type)
+    if len(cls.DETECTOR_BACKENDS) < 2:
+        backend = None
+    return cls.detector_parameterisation(backend or None)
+
+
 def build_detection_option_widget(meta) -> QWidget:
     """
     The control one detector parameter is typed into.

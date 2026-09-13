@@ -1887,3 +1887,108 @@ def test_a_detector_setting_does_not_make_it_a_different_target():
     assert describe_target_mismatch(spec(4), spec(9)) == []
     assert describe_target_mismatch(
         spec(4), {"target": {**spec(4)["target"], "num_squares_x": 11}})
+
+
+# --------------------------------------------------------------------------
+# The optimisation tab sweeps what the selected detector takes
+# --------------------------------------------------------------------------
+#
+# The sliders were OpenCV's, whatever the target was read with.  So a study
+# over a target set to aruco2 offered sixteen settings to search over that
+# the aruco2 call cannot be given, and would have spent its whole budget
+# re-running one detection.
+
+
+def _optimisation_tab():
+    from PySide6.QtWidgets import QCheckBox, QTabWidget
+
+    from pyCamSet.gui.optimisation_tab import OptimisationTab
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    return OptimisationTab(QTabWidget(), QCheckBox(), QCheckBox(),
+                           WorkspaceManager(None))
+
+
+@pytest.mark.gui
+def test_the_sweepable_rows_follow_the_selected_detector():
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
+
+    QApplication.instance() or QApplication([])
+    tab = _optimisation_tab()
+    try:
+        assert set(tab._param_rows) == {p.key for p in ARUCO_OPENCV_DETECTOR.tunable()}
+        assert tab._nothing_to_sweep.text() == ""
+
+        tab._backend_combo.setCurrentIndex(tab._backend_combo.findData("aruco2"))
+        assert tab._param_rows == {}
+        assert "takes no settings" in tab._nothing_to_sweep.text()
+        assert tab._collect_parameter_rows() == []
+
+        tab._backend_combo.setCurrentIndex(tab._backend_combo.findData("aruco1"))
+        assert set(tab._param_rows) == {p.key for p in ARUCO_OPENCV_DETECTOR.tunable()}
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
+def test_the_preset_selector_never_offers_another_detectors_presets():
+    """A hidden combo keeping the last detector's presets would apply them
+    to rows that do not exist."""
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    tab = _optimisation_tab()
+    try:
+        def offered():
+            return [tab._detection_profile_combo.itemText(i)
+                    for i in range(tab._detection_profile_combo.count())]
+
+        assert "Balanced" in offered() and offered()[-1] == "Custom"
+
+        tab._backend_combo.setCurrentIndex(tab._backend_combo.findData("aruco2"))
+        assert offered() == ["Custom"], "aruco2 has no presets of its own"
+        assert tab._detection_profile_combo.isHidden()
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
+def test_a_preset_still_sets_the_bounds_of_the_rows_it_covers():
+    """The rows are rebuilt now, so the preset has to reach the new ones."""
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    tab = _optimisation_tab()
+    try:
+        tab._target_type_combo.setCurrentText("Ccube")
+        tab._detection_profile_combo.setCurrentText("Aggressive Recovery")
+        row = tab._param_rows["adaptiveThreshWinSizeMax"]
+
+        from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
+        expected = ARUCO_OPENCV_DETECTOR.profiles()[
+            "Aggressive Recovery"].bounds_for("adaptiveThreshWinSizeMax")
+        assert row.bounds() == expected
+
+        # Editing a bound by hand is what "Custom" means.
+        row.set_bounds(5, 9)
+        assert tab._detection_profile_combo.currentText() == "Custom"
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.parametrize(
+    ("target_type", "backend", "expected"),
+    [("ChArUco", "aruco1", "aruco1"),
+     ("ChArUco", "aruco2", "aruco2"),
+     ("Ccube", "aruco2", "aruco2"),
+     # One combo serves every target; a target with one detector ignores it.
+     ("PuzzleBoard", "aruco1", "puzzle_board"),
+     ("PuzzleBoardCube", "", "puzzle_board")],
+)
+def test_a_form_resolves_its_target_selection_to_one_detector(
+        target_type, backend, expected):
+    from pyCamSet.gui.shared_functions import detector_parameterisation_for
+
+    assert detector_parameterisation_for(target_type, backend).name == expected

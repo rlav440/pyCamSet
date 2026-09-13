@@ -63,6 +63,7 @@ from pyCamSet.gui.shared_functions import (
     TerminalWidget,
     apply_target_spec_to_widgets,
     build_detection_option_widget,
+    detector_parameterisation_for,
     gate_continue_button,
     make_blue_button,
     make_continue_button,
@@ -622,16 +623,10 @@ class Phase1Tab(QWidget):
         self.refresh_recent_targets()
 
     def _current_detector_parameterisation(self):
-        """
-        What the selected target's detection can be told.
-
-        One detector combo serves every target, so only a target with a
-        choice of detector takes its selection from it.
-        """
-        cls = target_class(self._target_combo.currentText())
-        backend = (str(self._marker_backend_combo.currentData() or "")
-                   if len(cls.DETECTOR_BACKENDS) > 1 else "")
-        return cls.detector_parameterisation(backend or None)
+        """What the selected target's detection can be told."""
+        return detector_parameterisation_for(
+            self._target_combo.currentText(),
+            str(self._marker_backend_combo.currentData() or ""))
 
     def _rebuild_detection_options(self) -> None:
         """

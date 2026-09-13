@@ -1,8 +1,8 @@
 """PySide6 Optimisation tab for detector sweeps and retained-run promotion.
 
 The tab implements the user-facing parts of the Optimisation tab: paths,
-calibration target, optimisation mode, calibration controls, ChArUco
-detection options (built dynamically from the metadata table), and results /
+calibration target, optimisation mode, calibration controls, the settings
+the selected target's detector says it can be swept over, and results /
 progress.
 
 Heavy lifting (detection, phase 3, phase 4, scoring, retention, metadata)
@@ -50,13 +50,13 @@ from pyCamSet.calibration_targets.backend_registry import (
 )
 from pyCamSet.gui.shared_functions import (
     TAB_OPTIMISATION,
+    detector_parameterisation_for,
     WorkspaceManager,
     make_green_button,
     make_orange_button,
     make_section_label,
     repopulate_dict_combo,
 )
-from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
 from pyCamSet.workflow.tuning.study import (
     MAX_SUCCESSES_HARD_CAP,
     TRIAL_GATING_PROFILE_NAMES,
@@ -216,7 +216,7 @@ class OptimisationTab(QWidget):
         layout.addWidget(make_section_label("Trial Gating"))
         layout.addWidget(self._build_trial_gating_section())
 
-        layout.addWidget(make_section_label("ChArUco Detection Options"))
+        layout.addWidget(make_section_label("Detection Options"))
         layout.addWidget(self._build_detector_section())
 
         layout.addWidget(make_section_label("Results / Progress"))
@@ -272,6 +272,7 @@ class OptimisationTab(QWidget):
         self._target_type_combo = QComboBox()
         self._target_type_combo.addItems(list(_TARGET_CHOICES))
         self._target_type_combo.currentTextChanged.connect(self._update_target_visibility)
+        self._target_type_combo.currentTextChanged.connect(self._on_detector_choice_changed)
         form.addRow("Target type:", self._target_type_combo)
 
         self._rows_label = QLabel("Rows (num_squares_y):")
@@ -459,33 +460,88 @@ class OptimisationTab(QWidget):
         v = QVBoxLayout(gb)
         # Add a profile selector so users can pre-fill bounds quickly.
         self._detection_profile_combo = QComboBox()
-        # The detector's own display order, then the hand-edited state.
-        self._detection_profile_combo.addItems(
-            list(ARUCO_OPENCV_DETECTOR.profiles()) + [_CUSTOM_PROFILE])
         # Re-apply profile bounds whenever the selected profile changes.
         self._detection_profile_combo.currentTextChanged.connect(self._on_detection_profile_changed)
-        # Attach per-item and combo-level hover text in the existing tooltip pattern.
-        for idx in range(self._detection_profile_combo.count()):
-            self._detection_profile_combo.setItemData(
-                idx,
-                self._profile_tooltip(self._detection_profile_combo.itemText(idx)),
-                Qt.ItemDataRole.ToolTipRole)
-        self._detection_profile_combo.setToolTip(self._profile_tooltip("Balanced"))
         form = QFormLayout()
-        form.addRow("Detection Profile:", self._detection_profile_combo)
+        self._detection_profile_label = QLabel("Detection Profile:")
+        form.addRow(self._detection_profile_label, self._detection_profile_combo)
         form_wrap = QWidget()
         form_wrap.setLayout(form)
         v.addWidget(form_wrap)
-        # Build one editable parameter row for each metadata entry.
-        for entry in ARUCO_OPENCV_DETECTOR.tunable():
+        # Said when the selected detector takes no settings: a study over it
+        # would run every trial with the same detection.
+        self._nothing_to_sweep = QLabel()
+        self._nothing_to_sweep.setWordWrap(True)
+        self._nothing_to_sweep.setStyleSheet("color: #8a4a00;")
+        v.addWidget(self._nothing_to_sweep)
+        # The rows themselves belong to whichever detector is selected, and
+        # are rebuilt when that changes.
+        self._param_rows_area = QWidget()
+        self._param_rows_layout = QVBoxLayout(self._param_rows_area)
+        self._param_rows_layout.setContentsMargins(0, 0, 0, 0)
+        v.addWidget(self._param_rows_area)
+        self._rebuild_detector_rows()
+        return gb
+
+    def _current_detector_parameterisation(self):
+        """What the selected target's detection can be told."""
+        return detector_parameterisation_for(
+            self._target_type_combo.currentText(),
+            str(self._backend_combo.currentData() or ""))
+
+    def _rebuild_detector_rows(self) -> None:
+        """
+        Offer the parameters the selected target's detector actually sweeps.
+
+        The rows were OpenCV's, whatever the target was read with, so a
+        study over a target set to aruco2 swept sixteen settings that its
+        detection cannot be given.
+        """
+        detector = self._current_detector_parameterisation()
+        parameters = detector.tunable()
+
+        self._param_rows = {}
+        while self._param_rows_layout.count():
+            item = self._param_rows_layout.takeAt(0)
+            if (widget := item.widget()) is not None:
+                widget.deleteLater()
+
+        self._nothing_to_sweep.setText("" if parameters else (
+            f"The {detector.name} detector takes no settings, so there is "
+            f"nothing for a study to search over."))
+        self._param_rows_area.setVisible(bool(parameters))
+        self._detection_profile_label.setVisible(bool(parameters))
+        self._detection_profile_combo.setVisible(bool(parameters))
+
+        for entry in parameters:
             row = BoundedSliderRow(entry)
             # Watch bound edits so manual changes can flip the selector to Custom.
             row.boundsChanged.connect(self._on_detection_profile_bounds_changed)
             self._param_rows[entry.key] = row
-            v.addWidget(row)
-        # Populate initial bounds from the default profile on first load.
-        self._apply_detection_profile("Balanced")
-        return gb
+            self._param_rows_layout.addWidget(row)
+
+        self._rebuild_detection_profiles(detector)
+
+    def _rebuild_detection_profiles(self, detector) -> None:
+        """Offer the presets this detector has, and start from the first."""
+        presets = list(detector.profiles())
+        self._applying_detection_profile = True
+        try:
+            self._detection_profile_combo.clear()
+            self._detection_profile_combo.addItems(presets + [_CUSTOM_PROFILE])
+            for idx in range(self._detection_profile_combo.count()):
+                self._detection_profile_combo.setItemData(
+                    idx,
+                    self._profile_tooltip(self._detection_profile_combo.itemText(idx)),
+                    Qt.ItemDataRole.ToolTipRole)
+        finally:
+            self._applying_detection_profile = False
+        # A detector with no presets leaves every row at its own bounds.
+        if presets:
+            self._apply_detection_profile(presets[0])
+        else:
+            self._detection_profile_combo.setToolTip(
+                self._profile_tooltip(_CUSTOM_PROFILE))
 
     def _build_results_section(self) -> QWidget:
         gb = QGroupBox()
@@ -604,6 +660,12 @@ class OptimisationTab(QWidget):
         self._backend_status.setStyleSheet(
             "color: #2a7a2a;" if marker_backend_available(backend) else "color: #8a4a00;"
         )
+        self._on_detector_choice_changed()
+
+    def _on_detector_choice_changed(self, *_args) -> None:
+        """Rebuild the rows once the detector section exists to rebuild."""
+        if hasattr(self, "_param_rows_layout"):
+            self._rebuild_detector_rows()
 
     def _collect_target(self) -> dict:
         # ArUco dict name → enum, looked up lazily to avoid hard cv2/aruco2
@@ -747,7 +809,8 @@ class OptimisationTab(QWidget):
 
     def _parameter_key_to_label_map(self) -> dict[str, str]:
         """Return a stable key->label mapping for detector parameter UI text."""
-        return {entry.key: entry.label for entry in ARUCO_OPENCV_DETECTOR.tunable()}
+        return {entry.key: entry.label
+                for entry in self._current_detector_parameterisation().tunable()}
 
     def _profile_tooltip(self, profile_name: str) -> str:
         """One profile's hover text, over the labels this form shows."""
@@ -756,8 +819,8 @@ class OptimisationTab(QWidget):
                 "Custom bounds edited manually.\n"
                 "Recommended parameters to check for optimisation: keep this "
                 "user-selected.")
-        return ARUCO_OPENCV_DETECTOR.profiles()[profile_name].tooltip(
-            self._parameter_key_to_label_map())
+        presets = self._current_detector_parameterisation().profiles()
+        return presets[profile_name].tooltip(self._parameter_key_to_label_map())
 
     def _on_detection_profile_changed(self, profile_name: str) -> None:
         # Ignore recursive signal traffic while profile bounds are being copied in.
@@ -771,7 +834,7 @@ class OptimisationTab(QWidget):
 
     def _apply_detection_profile(self, profile_name: str) -> None:
         # Resolve profile payload once to keep copies deterministic.
-        profile = ARUCO_OPENCV_DETECTOR.profiles()[profile_name]
+        profile = self._current_detector_parameterisation().profiles()[profile_name]
         # Block recursive state flips while bounds are applied row by row.
         self._applying_detection_profile = True
         try:
@@ -819,14 +882,18 @@ class OptimisationTab(QWidget):
         if self._thread is not None:
             QMessageBox.information(self, "Optimisation", "A run is already in progress.")
             return
-        if not marker_backend_available(str(self._backend_combo.currentData() or "aruco1")):
+        detector = self._current_detector_parameterisation()
+        if (reason := detector.unavailable_reason()) is not None:
+            QMessageBox.warning(self, "Detector unavailable", reason)
+            return
+        if not detector.tunable():
+            # Every trial would detect identically, so the study would spend
+            # its whole budget re-running one configuration.
             QMessageBox.warning(
-                self,
-                "Marker backend unavailable",
-                "ArUco 2 (aruco2) is selected but the 'aruco2' package is not "
-                "installed. Install it with `pip install aruco2` or switch the "
-                "marker backend to ArUco 1 (OpenCV).",
-            )
+                self, "Nothing to optimise",
+                f"The {detector.name} detector takes no settings, so every "
+                f"trial would run the same detection. Choose a target or "
+                f"detector with settings to search over.")
             return
         try:
             config = self._collect_config()

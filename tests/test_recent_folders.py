@@ -17,7 +17,7 @@ import json
 
 import pytest
 
-from pyCamSet.gui import recent_folders as rf
+from pyCamSet.workflow import recent_folders as rf
 
 
 @pytest.fixture(autouse=True)
@@ -179,7 +179,7 @@ def test_saving_a_run_records_its_image_folder(tmp_path):
     The field changes on every keystroke; a saved run means the workspace
     is real, and its parent is the folder someone would pick again.
     """
-    from pyCamSet.gui.shared_functions import WorkspaceManager
+    from pyCamSet.workflow.workspace import WorkspaceManager
 
     image_folder = _folder(tmp_path, "images")
     manager = WorkspaceManager(image_folder / ".pycamset_workspace")

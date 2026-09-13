@@ -1,19 +1,17 @@
 """
 Phase 2 - Per-camera initial calibration (intrinsics) GUI.
 
-Implements Phase 2 using existing pyCamSet functions:
-- run_initial_calibration
-- detect_datapoints_in_imfile (for optional high-distortion re-detection)
+The form and the figures; the calibration itself is
+:mod:`pyCamSet.workflow.phase2`.  The diagnostics tab additionally builds a
+phase 2 run of its own from detections it has pruned at a threshold, and
+reports the same numbers about it through ``phase2.diagnostics_of``.
 """
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Callable, Optional
-import shutil
 
 import cv2
 import numpy as np
@@ -38,57 +36,68 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.calibration_targets.backend_registry import (
+    MARKER_BACKEND_LABELS,
+    marker_backend_availability_text,
+    marker_backend_available,
+)
 from pyCamSet.gui.shared_functions import (
-    show_tab,
-            as_io_path,
-    TAB_PHASE2,
-    TAB_PHASE3,
     CollapsibleSection,
-    EmitLogHandler,
-    EmitStream,
     MatplotlibFigureCard,
     PhaseWorker,
     RunSelectorWidget,
+    TAB_PHASE2,
+    TAB_PHASE3,
     TerminalWidget,
-    WorkspaceManager,
-    MARKER_BACKEND_LABELS,
-    build_target,
-    extract_detection_and_cam_res,
-    marker_backend_availability_text,
-    marker_backend_available,
+    apply_target_params_to_widgets,
     make_blue_button,
     make_continue_button,
     make_orange_button,
-    make_run_id,
     make_scrollable_tab,
     make_section_label,
     make_separator,
-    ensure_directory,
-    path_exists,
     render_predecessor_chain_section,
-    resolve_phase1_pickle_artifact,
-    apply_target_params_to_widgets,
-    describe_target_mismatch,
-    target_mismatch_message,
+    show_tab,
+)
+from pyCamSet.workflow import phase2 as phase2_workflow
+from pyCamSet.workflow.detections import extract_detection_and_cam_res
+from pyCamSet.workflow.logs import captured_output
+from pyCamSet.workflow.params import (
+    ParamError,
+    as_json_object,
+    as_optional_positive_int,
+    as_positive_float,
+    require_image_folder,
+    require_marker_backend,
+    require_target_match,
+)
+from pyCamSet.workflow.targets import (
+    TARGET_CHOICES as _TARGET_CHOICES,
+    target_from_params,
     target_params_of_run,
+)
+from pyCamSet.workflow.workspace import (
+    WorkspaceManager,
+    as_io_path,
+    ensure_directory,
+    make_run_id,
+    path_exists,
+    resolve_phase1_pickle_artifact,
     resolve_phase2_camset_artifact,
 )
 
+# The diagnostics tab builds a phase 2 run of its own from pruned detections,
+# and loads a run's camset to draw undistortion from, so it reaches for the
+# backend directly.  The flag is the phase runner's: they fail together.
 try:
-    from pyCamSet.calibration.camera_calibrator import detect_datapoints_in_imfile, run_initial_calibration
-    from pyCamSet.calibration_targets.abstract_target import get_keys
+    from pyCamSet.calibration.camera_calibrator import run_initial_calibration
     from pyCamSet.utils.saving import load_CameraSet, load_pickle
-
-    _PYCAMSET_OK = True
 except ImportError:
-    detect_datapoints_in_imfile = None
-    get_keys = None
     run_initial_calibration = None
     load_CameraSet = None
     load_pickle = None
-    _PYCAMSET_OK = False
 
-_TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
+_PYCAMSET_OK = phase2_workflow.BACKEND_OK
 
 
 def _normalise_per_view_series(payload: object) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -109,118 +118,6 @@ def _normalise_per_view_series(payload: object) -> tuple[np.ndarray, np.ndarray,
     indices = np.arange(rms.size, dtype=float)
     valid = ~np.isnan(rms)
     return indices, rms, np.full(rms.shape, np.nan, dtype=float), valid, valid
-
-
-def _compute_true_per_view_reprojection(detections, calibration_target, cams) -> tuple[dict[str, dict], dict[str, float]]:
-    """Compute true per-image RMS reprojection error for each camera/image index."""
-    if get_keys is None:
-        raise RuntimeError("pyCamSet detection helpers are unavailable.")
-
-    _compute_true_per_view_reprojection._exception_count = 0
-    d26_per_view: dict[str, dict] = {}
-    d21_rms: dict[str, float] = {}
-    max_ims = int(detections.max_ims)
-
-    for cam_name in cams.get_names():
-        cam = cams[cam_name]
-        cam_detection = detections.get(cam=cam_name)
-        cam_has_any = cam_detection.has_data()
-
-        image_indices: list[int] = []
-        rms_px: list[float] = []
-        n_points: list[int] = []
-        has_detection: list[bool] = []
-        valid_pose: list[bool] = []
-
-        weighted_sq_sum = 0.0
-        total_points = 0
-
-        for im_idx in range(max_ims):
-            image_indices.append(im_idx)
-            if not cam_has_any:
-                rms_px.append(float("nan"))
-                n_points.append(0)
-                has_detection.append(False)
-                valid_pose.append(False)
-                continue
-
-            im_detect = cam_detection.get(global_im_num=im_idx)
-            data = im_detect.get_data()
-            if data is None or len(data) == 0:
-                rms_px.append(float("nan"))
-                n_points.append(0)
-                has_detection.append(False)
-                valid_pose.append(False)
-                continue
-
-            has_detection.append(True)
-            n_pts = int(data.shape[0])
-            n_points.append(n_pts)
-
-            try:
-                pose = calibration_target.target_pose_in_cam_image(im_detect, cam, mode="nan")
-            except Exception as pose_exc:
-                # Distinguish a real exception from a legitimate "no pose"
-                # result. Keep the NaN fallback (this must not become a hard
-                # crash), but make the exception case observable instead of
-                # silently swallowing it.
-                logging.debug(
-                    "target_pose_in_cam_image raised for cam=%s im=%d: %s",
-                    cam_name, im_idx, pose_exc,
-                )
-                _compute_true_per_view_reprojection._exception_count += 1
-                pose = np.ones((4, 4), dtype=float) * np.nan
-
-            pose_arr = np.asarray(pose, dtype=float)
-            if pose_arr.shape != (4, 4) or np.any(np.isnan(pose_arr)):
-                rms_px.append(float("nan"))
-                valid_pose.append(False)
-                continue
-
-            valid_pose.append(True)
-            keys = get_keys(data).astype(int)
-            object_points = np.asarray(calibration_target.point_data[tuple(keys.T)], dtype=np.float32).reshape(-1, 3)
-            image_points = np.asarray(data[:, -2:], dtype=np.float32).reshape(-1, 2)
-            rvec, _ = cv2.Rodrigues(pose_arr[:3, :3].astype(np.float64))
-            tvec = pose_arr[:3, 3].astype(np.float64)
-            projected, _ = cv2.projectPoints(
-                object_points,
-                rvec,
-                tvec,
-                np.asarray(cam.intrinsic, dtype=np.float64),
-                np.asarray(cam.distortion_coefs, dtype=np.float64).reshape(-1),
-            )
-            projected = projected.reshape(-1, 2).astype(np.float32)
-            sq_err = np.sum((projected - image_points) ** 2, axis=1)
-            rms = float(np.sqrt(np.mean(sq_err))) if sq_err.size else float("nan")
-            rms_px.append(rms)
-            if sq_err.size:
-                weighted_sq_sum += float(np.sum(sq_err))
-                total_points += int(sq_err.size)
-
-        d26_per_view[cam_name] = {
-            "image_indices": image_indices,
-            "rms_px": rms_px,
-            "n_points": n_points,
-            "has_detection": has_detection,
-            "valid_pose": valid_pose,
-        }
-        d21_rms[cam_name] = float(np.sqrt(weighted_sq_sum / total_points)) if total_points else float("nan")
-
-    exc_count = _compute_true_per_view_reprojection._exception_count
-    if exc_count > 0:
-        logging.warning(
-            "_compute_true_per_view_reprojection: %d target_pose_in_cam_image "
-            "call(s) raised exceptions (converted to NaN poses). Check debug "
-            "logs for details.",
-            exc_count,
-        )
-
-    return d26_per_view, d21_rms
-
-
-# Module-level initialisation of the exception counter attribute.
-_compute_true_per_view_reprojection._exception_count = 0
 
 
 def _make_grid_image(width: int, height: int, step: int = 48) -> np.ndarray:
@@ -679,80 +576,49 @@ class Phase2Tab(QWidget):
         )
 
     def _collect_params(self) -> Optional[dict]:
-        floc = self._floc_edit.text().strip()
-        if not floc:
-            QMessageBox.critical(self, "Validation Error", "Image folder is required.")
+        """Read the form, or say which field is wrong and return None."""
+        try:
+            return self._read_params()
+        except ParamError as exc:
+            QMessageBox.critical(self, "Validation Error", str(exc))
             return None
 
-        n_lim = None
-        if self._nlim_edit.text().strip():
-            try:
-                n_lim = int(self._nlim_edit.text().strip())
-            except ValueError:
-                QMessageBox.critical(self, "Validation Error", "n_lim must be an integer.")
-                return None
+    def _read_params(self) -> dict:
+        """The form as a phase 2 parameter dict.
 
-        try:
-            length = float(self._length_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "Length must be numeric.")
-            return None
-
-        fixed_params = None
-        if self._fp_edit.text().strip():
-            try:
-                fixed_params = json.loads(self._fp_edit.text().strip())
-            except json.JSONDecodeError as exc:
-                QMessageBox.critical(self, "Validation Error", f"Fixed params JSON: {exc}")
-                return None
-
-        # PuzzleBoard / PuzzleBoardCube parameters.
-        try:
-            pb_square_size = float(self._pb_square_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoard square_size must be numeric.")
-            return None
-        try:
-            pb_paper_width = float(self._pb_paper_w_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_width must be numeric.")
-            return None
-        try:
-            pb_paper_height = float(self._pb_paper_h_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_height must be numeric.")
-            return None
-        try:
-            pbc_length = float(self._pbc_square_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube length must be numeric.")
-            return None
-
+        :raises ParamError: for a field that cannot be used as it stands
+        """
         return {
-            "f_loc": floc,
+            "f_loc": require_image_folder(self._floc_edit.text()),
             "caching": self._cache_cb.isChecked(),
             "high_distortion": self._hd_cb.isChecked(),
-            "n_lim": n_lim,
+            "n_lim": as_optional_positive_int(self._nlim_edit.text(), "n_lim"),
             "min_detections_per_board": self._min_dtct_spin.value(),
-            "fixed_params": fixed_params,
+            "fixed_params": as_json_object(
+                self._fp_edit.text(), "Fixed params JSON"),
             "target_type": self._target_combo.currentText(),
             "n_points": self._npts_spin.value(),
-            "length": length,
-            "marker_backend": str(self._marker_backend_combo.currentData() or "aruco1"),
+            "length": as_positive_float(self._length_edit.text(), "Length"),
+            "marker_backend": str(
+                self._marker_backend_combo.currentData() or "aruco1"),
             "border_fraction": self._border_spin.value(),
             "marker_fraction": self._marker_spin.value(),
             # PuzzleBoard:
             "num_squares_x": self._pb_x_spin.value(),
             "num_squares_y": self._pb_y_spin.value(),
-            "square_size": pb_square_size,
+            "square_size": as_positive_float(
+                self._pb_square_edit.text(), "PuzzleBoard square_size"),
             "start_x": self._pb_start_x_spin.value(),
             "start_y": self._pb_start_y_spin.value(),
-            "paper_width": pb_paper_width,
-            "paper_height": pb_paper_height,
+            "paper_width": as_positive_float(
+                self._pb_paper_w_edit.text(), "PuzzleBoard paper_width"),
+            "paper_height": as_positive_float(
+                self._pb_paper_h_edit.text(), "PuzzleBoard paper_height"),
             "min_width": self._pb_min_width_spin.value(),
             # PuzzleBoardCube:
             "pbc_n_points": self._pbc_size_spin.value(),
-            "pbc_length": pbc_length,
+            "pbc_length": as_positive_float(
+                self._pbc_square_edit.text(), "PuzzleBoardCube length"),
         }
 
     def _load_phase1_run(self) -> Optional[dict]:
@@ -810,295 +676,77 @@ class Phase2Tab(QWidget):
         params = self._collect_params()
         if params is None:
             return
-        # FIX 2 (R1): the backend is unused for PuzzleBoard/PuzzleBoardCube
-        # (they never detect ArUco markers), so only refuse when the selected
-        # target actually uses the marker backend (mirror create_target.py).
-        if params.get("target_type") in ("Ccube", "ChArUco") and not marker_backend_available(
-            params.get("marker_backend", "aruco1")
-        ):
-            QMessageBox.warning(
-                self,
-                "Marker backend unavailable",
-                "ArUco 2 (aruco2) is selected but the 'aruco2' package is not "
-                "installed. Install it with `pip install aruco2` or switch the "
-                "marker backend to ArUco 1 (OpenCV).",
-            )
+        try:
+            require_marker_backend(params)
+        except ParamError as exc:
+            QMessageBox.warning(self, "Marker backend unavailable", str(exc))
             return
         if not _PYCAMSET_OK:
-            QMessageBox.critical(self, "Import error", "pyCamSet calibration modules are unavailable.")
+            QMessageBox.critical(
+                self, "Import error",
+                "pyCamSet calibration modules are unavailable.")
             return
-
         if self._worker is not None and self._worker.isRunning():
-            QMessageBox.information(self, "Phase 2 running", "Phase 2 is already running.")
+            QMessageBox.information(
+                self, "Phase 2 running", "Phase 2 is already running.")
             return
 
         self._sync_workspace_from_floc(params["f_loc"])
         if self._workspace_mgr.workspace_path is None:
-            QMessageBox.critical(self, "Workspace", "Could not initialize workspace.")
+            QMessageBox.critical(
+                self, "Workspace", "Could not initialize workspace.")
             return
 
-        override_pickle_text = self._det_pickle_edit.text().strip()
-        override_pickle = Path(override_pickle_text) if override_pickle_text else None
+        override_text = self._det_pickle_edit.text().strip()
+        override_pickle = Path(override_text) if override_text else None
 
         phase1_run = self._load_phase1_run()
         if phase1_run is None and override_pickle is None:
-            QMessageBox.information(self, "No Phase 1 run", "Run Phase 1 first or choose a detection pickle override.")
+            QMessageBox.information(
+                self, "No Phase 1 run",
+                "Run Phase 1 first or choose a detection pickle override.")
             return
 
-        # The detections index into the target's points, so a target of a
-        # different size cannot read them.  Caught here, where the two can
-        # still be named, rather than as an IndexError inside the target.
+        # An override says the person has chosen these detections deliberately,
+        # so the target is theirs to get right; otherwise the run supplying
+        # them decides what the target has to be.
         if override_pickle is None:
-            differences = describe_target_mismatch(
-                target_params_of_run(phase1_run), params)
-            if differences:
+            try:
+                require_target_match(phase1_run, params)
+            except ParamError as exc:
                 QMessageBox.critical(
-                    self, "Target does not match the detections",
-                    target_mismatch_message(
-                        str((phase1_run or {}).get("run_id", "unknown")),
-                        differences),
-                )
+                    self, "Target does not match the detections", str(exc))
                 return
 
-        selected_cameras = []
-        if phase1_run is not None:
-            selected_cameras = list(((phase1_run.get("params") or {}).get("selected_cameras") or []))
-        params["selected_cameras"] = selected_cameras
+        params["selected_cameras"] = list(
+            ((phase1_run or {}).get("params") or {}).get("selected_cameras") or [])
 
         self._update_detection_source_label()
 
         self._terminal.clear_terminal()
         self._terminal.append_line("=== Phase 2: Per-camera Initial Calibration ===")
         self._terminal.append_line(f"Image folder : {params['f_loc']}")
-        self._terminal.append_line(f"Phase 1 run  : {phase1_run.get('run_id', 'none') if phase1_run else 'none'}")
-        self._terminal.append_line(f"selected cams: {selected_cameras if selected_cameras else 'all'}")
+        self._terminal.append_line(
+            f"Phase 1 run  : "
+            f"{phase1_run.get('run_id', 'none') if phase1_run else 'none'}")
+        self._terminal.append_line(
+            f"selected cams: {params['selected_cameras'] or 'all'}")
         if override_pickle is not None:
             self._terminal.append_line(f"Override det : {override_pickle}")
         self._terminal.append_line("Starting…")
 
-        def work_fn(emit: Callable[[str], None]) -> dict:
-            diagnostics: dict = {}
-            error_msg: Optional[str] = None
-            ws_path = self._workspace_mgr.workspace_path
-            assert ws_path is not None
+        workspace_mgr = self._workspace_mgr
 
-            run_id = make_run_id()
-            run_dir = ws_path / "phase2_runs" / run_id
-            ensure_directory(run_dir)
-
-            det_pickle = None
-            if override_pickle is not None:
-                if path_exists(override_pickle):
-                    det_pickle = override_pickle
-                    emit(f"Using override detections: {det_pickle}")
-                else:
-                    emit(f"Override path missing: {override_pickle} (falling back to Phase 1 source)")
-
-            if det_pickle is None and phase1_run is not None:
-                det_pickle = resolve_phase1_pickle_artifact(phase1_run, ws_path)
-
-            detections = None
-            cam_res = None
-
-            stream = EmitStream(emit)
-            log_handler = EmitLogHandler(emit)
-            log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
-            root_logger = logging.getLogger()
-            root_logger.addHandler(log_handler)
-
-            try:
-                with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
-                    target = build_target(
-                        params["target_type"],
-                        params["n_points"],
-                        params["length"],
-                        border_fraction=params.get("border_fraction", 0.1),
-                        marker_fraction=params.get("marker_fraction", 0.8),
-                        marker_backend=params.get("marker_backend", "aruco1"),
-                        num_squares_x=params.get("num_squares_x", 105),
-                        num_squares_y=params.get("num_squares_y", 148),
-                        square_size=params.get("square_size", 2.0),
-                        start_x=params.get("start_x", 0),
-                        start_y=params.get("start_y", 0),
-                        paper_width=params.get("paper_width", 210.0),
-                        paper_height=params.get("paper_height", 297.0),
-                        min_width=params.get("min_width", 4),
-                        pbc_n_points=params.get("pbc_n_points", 20),
-                        pbc_length=params.get("pbc_length", 200.0),
-                    )
-                    selected = list(params.get("selected_cameras") or [])
-                    selected_set = set(selected)
-                    f_loc = Path(params["f_loc"])
-
-                    cam_folders = [
-                        p for p in sorted(f_loc.iterdir())
-                        if p.is_dir() and p.name != "sparse" and not p.name.startswith(".")
-                    ]
-                    if selected_set:
-                        cam_folders = [p for p in cam_folders if p.name in selected_set]
-                        if len(cam_folders) < 2:
-                            raise RuntimeError("Need at least two selected camera folders for Phase 2.")
-
-                    detect_root = f_loc
-                    tmp_ctx: Optional[TemporaryDirectory] = None
-                    root_entries = list(f_loc.iterdir())
-                    allowed = {p.name for p in cam_folders}
-                    has_extra_entries = any(p.name not in allowed for p in root_entries)
-                    if has_extra_entries:
-                        tmp_ctx = TemporaryDirectory(prefix="pycamset_phase2_")
-                        detect_root = Path(tmp_ctx.name)
-                        emit("2a  Using filtered staging folder (selected camera subfolders only).")
-                        for cam in cam_folders:
-                            dst = detect_root / cam.name
-                            try:
-                                dst.symlink_to(cam, target_is_directory=True)
-                            except Exception:
-                                shutil.copytree(cam, dst)
-
-                    try:
-                        if det_pickle is not None and path_exists(det_pickle):
-                            emit(f"Using detections: {det_pickle}")
-                            payload = load_pickle(as_io_path(det_pickle))
-                            detections, cam_res = extract_detection_and_cam_res(payload)
-                            if selected_set:
-                                det_cam_names = list(getattr(detections, "cam_names", []) or [])
-                                if set(det_cam_names) != selected_set:
-                                    emit(
-                                        "Detection artifact camera set does not match selected cameras; "
-                                        "running fresh detection on selected subset."
-                                    )
-                                    detections = None
-                                    cam_res = None
-
-                        if detections is None or cam_res is None:
-                            emit("Detection artifact missing/incompatible, falling back to detection pass.")
-                            detections, cam_res = detect_datapoints_in_imfile(
-                                f_loc=detect_root,
-                                calibration_target=target,
-                                caching=params["caching"],
-                                draw=False,
-                                n_lim=params["n_lim"],
-                            )
-
-                        cams, _, per_im = run_initial_calibration(
-                            detection=detections,
-                            calibration_target=target,
-                            cam_res=cam_res,
-                            save=False,
-                            fixed_params=params["fixed_params"],
-                            return_poses_and_costs=True,
-                            min_detections_per_board=int(params.get("min_detections_per_board", 12)),
-                        )
-                        emit("2b  Initial calibration completed.")
-
-                        if params["high_distortion"]:
-                            emit("2c  High-distortion mode: re-running detection with initial intrinsics…")
-                            detections_hd, _ = detect_datapoints_in_imfile(
-                                f_loc=detect_root,
-                                calibration_target=target,
-                                caching=False,
-                                draw=False,
-                                n_lim=params["n_lim"],
-                                camset=cams,
-                            )
-                            cams, _, per_im = run_initial_calibration(
-                                detection=detections_hd,
-                                calibration_target=target,
-                                cam_res=cam_res,
-                                save=False,
-                                fixed_params=params["fixed_params"],
-                                return_poses_and_costs=True,
-                                min_detections_per_board=int(params.get("min_detections_per_board", 12)),
-                            )
-                            detections = detections_hd
-                            emit("2c  High-distortion refinement completed.")
-                    finally:
-                        if tmp_ctx is not None:
-                            tmp_ctx.cleanup()
-
-                    camset_path = run_dir / (
-                        "initial_cameras_high_distortion.camset"
-                        if params["high_distortion"]
-                        else "initial_cameras.camset"
-                    )
-                    cams.save(camset_path)
-
-                    d21_rms = {}
-                    d22_intr = {}
-                    d23_dst = {}
-                    cam_names = list(cams.get_names())
-
-                    d26_per_view, d21_rms = _compute_true_per_view_reprojection(detections, target, cams)
-
-                    for cam_name, cam in zip(cam_names, cams):
-
-                        intr = np.array(cam.intrinsic)
-                        d22_intr[cam_name] = {
-                            "fx": float(intr[0, 0]),
-                            "fy": float(intr[1, 1]),
-                            "cx": float(intr[0, 2]),
-                            "cy": float(intr[1, 2]),
-                            "res": np.array(cam.res).astype(float).tolist(),
-                        }
-                        dst = np.array(cam.distortion_coefs).reshape(-1)
-                        d23_dst[cam_name] = {
-                            "coeffs": dst.astype(float).tolist(),
-                            "l2_norm": float(np.linalg.norm(dst)),
-                        }
-
-                    diagnostics["D2.1_per_camera_rms_reprojection"] = d21_rms
-                    diagnostics["D2.2_intrinsics"] = d22_intr
-                    diagnostics["D2.3_distortion"] = d23_dst
-                    diagnostics["D2.5_intrinsic_stddev"] = "not available in current pyCamSet API"
-                    diagnostics["D2.6_per_view_reprojection"] = d26_per_view
-                    diagnostics["D2.7_per_view_error_plot"] = "rendered in diagnostics tab (true per-image reprojection RMS)"
-
-                    emit("Diagnostics computed (D2.1-D2.7).")
-
-                    metadata = {
-                        "run_id": run_id,
-                        "phase": "phase2",
-                        "params": params,
-                        "diagnostics": diagnostics,
-                        "error": None,
-                        "inputs": {
-                            "phase1_run_id": phase1_run.get("run_id") if phase1_run else None,
-                        },
-                        "artifacts": {
-                            "initial_camset": str(camset_path),
-                            "phase1_detection_pickle": str(det_pickle) if det_pickle is not None else None,
-                            "detection_source_override": str(override_pickle) if override_pickle is not None else None,
-                        },
-                    }
-                    self._workspace_mgr.save_run("phase2", run_id, metadata)
-                    emit(f"Run saved: {run_id}")
-                    return metadata
-
-            except Exception as exc:
-                error_msg = str(exc)
-                emit(f"ERROR: {error_msg}")
-                metadata = {
-                    "run_id": run_id,
-                    "phase": "phase2",
-                    "params": params,
-                    "diagnostics": diagnostics,
-                    "error": error_msg,
-                    "inputs": {"phase1_run_id": phase1_run.get("run_id") if phase1_run else None},
-                    "artifacts": {
-                        "phase1_detection_pickle": str(det_pickle) if det_pickle is not None else None,
-                        "detection_source_override": str(override_pickle) if override_pickle is not None else None,
-                    },
-                }
-                self._workspace_mgr.save_run("phase2", run_id, metadata)
-                return metadata
-            finally:
-                stream.flush()
-                root_logger.removeHandler(log_handler)
+        def work_fn(log: Callable[[str], None]) -> dict:
+            return phase2_workflow.run(
+                params, workspace_mgr, log,
+                phase1_run=phase1_run, override_pickle=override_pickle)
 
         self._worker = PhaseWorker(work_fn, parent=self)
         self._worker.line_ready.connect(self._terminal.append_line)
         self._worker.finished.connect(self._on_run_finished)
-        self._worker.error.connect(lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
+        self._worker.error.connect(
+            lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
         self._worker.start()
 
     def _on_run_finished(self, metadata: dict) -> None:
@@ -1609,73 +1257,26 @@ class Phase2DiagnosticsTab(QWidget):
 
                 # ── Rebuild target and run Phase 2 ──────────────────────
                 src_params = source_run.get("params") or {}
-                target = build_target(
-                    src_params.get("target_type", "Ccube"),
-                    src_params.get("n_points", 6),
-                    src_params.get("length", 30.0),
-                    border_fraction=src_params.get("border_fraction", 0.1),
-                    marker_fraction=src_params.get("marker_fraction", 0.8),
-                    marker_backend=src_params.get("marker_backend", "aruco1"),
-                    num_squares_x=src_params.get("num_squares_x", 105),
-                    num_squares_y=src_params.get("num_squares_y", 148),
-                    square_size=src_params.get("square_size", 2.0),
-                    start_x=src_params.get("start_x", 0),
-                    start_y=src_params.get("start_y", 0),
-                    paper_width=src_params.get("paper_width", 210.0),
-                    paper_height=src_params.get("paper_height", 297.0),
-                    min_width=src_params.get("min_width", 4),
-                    pbc_n_points=src_params.get("pbc_n_points", 20),
-                    pbc_length=src_params.get("pbc_length", 200.0),
-                )
+                target = target_from_params(src_params)
                 emit("Running Phase 2 initial calibration on filtered detections…")
-                stream = EmitStream(emit)
-                log_handler = EmitLogHandler(emit)
-                log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
-                root_logger = logging.getLogger()
-                root_logger.addHandler(log_handler)
-                try:
-                    with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
-                        cams, _, per_im = run_initial_calibration(
-                            detection=filtered_det,
-                            calibration_target=target,
-                            cam_res=cam_res,
-                            save=False,
-                            fixed_params=src_params.get("fixed_params"),
-                            return_poses_and_costs=True,
-                            min_detections_per_board=int(src_params.get("min_detections_per_board", 12)),
-                        )
-                finally:
-                    root_logger.removeHandler(log_handler)
+                with captured_output(emit):
+                    cams, _, _ = run_initial_calibration(
+                        detection=filtered_det,
+                        calibration_target=target,
+                        cam_res=cam_res,
+                        save=False,
+                        fixed_params=src_params.get("fixed_params"),
+                        return_poses_and_costs=True,
+                        min_detections_per_board=int(
+                            src_params.get("min_detections_per_board", 12)),
+                    )
                 emit("Phase 2 calibration completed.")
 
                 camset_path = run_dir / "initial_cameras.camset"
                 cams.save(camset_path)
 
-                # ── Compute diagnostics ─────────────────────────────────
-                d26_per_view, d21_rms = _compute_true_per_view_reprojection(filtered_det, target, cams)
-                d22_intr: dict = {}
-                d23_dst: dict = {}
-                for cam_name, cam in zip(list(cams.get_names()), cams):
-                    intr = np.array(cam.intrinsic)
-                    d22_intr[cam_name] = {
-                        "fx": float(intr[0, 0]), "fy": float(intr[1, 1]),
-                        "cx": float(intr[0, 2]), "cy": float(intr[1, 2]),
-                        "res": np.array(cam.res).astype(float).tolist(),
-                    }
-                    dst = np.array(cam.distortion_coefs).reshape(-1)
-                    d23_dst[cam_name] = {
-                        "coeffs": dst.astype(float).tolist(),
-                        "l2_norm": float(np.linalg.norm(dst)),
-                    }
-
-                diagnostics = {
-                    "D2.1_per_camera_rms_reprojection": d21_rms,
-                    "D2.2_intrinsics": d22_intr,
-                    "D2.3_distortion": d23_dst,
-                    "D2.5_intrinsic_stddev": "not available in current pyCamSet API",
-                    "D2.6_per_view_reprojection": d26_per_view,
-                    "D2.7_per_view_error_plot": "rendered in diagnostics tab (true per-image reprojection RMS)",
-                }
+                diagnostics = phase2_workflow.diagnostics_of(
+                    filtered_det, target, cams)
 
                 # ── Build and save metadata ─────────────────────────────
                 src_params2 = source_run.get("params") or {}

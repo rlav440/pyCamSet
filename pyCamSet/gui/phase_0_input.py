@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyCamSet.gui.recent_folders import (
+from pyCamSet.workflow.recent_folders import (
     forget_folder,
     load_recent_folders,
     remember_folder,
@@ -45,16 +45,18 @@ from pyCamSet.gui.recent_folders import (
 from pyCamSet.gui.shared_functions import (
     BLUE_BTN_STYLE,
     IMAGE_FOLDER_SCHEMATIC,
-    TAB_PHASE1,
     RunSelectorWidget,
+    TAB_PHASE1,
     TerminalWidget,
     WorkspaceManager,
-    count_images_in_folder,
-    get_camera_subfolders,
     make_blue_button,
     make_continue_button,
     make_section_label,
     make_separator,
+)
+from pyCamSet.workflow.workspace import (
+    count_images_in_folder,
+    get_camera_subfolders,
 )
 
 # pyCamSet helpers — guarded import

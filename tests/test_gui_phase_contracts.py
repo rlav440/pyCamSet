@@ -1,12 +1,12 @@
-"""The seam between the GUI phase tabs and the optimisation backend.
+"""The seam between the workflow phases and the optimisation backend.
 
-The phase tabs reach into the library through a small, unenforced contract:
-a guarded import block at the top of each tab, and a statistics dictionary
-whose keys the tabs read by name.  Nothing held either end in place, and
-both ends drifted -- ``run_bundle_adjustment_with_stats`` was removed from
-``optimisation_handling`` while three call sites still imported it.  Because
-the import sits in ``try: ... except ImportError``, the failure did not
-surface as a missing name.  It set ``_PYCAMSET_OK = False``, and Phase 3
+Each phase reaches into the library through a small, unenforced contract:
+a guarded import block at the top of the phase module, and a statistics
+dictionary whose keys it reads by name.  Nothing held either end in place,
+and both ends drifted -- ``run_bundle_adjustment_with_stats`` was removed
+from ``optimisation_handling`` while three call sites still imported it.
+Because the import sits in ``try: ... except ImportError``, the failure did
+not surface as a missing name.  It set the backend flag false, and Phase 3
 told the user "pyCamSet optimisation modules are unavailable" -- a message
 about the install, for what was a rename.
 
@@ -14,10 +14,13 @@ So these tests are about the seam rather than about the solve:
 
 * the guarded imports actually resolve, named one at a time, so a removal
   reports the symbol rather than flipping a boolean;
-* the statistics dictionary carries every key the tabs and the study driver
-  read out of it;
+* the statistics dictionary carries every key the phases and the study
+  driver read out of it;
 * the two public entry points describe the same run, because they are the
   same solve.
+
+The guards now sit in :mod:`pyCamSet.workflow`, which imports no Qt, so
+these run on an install with no GUI toolkit at all.
 
 The unit tests here use stubs and run in the fast suite.  The one test that
 needs a real solve shares the session-scoped ChArUco fixtures.
@@ -55,21 +58,30 @@ def test_the_backend_exposes_its_entry_points(name):
 
 
 # --------------------------------------------------------------------------
-# The guarded imports at the top of each phase tab
+# The guarded imports at the top of each phase module
 # --------------------------------------------------------------------------
 
-# Mirrors the ``except ImportError`` branch in each tab, which sets exactly
+# Mirrors the ``except ImportError`` branch in each phase, which sets exactly
 # these names to None.  Listing them here means a backend symbol that goes
 # away is reported as itself, not as "the modules are unavailable".
 PHASE_BACKEND_NAMES = {
-    "pyCamSet.gui.phase_3_bundle_adjustment": (
+    "pyCamSet.workflow.phase1": (
+        "detect_datapoints_in_imfile",
+        "validate_detections",
+    ),
+    "pyCamSet.workflow.phase2": (
+        "detect_datapoints_in_imfile",
+        "run_initial_calibration",
+        "load_pickle",
+    ),
+    "pyCamSet.workflow.phase3": (
         "CameraLockboxConfig",
         "run_bundle_adjustment_with_stats",
         "TemplateBundleHandler",
         "load_CameraSet",
         "load_pickle",
     ),
-    "pyCamSet.gui.phase_4_self_calibration": (
+    "pyCamSet.workflow.phase4": (
         "run_bundle_adjustment_with_stats",
         "SelfBundleHandler",
         "load_CameraSet",
@@ -78,24 +90,22 @@ PHASE_BACKEND_NAMES = {
 
 
 def _phase_module(name: str):
-    pytest.importorskip("PySide6", reason="the phase tabs are Qt widgets")
     return importlib.import_module(name)
 
 
-@pytest.mark.gui
 @pytest.mark.parametrize("module_name", sorted(PHASE_BACKEND_NAMES))
-def test_the_phase_tab_finds_its_backend(module_name):
-    """``_PYCAMSET_OK`` false here is the dialog the user actually sees."""
+def test_the_phase_finds_its_backend(module_name):
+    """``BACKEND_OK`` false here is the dialog the user actually sees."""
     module = _phase_module(module_name)
 
-    assert module._PYCAMSET_OK is True, (
-        f"{module_name} fell back to its ImportError branch, so the tab will "
-        f"refuse to run with 'pyCamSet optimisation modules are unavailable'. "
-        f"Import the module directly to see the underlying error."
+    assert module.BACKEND_OK is True, (
+        f"{module_name} fell back to its ImportError branch, so the phase "
+        f"will refuse to run with 'pyCamSet optimisation modules are "
+        f"unavailable'. Import the module directly to see the underlying "
+        f"error."
     )
 
 
-@pytest.mark.gui
 @pytest.mark.parametrize(
     ("module_name", "symbol"),
     [(m, s) for m, names in sorted(PHASE_BACKEND_NAMES.items()) for s in names],
@@ -110,16 +120,15 @@ def test_every_guarded_backend_name_resolves(module_name, symbol):
     )
 
 
-@pytest.mark.gui
 def test_a_broken_backend_says_why(monkeypatch, caplog):
-    """The guard must name the cause, not just disable the tab.
+    """The guard must name the cause, not just disable the phase.
 
     Reloading with the backend module poisoned takes the ImportError branch
     the same way a renamed symbol would.
     """
     import sys
 
-    module_name = "pyCamSet.gui.phase_3_bundle_adjustment"
+    module_name = "pyCamSet.workflow.phase3"
     module = _phase_module(module_name)
 
     monkeypatch.setitem(
@@ -128,7 +137,7 @@ def test_a_broken_backend_says_why(monkeypatch, caplog):
         reloaded = importlib.reload(module)
 
     try:
-        assert reloaded._PYCAMSET_OK is False
+        assert reloaded.BACKEND_OK is False
         assert "Phase 3 optimisation backend unavailable" in caplog.text
     finally:
         # leave the module importable for everything after this test
@@ -408,8 +417,10 @@ def test_the_stats_agree_with_the_calibration_report(short_charuco_handler):
 # refuse the run when the two still disagree.
 
 from pyCamSet.gui.shared_functions import (  # noqa: E402
-    TARGET_IDENTITY_KEYS,
     apply_target_params_to_widgets,
+)
+from pyCamSet.workflow.targets import (  # noqa: E402
+    TARGET_IDENTITY_KEYS,
     describe_target_mismatch,
     target_mismatch_message,
     target_params_of_run,

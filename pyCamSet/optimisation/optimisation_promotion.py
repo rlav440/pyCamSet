@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from pyCamSet.gui.shared_functions import WorkspaceManager
+    from pyCamSet.workflow.workspace import WorkspaceManager
 
 _RUN_ID_TIMESTAMP_FORMAT = "%Y%m%dT%H%M%S"
 

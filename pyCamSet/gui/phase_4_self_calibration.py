@@ -1,12 +1,11 @@
 """
 Phase 4 - Self-calibration GUI.
 
-Implements Phase 4 using SelfBundleHandler with an
-explicit user-triggered flow and diagnostics, including Assess Calibration.
+The form and the figures, plus Assess Calibration; the solve itself is
+:mod:`pyCamSet.workflow.phase4`.
 """
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
@@ -36,26 +35,32 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
-    show_tab,
-    as_io_path,
-    IMAGE_FOLDER_SCHEMATIC,
-    TAB_PHASE4,
     CollapsibleSection,
-    EmitLogHandler,
-    EmitStream,
+    IMAGE_FOLDER_SCHEMATIC,
     PhaseWorker,
     RunSelectorWidget,
+    TAB_PHASE4,
     TerminalWidget,
     WorkspaceManager,
     make_blue_button,
     make_green_button,
     make_orange_button,
-    make_run_id,
     make_section_label,
     make_separator,
-    ensure_directory,
-    path_exists,
     render_predecessor_chain_section,
+    show_tab,
+)
+from pyCamSet.workflow import phase4 as phase4_workflow
+from pyCamSet.workflow.params import (
+    ParamError,
+    as_int,
+    as_json_object,
+    as_outlier_mode,
+    as_positive_int,
+    require_image_folder,
+)
+from pyCamSet.workflow.workspace import (
+    path_exists,
     resolve_phase3_camset_artifact,
 )
 from pyCamSet.gui.assess_calibration import (
@@ -63,25 +68,12 @@ from pyCamSet.gui.assess_calibration import (
     launch_visualise_calibration_open3d_for_run,
     launch_save_pyvista_png_for_run,
     merge_phase3_phase4_runs,
-    observation_residual_xy,
     select_latest_visualisation_run,
 )
 
 _LOG = logging.getLogger(__name__)
 
-try:
-    from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment_with_stats
-    from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
-    from pyCamSet.utils.saving import load_CameraSet
-
-    _PYCAMSET_OK = True
-except ImportError as exc:
-    run_bundle_adjustment_with_stats = None
-    SelfBundleHandler = None
-    load_CameraSet = None
-    _PYCAMSET_OK = False
-    # See the note on the same guard in phase_3_bundle_adjustment.
-    _LOG.warning("Phase 4 optimisation backend unavailable: %s", exc)
+_PYCAMSET_OK = phase4_workflow.BACKEND_OK
 
 _TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
 
@@ -457,48 +449,31 @@ class Phase4Tab(QWidget):
         self._source_lbl.setText(f"Source: run {rid} -> {p or 'missing camset artifact'}")
 
     def _collect_params(self) -> Optional[dict]:
-        floc = self._floc_edit.text().strip()
-        if not floc:
-            QMessageBox.critical(self, "Validation Error", "Image folder is required.")
-            return None
-
+        """Read the form, or say which field is wrong and return None."""
         try:
-            threads = int(self._threads_edit.text().strip() or "1")
-            fixed_pose = int(self._fixed_pose_edit.text().strip())
-            ref_cam = int(self._ref_cam_edit.text().strip())
-            ref_pose = int(self._ref_pose_edit.text().strip())
-        except ValueError as exc:
-            QMessageBox.critical(self, "Validation Error", f"Invalid numeric value: {exc}")
+            return self._read_params()
+        except ParamError as exc:
+            QMessageBox.critical(self, "Validation Error", str(exc))
             return None
 
-        fixed_params = None
-        if self._fp_edit.text().strip():
-            try:
-                fixed_params = json.loads(self._fp_edit.text().strip())
-            except json.JSONDecodeError as exc:
-                QMessageBox.critical(self, "Validation Error", f"Fixed params JSON: {exc}")
-                return None
+    def _read_params(self) -> dict:
+        """The form as a phase 4 parameter dict.
 
-        raw_outlier_mode = (self._outliers_combo.currentText() or "").strip().lower()
-        if raw_outlier_mode in {"y", "yes", "true", "1", "on", "enabled"}:
-            outlier_mode = "y"
-        elif raw_outlier_mode in {"n", "no", "false", "0", "off", "none", "disabled"}:
-            outlier_mode = "n"
-        elif raw_outlier_mode == "ask":
-            outlier_mode = "y"  # GUI worker cannot do stdin prompts safely
-        else:
-            outlier_mode = "n"
-
+        :raises ParamError: for a field that cannot be used as it stands
+        """
         return {
-            "f_loc": floc,
-            "threads": threads,
-            "fixed_params": fixed_params,
+            "f_loc": require_image_folder(self._floc_edit.text()),
+            "threads": as_positive_int(
+                self._threads_edit.text().strip() or "1", "Threads"),
+            "fixed_params": as_json_object(
+                self._fp_edit.text(), "Fixed params JSON"),
             "problem_options": {
                 "verbosity": int(self._verbosity_spin.value()),
-                "fixed_pose": fixed_pose,
-                "ref_cam": ref_cam,
-                "ref_pose": ref_pose,
-                "outliers": outlier_mode,
+                "fixed_pose": as_int(
+                    self._fixed_pose_edit.text(), "fixed_pose"),
+                "ref_cam": as_int(self._ref_cam_edit.text(), "ref_cam"),
+                "ref_pose": as_int(self._ref_pose_edit.text(), "ref_pose"),
+                "outliers": as_outlier_mode(self._outliers_combo.currentText()),
                 "max_nfev": int(self._max_nfev_spin.value()),
                 "loss": self._loss_combo.currentText(),
                 "f_scale": float(self._f_scale_spin.value()),
@@ -528,203 +503,57 @@ class Phase4Tab(QWidget):
         if params is None:
             return
         if not _PYCAMSET_OK:
-            QMessageBox.critical(self, "Import error", "pyCamSet optimisation modules are unavailable.")
+            QMessageBox.critical(
+                self, "Import error",
+                "pyCamSet optimisation modules are unavailable.")
             return
         if self._worker is not None and self._worker.isRunning():
             if self._info_cb.isChecked():
-                QMessageBox.information(self, "Phase 4 running", "Phase 4 is already running.")
+                QMessageBox.information(
+                    self, "Phase 4 running", "Phase 4 is already running.")
             return
 
         self._sync_workspace_from_floc(params["f_loc"])
         if self._workspace_mgr.workspace_path is None:
-            QMessageBox.critical(self, "Workspace", "Could not initialize workspace.")
+            QMessageBox.critical(
+                self, "Workspace", "Could not initialize workspace.")
             return
 
         phase3_run = self._load_phase3_run()
         phase3_camset = self._resolve_phase3_camset(phase3_run)
         if phase3_camset is None:
             if self._info_cb.isChecked():
-                QMessageBox.information(self, "No Phase 3 source", "Select a valid Phase 3 run/camset first.")
+                QMessageBox.information(
+                    self, "No Phase 3 source",
+                    "Select a valid Phase 3 run/camset first.")
             return
 
-        selected_cameras = list(((phase3_run.get("params") or {}).get("selected_cameras") or []) if phase3_run else [])
-        params["selected_cameras"] = selected_cameras
+        params["selected_cameras"] = list(
+            ((phase3_run or {}).get("params") or {}).get("selected_cameras") or [])
 
         self._terminal.clear_terminal()
         self._terminal.append_line("=== Phase 4: Self-Calibration ===")
         self._terminal.append_line(f"Image folder : {params['f_loc']}")
-        self._terminal.append_line(f"Phase 3 run  : {phase3_run.get('run_id', 'unknown') if phase3_run else 'override'}")
+        self._terminal.append_line(
+            f"Phase 3 run  : "
+            f"{phase3_run.get('run_id', 'unknown') if phase3_run else 'override'}")
         self._terminal.append_line(f"Camset       : {phase3_camset}")
-        self._terminal.append_line(f"selected cams: {selected_cameras if selected_cameras else 'all'}")
+        self._terminal.append_line(
+            f"selected cams: {params['selected_cameras'] or 'all'}")
         self._terminal.append_line("Starting…")
 
-        def work_fn(emit: Callable[[str], None]) -> dict:
-            ws_path = self._workspace_mgr.workspace_path
-            assert ws_path is not None
+        workspace_mgr = self._workspace_mgr
 
-            # Keep run ids compact to reduce path length pressure on Windows.
-            run_id = make_run_id()
-            run_dir = ws_path / "phase4_runs" / run_id
-            ensure_directory(run_dir)
-            diagnostics: dict = {}
-
-            stream = EmitStream(emit)
-            log_handler = EmitLogHandler(emit)
-            log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
-            root_logger = logging.getLogger()
-            root_logger.addHandler(log_handler)
-
-            try:
-                with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
-                    prev_cams = load_CameraSet(as_io_path(phase3_camset))
-                    selected = list(params.get("selected_cameras") or [])
-                    if selected:
-                        camset_names = set(prev_cams.get_names())
-                        if camset_names != set(selected):
-                            raise RuntimeError(
-                                "Phase 3 camset cameras do not match selected camera subset. "
-                                "Re-run Phase 3 with the same selected cameras."
-                            )
-                    prev_handler = getattr(prev_cams, "calibration_handler", None)
-                    if prev_handler is None:
-                        raise RuntimeError("Selected Phase 3 camset has no calibration handler metadata.")
-
-                    handler = SelfBundleHandler(
-                        camset=prev_cams,
-                        target=prev_handler.target,
-                        detection=prev_handler.detection,
-                        fixed_params=params["fixed_params"],
-                        options=params["problem_options"],
-                    )
-                    handler.set_from_templated_camset(prev_cams)
-
-                    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(handler, threads=params["threads"])  # type: ignore[arg-type]
-                    init_euclid = float(stats.get("initial_euclid", float("nan")))
-                    final_euclid = float(stats.get("final_euclid", float("nan")))
-                    emit(f"D4.3  Initial Euclidean reprojection error: {init_euclid:.4f} px")
-                    emit(f"D4.3  Final Euclidean reprojection error: {final_euclid:.4f} px")
-
-                    p3_final = float((phase3_run.get("diagnostics") or {}).get("D3.6_final_euclid_px", float("nan"))) if phase3_run else float("nan")
-                    d44 = float(p3_final - final_euclid) if np.isfinite(p3_final) else float("nan")
-                    emit(f"D4.4  Improvement vs Phase 3 final error: {d44:.4f} px")
-
-                    # Use a fixed short filename so long source folders do not exceed MAX_PATH.
-                    out_path = run_dir / "self_calibrated_cameras.camset"
-                    out_cams.save(out_path)
-
-                    visible = np.array(getattr(handler, "visible_feature_mask", []), dtype=bool)
-                    fixed_inds = [int(x) for x in getattr(handler, "fixed_inds", [])]
-                    updated_target = np.array(handler.get_updated_target(optimisation.x), dtype=float)
-                    ref_target = np.array(handler.target.point_data, dtype=float).reshape(-1, 3)
-
-                    # Mask to only visible features for D4.5/D4.7. Flat PuzzleBoard's
-                    # point_data spans 251,001 virtual-field positions; only the
-                    # ~15,540 printed-window points are actually detected. Undetected
-                    # points are fixed at their initial values (ratio~1, disp~0),
-                    # which would dilute np.nanmedian(ratio) and np.nanmean(displacement)
-                    # if included. All other targets have no virtual-field padding, so
-                    # this mask is a no-op for them (visible is all-True for detected
-                    # points and correctly excludes only genuinely unseen features).
-                    if visible.size == ref_target.shape[0] and np.any(visible):
-                        ref_norm = np.linalg.norm(ref_target[visible], axis=1)
-                        upd_norm = np.linalg.norm(updated_target[visible], axis=1)
-                        ratio = ref_norm / np.where(upd_norm == 0.0, np.nan, upd_norm)
-                        displacement = np.linalg.norm(updated_target[visible] - ref_target[visible], axis=1)
-                    else:
-                        with np.errstate(invalid="ignore", divide="ignore"):
-                            ref_norm = np.linalg.norm(ref_target, axis=1)
-                            upd_norm = np.linalg.norm(updated_target, axis=1)
-                            ratio = ref_norm / np.where(upd_norm == 0.0, np.nan, upd_norm)
-                        displacement = np.linalg.norm(updated_target - ref_target, axis=1)
-                    scale_est = float(np.nanmedian(ratio)) if ratio.size else float("nan")
-                    mean_disp_mm = float(np.nanmean(displacement) * 1000.0) if displacement.size else float("nan")
-
-                    _raw_init = getattr(handler, "initial_per_im_error", None)
-                    per_im_init = np.asarray(_raw_init, dtype=float) if _raw_init is not None else np.array([])
-                    per_cam_err: dict[str, float] = {}
-                    try:
-                        dd = np.asarray(handler.get_detection_data(flatten=True))
-                        residual_xy = observation_residual_xy(optimisation.fun, handler)
-                        residual_norm = np.linalg.norm(residual_xy, axis=1)
-                        if dd.ndim == 2 and dd.shape[1] >= 1:
-                            cam_idx = dd[:, 0].astype(int)
-                            if cam_idx.size != residual_norm.size:
-                                raise ValueError(
-                                    "D4.12 alignment mismatch: "
-                                    f"cam_idx={cam_idx.size}, residuals={residual_norm.size}"
-                                )
-                            cam_names = list(getattr(handler, "cam_names", []))
-                            for idx, name in enumerate(cam_names):
-                                mask = cam_idx == idx
-                                per_cam_err[name] = float(np.mean(residual_norm[mask])) if np.any(mask) else float("nan")
-                    except Exception as diag_exc:
-                        emit(f"Warning: D4.12 skipped due to diagnostics error: {diag_exc}")
-
-                    diagnostics["D4.1_n_free_target_points"] = int(np.sum(visible))
-                    emit(f"D4.1  Free target points: {diagnostics['D4.1_n_free_target_points']}")
-                    diagnostics["D4.2_gauge_fixed_points"] = {"count": len(fixed_inds), "indices": fixed_inds}
-                    emit(f"D4.2  Gauge-fixed points: count={len(fixed_inds)}, indices={fixed_inds}")
-                    diagnostics["D4.3_per_image_initial_reprojection"] = per_im_init.tolist()
-                    diagnostics["D4.3_initial_euclid_px"] = init_euclid
-                    diagnostics["D4.3_final_euclid_px"] = final_euclid
-                    diagnostics["D4.4_vs_phase3_delta_px"] = d44
-                    diagnostics["D4.5_gauge_scale_factor"] = scale_est
-                    emit(f"D4.5  Gauge scale factor: {scale_est:.6f}")
-                    diagnostics["D4.7_mean_target_displacement_mm"] = mean_disp_mm
-                    emit(f"D4.7  Mean target displacement: {mean_disp_mm:.5f} mm")
-                    diagnostics["D4.8_shape_change_arrows"] = "available in Assess Calibration"
-                    diagnostics["D4.9_planarity_rms_mm"] = "available in backend special_plots"
-                    diagnostics["D4.10_accuracy_precision"] = "available in Assess Calibration"
-                    diagnostics["D4.12_per_camera_mean_reprojection"] = per_cam_err
-                    if per_cam_err:
-                        valid_cams = {k: v for k, v in per_cam_err.items() if np.isfinite(v)}
-                        if valid_cams:
-                            worst_cam = max(valid_cams, key=valid_cams.get)
-                            best_cam = min(valid_cams, key=valid_cams.get)
-                            emit(f"D4.12  Per-camera mean reprojection: best={best_cam}={valid_cams[best_cam]:.2f}px, worst={worst_cam}={valid_cams[worst_cam]:.2f}px")
-                        else:
-                            emit("D4.12  Per-camera mean reprojection: no valid cameras")
-
-                    metadata = {
-                        "run_id": run_id,
-                        "phase": "phase4",
-                        "params": params,
-                        "diagnostics": diagnostics,
-                        "error": None,
-                        "inputs": {"phase3_run_id": phase3_run.get("run_id") if phase3_run else None},
-                        "artifacts": {
-                            "self_calibrated_camset": str(out_path),
-                            "optimised_camset": str(out_path),
-                            "phase3_camset_used": str(phase3_camset),
-                        },
-                    }
-                    self._workspace_mgr.save_run("phase4", run_id, metadata)
-                    emit(f"Run saved: {run_id}")
-                    return metadata
-            except Exception as exc:
-                msg = str(exc)
-                emit(f"ERROR: {msg}")
-                metadata = {
-                    "run_id": run_id,
-                    "phase": "phase4",
-                    "params": params,
-                    "diagnostics": diagnostics,
-                    "error": msg,
-                    "inputs": {"phase3_run_id": phase3_run.get("run_id") if phase3_run else None},
-                    "artifacts": {
-                        "phase3_camset_used": str(phase3_camset),
-                    },
-                }
-                self._workspace_mgr.save_run("phase4", run_id, metadata)
-                return metadata
-            finally:
-                stream.flush()
-                root_logger.removeHandler(log_handler)
+        def work_fn(log: Callable[[str], None]) -> dict:
+            return phase4_workflow.run(
+                params, workspace_mgr, log,
+                phase3_run=phase3_run, phase3_camset=phase3_camset)
 
         self._worker = PhaseWorker(work_fn, parent=self)
         self._worker.line_ready.connect(self._terminal.append_line)
         self._worker.finished.connect(self._on_run_finished)
-        self._worker.error.connect(lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
+        self._worker.error.connect(
+            lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
         self._worker.start()
 
     def _on_run_finished(self, _metadata: dict) -> None:

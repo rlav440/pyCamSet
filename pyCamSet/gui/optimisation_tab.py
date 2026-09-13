@@ -42,16 +42,18 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.bounded_slider import BoundedSliderRow
-from pyCamSet.gui.shared_functions import (
+from pyCamSet.calibration_targets.backend_registry import (
     ARUCO1_DICT_NAMES,
     MARKER_BACKEND_LABELS,
+    marker_backend_availability_text,
+    marker_backend_available,
+)
+from pyCamSet.gui.shared_functions import (
     TAB_OPTIMISATION,
     WorkspaceManager,
     make_green_button,
     make_orange_button,
     make_section_label,
-    marker_backend_availability_text,
-    marker_backend_available,
     repopulate_dict_combo,
 )
 from pyCamSet.optimisation.charuco_detector_metadata import (

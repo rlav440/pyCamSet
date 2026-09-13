@@ -1,12 +1,13 @@
 """
 Phase 3 - Template bundle adjustment GUI.
 
-Implements Phase 3 by orchestrating core pyCamSet
-bundle-adjustment functions and persisting run diagnostics.
+The form, the lockbox controls and the figures; the solve itself is
+:mod:`pyCamSet.workflow.phase3`.  The diagnostics tab additionally re-solves
+from detections it has pruned by image, which is why the backend names are
+still imported here.
 """
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
@@ -37,75 +38,92 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.workflow import phase3 as phase3_workflow
+from pyCamSet.workflow.diagnostics import observation_residual_xy
+from pyCamSet.workflow.params import (
+    ParamError,
+    as_int,
+    as_json_object,
+    as_outlier_mode,
+    as_positive_float,
+    as_positive_int,
+    require_image_folder,
+    require_marker_backend,
+    require_target_match,
+)
+from pyCamSet.calibration_targets.backend_registry import (
+    MARKER_BACKEND_LABELS,
+    marker_backend_availability_text,
+    marker_backend_available,
+)
 from pyCamSet.gui.shared_functions import (
-    as_io_path,
-    IMAGE_FOLDER_SCHEMATIC,
-    TAB_PHASE3,
-    TAB_PHASE4,
     CollapsibleSection,
-    EmitLogHandler,
-    EmitStream,
+    IMAGE_FOLDER_SCHEMATIC,
     MatplotlibFigureCard,
     PhaseWorker,
     RunSelectorWidget,
+    TAB_PHASE3,
+    TAB_PHASE4,
     TerminalWidget,
     WorkspaceManager,
-    MARKER_BACKEND_LABELS,
-    build_target,
-    extract_detection,
-    marker_backend_availability_text,
-    marker_backend_available,
+    apply_target_params_to_widgets,
     make_blue_button,
-    make_orange_button,
     make_green_button,
-    make_run_id,
+    make_orange_button,
     make_scrollable_tab,
     make_section_label,
     make_separator,
-    ensure_directory,
     render_predecessor_chain_section,
-    resolve_phase1_pickle_artifact,
-    apply_target_params_to_widgets,
-    describe_target_mismatch,
-    target_mismatch_message,
+    show_tab,
+)
+from pyCamSet.workflow.detections import (
+    extract_detection,
+)
+from pyCamSet.workflow.logs import (
+    captured_output,
+    non_interactive_plotting,
+)
+from pyCamSet.workflow.targets import (
+    build_target,
     target_params_of_run,
+)
+from pyCamSet.workflow.workspace import (
+    as_io_path,
+    ensure_directory,
+    make_run_id,
+    path_exists,
+    resolve_phase1_pickle_artifact,
     resolve_phase2_camset_artifact,
     resolve_phase3_camset_artifact,
-    path_exists,
-    show_tab,
-    suppress_matplotlib_gui,
 )
 from pyCamSet.gui.assess_calibration import (
     launch_visualise_calibration_for_run,
     launch_visualise_calibration_open3d_for_run,
     launch_save_pyvista_png_for_run,
     merge_phase3_phase4_runs,
-    observation_residual_xy,
     select_latest_visualisation_run,
 )
 from pyCamSet.gui.phase_3_lockbox_editor import Phase3LockboxEditor
 
 _LOG = logging.getLogger(__name__)
 
-try:
-    from pyCamSet.optimisation.camera_lockbox import CameraLockboxConfig
-    from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment_with_stats
-    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
-    from pyCamSet.utils.saving import load_CameraSet, load_pickle
+# The lockbox editor loads camsets of its own, and the diagnostics tab builds
+# a phase 3 run from pruned detections, so both reach for the backend here.
+# The names come from the phase runner rather than from a second guard: they
+# are the same symbols, and they should go missing together.
+from pyCamSet.workflow.phase3 import (  # noqa: E402
+    CameraLockboxConfig,
+    TemplateBundleHandler,
+    run_bundle_adjustment_with_stats,
+)
 
-    _PYCAMSET_OK = True
-except ImportError as exc:
-    CameraLockboxConfig = None
-    run_bundle_adjustment_with_stats = None
-    TemplateBundleHandler = None
+try:
+    from pyCamSet.utils.saving import load_CameraSet, load_pickle
+except ImportError:
     load_CameraSet = None
     load_pickle = None
-    _PYCAMSET_OK = False
-    # Said out loud, because collapsing the cause into a boolean is how a
-    # renamed backend symbol came to look to the user like a broken install:
-    # the tab reports the modules as unavailable, and nothing says which one
-    # or why.
-    _LOG.warning("Phase 3 optimisation backend unavailable: %s", exc)
+
+_PYCAMSET_OK = phase3_workflow.BACKEND_OK
 
 _TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
 
@@ -762,120 +780,102 @@ class Phase3Tab(QWidget):
         )
 
     def _collect_params(self) -> Optional[dict]:
-        floc = self._floc_edit.text().strip()
-        if not floc:
-            QMessageBox.critical(self, "Validation Error", "Image folder is required.")
-            return None
-
+        """Read the form, or say which field is wrong and return None."""
         try:
-            threads = int(self._threads_edit.text().strip()) if self._threads_edit.text().strip() else 1
-            fixed_pose = int(self._fixed_pose_edit.text().strip())
-            ref_cam = int(self._ref_cam_edit.text().strip())
-            ref_pose = int(self._ref_pose_edit.text().strip())
-            length = float(self._length_edit.text().strip())
-        except ValueError as exc:
-            QMessageBox.critical(self, "Validation Error", f"Invalid numeric value: {exc}")
+            return self._read_params()
+        except ParamError as exc:
+            QMessageBox.critical(self, "Validation Error", str(exc))
             return None
 
-        fixed_params = None
-        if self._fp_edit.text().strip():
-            try:
-                fixed_params = json.loads(self._fp_edit.text().strip())
-            except json.JSONDecodeError as exc:
-                QMessageBox.critical(self, "Validation Error", f"Fixed params JSON: {exc}")
-                return None
+    def _read_params(self) -> dict:
+        """The form as a phase 3 parameter dict.
 
-        raw_outlier_mode = (self._outliers_combo.currentText() or "").strip().lower()
-        if raw_outlier_mode in {"y", "yes", "true", "1", "on", "enabled"}:
-            outlier_mode = "y"
-        elif raw_outlier_mode in {"n", "no", "false", "0", "off", "none", "disabled"}:
-            outlier_mode = "n"
-        elif raw_outlier_mode == "ask":
-            outlier_mode = "y"  # GUI worker cannot do stdin prompts safely
-        else:
-            outlier_mode = "n"
-
-        lockbox_enabled = self._lockbox_enabled_cb.isChecked()
-        original_lockbox_source_path = self._lockbox_source_edit.text().strip()
-        edited_lockbox_source_path = self._edited_lockbox_camset_path
-        effective_lockbox_source_path = edited_lockbox_source_path or original_lockbox_source_path
-        if lockbox_enabled:
-            if not original_lockbox_source_path:
-                QMessageBox.critical(self, "Validation Error", "Original source camset is required when lockbox is enabled.")
-                return None
-            if not path_exists(original_lockbox_source_path):
-                QMessageBox.critical(self, "Validation Error", f"Original source camset does not exist: {original_lockbox_source_path}")
-                return None
-            if not effective_lockbox_source_path or not path_exists(effective_lockbox_source_path):
-                QMessageBox.critical(self, "Validation Error", f"Effective lockbox source does not exist: {effective_lockbox_source_path}")
-                return None
-
-        # PuzzleBoard / PuzzleBoardCube parameters.
-        try:
-            pb_square_size = float(self._pb_square_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoard square_size must be numeric.")
-            return None
-        try:
-            pb_paper_width = float(self._pb_paper_w_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_width must be numeric.")
-            return None
-        try:
-            pb_paper_height = float(self._pb_paper_h_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_height must be numeric.")
-            return None
-        try:
-            pbc_length = float(self._pbc_square_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube length must be numeric.")
-            return None
-
+        :raises ParamError: for a field that cannot be used as it stands
+        """
         return {
-            "f_loc": floc,
-            "threads": threads,
-            "fixed_params": fixed_params,
+            "f_loc": require_image_folder(self._floc_edit.text()),
+            "threads": as_positive_int(
+                self._threads_edit.text().strip() or "1", "Threads"),
+            "fixed_params": as_json_object(
+                self._fp_edit.text(), "Fixed params JSON"),
             "target_type": self._target_combo.currentText(),
             "n_points": self._npts_spin.value(),
-            "length": length,
-            "marker_backend": str(self._marker_backend_combo.currentData() or "aruco1"),
+            "length": as_positive_float(self._length_edit.text(), "Length"),
+            "marker_backend": str(
+                self._marker_backend_combo.currentData() or "aruco1"),
             "border_fraction": self._border_spin.value(),
             "marker_fraction": self._marker_spin.value(),
             # PuzzleBoard:
             "num_squares_x": self._pb_x_spin.value(),
             "num_squares_y": self._pb_y_spin.value(),
-            "square_size": pb_square_size,
+            "square_size": as_positive_float(
+                self._pb_square_edit.text(), "PuzzleBoard square_size"),
             "start_x": self._pb_start_x_spin.value(),
             "start_y": self._pb_start_y_spin.value(),
-            "paper_width": pb_paper_width,
-            "paper_height": pb_paper_height,
+            "paper_width": as_positive_float(
+                self._pb_paper_w_edit.text(), "PuzzleBoard paper_width"),
+            "paper_height": as_positive_float(
+                self._pb_paper_h_edit.text(), "PuzzleBoard paper_height"),
             "min_width": self._pb_min_width_spin.value(),
             # PuzzleBoardCube:
             "pbc_n_points": self._pbc_size_spin.value(),
-            "pbc_length": pbc_length,
-            "lockbox": {
-                "enabled": bool(lockbox_enabled),
-                "original_source_camset": original_lockbox_source_path if lockbox_enabled else None,
-                "edited_source_camset": edited_lockbox_source_path if lockbox_enabled else None,
-                "edited_source_metadata": self._edited_lockbox_metadata_path if lockbox_enabled else None,
-                "source_camset": effective_lockbox_source_path if lockbox_enabled else None,
-                "warm_start": bool(self._lockbox_warm_start_cb.isChecked()),
-                "rotation_half_width": float(self._lockbox_rotation_half_spin.value()),
-                "translation_half_width": float(self._lockbox_translation_half_spin.value()),
-                "rotation_sigma": float(self._lockbox_rotation_sigma_spin.value()),
-                "translation_sigma": float(self._lockbox_translation_sigma_spin.value()),
-                "center_sigma": float(self._lockbox_center_sigma_spin.value()),
-                "implementation_mode": "extrinsic_parameter_mvp",
-            },
+            "pbc_length": as_positive_float(
+                self._pbc_square_edit.text(), "PuzzleBoardCube length"),
+            "lockbox": self._read_lockbox_params(),
             "problem_options": {
                 "verbosity": int(self._verbosity_spin.value()),
-                "fixed_pose": fixed_pose,
-                "ref_cam": ref_cam,
-                "ref_pose": ref_pose,
-                "outliers": outlier_mode,
+                "fixed_pose": as_int(
+                    self._fixed_pose_edit.text(), "fixed_pose"),
+                "ref_cam": as_int(self._ref_cam_edit.text(), "ref_cam"),
+                "ref_pose": as_int(self._ref_pose_edit.text(), "ref_pose"),
+                "outliers": as_outlier_mode(self._outliers_combo.currentText()),
                 "max_nfev": int(self._max_nfev_spin.value()),
             },
+        }
+
+    def _read_lockbox_params(self) -> dict:
+        """The lockbox block of the parameters, checked only when it is on.
+
+        The edited copy the lockbox editor writes takes precedence over the
+        camset it was derived from, and both are recorded: the run should say
+        what it actually solved against and where that came from.
+
+        :raises ParamError: when the lockbox is on but its source is not there
+        """
+        enabled = self._lockbox_enabled_cb.isChecked()
+        original = self._lockbox_source_edit.text().strip()
+        edited = self._edited_lockbox_camset_path
+        effective = edited or original
+
+        if enabled:
+            if not original:
+                raise ParamError(
+                    "Original source camset is required when lockbox is "
+                    "enabled.")
+            if not path_exists(original):
+                raise ParamError(
+                    f"Original source camset does not exist: {original}")
+            if not effective or not path_exists(effective):
+                raise ParamError(
+                    f"Effective lockbox source does not exist: {effective}")
+
+        return {
+            "enabled": bool(enabled),
+            "original_source_camset": original if enabled else None,
+            "edited_source_camset": edited if enabled else None,
+            "edited_source_metadata": (
+                self._edited_lockbox_metadata_path if enabled else None),
+            "source_camset": effective if enabled else None,
+            "warm_start": bool(self._lockbox_warm_start_cb.isChecked()),
+            "rotation_half_width": float(
+                self._lockbox_rotation_half_spin.value()),
+            "translation_half_width": float(
+                self._lockbox_translation_half_spin.value()),
+            "rotation_sigma": float(self._lockbox_rotation_sigma_spin.value()),
+            "translation_sigma": float(
+                self._lockbox_translation_sigma_spin.value()),
+            "center_sigma": float(self._lockbox_center_sigma_spin.value()),
+            "implementation_mode": "extrinsic_parameter_mvp",
         }
 
     def set_phase2_run_id(self, run_id: str) -> None:
@@ -1013,322 +1013,85 @@ class Phase3Tab(QWidget):
         params = self._collect_params()
         if params is None:
             return
-        # FIX 2 (R1): the backend is unused for PuzzleBoard/PuzzleBoardCube
-        # (they never detect ArUco markers), so only refuse when the selected
-        # target actually uses the marker backend (mirror create_target.py).
-        if params.get("target_type") in ("Ccube", "ChArUco") and not marker_backend_available(
-            params.get("marker_backend", "aruco1")
-        ):
-            QMessageBox.warning(
-                self,
-                "Marker backend unavailable",
-                "ArUco 2 (aruco2) is selected but the 'aruco2' package is not "
-                "installed. Install it with `pip install aruco2` or switch the "
-                "marker backend to ArUco 1 (OpenCV).",
-            )
+        try:
+            require_marker_backend(params)
+        except ParamError as exc:
+            QMessageBox.warning(self, "Marker backend unavailable", str(exc))
             return
         if not _PYCAMSET_OK:
-            QMessageBox.critical(self, "Import error", "pyCamSet optimisation modules are unavailable.")
+            QMessageBox.critical(
+                self, "Import error",
+                "pyCamSet optimisation modules are unavailable.")
             return
         if self._worker is not None and self._worker.isRunning():
             if self._info_cb.isChecked():
-                QMessageBox.information(self, "Phase 3 running", "Phase 3 is already running.")
+                QMessageBox.information(
+                    self, "Phase 3 running", "Phase 3 is already running.")
             return
 
         self._sync_workspace_from_floc(params["f_loc"])
         if self._workspace_mgr.workspace_path is None:
-            QMessageBox.critical(self, "Workspace", "Could not initialize workspace.")
+            QMessageBox.critical(
+                self, "Workspace", "Could not initialize workspace.")
             return
 
         phase2_run = self._load_phase2_run()
         if phase2_run is None:
             if self._info_cb.isChecked():
-                QMessageBox.information(self, "No Phase 2 run", "Run Phase 2 first.")
+                QMessageBox.information(
+                    self, "No Phase 2 run", "Run Phase 2 first.")
             return
 
         phase1_run = self._load_phase1_run_for_phase2(phase2_run)
         if phase1_run is None:
             if self._info_cb.isChecked():
-                QMessageBox.information(self, "No Phase 1 run", "No Phase 1 run found for detections.")
+                QMessageBox.information(
+                    self, "No Phase 1 run",
+                    "No Phase 1 run found for detections.")
             return
 
-        # The detections index into the target's points, so a target of a
-        # different size cannot read them.  Caught here, where the two can
-        # still be named, rather than as an IndexError inside the target.
-        differences = describe_target_mismatch(
-            target_params_of_run(phase1_run), params)
-        if differences:
+        try:
+            require_target_match(phase1_run, params)
+        except ParamError as exc:
             QMessageBox.critical(
-                self, "Target does not match the detections",
-                target_mismatch_message(
-                    str(phase1_run.get("run_id", "unknown")), differences),
-            )
+                self, "Target does not match the detections", str(exc))
             return
 
-        selected_cameras = list(
+        params["selected_cameras"] = list(
             ((phase2_run.get("params") or {}).get("selected_cameras") or [])
-            or ((phase1_run.get("params") or {}).get("selected_cameras") or [])
-        )
-        params["selected_cameras"] = selected_cameras
+            or ((phase1_run.get("params") or {}).get("selected_cameras") or []))
+
+        override = self._preferred_phase2_camset_path
+        camset_override = Path(override) if override else None
 
         self._src_lbl.setText(
-            f"Phase 2: {phase2_run.get('run_id', '?')} | Phase 1: {phase1_run.get('run_id', '?')}"
-        )
+            f"Phase 2: {phase2_run.get('run_id', '?')} | "
+            f"Phase 1: {phase1_run.get('run_id', '?')}")
 
         self._terminal.clear_terminal()
         self._terminal.append_line("=== Phase 3: Template Bundle Adjustment ===")
         self._terminal.append_line(f"Image folder : {params['f_loc']}")
-        self._terminal.append_line(f"Phase 2 run  : {phase2_run.get('run_id', 'unknown')}")
-        self._terminal.append_line(f"Phase 1 run  : {phase1_run.get('run_id', 'unknown')}")
-        self._terminal.append_line(f"selected cams: {selected_cameras if selected_cameras else 'all'}")
+        self._terminal.append_line(
+            f"Phase 2 run  : {phase2_run.get('run_id', 'unknown')}")
+        self._terminal.append_line(
+            f"Phase 1 run  : {phase1_run.get('run_id', 'unknown')}")
+        self._terminal.append_line(
+            f"selected cams: {params['selected_cameras'] or 'all'}")
         self._terminal.append_line("Starting…")
 
-        def work_fn(emit: Callable[[str], None]) -> dict:
-            ws_path = self._workspace_mgr.workspace_path
-            assert ws_path is not None
+        workspace_mgr = self._workspace_mgr
 
-            run_id = make_run_id()
-            run_dir = ws_path / "phase3_runs" / run_id
-            ensure_directory(run_dir)
-
-            diagnostics: dict = {}
-            camset_path: Optional[str] = None
-            p1_pickle: Optional[Path] = None
-
-            stream = EmitStream(emit)
-            log_handler = EmitLogHandler(emit)
-            log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
-            root_logger = logging.getLogger()
-            root_logger.addHandler(log_handler)
-
-            try:
-                with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream), suppress_matplotlib_gui():
-                    emit("Phase 3 running in non-interactive plotting mode (thread-safe).")
-
-                    camset_path = self._preferred_phase2_camset_path
-                    if camset_path and not path_exists(camset_path):
-                        camset_path = None
-                    if not camset_path:
-                        camset_resolved = resolve_phase2_camset_artifact(phase2_run, ws_path)
-                        camset_path = str(camset_resolved) if camset_resolved is not None else None
-                    if not camset_path:
-                        raise RuntimeError("Phase 2 run is missing initial_camset artifact.")
-                    if not path_exists(camset_path):
-                        raise RuntimeError(f"Phase 2 camset path does not exist: {camset_path}")
-
-                    p1_pickle = resolve_phase1_pickle_artifact(phase1_run, ws_path)
-                    if not p1_pickle:
-                        raise RuntimeError("Could not resolve Phase 1 detected_datapoints.pickle artifact.")
-
-                    cams = load_CameraSet(as_io_path(camset_path))
-                    payload = load_pickle(as_io_path(p1_pickle))
-                    detections = extract_detection(payload)
-                    if detections is None:
-                        raise RuntimeError("Could not extract TargetDetection from Phase 1 pickle.")
-
-                    selected = list(params.get("selected_cameras") or [])
-                    if selected:
-                        selected_set = set(selected)
-                        camset_names = set(cams.get_names())
-                        det_names = set(getattr(detections, "cam_names", []) or [])
-                        if camset_names != selected_set:
-                            raise RuntimeError(
-                                "Phase 2 camset cameras do not match selected camera subset. "
-                                "Re-run Phase 2 with the same selected cameras."
-                            )
-                        if det_names != selected_set:
-                            raise RuntimeError(
-                                "Phase 1 detections do not match selected camera subset. "
-                                "Re-run Phase 1/2 with the same selected cameras."
-                            )
-
-                    target = build_target(
-                        params["target_type"],
-                        params["n_points"],
-                        params["length"],
-                        border_fraction=params.get("border_fraction", 0.1),
-                        marker_fraction=params.get("marker_fraction", 0.8),
-                        marker_backend=params.get("marker_backend", "aruco1"),
-                        num_squares_x=params.get("num_squares_x", 105),
-                        num_squares_y=params.get("num_squares_y", 148),
-                        square_size=params.get("square_size", 2.0),
-                        start_x=params.get("start_x", 0),
-                        start_y=params.get("start_y", 0),
-                        paper_width=params.get("paper_width", 210.0),
-                        paper_height=params.get("paper_height", 297.0),
-                        min_width=params.get("min_width", 4),
-                        pbc_n_points=params.get("pbc_n_points", 20),
-                        pbc_length=params.get("pbc_length", 200.0),
-                    )
-                    lockbox_params = dict(params.get("lockbox") or {})
-                    lockbox_config = CameraLockboxConfig(
-                        enabled=bool(lockbox_params.get("enabled", False)),
-                        rotation_half_width=float(lockbox_params.get("rotation_half_width", 0.1)),
-                        translation_half_width=float(lockbox_params.get("translation_half_width", 0.1)),
-                        rotation_sigma=float(lockbox_params.get("rotation_sigma", 0.05)),
-                        translation_sigma=float(lockbox_params.get("translation_sigma", 0.01)),
-                        center_sigma=float(lockbox_params.get("center_sigma", 0.0)),
-                    )
-                    lockbox_source_camset = None
-                    lockbox_source_path = lockbox_params.get("source_camset")
-                    if lockbox_config.enabled:
-                        if not lockbox_source_path:
-                            raise RuntimeError("Lockbox is enabled but no effective lockbox source path was provided.")
-                        emit(f"Loading effective lockbox source camset: {lockbox_source_path}")
-                        if lockbox_params.get("original_source_camset") and lockbox_params.get("edited_source_camset"):
-                            emit(f"Original source camset: {lockbox_params.get('original_source_camset')}")
-                            emit(f"Edited lockbox copy: {lockbox_params.get('edited_source_camset')}")
-                        lockbox_source_camset = load_CameraSet(as_io_path(lockbox_source_path))
-                        if set(lockbox_source_camset.get_names()) != set(cams.get_names()):
-                            raise RuntimeError(
-                                "Effective lockbox source camera names do not match the active Phase 2 camset. "
-                                "This would break TemplateBundleHandler."
-                            )
-
-                    handler = TemplateBundleHandler(
-                        camset=cams,
-                        target=target,
-                        detection=detections,
-                        fixed_params=params["fixed_params"],
-                        options=params["problem_options"],
-                        lockbox_config=lockbox_config,
-                        lockbox_source_camset=lockbox_source_camset,
-                        lockbox_warm_start=bool(lockbox_params.get("warm_start", True)),
-                    )
-                    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(  # type: ignore[arg-type]
-                        handler,
-                        threads=params["threads"],
-                    )
-
-                    init_euclid = float(stats.get("initial_euclid", float("nan")))
-                    final_euclid = float(stats.get("final_euclid", float("nan")))
-                    dt = float(stats.get("elapsed_sec", float("nan")))
-
-                    emit(f"D3.5  Initial Euclidean reprojection error: {init_euclid:.4f} px")
-                    emit(f"D3.6  Final Euclidean reprojection error: {final_euclid:.4f} px")
-                    if not bool(stats.get("success", optimisation.success)):
-                        emit(f"Solver note: {stats.get('message', optimisation.message)}")
-                    emit(f"Optimisation finished in {dt:.2f}s")
-
-                    camset_out_path = run_dir / "optimised_cameras.camset"
-                    out_cams.save(camset_out_path)
-
-                    missing_before = np.array(
-                        getattr(handler, "missing_poses_before_outlier_rejection", []),
-                        dtype=bool,
-                    )
-                    missing_after = np.array(
-                        getattr(
-                            handler,
-                            "missing_poses_after_outlier_rejection",
-                            handler.missing_poses if handler.missing_poses is not None else [],
-                        ),
-                        dtype=bool,
-                    )
-                    per_im_init = np.array(getattr(handler, "initial_per_im_error", []), dtype=float)
-
-                    # Robust D3.12 (do not fail run if diagnostic sizing differs)
-                    per_cam_err: dict[str, float] = {}
-                    try:
-                        dd = np.asarray(handler.get_detection_data(flatten=True))
-                        residual_xy = observation_residual_xy(optimisation.fun, handler)
-                        residual_norm = np.linalg.norm(residual_xy, axis=1)
-
-                        if dd.ndim == 2 and dd.shape[1] >= 1:
-                            cam_idx = dd[:, 0].astype(int)
-                            if cam_idx.size != residual_norm.size:
-                                raise ValueError(
-                                    "D3.12 alignment mismatch: "
-                                    f"cam_idx={cam_idx.size}, residuals={residual_norm.size}"
-                                )
-
-                            for idx, name in enumerate(handler.cam_names):
-                                mask = cam_idx == idx
-                                per_cam_err[name] = (
-                                    float(np.mean(residual_norm[mask])) if np.any(mask) else float("nan")
-                                )
-                        else:
-                            emit("Warning: D3.12 skipped (unexpected detection-data shape).")
-                    except Exception as diag_exc:
-                        emit(f"Warning: D3.12 skipped due to diagnostics error: {diag_exc}")
-
-                    param_count = int(stats.get("param_count", 0))
-                    obs_count = int(stats.get("observation_count", len(optimisation.fun) // 2))
-
-                    n_missing_before = int(np.sum(missing_before))
-                    n_missing_after = int(np.sum(missing_after))
-                    diagnostics["D3.1_n_missing_poses"] = n_missing_before
-                    diagnostics["D3.2_n_outlier_removed"] = int(max(0, n_missing_after - n_missing_before))
-                    diagnostics["D3.3_per_image_initial_reprojection"] = per_im_init.tolist()
-                    diagnostics["D3.4_initial_error_plot"] = "rendered in diagnostics tab"
-                    diagnostics["D3.5_initial_euclid_px"] = init_euclid
-                    diagnostics["D3.6_final_euclid_px"] = final_euclid
-                    diagnostics["D3.7_error_reduction_ratio"] = (
-                        float(init_euclid / final_euclid) if final_euclid > 0 else float("inf")
-                    )
-                    diagnostics["D3.8_solver_status"] = {
-                        "status": int(stats.get("status", optimisation.status)),
-                        "message": str(stats.get("message", optimisation.message)),
-                        "success": bool(stats.get("success", optimisation.success)),
-                    }
-                    diagnostics["D3.9_nfev"] = int(stats.get("nfev", optimisation.nfev))
-                    diagnostics["D3.10_parameter_observation_ratio"] = {
-                        "param_count": param_count,
-                        "observation_count": obs_count,
-                        "ratio": float(param_count / max(obs_count, 1)),
-                    }
-                    diagnostics["D3.11_residual_xy_scatter"] = residual_xy.tolist() if 'residual_xy' in locals() else []
-                    diagnostics["D3.12_per_camera_mean_reprojection"] = per_cam_err
-                    diagnostics["D3.13_extrinsic_pose_view"] = "rendered in diagnostics tab"
-
-                    metadata = {
-                        "run_id": run_id,
-                        "phase": "phase3",
-                        "params": params,
-                        "diagnostics": diagnostics,
-                        "error": None,
-                        "inputs": {
-                            "phase2_run_id": phase2_run.get("run_id"),
-                            "phase1_run_id": phase1_run.get("run_id"),
-                        },
-                        "artifacts": {
-                            "optimised_camset": str(camset_out_path),
-                            "phase2_initial_camset_used": str(camset_path),
-                            "phase1_detection_pickle_used": str(p1_pickle),
-                        },
-                    }
-                    self._workspace_mgr.save_run("phase3", run_id, metadata)
-                    emit(f"Run saved: {run_id}")
-                    return metadata
-
-            except Exception as exc:
-                msg = str(exc)
-                emit(f"ERROR: {msg}")
-                metadata = {
-                    "run_id": run_id,
-                    "phase": "phase3",
-                    "params": params,
-                    "diagnostics": diagnostics,
-                    "error": msg,
-                    "inputs": {
-                        "phase2_run_id": phase2_run.get("run_id"),
-                        "phase1_run_id": phase1_run.get("run_id"),
-                    },
-                    "artifacts": {
-                        "phase2_initial_camset_used": str(camset_path) if camset_path else None,
-                        "phase1_detection_pickle_used": str(p1_pickle) if p1_pickle is not None else None,
-                    },
-                }
-                self._workspace_mgr.save_run("phase3", run_id, metadata)
-                return metadata
-            finally:
-                stream.flush()
-                root_logger.removeHandler(log_handler)
+        def work_fn(log: Callable[[str], None]) -> dict:
+            return phase3_workflow.run(
+                params, workspace_mgr, log,
+                phase2_run=phase2_run, phase1_run=phase1_run,
+                camset_override=camset_override)
 
         self._worker = PhaseWorker(work_fn, parent=self)
         self._worker.line_ready.connect(self._terminal.append_line)
         self._worker.finished.connect(self._on_run_finished)
-        self._worker.error.connect(lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
+        self._worker.error.connect(
+            lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
         self._worker.start()
 
     def _on_run_finished(self, metadata: dict) -> None:
@@ -1997,18 +1760,10 @@ class Phase3DiagnosticsTab(QWidget):
                     lockbox_warm_start=bool(lockbox_params.get("warm_start", True)),
                 )
 
-                stream = EmitStream(emit)
-                log_handler = EmitLogHandler(emit)
-                log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
-                root_logger = logging.getLogger()
-                root_logger.addHandler(log_handler)
-                try:
-                    with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream), suppress_matplotlib_gui():
-                        optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
-                            handler, threads=threads
-                        )
-                finally:
-                    root_logger.removeHandler(log_handler)
+                with captured_output(emit), non_interactive_plotting():
+                    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
+                        handler, threads=threads
+                    )
 
                 init_euclid = float(stats.get("initial_euclid", float("nan")))
                 final_euclid = float(stats.get("final_euclid", float("nan")))

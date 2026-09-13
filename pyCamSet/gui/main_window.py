@@ -26,8 +26,8 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
-    TAB_EXPORT_CALIBRATION,
     TAB_CREATE_TARGET,
+    TAB_EXPORT_CALIBRATION,
     TAB_OPTIMISATION,
     TAB_PHASE0,
     TAB_PHASE1,

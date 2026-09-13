@@ -45,8 +45,6 @@ from pyCamSet.gui.shared_functions import (
     make_blue_button,
     make_section_label,
     make_separator,
-    marker_backend_availability_text,
-    marker_backend_available,
     repopulate_dict_combo,
 )
 

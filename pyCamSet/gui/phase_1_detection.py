@@ -1,15 +1,11 @@
 """
 Phase 1 — Target Detection tab and diagnostics (PySide6).
 
-Calls existing pyCamSet functions:
-- :func:`~pyCamSet.calibration.camera_calibrator.detect_datapoints_in_imfile`
-- :func:`~pyCamSet.calibration.camera_calibrator.validate_detections`
-- :class:`~pyCamSet.calibration_targets.target_Ccube.Ccube`
-- :class:`~pyCamSet.calibration_targets.target_charuco.ChArUco`
-- :meth:`TargetDetection.features_per_im_per_cam`
-- :meth:`TargetDetection.get_cam_list`
+The form and the figures.  The detection pass itself, and the diagnostics it
+computes, are :mod:`pyCamSet.workflow.phase1`; this tab reads the settings off
+the widgets, hands them over, and draws what comes back.
 
-Diagnostics implemented (D1.1–D1.7)
+Diagnostics drawn here (D1.1–D1.7)
 -------------------------------------
 D1.1 Total detections per camera.
 D1.2 Detection rate per camera (%).
@@ -23,13 +19,8 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any, Callable, Optional
-import contextlib
-import logging
-import math
 import pickle
-import shutil
 
 import numpy as np
 
@@ -61,97 +52,67 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
-    show_tab,
-    IMAGE_FOLDER_SCHEMATIC,
-    TAB_PHASE1,
-    TAB_PHASE1_DIAG,
-    TAB_PHASE2,
     CollapsibleSection,
-    EmitLogHandler,
-    EmitStream,
+    IMAGE_FOLDER_SCHEMATIC,
     MatplotlibFigureCard,
     PhaseWorker,
     RunSelectorWidget,
+    TAB_PHASE1,
+    TAB_PHASE1_DIAG,
+    TAB_PHASE2,
     TerminalWidget,
-    WorkspaceManager,
-    CHARUCO_DETECTION_OPTION_METADATA,
     build_charuco_option_tooltip,
-    build_target,
-    collect_charuco_detection_options,
-    copy_file,
-    count_images_in_folder,
-    get_camera_subfolders,
     make_blue_button,
     make_continue_button,
     make_orange_button,
-    make_run_id,
     make_scrollable_tab,
     make_section_label,
     make_separator,
-    path_exists,
     render_predecessor_chain_section,
+    show_tab,
+)
+from pyCamSet.workflow import phase1 as phase1_workflow
+from pyCamSet.workflow.params import (
+    ParamError,
+    as_json_object,
+    as_optional_positive_int,
+    as_positive_float,
+    require_image_folder,
+    require_marker_backend,
+)
+from pyCamSet.workflow.targets import (
+    CHARUCO_BASED_TARGETS as _CHARUCO_BASED_TARGETS,
+    CHARUCO_DETECTION_OPTION_METADATA,
+    TARGET_CHOICES as _TARGET_CHOICES,
+    collect_charuco_detection_options,
+)
+from pyCamSet.workflow.workspace import (
+    IMAGE_EXTS as _IMAGE_EXTS,
+    WorkspaceManager,
+    get_camera_subfolders,
+    path_exists,
+    workspace_path_for,
 )
 
-# pyCamSet guarded imports
-try:
-    from pyCamSet.calibration.camera_calibrator import (
-        detect_datapoints_in_imfile,
-        validate_detections,
-    )
-    _PYCAMSET_OK = True
-except (ImportError, OSError):
-    detect_datapoints_in_imfile = None
-    validate_detections = None
-    _PYCAMSET_OK = False
-
-_TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
-_CHARUCO_BASED_TARGETS = {"Ccube", "ChArUco"}  # Both targets detect ChArUco corners in Phase 1.
-_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+_PYCAMSET_OK = phase1_workflow.BACKEND_OK
 
 
-def _build_target(
-    target_type: str,
-    n_points: int,
-    length: float,
-    charuco_detection_options: dict[str, dict[str, Any]] | None = None,
-    border_fraction: float = 0.1,
-    marker_fraction: float = 0.8,
-    marker_backend: str = "aruco1",
-    # PuzzleBoard-only:
-    num_squares_x: int = 105,
-    num_squares_y: int = 148,
-    square_size: float = 2.0,
-    start_x: int = 0,
-    start_y: int = 0,
-    paper_width: float = 210.0,
-    paper_height: float = 297.0,
-    min_width: int = 4,
-    # PuzzleBoardCube-only:
-    pbc_n_points: int = 20,
-    pbc_length: float = 200.0,
-):
-    """Construct the calibration target object from existing pyCamSet classes."""
-    if not _PYCAMSET_OK:
-        raise RuntimeError("pyCamSet calibration targets are not importable.")
-    return build_target(
-        target_type,
-        n_points,
-        length,
-        charuco_detection_options=charuco_detection_options,
-        border_fraction=border_fraction,
-        marker_fraction=marker_fraction,
-        marker_backend=marker_backend,
-        num_squares_x=num_squares_x,
-        num_squares_y=num_squares_y,
-        square_size=square_size,
-        start_x=start_x,
-        start_y=start_y,
-        paper_width=paper_width,
-        paper_height=paper_height,
-        min_width=min_width,
-        pbc_n_points=pbc_n_points,
-        pbc_length=pbc_length,
-    )
+def _run_header(params: dict) -> list[str]:
+    """The settings a run starts with, as the terminal pane prints them."""
+    lines = [
+        "=== Phase 1: Target Detection ===",
+        f"Image folder : {params['f_loc']}",
+        f"Target       : {params['target_type']} "
+        f"(n={params['n_points']}, length={params['length']} mm)",
+        f"caching      : {params['caching']}",
+        f"high_distort : {params['high_distortion']}",
+        f"threads      : {params['threads'] or 'auto'}",
+    ]
+    if params.get("upscale_factor", 1) != 1:
+        lines.append(f"upscale      : {params['upscale_factor']}x")
+    lines.append(f"selected cams: {params['selected_cameras']}")
+    lines.append("Starting detection…")
+    return lines
 
 
 class Phase1Tab(QWidget):
@@ -694,65 +655,24 @@ class Phase1Tab(QWidget):
         )
 
     def _collect_params(self) -> Optional[dict]:
-        floc = self._floc_edit.text().strip()
-        if not floc:
-            QMessageBox.critical(self, "Validation Error", "Image folder is required.")
-            return None
-
-        n_lim = None
-        if self._nlim_edit.text().strip():
-            try:
-                n_lim = int(self._nlim_edit.text().strip())
-                if n_lim <= 0:
-                    raise ValueError
-            except ValueError:
-                QMessageBox.critical(self, "Validation Error", "n_lim must be a positive integer.")
-                return None
-
+        """Read the form, or say which field is wrong and return None."""
         try:
-            length = float(self._length_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "Length must be a number.")
-            return None
-        if not math.isfinite(length) or length <= 0.0:
-            QMessageBox.critical(self, "Validation Error", "Length must be finite and greater than zero.")
+            return self._read_params()
+        except ParamError as exc:
+            QMessageBox.critical(self, "Validation Error", str(exc))
             return None
 
-        threads = None
-        if self._threads_edit.text().strip():
-            try:
-                threads = int(self._threads_edit.text().strip())
-                if threads <= 0:
-                    raise ValueError
-            except ValueError:
-                QMessageBox.critical(self, "Validation Error", "Threads must be a positive integer.")
-                return None
+    def _read_params(self) -> dict:
+        """The form as a phase 1 parameter dict.
 
-        import json
-        fixed_params = None
-        if self._fp_edit.text().strip():
-            try:
-                fixed_params = json.loads(self._fp_edit.text().strip())
-            except json.JSONDecodeError as exc:
-                QMessageBox.critical(self, "Validation Error", f"Fixed params JSON: {exc}")
-                return None
-            if not isinstance(fixed_params, dict):
-                QMessageBox.critical(self, "Validation Error", "Fixed params JSON must be an object.")
-                return None
-
-        problem_options = None
-        if self._po_edit.text().strip():
-            try:
-                problem_options = json.loads(self._po_edit.text().strip())
-            except json.JSONDecodeError as exc:
-                QMessageBox.critical(self, "Validation Error", f"Problem options JSON: {exc}")
-                return None
-            if not isinstance(problem_options, dict):
-                QMessageBox.critical(self, "Validation Error", "Problem options JSON must be an object.")
-                return None
+        :raises ParamError: for a field that cannot be used as it stands
+        """
+        selected_cameras = self.get_selected_cameras()
+        if not selected_cameras:
+            raise ParamError("Select at least one camera.")
 
         charuco_detection_options = None
-        if self._target_combo.currentText() in _CHARUCO_BASED_TARGETS:  # Collect options for both targets.
+        if self._target_combo.currentText() in _CHARUCO_BASED_TARGETS:
             raw_charuco_values: dict[str, Any] = {}
             for key, widget in self._charuco_option_widgets.items():
                 if isinstance(widget, QComboBox):
@@ -760,66 +680,47 @@ class Phase1Tab(QWidget):
                 elif isinstance(widget, QLineEdit):
                     raw_charuco_values[key] = widget.text().strip()
             try:
-                charuco_detection_options = collect_charuco_detection_options(raw_charuco_values)
+                charuco_detection_options = collect_charuco_detection_options(
+                    raw_charuco_values)
             except ValueError as exc:
-                QMessageBox.critical(self, "Validation Error", str(exc))
-                return None
-
-        selected_cameras = self.get_selected_cameras()
-        if not selected_cameras:
-            QMessageBox.critical(self, "Validation Error", "Select at least one camera.")
-            return None
-
-        # PuzzleBoard / PuzzleBoardCube parameters — collected from their respective widgets.
-        try:
-            pb_square_size = float(self._pb_square_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoard square_size must be a number.")
-            return None
-        try:
-            pb_paper_width = float(self._pb_paper_w_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_width must be a number.")
-            return None
-        try:
-            pb_paper_height = float(self._pb_paper_h_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoard paper_height must be a number.")
-            return None
-        try:
-            pbc_length = float(self._pbc_square_edit.text().strip())
-        except ValueError:
-            QMessageBox.critical(self, "Validation Error", "PuzzleBoardCube length must be a number.")
-            return None
+                raise ParamError(str(exc)) from None
 
         return {
-            "f_loc": floc,
+            "f_loc": require_image_folder(self._floc_edit.text()),
             "caching": self._cache_cb.isChecked(),
             "high_distortion": self._hd_cb.isChecked(),
-            "n_lim": n_lim,
-            "threads": threads,
+            "n_lim": as_optional_positive_int(self._nlim_edit.text(), "n_lim"),
+            "threads": as_optional_positive_int(
+                self._threads_edit.text(), "Threads"),
             "upscale_factor": int(self._upscale_combo.currentText().rstrip("x")),
-            "fixed_params": fixed_params,
-            "problem_options": problem_options,
+            "fixed_params": as_json_object(
+                self._fp_edit.text(), "Fixed params JSON"),
+            "problem_options": as_json_object(
+                self._po_edit.text(), "Problem options JSON"),
             "charuco_detection_options": charuco_detection_options,
             "target_type": self._target_combo.currentText(),
             "n_points": self._npts_spin.value(),
-            "length": length,
-            "marker_backend": str(self._marker_backend_combo.currentData() or "aruco1"),
+            "length": as_positive_float(self._length_edit.text(), "Length"),
+            "marker_backend": str(
+                self._marker_backend_combo.currentData() or "aruco1"),
             "border_fraction": self._border_spin.value(),
             "marker_fraction": self._marker_spin.value(),
             # PuzzleBoard:
             "num_squares_x": self._pb_x_spin.value(),
             "num_squares_y": self._pb_y_spin.value(),
-            "square_size": pb_square_size,
+            "square_size": as_positive_float(
+                self._pb_square_edit.text(), "PuzzleBoard square_size"),
             "start_x": self._pb_start_x_spin.value(),
             "start_y": self._pb_start_y_spin.value(),
-            "paper_width": pb_paper_width,
-            "paper_height": pb_paper_height,
+            "paper_width": as_positive_float(
+                self._pb_paper_w_edit.text(), "PuzzleBoard paper_width"),
+            "paper_height": as_positive_float(
+                self._pb_paper_h_edit.text(), "PuzzleBoard paper_height"),
             "min_width": self._pb_min_width_spin.value(),
             # PuzzleBoardCube:
             "pbc_n_points": self._pbc_size_spin.value(),
-            "pbc_length": pbc_length,
+            "pbc_length": as_positive_float(
+                self._pbc_square_edit.text(), "PuzzleBoardCube length"),
             "selected_cameras": selected_cameras,
         }
 
@@ -827,323 +728,35 @@ class Phase1Tab(QWidget):
         params = self._collect_params()
         if params is None:
             return
-        # FIX 2 (R1): the backend is unused for PuzzleBoard/PuzzleBoardCube
-        # (they never detect ArUco markers), so only refuse when the selected
-        # target actually uses the marker backend (mirror create_target.py).
-        if params.get("target_type") in ("Ccube", "ChArUco") and not marker_backend_available(
-            params.get("marker_backend", "aruco1")
-        ):
-            QMessageBox.warning(
-                self,
-                "Marker backend unavailable",
-                "ArUco 2 (aruco2) is selected but the 'aruco2' package is not "
-                "installed. Install it with `pip install aruco2` or switch the "
-                "marker backend to ArUco 1 (OpenCV).",
-            )
+        try:
+            require_marker_backend(params)
+        except ParamError as exc:
+            QMessageBox.warning(self, "Marker backend unavailable", str(exc))
+            return
+        if not _PYCAMSET_OK:
+            QMessageBox.critical(
+                self, "Import error",
+                "pyCamSet calibration modules are unavailable.")
             return
 
-        f_loc = Path(params["f_loc"])
-        canonical_ws = f_loc / ".pycamset_workspace"
-        if self._workspace_mgr.workspace_path is None or self._workspace_mgr.workspace_path != canonical_ws:
-            self._workspace_mgr.set_workspace_path(canonical_ws, ensure=True)
+        workspace = workspace_path_for(params["f_loc"])
+        if self._workspace_mgr.workspace_path != workspace:
+            self._workspace_mgr.set_workspace_path(workspace, ensure=True)
 
         self._terminal.clear_terminal()
-        self._terminal.append_line("=== Phase 1: Target Detection ===")
-        self._terminal.append_line(f"Image folder : {params['f_loc']}")
-        self._terminal.append_line(
-            f"Target       : {params['target_type']} "
-            f"(n={params['n_points']}, length={params['length']} mm)"
-        )
-        self._terminal.append_line(f"caching      : {params['caching']}")
-        self._terminal.append_line(f"high_distort : {params['high_distortion']}")
-        self._terminal.append_line(f"threads      : {params['threads'] or 'auto'}")
-        if params.get("upscale_factor", 1) != 1:
-            self._terminal.append_line(f"upscale      : {params['upscale_factor']}x")
-        self._terminal.append_line(f"selected cams: {params['selected_cameras']}")
-        self._terminal.append_line("Starting detection…")
+        for line in _run_header(params):
+            self._terminal.append_line(line)
 
-        def work_fn(emit: Callable[[str], None]) -> dict:
-            diagnostics: dict = {}
-            error_msg: Optional[str] = None
-            det_pickle_src: Optional[Path] = None
+        workspace_mgr = self._workspace_mgr
 
-            stream = EmitStream(emit)
-            log_handler = EmitLogHandler(emit)
-            log_handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
-            root_logger = logging.getLogger()
-            root_logger.addHandler(log_handler)
-
-            try:
-                with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
-                    f_loc = Path(params["f_loc"])
-                    selected = list(params.get("selected_cameras") or [])
-                    selected_set = set(selected)
-
-                    cam_folders = get_camera_subfolders(f_loc)
-                    if selected_set:
-                        cam_folders = [p for p in cam_folders if p.name in selected_set]
-                    cam_names = [p.name for p in cam_folders]
-                    cam_img_counts = {p.name: count_images_in_folder(p) for p in cam_folders}
-                    emit(f"1a  Camera sub-folders: {cam_names}")
-                    upscale_factor = params.get("upscale_factor", 1)
-                    if upscale_factor > 1:
-                        emit(f"1a  Upscale factor: {upscale_factor}x")
-                    if len(cam_folders) < 1:
-                        raise RuntimeError("No selected camera sub-folders found.")
-                    counts = [count_images_in_folder(p) for p in cam_folders]
-                    if not counts or any(c <= 0 for c in counts) or len(set(counts)) != 1:
-                        raise RuntimeError("Camera folders must contain equal non-zero image counts.")
-
-                    target = _build_target(
-                        params["target_type"],
-                        params["n_points"],
-                        params["length"],
-                        charuco_detection_options=params.get("charuco_detection_options"),
-                        border_fraction=params.get("border_fraction", 0.1),
-                        marker_fraction=params.get("marker_fraction", 0.8),
-                        marker_backend=params.get("marker_backend", "aruco1"),
-                        num_squares_x=params.get("num_squares_x", 105),
-                        num_squares_y=params.get("num_squares_y", 148),
-                        square_size=params.get("square_size", 2.0),
-                        start_x=params.get("start_x", 0),
-                        start_y=params.get("start_y", 0),
-                        paper_width=params.get("paper_width", 210.0),
-                        paper_height=params.get("paper_height", 297.0),
-                        min_width=params.get("min_width", 4),
-                        pbc_n_points=params.get("pbc_n_points", 20),
-                        pbc_length=params.get("pbc_length", 200.0),
-                    )
-
-                    detect_root = f_loc
-                    tmp_ctx: Optional[TemporaryDirectory] = None
-                    root_entries = list(f_loc.iterdir())
-                    allowed = {p.name for p in cam_folders}
-                    has_extra_entries = any(p.name not in allowed for p in root_entries)
-                    if has_extra_entries:
-                        tmp_ctx = TemporaryDirectory(prefix="pycamset_phase1_")
-                        detect_root = Path(tmp_ctx.name)
-                        emit("1a  Using filtered staging folder (camera subfolders only).")
-                        for cam in cam_folders:
-                            dst = detect_root / cam.name
-                            try:
-                                dst.symlink_to(cam, target_is_directory=True)
-                            except Exception:
-                                shutil.copytree(cam, dst)
-
-                    try:
-                        detections, cam_res = detect_datapoints_in_imfile(
-                            f_loc=detect_root,
-                            calibration_target=target,
-                            caching=params["caching"],
-                            draw=False,
-                            n_lim=params["n_lim"],
-                            upscale_factor=upscale_factor,
-                        )
-                        emit("1b  Detection complete.")
-
-                        if detect_root != f_loc:
-                            # Compute the actual cache filename (may include upscale suffix).
-                            _cache_base = "detected_datapoints.pickle"
-                            if upscale_factor != 1:
-                                _cache_base = f"detected_datapoints_upscale{upscale_factor}x.pickle"
-                            for artifact_name in (_cache_base,):
-                                src = detect_root / artifact_name
-                                if path_exists(src):
-                                    dst = f_loc / artifact_name
-                                    copy_file(src, dst)
-                                    if artifact_name == _cache_base:
-                                        det_pickle_src = dst
-                        else:
-                            _cache_base = "detected_datapoints.pickle"
-                            if upscale_factor != 1:
-                                _cache_base = f"detected_datapoints_upscale{upscale_factor}x.pickle"
-                            cand = f_loc / _cache_base
-                            if path_exists(cand):
-                                det_pickle_src = cand
-
-                    finally:
-                        if tmp_ctx is not None:
-                            tmp_ctx.cleanup()
-
-                    validate_detections(detections, target)
-                    emit("1c  Validation complete.")
-
-                    try:
-                        # D1.1 unchanged
-                        total_per_cam: dict[str, int] = {}
-                        for cam_det in detections.get_cam_list():
-                            data = cam_det.get_data()
-                            if data is None or len(data) == 0:
-                                continue
-                            cam_idx = int(data[0, 0])
-                            cam_name = detections.cam_names[cam_idx]
-                            total_per_cam[cam_name] = len(data)
-                        diagnostics["D1.1_total_detections"] = total_per_cam
-
-                        # D1.2 / D1.3 revised
-                        # PuzzleBoard's point_data spans the entire 501x501 virtual
-                        # code-lookup field (251,001 positions), not the physically
-                        # printed window. Use num_squares_x * num_squares_y for the
-                        # printed-window point count; all other targets (Ccube,
-                        # ChArUco, PuzzleBoardCube) correctly use point_data.shape[-2].
-                        if target.__class__.__name__ == "PuzzleBoard":
-                            corners_per_face = int(target.num_squares_x * target.num_squares_y)
-                        else:
-                            corners_per_face = int(target.point_data.shape[-2])
-                        det_rate: dict[str, float] = {}
-                        completeness: dict[str, float] = {}
-
-                        for cam_det in detections.get_cam_list():
-                            data0 = cam_det.get_data()
-                            if data0 is None or len(data0) == 0:
-                                continue
-                            cam_idx = int(data0[0, 0])
-                            cam_name = detections.cam_names[cam_idx]
-                            expected = int(cam_img_counts.get(cam_name, detections.max_ims))
-                            if params["n_lim"] is not None:
-                                expected = min(expected, int(params["n_lim"]))
-                            expected = max(expected, 1)
-
-                            detected_images = 0
-                            per_image_frac: list[float] = []
-
-                            for im_det in cam_det.get_image_list():
-                                datum = im_det.get_data()
-                                if datum is None or len(datum) == 0:
-                                    continue
-                                detected_images += 1
-
-                                id_cols = datum[:, 2:-2]
-                                if id_cols.ndim == 1:
-                                    id_cols = id_cols.reshape(-1, 1)
-
-                                if id_cols.shape[1] <= 0:
-                                    continue
-
-                                if id_cols.shape[1] == 1:
-                                    # point-id only
-                                    n_unique_points = len(np.unique(id_cols[:, 0]))
-                                    per_image_frac.append(n_unique_points / max(corners_per_face, 1))
-                                else:
-                                    # board-id columns + final point-id column
-                                    board_cols = id_cols[:, :-1]
-                                    point_col = id_cols[:, -1]
-                                    board_ids = np.unique(board_cols, axis=0)
-                                    board_fracs: list[float] = []
-                                    for b in board_ids:
-                                        mask = np.all(board_cols == b, axis=1)
-                                        n_unique_points = len(np.unique(point_col[mask]))
-                                        board_fracs.append(n_unique_points / max(corners_per_face, 1))
-                                    if board_fracs:
-                                        per_image_frac.append(float(np.mean(board_fracs)))
-
-                            det_rate[cam_name] = float(detected_images) / float(expected)
-                            completeness[cam_name] = float(np.mean(per_image_frac)) if per_image_frac else 0.0
-
-                        diagnostics["D1.2_detection_rate"] = det_rate
-                        diagnostics["D1.3_board_completeness"] = completeness
-
-                        for cam in detections.cam_names:
-                            r = det_rate.get(cam, 0.0) * 100.0
-                            c = completeness.get(cam, 0.0) * 100.0
-                            emit(f"D1.2/D1.3  {cam}: rate={r:.1f}% completeness={c:.1f}%")
-
-                        # D1.4 — existing features_per_im_per_cam
-                        fpm = detections.features_per_im_per_cam()
-                        diagnostics["D1.4_features_matrix"] = fpm.tolist()
-
-                        # D1.6 — spatial coverage
-                        try:
-                            from scipy.spatial import ConvexHull
-                            coverage: dict[str, float] = {}
-                            # Use enumerate index (= cam_names order) instead of
-                            # get_data()[0, 0] which crashes when get_data() is
-                            # None for zero-detection cameras. Same fix pattern
-                            # as camera_calibrator.py:408.
-                            for cam_ind, (cam_det, res) in enumerate(
-                                zip(detections.get_cam_list(), cam_res)
-                            ):
-                                cam_name = detections.cam_names[cam_ind]
-                                data = cam_det.get_data()
-                                if data is None or len(data) == 0:
-                                    coverage[cam_name] = float("nan")
-                                    continue
-                                pts = data[:, -2:]
-                                img_area = float(res[0]) * float(res[1])
-                                if len(pts) >= 3:
-                                    try:
-                                        hull_area = ConvexHull(pts).volume
-                                        coverage[cam_name] = hull_area / img_area
-                                    except Exception:
-                                        coverage[cam_name] = float("nan")
-                                else:
-                                    coverage[cam_name] = float("nan")
-                            diagnostics["D1.6_spatial_coverage"] = coverage
-                        except ImportError:
-                            pass
-
-                        # D1.7 — min features
-                        min_feat = int(np.min(fpm[fpm > 0])) if np.any(fpm > 0) else 0
-                        diagnostics["D1.7_min_features"] = min_feat
-                        emit(f"D1.7  Min features in any image–camera: {min_feat}")
-
-                        diagnostics["cam_names"] = detections.cam_names
-                        diagnostics["n_images"] = int(detections.max_ims)
-
-                    except Exception as diag_exc:
-                        emit(f"  (partial diagnostics: {diag_exc})")
-
-                    emit("Phase 1 complete.")
-
-            except Exception as exc:
-                error_msg = str(exc)
-                diagnostics["error"] = error_msg
-            finally:
-                stream.flush()
-                root_logger.removeHandler(log_handler)
-
-            run_id = make_run_id()
-            metadata = {
-                "run_id": run_id,
-                "phase": "phase1",
-                "params": params,
-                "diagnostics": diagnostics,
-                "error": error_msg,
-            }
-
-            # Defensive fallback: always guarantee workspace is set before save.
-            if self._workspace_mgr.workspace_path is None:
-                self._workspace_mgr.set_workspace_path(Path(params["f_loc"]) / ".pycamset_workspace", ensure=True)
-
-            meta_path = self._workspace_mgr.save_run("phase1", run_id, metadata)
-            run_dir = meta_path.parent
-            run_pickle = run_dir / "detected_datapoints.pickle"
-
-            if det_pickle_src is None:
-                cand = Path(params["f_loc"]) / "detected_datapoints.pickle"
-                if path_exists(cand):
-                    det_pickle_src = cand
-
-            if det_pickle_src is not None and path_exists(det_pickle_src):
-                try:
-                    copy_file(det_pickle_src, run_pickle)
-                    metadata.setdefault("artifacts", {})["detected_datapoints_pickle"] = str(run_pickle)
-                    self._workspace_mgr.save_run("phase1", run_id, metadata)
-                    emit(f"Artifact saved: {run_pickle}")
-                except Exception as copy_exc:
-                    err_msg = f"Could not save run-local detected_datapoints.pickle: {copy_exc}"
-                    metadata["error"] = err_msg
-                    self._workspace_mgr.save_run("phase1", run_id, metadata)
-                    emit(f"ERROR: {err_msg}")
-                    return metadata
-
-            emit(f"Run saved: {run_id}")
-            return metadata
+        def work_fn(log: Callable[[str], None]) -> dict:
+            return phase1_workflow.run(params, workspace_mgr, log)
 
         self._worker = PhaseWorker(work_fn, parent=self)
         self._worker.line_ready.connect(self._terminal.append_line)
         self._worker.finished.connect(self._on_run_finished)
-        self._worker.error.connect(lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
+        self._worker.error.connect(
+            lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
         self._worker.start()
 
     def _on_run_finished(self, metadata: dict) -> None:

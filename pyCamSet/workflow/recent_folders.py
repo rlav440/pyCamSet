@@ -1,7 +1,7 @@
 """
 The image folders this machine has calibrated before.
 
-Everything the GUI remembers about a calibration lives in
+Everything pyCamSet remembers about a calibration lives in
 ``<image folder>/.pycamset_workspace``: the runs, their artifacts, and the
 handoff between phases.  All of it is found again by pointing the GUI at
 the same image folder -- and the image folder itself was the one thing

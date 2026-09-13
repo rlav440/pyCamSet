@@ -42,7 +42,7 @@ dependencies = [
     # stays true of a headless install.
     "pyvista",
     # The GUI is the default install, so its one hard dependency is a base
-    # dependency.  It is also by far the largest -- see requirements-core.txt
+    # dependency.  It is also by far the largest -- see requirements_core.txt
     # for the lean install that leaves it out.
     "PySide6",
 ]

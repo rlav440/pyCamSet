@@ -40,11 +40,11 @@ jobs:
       - name: Install
         # The lean install: the suite is headless, and PySide6 is a 1.2 GB
         # download that none of it exercises.  This is also the path
-        # requirements-core.txt documents, so CI keeps it honest.
+        # requirements_core.txt documents, so CI keeps it honest.
         run: |
           python -m pip install --upgrade pip
           pip install -e . --no-deps
-          pip install -r requirements-core.txt
+          pip install -r requirements_core.txt
           pip install pytest>=7.0 pytest-timeout pytest-cov
           pip install "opencv-python${{ matrix.opencv }}"
 

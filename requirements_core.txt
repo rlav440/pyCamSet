@@ -5,7 +5,7 @@
 # the Qt GUI and the `pycamset` command are unavailable.
 #
 #     pip install pyCamSet --no-deps
-#     pip install -r requirements-core.txt
+#     pip install -r requirements_core.txt
 numpy
 scipy
 matplotlib

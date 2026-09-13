@@ -1,4 +1,4 @@
-"""requirements-core.txt is generated, so it can go stale.
+"""requirements_core.txt is generated, so it can go stale.
 
 It is the only description of the lean install -- ``pip install pyCamSet
 --no-deps`` plus this file -- and nothing else would notice if a dependency
@@ -19,10 +19,10 @@ from write_core_requirements import EXCLUDED, core_requirements, rendered  # noq
 
 
 def test_the_file_matches_pyproject():
-    actual = (ROOT / "requirements-core.txt").read_text(encoding="utf-8")
+    actual = (ROOT / "requirements_core.txt").read_text(encoding="utf-8")
 
     assert actual == rendered(), (
-        "requirements-core.txt is out of step with pyproject.toml; "
+        "requirements_core.txt is out of step with pyproject.toml; "
         "regenerate it with:\n"
         "    python setup_scripts/write_core_requirements.py"
     )

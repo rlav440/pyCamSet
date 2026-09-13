@@ -1,7 +1,7 @@
 """The ``pycamset`` console script.
 
 PySide6 is a base dependency, but the lean install documented in
-requirements-core.txt leaves it out, so these tests cover the part of the
+requirements_core.txt leaves it out, so these tests cover the part of the
 entry point that must work either way: the launch call, and the message
 someone on the lean install gets instead.
 """

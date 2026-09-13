@@ -1,4 +1,4 @@
-"""Regenerate requirements-core.txt from pyproject.toml.
+"""Regenerate requirements_core.txt from pyproject.toml.
 
 The GUI is the default install, so PySide6 is a base dependency -- and at
 1.2 GB it is larger than everything else combined.  A lean install therefore
@@ -24,7 +24,7 @@ HEADER = """\
 # the Qt GUI and the `pycamset` command are unavailable.
 #
 #     pip install pyCamSet --no-deps
-#     pip install -r requirements-core.txt
+#     pip install -r requirements_core.txt
 """
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -47,6 +47,6 @@ def rendered() -> str:
 
 
 if __name__ == "__main__":
-    target = ROOT / "requirements-core.txt"
+    target = ROOT / "requirements_core.txt"
     target.write_text(rendered(), encoding="utf-8")
     print(f"wrote {target.relative_to(ROOT)} ({len(core_requirements())} requirements)")

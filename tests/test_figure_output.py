@@ -195,6 +195,9 @@ class TestCameraSetPlots:
 
 @pytest.mark.slow
 @pytest.mark.data
+# The only two tests that drive a real pyvista plotter rather than a stub:
+# visualise_calibration renders the reconstruction view through VTK.
+@pytest.mark.needs_opengl
 def test_a_whole_diagnostic_set_can_be_saved(charuco_problem, tmp_path,
                                              no_new_figures):
     """The end of the exercise: every figure from a real calibration, written
@@ -220,6 +223,9 @@ def test_a_whole_diagnostic_set_can_be_saved(charuco_problem, tmp_path,
 
 @pytest.mark.slow
 @pytest.mark.data
+# The only two tests that drive a real pyvista plotter rather than a stub:
+# visualise_calibration renders the reconstruction view through VTK.
+@pytest.mark.needs_opengl
 def test_special_plots_are_skipped_when_nobody_is_watching(
         charuco_problem, tmp_path):
     """special_plots drives its own window and its signature belongs to the

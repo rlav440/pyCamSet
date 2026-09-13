@@ -31,7 +31,10 @@ shell for:
 
 from __future__ import annotations
 
+import functools
 import os
+import subprocess
+import sys
 import warnings
 from pathlib import Path
 
@@ -49,6 +52,7 @@ MARKERS = {
     "slow": "takes more than ~10s; runs a full bundle adjustment",
     "gui": "requires the optional PySide6 dependency",
     "needs_jit": "asserts on numba's compiled behaviour; invalid with NUMBA_DISABLE_JIT",
+    "needs_opengl": "renders through VTK, which needs an OpenGL context",
 }
 
 # --- Optional-environment probes --------------------------------------------
@@ -96,6 +100,34 @@ except ImportError:
     PySide6 = None  # type: ignore[assignment]
     PYSIDE6_AVAILABLE = False
 
+@functools.lru_cache(maxsize=1)
+def opengl_is_available() -> bool:
+    """
+    Whether this machine can give VTK an OpenGL context.
+
+    Asked in a subprocess, because a machine that cannot does not raise --
+    it faults.  A segmentation fault on Linux, an access violation on
+    Windows, and either way the session goes down with it: that is how the
+    Windows runners reported it, as a dead process and no test report at
+    all.  Off screen is not no screen; VTK still wants a context.
+
+    :return: whether a plotter can be built and rendered
+    """
+    probe = (
+        "import pyvista as pv\n"
+        "plotter = pv.Plotter(off_screen=True)\n"
+        "plotter.add_mesh(pv.Sphere())\n"
+        "plotter.show()\n"
+    )
+    try:
+        finished = subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, timeout=300
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return finished.returncode == 0
+
+
 # Regression test gated on the legacy ChArUco calibration API availability.
 BUNDLE_TEST_BASENAME = "bundle_correctness_test.py"
 
@@ -137,6 +169,13 @@ def pytest_collection_modifyitems(
 
     skip_no_gui = pytest.mark.skip(reason="PySide6 is not installed")
 
+    # Only pay for the probe when something actually selected needs it.
+    wants_opengl = any("needs_opengl" in item.keywords for item in items)
+    have_opengl = opengl_is_available() if wants_opengl else True
+    skip_no_opengl = pytest.mark.skip(
+        reason="VTK cannot make an OpenGL context on this machine"
+    )
+
     for item in items:
         if not have_data and "data" in item.keywords:
             item.add_marker(skip_no_data)
@@ -144,6 +183,8 @@ def pytest_collection_modifyitems(
             item.add_marker(skip_no_jit)
         if not PYSIDE6_AVAILABLE and "gui" in item.keywords:
             item.add_marker(skip_no_gui)
+        if not have_opengl and "needs_opengl" in item.keywords:
+            item.add_marker(skip_no_opengl)
 
     if not HAS_LEGACY_CHARUCO_CALIBRATION:
         skip_legacy_api = pytest.mark.skip(

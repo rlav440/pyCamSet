@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -36,11 +37,17 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
-from pyCamSet.workflow.params import ParamError, as_positive_float
+from pyCamSet.calibration_targets.backend_registry import (
+    MARKER_BACKEND_LABELS,
+    marker_backend_availability_text,
+    marker_backend_available,
+)
+from pyCamSet.workflow.params import ParamError
 from pyCamSet.workflow.run_quality import blocking_reasons
 from pyCamSet.workflow.workspace import WorkspaceManager
 
@@ -405,17 +412,6 @@ class CollapsibleSection(QWidget):
 
 
 
-def build_detection_option_tooltip(meta) -> str:
-    """Build canonical tooltip/info text from a detector parameter."""
-    return (
-        f"{meta.concept}\n\n"
-        f"Default: {meta.label_for(meta.default)}\n"
-        f"Range: {meta.range_text}\n"
-        f"Range source: {meta.range_source}\n"
-        f"Suggested value(s): {meta.suggested}"
-    )
-
-
 def detector_parameterisation_for(target_type: str, backend: str | None):
     """
     The detector a form's target selection names.
@@ -436,17 +432,48 @@ def detector_parameterisation_for(target_type: str, backend: str | None):
     return cls.detector_parameterisation(backend or None)
 
 
-def build_detection_option_widget(meta) -> QWidget:
-    """
-    The control one detector parameter is typed into.
+def build_parameter_tooltip(meta) -> str:
+    """What one parameter says about itself, as hover text."""
+    lines = [meta.concept, ""] if meta.concept else []
+    lines.append(f"Default: {meta.label_for(meta.default)}")
+    if meta.range_text:
+        lines.append(f"Range: {meta.range_text}")
+    elif meta.minimum is not None and meta.maximum is not None:
+        lines.append(f"Range: {meta.minimum} to {meta.maximum}")
+    if meta.range_source:
+        lines.append(f"Range source: {meta.range_source}")
+    if meta.suggested:
+        lines.append(f"Suggested value(s): {meta.suggested}")
+    return "\n".join(lines)
 
-    A parameter with names offers them; everything else is typed, with the
-    shape of the value as the placeholder where it is not obvious.
+
+def build_parameter_widget(meta) -> QWidget:
+    """
+    The control one parameter is typed into.
+
+    Named choices get a combo, an on/off gets a check box, a number with
+    bounds gets a spin box that holds it inside them, and everything else
+    -- a matrix, a vector, a number with no bounds -- gets a text field
+    whose placeholder says the shape of the value.
     """
     if meta.choices:
         widget = QComboBox()
         widget.addItems(meta.choice_labels())
         widget.setCurrentText(meta.label_for(meta.default))
+    elif meta.dtype == "bool":
+        widget = QCheckBox()
+        widget.setChecked(bool(meta.default))
+    elif meta.dtype in ("int", "float") and meta.minimum is not None \
+            and meta.maximum is not None:
+        if meta.dtype == "int":
+            widget = QSpinBox()
+            widget.setSingleStep(int(meta.step or 1) or 1)
+        else:
+            widget = QDoubleSpinBox()
+            widget.setDecimals(int(meta.decimals or 3))
+            widget.setSingleStep(float(meta.step or 0.01) or 0.01)
+        widget.setRange(meta.cast(meta.minimum), meta.cast(meta.maximum))
+        widget.setValue(meta.cast(meta.default))
     else:
         widget = QLineEdit("" if meta.default == "" else str(meta.default))
         if meta.dtype == "json_matrix_3x3":
@@ -454,138 +481,192 @@ def build_detection_option_widget(meta) -> QWidget:
         elif meta.dtype == "json_vector":
             widget.setPlaceholderText("e.g. [k1,k2,p1,p2,k3] or blank")
     widget.setFixedWidth(220)
-    widget.setToolTip(build_detection_option_tooltip(meta))
+    widget.setToolTip(build_parameter_tooltip(meta))
     return widget
 
 
-def read_detection_option_widget(widget):
-    """What was typed into one of :func:`build_detection_option_widget`'s controls."""
+def read_parameter_widget(widget):
+    """What was typed into one of :func:`build_parameter_widget`'s controls."""
     if isinstance(widget, QComboBox):
         return widget.currentText()
+    if isinstance(widget, QCheckBox):
+        return widget.isChecked()
+    if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+        return widget.value()
     return widget.text().strip()
 
 
+def set_parameter_widget(widget, value) -> None:
+    """Show *value* in one of :func:`build_parameter_widget`'s controls."""
+    if isinstance(widget, QComboBox):
+        widget.setCurrentText(str(value))
+    elif isinstance(widget, QCheckBox):
+        widget.setChecked(bool(value))
+    elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+        widget.setValue(type(widget.value())(value))
+    else:
+        widget.setText("" if value is None else str(value))
 
 
-
-
-#: Which of the form's controls each target takes its arguments from.  The
-#: form is one set of widgets serving four targets, showing and hiding as the
-#: type changes, so this is where that flat set becomes each target's own
-#: constructor arguments.  It is the only mapping of its kind left: every
-#: other place a target is described, it is described as a spec.
-_TARGET_WIDGETS: dict[str, dict[str, tuple[str, type]]] = {
-    "Ccube": {
-        "n_points": ("_npts_spin", int),
-        "length": ("_length_edit", float),
-        "border_fraction": ("_border_spin", float),
-    },
-    "ChArUco": {
-        "num_squares_x": ("_npts_spin", int),
-        "num_squares_y": ("_npts_spin", int),
-        "square_size": ("_length_edit", float),
-        "marker_fraction": ("_marker_spin", float),
-    },
-    "PuzzleBoard": {
-        "num_squares_x": ("_pb_x_spin", int),
-        "num_squares_y": ("_pb_y_spin", int),
-        "square_size": ("_pb_square_edit", float),
-        "start_x": ("_pb_start_x_spin", int),
-        "start_y": ("_pb_start_y_spin", int),
-        "paper_width": ("_pb_paper_w_edit", float),
-        "paper_height": ("_pb_paper_h_edit", float),
-    },
-    "PuzzleBoardCube": {
-        "n_points": ("_pbc_size_spin", int),
-        "length": ("_pbc_square_edit", float),
-    },
-}
-
-def _backend_argument(target_type: str) -> Optional[str]:
+class TargetSettingsForm(QWidget):
     """
-    What the form's detector combo is called in *target_type*'s constructor.
+    The controls a calibration target is described with.
 
-    A target with one detector is never asked which to use.  The name is
-    written here and in :func:`detector_parameterisation_of`, and nowhere
-    else outside the two targets that take one.
+    A target combo, a detector combo for the targets that have a choice of
+    one, and a control for each argument the selected target declares --
+    rebuilt when either changes.  Which is the point: the target's own
+    arguments were a map of widget names, one copy per phase, so a target
+    none of them named had no form at all.
+
+    ``marker_backend`` is written here and in
+    :func:`~pyCamSet.workflow.targets.detector_parameterisation_of`, and
+    nowhere else outside the two targets that take one: it is what those
+    constructors call the detector they are read with.
     """
-    from pyCamSet.calibration_targets.target_registry import target_class
 
-    if len(target_class(target_type).DETECTOR_BACKENDS) > 1:
-        return "marker_backend"
-    return None
+    changed = Signal()
 
+    def __init__(self, parent: Optional[QWidget] = None,
+                 targets: Optional[list[str]] = None) -> None:
+        super().__init__(parent)
+        from pyCamSet.calibration_targets.target_registry import TARGET_NAMES
 
-def _widget_value(tab: Any, name: str, cast: type, label: str):
-    """Read one control, as the value its target's argument takes."""
-    widget = getattr(tab, name, None)
-    if widget is None:
-        return None
-    if hasattr(widget, "value"):
-        return cast(widget.value())
-    text = widget.text().strip()
-    return as_positive_float(text, label) if cast is float else cast(text)
+        self._widgets: dict[str, QWidget] = {}
+        form = QFormLayout(self)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
+        self._target_combo = QComboBox()
+        self._target_combo.addItems(list(targets or TARGET_NAMES))
+        self._target_combo.setToolTip(
+            "The calibration target these settings describe.")
+        form.addRow("Target type:", self._target_combo)
 
-def read_target_spec(tab: Any, detection_options: dict | None = None) -> dict:
-    """
-    The target spec a phase tab's controls describe.
+        self._backend_label = QLabel("Detector:")
+        self._backend_combo = QComboBox()
+        for label, value in MARKER_BACKEND_LABELS.items():
+            self._backend_combo.addItem(label, value)
+        self._backend_combo.setToolTip(
+            "Which library reads this target's markers.")
+        form.addRow(self._backend_label, self._backend_combo)
+        self._backend_status = QLabel()
+        self._backend_status.setStyleSheet("font-size: 10px;")
+        form.addRow("", self._backend_status)
 
-    :param tab: the phase tab, holding the target widgets
-    :param detection_options: the detector tuning, when the tab collects it
-    :raises ParamError: for a control whose value the target cannot take
-    """
-    target_type = tab._target_combo.currentText()
-    spec: dict[str, Any] = {"type": target_type}
-    for argument, (widget_name, cast) in _TARGET_WIDGETS[target_type].items():
-        value = _widget_value(tab, widget_name, cast, argument)
-        if value is not None:
-            spec[argument] = value
-    if (argument := _backend_argument(target_type)) is not None:
-        spec[argument] = str(tab._marker_backend_combo.currentData() or "aruco1")
-    if detection_options is not None:
-        spec["detection_options"] = detection_options
-    return spec
+        self._rows = QWidget()
+        self._rows_form = QFormLayout(self._rows)
+        self._rows_form.setContentsMargins(0, 0, 0, 0)
+        self._rows_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.addRow(self._rows)
 
+        self._target_combo.currentTextChanged.connect(self._rebuild)
+        self._backend_combo.currentIndexChanged.connect(self._rebuild)
+        self._rebuild()
 
-def apply_target_spec_to_widgets(tab: Any, spec: dict) -> None:
-    """
-    Set a phase tab's target controls from a saved run's target.
+    # -- what is selected ------------------------------------------------
 
-    Phases 2 and 3 build their own target and pair it with detections made
-    by an earlier run, so the default that is right almost always is the one
-    the detections were made with.
+    def target_type(self) -> str:
+        """The selected target's name."""
+        return self._target_combo.currentText()
 
-    Spin boxes clamp to their own ranges, so a value the interface cannot
-    represent is silently narrowed here; :func:`describe_target_mismatch`
-    is what catches that before it reaches the solver.
+    def backend(self) -> str:
+        """The selected detector, for a target that is offered a choice."""
+        return str(self._backend_combo.currentData() or "aruco1")
 
-    :param tab: the phase tab, holding the target widgets
-    :param spec: the target spec to adopt
-    """
-    if not spec or "type" not in spec:
-        return
-    combo = getattr(tab, "_target_combo", None)
-    if combo is not None:
-        combo.setCurrentText(str(spec["type"]))
+    def detector_parameterisation(self):
+        """What the selected target's detection can be told."""
+        return detector_parameterisation_for(self.target_type(), self.backend())
 
-    for argument, (widget_name, cast) in _TARGET_WIDGETS.get(spec["type"], {}).items():
-        if spec.get(argument) is None:
-            continue
-        widget = getattr(tab, widget_name, None)
-        if widget is None:
-            continue
-        if hasattr(widget, "setValue"):
-            widget.setValue(cast(spec[argument]))
-        else:
-            widget.setText(f"{float(spec[argument]):g}")
+    def construction_parameters(self):
+        """What the selected target says it is described by."""
+        from pyCamSet.calibration_targets.target_registry import target_class
 
-    backend = spec.get("marker_backend")
-    backend_combo = getattr(tab, "_marker_backend_combo", None)
-    if backend_combo is not None and backend:
-        index = backend_combo.findData(str(backend))
-        if index >= 0:
-            backend_combo.setCurrentIndex(index)
+        return target_class(self.target_type()).construction_parameters(
+            self.backend() if self._backend_offered() else None)
+
+    def _backend_offered(self) -> bool:
+        """Whether this target has a choice of detector to be asked about."""
+        from pyCamSet.calibration_targets.target_registry import target_class
+
+        return len(target_class(self.target_type()).DETECTOR_BACKENDS) > 1
+
+    # -- the form -------------------------------------------------------
+
+    def _rebuild(self, *_args) -> None:
+        """Offer the arguments the selected target says it takes."""
+        offered = self._backend_offered()
+        self._backend_label.setVisible(offered)
+        self._backend_combo.setVisible(offered)
+        self._backend_status.setVisible(offered)
+        if offered:
+            backend = self.backend()
+            self._backend_status.setText(marker_backend_availability_text(backend))
+            self._backend_status.setStyleSheet(
+                "font-size: 10px; color: "
+                + ("#2a7a2a;" if marker_backend_available(backend) else "#8a4a00;"))
+
+        self._widgets = {}
+        while self._rows_form.rowCount():
+            self._rows_form.removeRow(0)
+        for parameter in self.construction_parameters().settable():
+            widget = build_parameter_widget(parameter)
+            self._rows_form.addRow(f"{parameter.label}:", widget)
+            self._widgets[parameter.key] = widget
+        self.changed.emit()
+
+    # -- reading and writing a spec --------------------------------------
+
+    def spec(self, detection_options: dict | None = None) -> dict:
+        """
+        The target spec these controls describe.
+
+        :param detection_options: the detector tuning, when the form
+            collecting this also collects that
+        :raises ParamError: for a value the target cannot take
+        """
+        from pyCamSet.calibration_targets.target_registry import TYPE_KEY
+
+        parameters = self.construction_parameters()
+        try:
+            values = parameters.parse(
+                {key: read_parameter_widget(widget)
+                 for key, widget in self._widgets.items()})
+        except ValueError as exc:
+            raise ParamError(str(exc)) from None
+
+        spec: dict[str, Any] = {TYPE_KEY: self.target_type(), **values}
+        if self._backend_offered():
+            spec["marker_backend"] = self.backend()
+        if detection_options is not None:
+            spec["detection_options"] = detection_options
+        return spec
+
+    def apply_spec(self, spec: dict) -> None:
+        """
+        Set these controls from a saved run's target.
+
+        Phases 2 and 3 build their own target and pair it with detections
+        made by an earlier run, so the default that is right almost always
+        is the one the detections were made with.
+
+        A control clamps to its own range, so a value the interface cannot
+        represent is silently narrowed here;
+        :func:`~pyCamSet.workflow.targets.describe_target_mismatch` is what
+        catches that before it reaches the solver.
+        """
+        from pyCamSet.calibration_targets.target_registry import TYPE_KEY
+
+        if not spec or TYPE_KEY not in spec:
+            return
+        # Both of these rebuild the rows, so they come before the values.
+        self._target_combo.setCurrentText(str(spec[TYPE_KEY]))
+        if backend := spec.get("marker_backend"):
+            if (index := self._backend_combo.findData(str(backend))) >= 0:
+                self._backend_combo.setCurrentIndex(index)
+
+        for key, widget in self._widgets.items():
+            if spec.get(key) is not None:
+                set_parameter_widget(widget, spec[key])
 
 
 # ---------------------------------------------------------------------------

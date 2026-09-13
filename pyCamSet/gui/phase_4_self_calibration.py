@@ -75,7 +75,6 @@ _LOG = logging.getLogger(__name__)
 
 _PYCAMSET_OK = phase4_workflow.BACKEND_OK
 
-_TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
 
 
 class Phase4Tab(QWidget):
@@ -164,42 +163,6 @@ class Phase4Tab(QWidget):
         self._source_lbl.setWordWrap(True)
         self._source_lbl.setStyleSheet("color: #666;")
         paths_sect.addRow("", self._source_lbl)
-
-        # ── Calibration Target (collapsible) ───────────────────────────
-        form_root.addWidget(make_separator())
-        target_sect = CollapsibleSection("Calibration Target", expanded=False)
-        form_root.addWidget(target_sect)
-
-        self._target_combo = QComboBox()
-        self._target_combo.addItems(_TARGET_CHOICES)
-        self._target_combo.setFixedWidth(140)
-        self._target_combo.setToolTip(
-            "Concept: the physical calibration target type.\n\n"
-            "Default: Ccube\n"
-            "Guidance: must match the target used in Phase 1 detection."
-        )
-        target_sect.addRow("Target type:", self._target_combo)
-
-        self._npts_spin = QSpinBox()
-        self._npts_spin.setRange(2, 30)
-        self._npts_spin.setValue(6)
-        self._npts_spin.setFixedWidth(90)
-        self._npts_spin.setToolTip(
-            "Concept: grid density of the calibration target.\n\n"
-            "Default: 6\n"
-            "Range: 2–30\n"
-            "Guidance: must exactly match the value used in Phase 1."
-        )
-        target_sect.addRow("n_points / squares_x:", self._npts_spin)
-
-        self._length_edit = QLineEdit("30.0")
-        self._length_edit.setFixedWidth(110)
-        self._length_edit.setToolTip(
-            "Concept: physical size of one feature on the target (mm).\n\n"
-            "Default: 30.0 mm\n"
-            "Guidance: must exactly match the value used in Phase 1."
-        )
-        target_sect.addRow("Length / square size (mm):", self._length_edit)
 
         # ── Self-Calibration Options ───────────────────────────────────
         form_root.addWidget(make_separator())

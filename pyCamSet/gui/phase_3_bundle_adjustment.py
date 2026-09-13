@@ -50,11 +50,6 @@ from pyCamSet.workflow.params import (
     require_detector_available,
     require_target_match,
 )
-from pyCamSet.calibration_targets.backend_registry import (
-    MARKER_BACKEND_LABELS,
-    marker_backend_availability_text,
-    marker_backend_available,
-)
 from pyCamSet.gui.shared_functions import (
     CollapsibleSection,
     IMAGE_FOLDER_SCHEMATIC,
@@ -65,7 +60,7 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE4,
     TerminalWidget,
     WorkspaceManager,
-    apply_target_spec_to_widgets,
+    TargetSettingsForm,
     gate_continue_button,
     make_blue_button,
     make_continue_button,
@@ -74,13 +69,13 @@ from pyCamSet.gui.shared_functions import (
     make_scrollable_tab,
     make_section_label,
     make_separator,
-    read_target_spec,
     render_predecessor_chain_section,
     show_tab,
 )
 from pyCamSet.workflow.detections import DetectionFilter
 from pyCamSet.calibration_targets.target_registry import build_target
 from pyCamSet.workflow.targets import (
+    TARGET_KEY,
     target_params_of_run,
 )
 from pyCamSet.workflow.workspace import (
@@ -109,7 +104,6 @@ except ImportError:
 
 _PYCAMSET_OK = phase3_workflow.BACKEND_OK
 
-_TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
 
 
 class Phase3Tab(QWidget):
@@ -198,74 +192,8 @@ class Phase3Tab(QWidget):
         target_sect = CollapsibleSection("Calibration Target", expanded=False)
         form_root.addWidget(target_sect)
 
-        self._target_combo = QComboBox()
-        self._target_combo.addItems(_TARGET_CHOICES)
-        self._target_combo.setFixedWidth(140)
-        self._target_combo.setToolTip(
-            "Concept: the physical calibration target type.\n\n"
-            "Default: Ccube\n"
-            "Guidance: must match the target used in Phase 1 detection."
-        )
-        target_sect.addRow("Target type:", self._target_combo)
-
-        self._npts_label = QLabel("n_points / squares_x:")
-        self._npts_spin = QSpinBox()
-        self._npts_spin.setRange(2, 30)
-        self._npts_spin.setValue(6)
-        self._npts_spin.setFixedWidth(90)
-        self._npts_spin.setToolTip(
-            "Concept: grid density of the calibration target.\n\n"
-            "Default: 6\n"
-            "Range: 2–30\n"
-            "Guidance: must exactly match the value used in Phase 1."
-        )
-        target_sect.addRow(self._npts_label, self._npts_spin)
-
-        self._length_label = QLabel("Length / square size (mm):")
-        self._length_edit = QLineEdit("30.0")
-        self._length_edit.setFixedWidth(110)
-        self._length_edit.setToolTip(
-            "Concept: physical size of one feature on the target (mm).\n\n"
-            "Default: 30.0 mm\n"
-            "Guidance: must exactly match the value used in Phase 1."
-        )
-        target_sect.addRow(self._length_label, self._length_edit)
-
-        self._border_label = QLabel("Border fraction (Ccube):")
-        self._border_spin = QDoubleSpinBox()
-        self._border_spin.setRange(0.0, 0.9)
-        self._border_spin.setDecimals(3)
-        self._border_spin.setSingleStep(0.01)
-        self._border_spin.setValue(0.1)
-        target_sect.addRow(self._border_label, self._border_spin)
-
-        self._marker_label = QLabel("Marker fraction (ChArUco):")
-        self._marker_spin = QDoubleSpinBox()
-        self._marker_spin.setRange(0.1, 1.0)
-        self._marker_spin.setDecimals(3)
-        self._marker_spin.setSingleStep(0.05)
-        self._marker_spin.setValue(0.8)
-        target_sect.addRow(self._marker_label, self._marker_spin)
-
-        self._marker_backend_combo = QComboBox()
-        for label, value in MARKER_BACKEND_LABELS.items():
-            self._marker_backend_combo.addItem(label, value)
-        self._marker_backend_combo.setCurrentText("ArUco 1 (OpenCV)")
-        self._marker_backend_combo.setFixedWidth(140)
-        # FIX 8(g): small availability label near the combo (plan v4 D12),
-        # refreshed on combo change so availability is honoured immediately.
-        self._marker_backend_status = QLabel(marker_backend_availability_text("aruco1"))
-        self._marker_backend_status.setStyleSheet("color: #2a7a2a;")
-        self._marker_backend_combo.setToolTip(
-            "Concept: which marker dictionary backend to use for detection.\n\n"
-            "ArUco 1 (OpenCV) — the built-in OpenCV ArUco detector.\n"
-            "ArUco 2 (aruco2) — the aruco2 package (ALVAR dictionaries).\n\n"
-            "Default: ArUco 1 (OpenCV)\n"
-            "Guidance: choose ArUco 2 only when the target was printed with an\n"
-            "ALVAR dictionary or when aruco2 detection is required."
-        )
-        target_sect.addRow("Marker backend:", self._marker_backend_combo)
-        target_sect.addRow("", self._marker_backend_status)
+        self._target_form = TargetSettingsForm()
+        target_sect.addRow(self._target_form)
 
         # ── PuzzleBoard-specific fields ───────────────────────────────
         self._pb_x_spin = QSpinBox()
@@ -317,9 +245,6 @@ class Phase3Tab(QWidget):
         target_sect.addRow("PBC length (mm):", self._pbc_square_edit)
 
 
-        self._target_combo.currentTextChanged.connect(self._on_target_type_changed)
-        self._marker_backend_combo.currentIndexChanged.connect(self._on_marker_backend_changed)
-        self._on_target_type_changed(self._target_combo.currentText())
 
         # ── Bundle Adjustment Options ──────────────────────────────────
         form_root.addWidget(make_separator())
@@ -645,7 +570,7 @@ class Phase3Tab(QWidget):
                 except Exception:
                     active_names = []
         try:
-            target = build_target(read_target_spec(self))
+            target = build_target(self._target_form.spec())
         except Exception:
             target = None
         fixed_params = None
@@ -705,39 +630,6 @@ class Phase3Tab(QWidget):
                 self._diagnostics_tab.refresh()
         self._refresh_phase2_sources()
 
-    def _on_target_type_changed(self, target_type: str) -> None:
-        is_ccube = target_type == "Ccube"
-        is_charuco_only = target_type == "ChArUco"
-        is_puzzleboard = target_type == "PuzzleBoard"
-        is_puzzleboard_cube = target_type == "PuzzleBoardCube"
-        show_ccube_charuco = is_ccube or is_charuco_only
-        self._border_label.setVisible(is_ccube)
-        self._border_spin.setVisible(is_ccube)
-        self._marker_label.setVisible(is_charuco_only)
-        self._marker_spin.setVisible(is_charuco_only)
-        self._npts_label.setVisible(show_ccube_charuco)
-        self._npts_spin.setVisible(show_ccube_charuco)
-        self._length_label.setVisible(show_ccube_charuco)
-        self._length_edit.setVisible(show_ccube_charuco)
-        self._marker_backend_combo.setVisible(show_ccube_charuco)
-        self._marker_backend_status.setVisible(show_ccube_charuco)
-        # PuzzleBoard fields.
-        for w in (self._pb_x_spin, self._pb_y_spin, self._pb_square_edit,
-                  self._pb_start_x_spin, self._pb_start_y_spin,
-                  self._pb_paper_w_edit, self._pb_paper_h_edit):
-            w.setVisible(is_puzzleboard)
-        # PuzzleBoardCube fields.
-        for w in (self._pbc_size_spin, self._pbc_square_edit):
-            w.setVisible(is_puzzleboard_cube)
-
-    def _on_marker_backend_changed(self) -> None:
-        """FIX 8(g): refresh the availability label on combo change."""
-        backend = str(self._marker_backend_combo.currentData() or "aruco1")
-        self._marker_backend_status.setText(marker_backend_availability_text(backend))
-        self._marker_backend_status.setStyleSheet(
-            "color: #2a7a2a;" if marker_backend_available(backend) else "color: #8a4a00;"
-        )
-
     def _collect_params(self) -> Optional[dict]:
         """Read the form, or say which field is wrong and return None."""
         try:
@@ -757,7 +649,7 @@ class Phase3Tab(QWidget):
                 self._threads_edit.text().strip() or "1", "Threads"),
             "fixed_params": as_json_object(
                 self._fp_edit.text(), "Fixed params JSON"),
-            "target": read_target_spec(self),
+            "target": self._target_form.spec(),
             "lockbox": self._read_lockbox_params(),
             "problem_options": {
                 "verbosity": int(self._verbosity_spin.value()),
@@ -913,7 +805,8 @@ class Phase3Tab(QWidget):
         if run_id is None or run_id == self._adopted_target_run_id:
             return
         self._adopted_target_run_id = run_id
-        apply_target_spec_to_widgets(self, target_params_of_run(run))
+        self._target_form.apply_spec(
+            target_params_of_run(run).get(TARGET_KEY, {}))
 
     def _load_phase2_run(self) -> Optional[dict]:
         runs = self._workspace_mgr.load_runs("phase2")

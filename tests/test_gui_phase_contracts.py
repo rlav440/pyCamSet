@@ -416,9 +416,6 @@ def test_the_stats_agree_with_the_calibration_report(short_charuco_handler):
 # 5x5 one.  The tabs now adopt the run's target when the run changes, and
 # refuse the run when the two still disagree.
 
-from pyCamSet.gui.shared_functions import (  # noqa: E402
-    apply_target_spec_to_widgets,
-)
 from pyCamSet.calibration_targets.target_Ccube import Ccube  # noqa: E402
 from pyCamSet.workflow.targets import (  # noqa: E402
     READING_ONLY_FIELDS,
@@ -527,121 +524,19 @@ def test_the_message_names_the_run_and_every_difference():
 
 
 # --- adopting a run's target -----------------------------------------------
+#
+# The controls were a map of widget names, one copy per phase, read by a
+# helper.  They are the target's own declared arguments now, so these are
+# about the form rather than about the map.
 
 
-class _Spin:
-    def __init__(self, value=0, lo=None, hi=None):
-        self.value_ = value
-        self._lo, self._hi = lo, hi
+def _target_form(target_type=None):
+    from pyCamSet.gui.shared_functions import TargetSettingsForm
 
-    def setValue(self, value):
-        if self._lo is not None:
-            value = max(self._lo, min(self._hi, value))
-        self.value_ = value
-
-
-class _Edit:
-    def __init__(self, text=""):
-        self.text_ = text
-
-    def setText(self, text):
-        self.text_ = text
-
-
-class _Combo:
-    def __init__(self, text="", data=()):
-        self.text_ = text
-        self._data = list(data)
-        self.index_ = -1
-
-    def setCurrentText(self, text):
-        self.text_ = text
-
-    def findData(self, value):
-        return self._data.index(value) if value in self._data else -1
-
-    def setCurrentIndex(self, index):
-        self.index_ = index
-
-
-class _FakeTab:
-    """The target widgets of a phase tab, without Qt.
-
-    Same attribute names as Phases 2 and 3, which are identical to each
-    other -- that is what lets one helper serve both.
-    """
-
-    def __init__(self):
-        self._target_combo = _Combo("Ccube")
-        self._npts_spin = _Spin(6, 2, 30)
-        self._length_edit = _Edit("30.0")
-        self._border_spin = _Spin(0.1)
-        self._marker_spin = _Spin(0.8)
-        self._marker_backend_combo = _Combo("", ["aruco1", "aruco2"])
-        self._pb_x_spin = _Spin(105)
-        self._pb_y_spin = _Spin(148)
-        self._pb_square_edit = _Edit("2.0")
-        self._pbc_size_spin = _Spin(20)
-        self._pbc_square_edit = _Edit("200.0")
-
-
-def test_adopting_a_run_sets_the_target_to_match_it():
-    tab = _FakeTab()
-
-    apply_target_spec_to_widgets(tab, CCUBE_12["target"])
-
-    assert tab._target_combo.text_ == "Ccube"
-    assert tab._npts_spin.value_ == 12
-    assert tab._length_edit.text_ == "80"
-    assert describe_target_mismatch(
-        CCUBE_12,
-        {"target": {"type": tab._target_combo.text_,
-                    "n_points": tab._npts_spin.value_,
-                    "length": tab._length_edit.text_,
-                    "border_fraction": tab._border_spin.value_}},
-    ) == []
-
-
-def test_adopting_selects_the_marker_backend_by_value():
-    tab = _FakeTab()
-
-    apply_target_spec_to_widgets(tab, _with(CCUBE_12, marker_backend="aruco2")["target"])
-
-    assert tab._marker_backend_combo.index_ == 1
-
-
-def test_adopting_nothing_changes_nothing():
-    tab = _FakeTab()
-
-    apply_target_spec_to_widgets(tab, {})
-
-    assert tab._npts_spin.value_ == 6
-    assert tab._length_edit.text_ == "30.0"
-
-
-def test_adopting_ignores_widgets_a_tab_does_not_have():
-    """Not every tab carries every target's fields."""
-    class _Sparse:
-        def __init__(self):
-            self._npts_spin = _Spin(6, 2, 30)
-
-    tab = _Sparse()
-    apply_target_spec_to_widgets(tab, CCUBE_12["target"])
-
-    assert tab._npts_spin.value_ == 12
-
-
-def test_a_value_the_interface_cannot_hold_is_still_caught():
-    """Spin boxes clamp silently; the mismatch check is the backstop."""
-    tab = _FakeTab()  # n_points range is 2..30
-
-    apply_target_spec_to_widgets(tab, _with(CCUBE_12, n_points=99)["target"])
-
-    assert tab._npts_spin.value_ == 30
-    assert describe_target_mismatch(
-        _with(CCUBE_12, n_points=99),
-        _with(CCUBE_12, n_points=tab._npts_spin.value_),
-    ) != []
+    form = TargetSettingsForm()
+    if target_type is not None:
+        form._target_combo.setCurrentText(target_type)
+    return form
 
 
 @pytest.mark.data
@@ -1660,9 +1555,9 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
         tab = window.phase1_tab
         tab._floc_edit.setText(str(images))
         tab.set_cameras(["1", "2", "3"], ["1", "2", "3"])
-        tab._target_combo.setCurrentText("ChArUco")
-        tab._npts_spin.setValue(20)
-        tab._length_edit.setText("4")
+        tab._target_form.apply_spec(
+            {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
+             "square_size": 4.0, "legacy": True})
         tab._nlim_edit.setText("4")          # four images is enough to solve
         # Caching on: the cache file is what phase 1 saves as its artifact,
         # and what phase 2 reads.  Without it a run records no detections.
@@ -1678,9 +1573,9 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
         # ---- phase 2: per-camera intrinsics ------------------------------
         tab = window.phase2_tab
         tab._floc_edit.setText(str(images))
-        tab._target_combo.setCurrentText("ChArUco")
-        tab._npts_spin.setValue(20)
-        tab._length_edit.setText("4")
+        tab._target_form.apply_spec(
+            {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
+             "square_size": 4.0, "legacy": True})
         tab._run_phase2()
 
         assert not refused, refused
@@ -1692,9 +1587,9 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
         # ---- phase 3: bundle adjustment ----------------------------------
         tab = window.phase3_tab
         tab._floc_edit.setText(str(images))
-        tab._target_combo.setCurrentText("ChArUco")
-        tab._npts_spin.setValue(20)
-        tab._length_edit.setText("4")
+        tab._target_form.apply_spec(
+            {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
+             "square_size": 4.0, "legacy": True})
         tab._max_nfev_spin.setValue(10)
         tab._run_phase3()
 
@@ -1835,10 +1730,10 @@ def test_the_detection_form_shows_what_the_chosen_detector_takes(
     QApplication.instance() or QApplication([])
     tab = _phase1_tab()
     try:
-        tab._target_combo.setCurrentText(target_type)
+        tab._target_form._target_combo.setCurrentText(target_type)
         if backend is not None:
-            tab._marker_backend_combo.setCurrentIndex(
-                tab._marker_backend_combo.findData(backend))
+            tab._target_form._backend_combo.setCurrentIndex(
+                tab._target_form._backend_combo.findData(backend))
 
         parameterisation = tab._current_detector_parameterisation()
         assert parameterisation.name == detector
@@ -1866,8 +1761,8 @@ def test_only_a_target_with_a_choice_of_detector_is_asked_for_one(
     QApplication.instance() or QApplication([])
     tab = _phase1_tab()
     try:
-        tab._target_combo.setCurrentText(target_type)
-        assert tab._marker_backend_combo.isHidden() is (not offered)
+        tab._target_form._target_combo.setCurrentText(target_type)
+        assert tab._target_form._backend_combo.isHidden() is (not offered)
     finally:
         tab.deleteLater()
 
@@ -1921,12 +1816,12 @@ def test_the_sweepable_rows_follow_the_selected_detector():
         assert set(tab._param_rows) == {p.key for p in ARUCO_OPENCV_DETECTOR.tunable()}
         assert tab._nothing_to_sweep.text() == ""
 
-        tab._backend_combo.setCurrentIndex(tab._backend_combo.findData("aruco2"))
+        tab._target_form._backend_combo.setCurrentIndex(tab._target_form._backend_combo.findData("aruco2"))
         assert tab._param_rows == {}
         assert "takes no settings" in tab._nothing_to_sweep.text()
         assert tab._collect_parameter_rows() == []
 
-        tab._backend_combo.setCurrentIndex(tab._backend_combo.findData("aruco1"))
+        tab._target_form._backend_combo.setCurrentIndex(tab._target_form._backend_combo.findData("aruco1"))
         assert set(tab._param_rows) == {p.key for p in ARUCO_OPENCV_DETECTOR.tunable()}
     finally:
         tab.deleteLater()
@@ -1947,7 +1842,7 @@ def test_the_preset_selector_never_offers_another_detectors_presets():
 
         assert "Balanced" in offered() and offered()[-1] == "Custom"
 
-        tab._backend_combo.setCurrentIndex(tab._backend_combo.findData("aruco2"))
+        tab._target_form._backend_combo.setCurrentIndex(tab._target_form._backend_combo.findData("aruco2"))
         assert offered() == ["Custom"], "aruco2 has no presets of its own"
         assert tab._detection_profile_combo.isHidden()
     finally:
@@ -1962,7 +1857,7 @@ def test_a_preset_still_sets_the_bounds_of_the_rows_it_covers():
     QApplication.instance() or QApplication([])
     tab = _optimisation_tab()
     try:
-        tab._target_type_combo.setCurrentText("Ccube")
+        tab._target_form._target_combo.setCurrentText("Ccube")
         tab._detection_profile_combo.setCurrentText("Aggressive Recovery")
         row = tab._param_rows["adaptiveThreshWinSizeMax"]
 
@@ -1992,3 +1887,139 @@ def test_a_form_resolves_its_target_selection_to_one_detector(
     from pyCamSet.gui.shared_functions import detector_parameterisation_for
 
     assert detector_parameterisation_for(target_type, backend).name == expected
+
+
+@pytest.mark.gui
+def test_adopting_a_run_sets_the_target_to_match_it():
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("ChArUco")
+    try:
+        form.apply_spec(CCUBE_12["target"])
+
+        assert form.target_type() == "Ccube"
+        spec = form.spec()
+        assert spec["n_points"] == 12
+        assert spec["length"] == 80
+        assert describe_target_mismatch(CCUBE_12, {"target": spec}) == []
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_adopting_selects_the_marker_backend_by_value():
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    form = _target_form()
+    try:
+        form.apply_spec(_with(CCUBE_12, marker_backend="aruco2")["target"])
+        assert form.backend() == "aruco2"
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_adopting_nothing_changes_nothing():
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("Ccube")
+    try:
+        before = form.spec()
+        form.apply_spec({})
+        assert form.spec() == before
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_adopting_ignores_a_field_this_target_does_not_have():
+    """A spec carries one target's arguments; the form offers another's."""
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("Ccube")
+    try:
+        form.apply_spec({**CCUBE_12["target"], "paper_width": 210.0})
+        assert form.spec()["n_points"] == 12
+        assert "paper_width" not in form.spec()
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_a_value_the_interface_cannot_hold_is_still_caught():
+    """Controls clamp silently; the mismatch check is the backstop."""
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("Ccube")
+    try:
+        form.apply_spec(_with(CCUBE_12, n_points=999)["target"])
+        held = form.spec()["n_points"]
+
+        assert held < 999, "clamped to what the control can hold"
+        assert describe_target_mismatch(
+            _with(CCUBE_12, n_points=999), {"target": form.spec()}) != []
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_the_form_offers_every_target_the_registry_knows():
+    """Which is the point: adding a target is a line in the registry."""
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.calibration_targets.target_registry import TARGET_NAMES
+
+    QApplication.instance() or QApplication([])
+    form = _target_form()
+    try:
+        offered = [form._target_combo.itemText(i)
+                   for i in range(form._target_combo.count())]
+        assert offered == list(TARGET_NAMES)
+
+        for name in offered:
+            form._target_combo.setCurrentText(name)
+            spec = form.spec()
+            assert spec["type"] == name
+            # What it collects is enough to build the target it describes.
+            from pyCamSet.calibration_targets.target_registry import build_target
+            assert build_target(spec) is not None
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("phase", ["phase_2_intrinsics", "phase_3_bundle_adjustment"])
+def test_a_phase_adopts_the_target_of_the_run_it_continues(phase):
+    """The helper took a tab and a spec, and was given a tab and a run's
+    whole parameters -- whose top-level keys are ``f_loc`` and ``target``,
+    never ``type``. So it returned at its first line and the phase kept
+    whatever target it was showing, while a test on the helper passed.
+    """
+    import importlib
+
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    QApplication.instance() or QApplication([])
+    module = importlib.import_module(f"pyCamSet.gui.{phase}")
+    tab_class = next(v for k, v in vars(module).items()
+                     if k.endswith("Tab") and isinstance(v, type))
+    tab = tab_class(QTabWidget(), QCheckBox(), QCheckBox(), WorkspaceManager(None))
+    try:
+        tab._target_form._target_combo.setCurrentText("ChArUco")
+        run = {"run_id": "r1", "params": CCUBE_12}
+
+        adopt = getattr(tab, "_adopt_target_from_phase1_run", None) or \
+            getattr(tab, "_adopt_target_from_run", None)
+        adopt(run)
+
+        assert tab._target_form.target_type() == "Ccube"
+        assert tab._target_form.spec()["n_points"] == 12
+    finally:
+        tab.deleteLater()

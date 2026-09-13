@@ -42,20 +42,13 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.bounded_slider import BoundedSliderRow
-from pyCamSet.calibration_targets.backend_registry import (
-    ARUCO1_DICT_NAMES,
-    MARKER_BACKEND_LABELS,
-    marker_backend_availability_text,
-    marker_backend_available,
-)
 from pyCamSet.gui.shared_functions import (
     TAB_OPTIMISATION,
-    detector_parameterisation_for,
+    TargetSettingsForm,
     WorkspaceManager,
     make_green_button,
     make_orange_button,
     make_section_label,
-    repopulate_dict_combo,
 )
 from pyCamSet.workflow.tuning.study import (
     MAX_SUCCESSES_HARD_CAP,
@@ -86,7 +79,6 @@ except Exception:  # pragma: no cover - module always importable
 
 
 _LOG = logging.getLogger(__name__)
-_TARGET_CHOICES = ("ChArUco", "Ccube")
 #: Not a preset but a state of the preset selector: bounds edited by hand.
 _CUSTOM_PROFILE = "Custom"
 _MIN_BOARD_DIMENSION = 2
@@ -267,69 +259,10 @@ class OptimisationTab(QWidget):
 
     def _build_target_section(self) -> QWidget:
         gb = QGroupBox()
-        form = QFormLayout(gb)
-
-        self._target_type_combo = QComboBox()
-        self._target_type_combo.addItems(list(_TARGET_CHOICES))
-        self._target_type_combo.currentTextChanged.connect(self._update_target_visibility)
-        self._target_type_combo.currentTextChanged.connect(self._on_detector_choice_changed)
-        form.addRow("Target type:", self._target_type_combo)
-
-        self._rows_label = QLabel("Rows (num_squares_y):")
-        self._rows_spin = QSpinBox()
-        self._rows_spin.setRange(2, 50)
-        self._rows_spin.setValue(7)
-        form.addRow(self._rows_label, self._rows_spin)
-
-        self._cols_label = QLabel("Cols (num_squares_x):")
-        self._cols_spin = QSpinBox()
-        self._cols_spin.setRange(2, 50)
-        self._cols_spin.setValue(7)
-        form.addRow(self._cols_label, self._cols_spin)
-
-        self._square_label = QLabel("Square length (mm):")
-        self._square_spin = QDoubleSpinBox()
-        self._square_spin.setRange(0.1, 1000.0)
-        self._square_spin.setDecimals(3)
-        self._square_spin.setValue(30.0)
-        form.addRow(self._square_label, self._square_spin)
-
-        self._marker_label = QLabel("Marker fraction:")
-        self._marker_spin = QDoubleSpinBox()
-        self._marker_spin.setRange(0.1, 1.0)
-        self._marker_spin.setDecimals(3)
-        self._marker_spin.setSingleStep(0.05)
-        self._marker_spin.setValue(0.8)
-        form.addRow(self._marker_label, self._marker_spin)
-
-        self._border_label = QLabel("Border fraction:")
-        self._border_spin = QDoubleSpinBox()
-        self._border_spin.setRange(0.001, 0.9)
-        self._border_spin.setDecimals(3)
-        self._border_spin.setSingleStep(0.01)
-        self._border_spin.setValue(0.1)
-        form.addRow(self._border_label, self._border_spin)
-
-        self._aruco_combo = QComboBox()
-        self._aruco_combo.addItems(ARUCO1_DICT_NAMES)
-        self._aruco_combo.setCurrentText("DICT_4X4_1000")
-        form.addRow("ArUco dictionary:", self._aruco_combo)
-
-        self._backend_combo = QComboBox()
-        for label, value in MARKER_BACKEND_LABELS.items():
-            self._backend_combo.addItem(label, value)
-        self._backend_combo.setCurrentText("ArUco 1 (OpenCV)")
-        self._backend_combo.currentIndexChanged.connect(self._on_backend_changed)
-        form.addRow("Marker backend:", self._backend_combo)
-        # FIX 8(g): small availability label near the combo (plan v4 D12),
-        # refreshed on combo change so availability is honoured immediately.
-        self._backend_status = QLabel(marker_backend_availability_text("aruco1"))
-        self._backend_status.setStyleSheet("color: #2a7a2a;")
-        form.addRow("", self._backend_status)
-
-        self._legacy_cb = QCheckBox("Legacy pattern")
-        form.addRow("", self._legacy_cb)
-        self._update_target_visibility(self._target_type_combo.currentText())
+        layout = QVBoxLayout(gb)
+        self._target_form = TargetSettingsForm()
+        self._target_form.changed.connect(self._on_detector_choice_changed)
+        layout.addWidget(self._target_form)
         return gb
 
     def _build_mode_section(self) -> QWidget:
@@ -485,9 +418,7 @@ class OptimisationTab(QWidget):
 
     def _current_detector_parameterisation(self):
         """What the selected target's detection can be told."""
-        return detector_parameterisation_for(
-            self._target_type_combo.currentText(),
-            str(self._backend_combo.currentData() or ""))
+        return self._target_form.detector_parameterisation()
 
     def _rebuild_detector_rows(self) -> None:
         """
@@ -623,18 +554,6 @@ class OptimisationTab(QWidget):
                 "Install with `pip install optuna` to enable full Optimisation tab features."
             )
 
-    def _update_target_visibility(self, target_type: str) -> None:
-        is_ccube = target_type == "Ccube"
-        self._rows_label.setText("Points (n_points):" if is_ccube else "Rows (num_squares_y):")
-        self._rows_spin.setRange(_MIN_BOARD_DIMENSION, _MAX_BOARD_DIMENSION)
-        self._cols_label.setVisible(not is_ccube)
-        self._cols_spin.setVisible(not is_ccube)
-        self._square_label.setText("Length (mm):" if is_ccube else "Square length (mm):")
-        self._marker_label.setVisible(not is_ccube)
-        self._marker_spin.setVisible(not is_ccube)
-        self._border_label.setVisible(is_ccube)
-        self._border_spin.setVisible(is_ccube)
-
     def _collect_parameter_rows(self) -> list[ParameterRowConfig]:
         rows: list[ParameterRowConfig] = []
         for key, widget in self._param_rows.items():
@@ -650,70 +569,10 @@ class OptimisationTab(QWidget):
             )
         return rows
 
-    def _on_backend_changed(self) -> None:
-        # Note: the ArUco dictionary combo has no change listeners, so no
-        # re-entrancy guard is needed while it is repopulated here.
-        repopulate_dict_combo(self._aruco_combo, str(self._backend_combo.currentData() or "aruco1"))
-        # FIX 8(g): honour availability on combo change, not only at start.
-        backend = str(self._backend_combo.currentData() or "aruco1")
-        self._backend_status.setText(marker_backend_availability_text(backend))
-        self._backend_status.setStyleSheet(
-            "color: #2a7a2a;" if marker_backend_available(backend) else "color: #8a4a00;"
-        )
-        self._on_detector_choice_changed()
-
     def _on_detector_choice_changed(self, *_args) -> None:
         """Rebuild the rows once the detector section exists to rebuild."""
         if hasattr(self, "_param_rows_layout"):
             self._rebuild_detector_rows()
-
-    def _collect_target(self) -> dict:
-        # ArUco dict name → enum, looked up lazily to avoid hard cv2/aruco2
-        # dependencies at import. The lookup is backend-aware (plan v4 D9):
-        # aruco2 names resolve through the aruco2 package, aruco1 through
-        # OpenCV. An unresolvable name is a hard validation error, never a
-        # silent fallback to dictionary 0.
-        marker_backend = str(self._backend_combo.currentData() or "aruco1")
-        dict_name = self._aruco_combo.currentText()
-        try:
-            if marker_backend == "aruco2":
-                import aruco2  # type: ignore[import-not-found]
-                a_dict_value = int(getattr(aruco2, dict_name))
-            else:
-                import cv2  # type: ignore[import-not-found]
-                a_dict_value = int(getattr(cv2.aruco, dict_name))
-        except (AttributeError, ImportError) as exc:
-            # Single-dialog contract: raise with the full detail and let the
-            # caller's existing error dialog present it - showing one here as
-            # well would double-report the same failure (P2 fix).
-            raise ValueError(
-                f"Could not resolve ArUco dictionary {dict_name!r} for marker "
-                f"backend {marker_backend!r}: {exc}"
-            ) from exc
-        # One set of controls serves both targets, so which of them each
-        # takes its arguments from is decided here -- a ChArUco sizes itself
-        # by square and count, a Ccube by edge length and points per face.
-        target_type = self._target_type_combo.currentText()
-        if target_type == "Ccube":
-            return {
-                "type": "Ccube",
-                "n_points": int(self._rows_spin.value()),
-                "length": float(self._square_spin.value()),
-                "border_fraction": float(self._border_spin.value()),
-                "aruco_dict": a_dict_value,
-                "legacy": self._legacy_cb.isChecked(),
-                "marker_backend": marker_backend,
-            }
-        return {
-            "type": target_type,
-            "num_squares_x": int(self._cols_spin.value()),
-            "num_squares_y": int(self._rows_spin.value()),
-            "square_size": float(self._square_spin.value()),
-            "marker_fraction": float(self._marker_spin.value()),
-            "a_dict": a_dict_value,
-            "legacy": self._legacy_cb.isChecked(),
-            "marker_backend": marker_backend,
-        }
 
     def _collect_controls(self) -> CalibrationControls:
         return CalibrationControls(
@@ -801,7 +660,7 @@ class OptimisationTab(QWidget):
             seed=seed,
             sampler_name=self._sampler_combo.currentText(),
             parameter_rows=self._collect_parameter_rows(),
-            target_spec=self._collect_target(),
+            target_spec=self._target_form.spec(),
             controls=self._collect_controls(),
             trial_gating=self._collect_trial_gating(),
             output_dir=Path(out) if out else None,

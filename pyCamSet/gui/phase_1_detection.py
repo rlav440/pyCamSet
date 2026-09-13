@@ -26,15 +26,9 @@ import numpy as np
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
-from pyCamSet.calibration_targets.backend_registry import (
-    MARKER_BACKEND_LABELS,
-    marker_backend_availability_text,
-    marker_backend_available,
-)
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -44,7 +38,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -61,9 +54,8 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE1_DIAG,
     TAB_PHASE2,
     TerminalWidget,
-    apply_target_spec_to_widgets,
-    build_detection_option_widget,
-    detector_parameterisation_for,
+    build_parameter_widget,
+    TargetSettingsForm,
     gate_continue_button,
     make_blue_button,
     make_continue_button,
@@ -71,8 +63,7 @@ from pyCamSet.gui.shared_functions import (
     make_scrollable_tab,
     make_section_label,
     make_separator,
-    read_detection_option_widget,
-    read_target_spec,
+    read_parameter_widget,
     render_predecessor_chain_section,
     show_tab,
 )
@@ -89,12 +80,7 @@ from pyCamSet.workflow.params import (
 from pyCamSet.workflow.recent_folders import remember_folder
 from pyCamSet.workflow.recent_targets import (
     forget_target, load_recent_targets, remember_target)
-from pyCamSet.calibration_targets.target_registry import target_class
-from pyCamSet.workflow.targets import (
-    describe_target,
-    TARGET_CHOICES as _TARGET_CHOICES,
-    TARGET_KEY,
-)
+from pyCamSet.workflow.targets import describe_target, TARGET_KEY
 from pyCamSet.workflow.workspace import (
     IMAGE_EXTS as _IMAGE_EXTS,
     WorkspaceManager,
@@ -269,142 +255,9 @@ class Phase1Tab(QWidget):
         recent_row.addWidget(forget_btn)
         target_sect.addRow("Recent targets:", recent_row)
 
-        self._target_combo = QComboBox()
-        self._target_combo.addItems(_TARGET_CHOICES)
-        self._target_combo.setFixedWidth(140)
-        self._target_combo.setToolTip(
-            "Concept: the physical calibration target type.\n\n"
-            "Ccube — corner-cube target with coded markers; robust to partial\n"
-            "  occlusion and suitable for most multi-camera setups.\n"
-            "ChArUco — charuco board (chessboard + ArUco markers); widely\n"
-            "  supported and easy to print.\n\n"
-            "Default: Ccube\n"
-            "Guidance: match this exactly to the physical target you are using."
-        )
-        target_sect.addRow("Target type:", self._target_combo)
-
-        self._npts_label = QLabel("n_points / squares_x:")
-        self._npts_spin = QSpinBox()
-        self._npts_spin.setRange(2, 20)
-        self._npts_spin.setValue(6)
-        self._npts_spin.setFixedWidth(80)
-        self._npts_spin.setToolTip(
-            "Concept: the grid density of the calibration target.\n"
-            "For Ccube: number of points per face edge.\n"
-            "For ChArUco: number of squares along the x-axis.\n\n"
-            "Default: 6\n"
-            "Range: 2–20\n"
-            "Guidance: must exactly match the physical target you are using.\n"
-            "Higher values give more feature constraints per image."
-        )
-        target_sect.addRow(self._npts_label, self._npts_spin)
-
-        self._length_label = QLabel("Length / square size (mm):")
-        self._length_edit = QLineEdit("30.0")
-        self._length_edit.setFixedWidth(100)
-        self._length_edit.setToolTip(
-            "Concept: the physical size of one feature on the calibration\n"
-            "target, in millimetres.  This sets the metric scale of the\n"
-            "calibration.\n\n"
-            "Default: 30.0 mm\n"
-            "Range: any positive float (mm)\n"
-            "Guidance: measure the actual printed/machined target — even a\n"
-            "1% error here propagates directly into reconstructed distances."
-        )
-        target_sect.addRow(self._length_label, self._length_edit)
-
-        self._border_label = QLabel("Border fraction (Ccube):")
-        self._border_spin = QDoubleSpinBox()
-        self._border_spin.setRange(0.0, 0.9)
-        self._border_spin.setDecimals(3)
-        self._border_spin.setSingleStep(0.01)
-        self._border_spin.setValue(0.1)
-        target_sect.addRow(self._border_label, self._border_spin)
-
-        self._marker_label = QLabel("Marker fraction (ChArUco):")
-        self._marker_spin = QDoubleSpinBox()
-        self._marker_spin.setRange(0.1, 1.0)
-        self._marker_spin.setDecimals(3)
-        self._marker_spin.setSingleStep(0.05)
-        self._marker_spin.setValue(0.8)
-        target_sect.addRow(self._marker_label, self._marker_spin)
-
-        self._marker_backend_combo = QComboBox()
-        for label, value in MARKER_BACKEND_LABELS.items():
-            self._marker_backend_combo.addItem(label, value)
-        self._marker_backend_combo.setCurrentText("ArUco 1 (OpenCV)")
-        self._marker_backend_combo.setFixedWidth(140)
-        # FIX 8(g): small availability label near the combo (plan v4 D12),
-        # refreshed on combo change so availability is honoured immediately.
-        self._marker_backend_status = QLabel(marker_backend_availability_text("aruco1"))
-        self._marker_backend_status.setStyleSheet("color: #2a7a2a;")
-        self._marker_backend_combo.setToolTip(
-            "Concept: which marker dictionary backend to use for detection.\n\n"
-            "ArUco 1 (OpenCV) — the built-in OpenCV ArUco detector.\n"
-            "ArUco 2 (aruco2) — the aruco2 package (ALVAR dictionaries).\n\n"
-            "Default: ArUco 1 (OpenCV)\n"
-            "Guidance: choose ArUco 2 only when the target was printed with an\n"
-            "ALVAR dictionary or when aruco2 detection is required."
-        )
-        target_sect.addRow("Marker backend:", self._marker_backend_combo)
-        target_sect.addRow("", self._marker_backend_status)
-
-        # ── PuzzleBoard-specific fields ───────────────────────────────
-        self._pb_x_label = QLabel("PB num_squares_x:")
-        self._pb_x_spin = QSpinBox()
-        self._pb_x_spin.setRange(2, 501)
-        self._pb_x_spin.setValue(105)
-        self._pb_x_spin.setFixedWidth(80)
-        target_sect.addRow(self._pb_x_label, self._pb_x_spin)
-
-        self._pb_y_label = QLabel("PB num_squares_y:")
-        self._pb_y_spin = QSpinBox()
-        self._pb_y_spin.setRange(2, 501)
-        self._pb_y_spin.setValue(148)
-        self._pb_y_spin.setFixedWidth(80)
-        target_sect.addRow(self._pb_y_label, self._pb_y_spin)
-
-        self._pb_square_label = QLabel("PB square_size (mm):")
-        self._pb_square_edit = QLineEdit("2.0")
-        self._pb_square_edit.setFixedWidth(100)
-        target_sect.addRow(self._pb_square_label, self._pb_square_edit)
-
-        self._pb_start_x_label = QLabel("PB start_x:")
-        self._pb_start_x_spin = QSpinBox()
-        self._pb_start_x_spin.setRange(0, 500)
-        self._pb_start_x_spin.setValue(0)
-        self._pb_start_x_spin.setFixedWidth(80)
-        target_sect.addRow(self._pb_start_x_label, self._pb_start_x_spin)
-
-        self._pb_start_y_label = QLabel("PB start_y:")
-        self._pb_start_y_spin = QSpinBox()
-        self._pb_start_y_spin.setRange(0, 500)
-        self._pb_start_y_spin.setValue(0)
-        self._pb_start_y_spin.setFixedWidth(80)
-        target_sect.addRow(self._pb_start_y_label, self._pb_start_y_spin)
-
-        self._pb_paper_w_label = QLabel("PB paper_width (mm):")
-        self._pb_paper_w_edit = QLineEdit("210.0")
-        self._pb_paper_w_edit.setFixedWidth(100)
-        target_sect.addRow(self._pb_paper_w_label, self._pb_paper_w_edit)
-
-        self._pb_paper_h_label = QLabel("PB paper_height (mm):")
-        self._pb_paper_h_edit = QLineEdit("297.0")
-        self._pb_paper_h_edit.setFixedWidth(100)
-        target_sect.addRow(self._pb_paper_h_label, self._pb_paper_h_edit)
-
-        # ── PuzzleBoardCube-specific fields ───────────────────────────
-        self._pbc_size_label = QLabel("PBC n_points / pieces per face:")
-        self._pbc_size_spin = QSpinBox()
-        self._pbc_size_spin.setRange(2, 160)
-        self._pbc_size_spin.setValue(20)
-        self._pbc_size_spin.setFixedWidth(80)
-        target_sect.addRow(self._pbc_size_label, self._pbc_size_spin)
-
-        self._pbc_square_label = QLabel("PBC length (mm):")
-        self._pbc_square_edit = QLineEdit("200.0")
-        self._pbc_square_edit.setFixedWidth(100)
-        target_sect.addRow(self._pbc_square_label, self._pbc_square_edit)
+        self._target_form = TargetSettingsForm()
+        self._target_form.changed.connect(self._on_target_changed)
+        target_sect.addRow(self._target_form)
 
         # ── Detection options ──────────────────────────────────────────
         form_root.addWidget(make_separator())
@@ -545,9 +398,7 @@ class Phase1Tab(QWidget):
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
 
-        self._target_combo.currentTextChanged.connect(self._on_target_type_changed)
-        self._marker_backend_combo.currentIndexChanged.connect(self._on_marker_backend_changed)
-        self._on_target_type_changed(self._target_combo.currentText())
+        self._on_target_changed()
         self.refresh_recent_targets()
 
     # ------------------------------------------------------------------
@@ -613,7 +464,7 @@ class Phase1Tab(QWidget):
         spec = self._recent_target_combo.currentData()
         if not spec:
             return
-        apply_target_spec_to_widgets(self, spec)
+        self._target_form.apply_spec(spec)
 
     def _forget_selected_target(self) -> None:
         spec = self._recent_target_combo.currentData()
@@ -624,9 +475,7 @@ class Phase1Tab(QWidget):
 
     def _current_detector_parameterisation(self):
         """What the selected target's detection can be told."""
-        return detector_parameterisation_for(
-            self._target_combo.currentText(),
-            str(self._marker_backend_combo.currentData() or ""))
+        return self._target_form.detector_parameterisation()
 
     def _rebuild_detection_options(self) -> None:
         """
@@ -653,49 +502,12 @@ class Phase1Tab(QWidget):
                 heading = QLabel(f"Priority {meta.priority}")
                 heading.setStyleSheet("color: #1976d2; font-weight: bold;")
                 self._detection_opts_section.addRow(heading)
-            widget = build_detection_option_widget(meta)
+            widget = build_parameter_widget(meta)
             self._detection_opts_section.addRow(f"{meta.label}:", widget)
             self._detection_option_widgets[meta.key] = widget
 
-    def _on_target_type_changed(self, target_type: str) -> None:
-        if hasattr(self, "_detection_opts_section"):
-            self._rebuild_detection_options()
-        is_ccube = target_type == "Ccube"
-        is_charuco_only = target_type == "ChArUco"
-        is_puzzleboard = target_type == "PuzzleBoard"
-        is_puzzleboard_cube = target_type == "PuzzleBoardCube"
-        # Ccube/ChArUco fields — visible only for their respective types.
-        self._border_label.setVisible(is_ccube)
-        self._border_spin.setVisible(is_ccube)
-        self._marker_label.setVisible(is_charuco_only)
-        self._marker_spin.setVisible(is_charuco_only)
-        self._npts_label.setVisible(is_ccube or is_charuco_only)
-        self._npts_spin.setVisible(is_ccube or is_charuco_only)
-        self._length_label.setVisible(is_ccube or is_charuco_only)
-        self._length_edit.setVisible(is_ccube or is_charuco_only)
-        has_choice = len(target_class(target_type).DETECTOR_BACKENDS) > 1
-        self._marker_backend_combo.setVisible(has_choice)
-        self._marker_backend_status.setVisible(has_choice)
-        # PuzzleBoard fields — toggle labels and field widgets in lockstep.
-        for w in (self._pb_x_label, self._pb_x_spin, self._pb_y_label, self._pb_y_spin,
-                  self._pb_square_label, self._pb_square_edit,
-                  self._pb_start_x_label, self._pb_start_x_spin,
-                  self._pb_start_y_label, self._pb_start_y_spin,
-                  self._pb_paper_w_label, self._pb_paper_w_edit,
-                  self._pb_paper_h_label, self._pb_paper_h_edit):
-            w.setVisible(is_puzzleboard)
-        # PuzzleBoardCube fields — toggle labels and field widgets in lockstep.
-        for w in (self._pbc_size_label, self._pbc_size_spin,
-                  self._pbc_square_label, self._pbc_square_edit):
-            w.setVisible(is_puzzleboard_cube)
-
-    def _on_marker_backend_changed(self) -> None:
-        """FIX 8(g): refresh the availability label on combo change."""
-        backend = str(self._marker_backend_combo.currentData() or "aruco1")
-        self._marker_backend_status.setText(marker_backend_availability_text(backend))
-        self._marker_backend_status.setStyleSheet(
-            "color: #2a7a2a;" if marker_backend_available(backend) else "color: #8a4a00;"
-        )
+    def _on_target_changed(self) -> None:
+        """The target or its detector changed, so its settings did too."""
         if hasattr(self, "_detection_opts_section"):
             self._rebuild_detection_options()
 
@@ -718,7 +530,7 @@ class Phase1Tab(QWidget):
 
         detection_options = None
         if self._detection_option_widgets:
-            typed = {key: read_detection_option_widget(widget)
+            typed = {key: read_parameter_widget(widget)
                      for key, widget in self._detection_option_widgets.items()}
             try:
                 detection_options = self._current_detector_parameterisation().parse(typed)
@@ -737,7 +549,7 @@ class Phase1Tab(QWidget):
                 self._fp_edit.text(), "Fixed params JSON"),
             "problem_options": as_json_object(
                 self._po_edit.text(), "Problem options JSON"),
-            "target": read_target_spec(self, detection_options),
+            "target": self._target_form.spec(detection_options),
             "selected_cameras": selected_cameras,
         }
 

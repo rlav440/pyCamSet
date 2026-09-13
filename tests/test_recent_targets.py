@@ -148,9 +148,10 @@ def test_picking_a_remembered_target_fills_the_form_in(phase1_tab):
     phase1_tab._recent_target_combo.setCurrentIndex(1)
     phase1_tab._on_recent_target_selected(1)
 
-    assert phase1_tab._target_combo.currentText() == "ChArUco"
-    assert phase1_tab._npts_spin.value() == 20
-    assert phase1_tab._length_edit.text() == "4"
+    spec = phase1_tab._target_form.spec()
+    assert spec["type"] == "ChArUco"
+    assert spec["num_squares_x"] == 20 and spec["num_squares_y"] == 20
+    assert spec["square_size"] == 4
 
 
 @pytest.mark.gui
@@ -179,9 +180,9 @@ def test_running_phase_1_remembers_the_target_it_ran_with(phase1_tab, tmp_path,
 
     phase1_tab._floc_edit.setText(str(images))
     phase1_tab.set_cameras(["cam0", "cam1"], ["cam0", "cam1"])
-    phase1_tab._target_combo.setCurrentText("ChArUco")
-    phase1_tab._npts_spin.setValue(20)
-    phase1_tab._length_edit.setText("4")
+    phase1_tab._target_form.apply_spec(
+        {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
+         "square_size": 4.0})
 
     phase1_tab._run_phase1()
 

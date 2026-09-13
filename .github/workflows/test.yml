@@ -54,15 +54,20 @@ jobs:
           pip install pytest>=7.0 pytest-timeout pytest-cov
           pip install "opencv-python${{ matrix.opencv }}"
 
-      - name: Qt's native dependencies
-        # libQt6Gui links libEGL, libGL, libxkbcommon and libdbus even under
-        # the offscreen platform plugin, so a pip-only install can still fail
-        # to load.  Naming them here makes the job independent of what the
-        # runner image happens to ship.  Only these four: they keep the same
-        # package names across 22.04 and 24.04, where glib and fontconfig do
-        # not, so those are left to the image and the step below says
-        # plainly if that turns out to be wrong.
-        if: ${{ runner.os == 'Linux' && ! matrix.lean }}
+      - name: Native graphics libraries
+        # Two things want these, so every Linux job gets them, lean included:
+        #
+        #   * VTK, which pyvista renders through.  Off screen is not no
+        #     screen -- it still makes an OpenGL context -- and without
+        #     libGL the render is a segmentation fault rather than an
+        #     import error, inside plotter.show().
+        #   * libQt6Gui, which links libEGL, libGL, libxkbcommon and libdbus
+        #     even under the offscreen platform plugin.
+        #
+        # Only these four: they keep the same package names across 22.04 and
+        # 24.04, where glib and fontconfig do not, so those are left to the
+        # image and the Qt check below says plainly if that is wrong.
+        if: ${{ runner.os == 'Linux' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \

@@ -14,6 +14,16 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 from pyCamSet.calibration_targets import AbstractTarget, ImageDetection, FaceToShape
+from pyCamSet.calibration_targets.backend_registry import (
+    ARUCO1_BACKEND,
+    dict_names_for_backend,
+    dictionary_id,
+)
+from pyCamSet.calibration_targets.parameters import (
+    Choice,
+    Parameter,
+    Parameterisation,
+)
 from pyCamSet.calibration_targets.aruco2_detection import (
     ARUCO2_DETECTOR,
     detect_markers,
@@ -29,6 +39,68 @@ from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform
 #: corrupts its own module state -- and three is where a face has more than
 #: the single chessboard corner that squeezes down to a bare point.
 _MIN_POINTS = 3
+
+#: The dictionary a cube is printed with unless another is asked for.  It is
+#: split six ways, so it needs markers to spare.
+_DEFAULT_DICT_NAME = "DICT_4X4_1000"
+
+
+class CcubeGeometry(Parameterisation):
+    """What decides where a Ccube's corners are, and how it prints."""
+
+    name = "Ccube"
+
+    def __init__(self, backend: str = ARUCO1_BACKEND):
+        self._backend = backend or ARUCO1_BACKEND
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        return (
+            Parameter(
+                key="n_points", label="Squares per face", default=5,
+                dtype="int", minimum=_MIN_POINTS, maximum=40, step=1,
+                concept="Concept: chessboard squares along one edge of one "
+                        "of the cube's six faces.",
+                suggested="4-8"),
+            Parameter(
+                key="length", label="Cube edge (mm)", default=20.0,
+                dtype="float", minimum=0.001, maximum=1000.0, step=1.0,
+                decimals=3,
+                concept="Concept: the printed edge length of the cube, in "
+                        "millimetres, border included.",
+                suggested="20-200"),
+            Parameter(
+                key="border_fraction", label="Border fraction", default=0.1,
+                dtype="float", minimum=0.001, maximum=0.9, step=0.01,
+                decimals=3,
+                concept="Concept: how much of each face is blank margin "
+                        "rather than board. Detection: too little and "
+                        "markers near an edge are cut by the fold.",
+                suggested="0.05-0.15"),
+            Parameter(
+                key="aruco_dict", label="ArUco dictionary",
+                default=_DEFAULT_DICT_NAME, dtype="str",
+                choices=tuple(Choice(name, name)
+                              for name in dict_names_for_backend(self._backend)),
+                concept="Concept: the marker alphabet, split six ways so "
+                        "that each face carries markers of its own.",
+                suggested=_DEFAULT_DICT_NAME),
+            Parameter(
+                key="legacy", label="Legacy pattern", default=False,
+                dtype="bool",
+                concept="Concept: which of OpenCV's two marker layouts the "
+                        "faces were printed to. Detection: the wrong one "
+                        "finds every marker and no corners.",
+                suggested="off, unless the cube predates OpenCV 4.6"),
+        )
+
+    def validate(self, values: dict) -> list[str]:
+        """A face is a ChArUco board, with the same two ways to be too small."""
+        n = values.get("n_points", 0)
+        if n < _MIN_POINTS:
+            return [f"A Ccube face must be at least {_MIN_POINTS}x"
+                    f"{_MIN_POINTS} squares; got n_points={n}."]
+        return []
 
 # TFORMS = [
 # 	([-1.209,-1.209, 1.209],[ 0.5,-0.5, 0.5]),
@@ -91,8 +163,12 @@ class Ccube(AbstractTarget):
         "aruco2": ARUCO2_DETECTOR,
     }
 
+    @classmethod
+    def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
+        return CcubeGeometry(backend or ARUCO1_BACKEND)
+
     def __init__(self, length=20, n_points=5,
-                 aruco_dict=aruco.DICT_4X4_1000,
+                 aruco_dict=_DEFAULT_DICT_NAME,
                  draw_res=(1000, 1000),
                  border_fraction=0.1,
                  line_fraction=0.003,
@@ -104,21 +180,13 @@ class Ccube(AbstractTarget):
         self.input_border_fraction = border_fraction
         self.actual_border_fraction = None
         self.line_fraction = line_fraction
-        # Each face is a ChArUco board, and OpenCV does not refuse one that
-        # is too small: it raises SystemError and leaves its aruco module in
-        # a state where the next board built or image detected aborts the
-        # process.  So it never gets one.
-        if n_points < _MIN_POINTS:
-            raise ValueError(
-                f"A Ccube face must be at least {_MIN_POINTS}x{_MIN_POINTS} "
-                f"squares; got n_points={n_points}.")
-
         self.marker_backend = marker_backend
         # FIX 1 (R1): only coerce ints. The pre-existing API also accepts a
         # cv2.aruco.Dictionary object (split_aruco_dictionary handles both);
         # keep the original object for the aruco1 path exactly as before.
-        if isinstance(aruco_dict, int):
-            self._aruco_dict_int = int(aruco_dict)
+        if isinstance(aruco_dict, (int, str)):
+            self._aruco_dict_int = dictionary_id(aruco_dict, marker_backend)
+            aruco_dict = self._aruco_dict_int
         else:
             self._aruco_dict_int = None
         self.aruco_dict = aruco_dict

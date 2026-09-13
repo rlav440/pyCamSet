@@ -13,6 +13,16 @@ from matplotlib import pyplot as plt
 logger = logging.getLogger(__name__)
 
 from pyCamSet.calibration_targets.abstract_target import AbstractTarget
+from pyCamSet.calibration_targets.backend_registry import (
+    ARUCO1_BACKEND,
+    dict_names_for_backend,
+    dictionary_id,
+)
+from pyCamSet.calibration_targets.parameters import (
+    Choice,
+    Parameter,
+    Parameterisation,
+)
 from pyCamSet.calibration_targets.aruco2_detection import (
     ARUCO2_DETECTOR,
     detect_charuco_corners,
@@ -23,6 +33,72 @@ from pyCamSet.calibration_targets.target_detections import ImageDetection
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import downsample_valid
 
+class ChArUcoGeometry(Parameterisation):
+    """What decides where a ChArUco board's corners are, and how it prints."""
+
+    name = "ChArUco"
+
+    def __init__(self, backend: str = ARUCO1_BACKEND):
+        self._backend = backend or ARUCO1_BACKEND
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        return (
+            Parameter(
+                key="num_squares_x", label="Squares across", default=5,
+                dtype="int", minimum=_MIN_SQUARES, maximum=100, step=1,
+                concept="Concept: chessboard squares along the board's x axis.",
+                suggested="5-20"),
+            Parameter(
+                key="num_squares_y", label="Squares down", default=5,
+                dtype="int", minimum=_MIN_SQUARES, maximum=100, step=1,
+                concept="Concept: chessboard squares along the board's y axis.",
+                suggested="5-20"),
+            Parameter(
+                key="square_size", label="Square size (mm)", default=10.0,
+                dtype="float", minimum=0.001, maximum=1000.0, step=0.5,
+                decimals=3,
+                concept="Concept: the printed edge length of one chessboard "
+                        "square, in millimetres.",
+                suggested="4-40"),
+            Parameter(
+                key="marker_fraction", label="Marker fraction", default=0.8,
+                dtype="float", minimum=0.1, maximum=1.0, step=0.05,
+                decimals=3,
+                concept="Concept: how much of a square its ArUco marker "
+                        "fills. Detection: a larger marker decodes further "
+                        "away; a smaller one leaves more white border.",
+                suggested="0.7-0.8"),
+            Parameter(
+                key="a_dict", label="ArUco dictionary",
+                default=_DEFAULT_DICT_NAME, dtype="str",
+                choices=tuple(Choice(name, name)
+                              for name in dict_names_for_backend(self._backend)),
+                concept="Concept: the marker alphabet printed on the board. "
+                        "It must have at least one marker per white square.",
+                suggested=_DEFAULT_DICT_NAME),
+            Parameter(
+                key="legacy", label="Legacy pattern", default=False,
+                dtype="bool",
+                concept="Concept: which of OpenCV's two marker layouts the "
+                        "board was printed to. Detection: the wrong one "
+                        "finds every marker and no corners.",
+                suggested="off, unless the board predates OpenCV 4.6"),
+        )
+
+    def validate(self, values: dict) -> list[str]:
+        """The two ways a board can be too small to exist."""
+        x = values.get("num_squares_x", 0)
+        y = values.get("num_squares_y", 0)
+        if x < _MIN_SQUARES or y < _MIN_SQUARES:
+            return [f"A ChArUco board must be at least "
+                    f"{_MIN_SQUARES}x{_MIN_SQUARES} squares; got {x}x{y}."]
+        if (corners := (x - 1) * (y - 1)) < _MIN_CORNERS:
+            return [f"A ChArUco board needs at least {_MIN_CORNERS} "
+                    f"chessboard corners; a {x}x{y} board has {corners}."]
+        return []
+
+
 #: The smallest board OpenCV will build.  Below this it does not raise a
 #: catchable error; it corrupts its own module state.
 _MIN_SQUARES = 2
@@ -30,6 +106,9 @@ _MIN_SQUARES = 2
 #: The fewest chessboard corners a board can have and still be described as
 #: an array of them -- one corner squeezes down to a bare point.
 _MIN_CORNERS = 2
+
+#: The dictionary a board is printed with unless another is asked for.
+_DEFAULT_DICT_NAME = "DICT_4X4_1000"
 
 
 class ChArUco(AbstractTarget):
@@ -39,13 +118,17 @@ class ChArUco(AbstractTarget):
         "aruco2": ARUCO2_DETECTOR,
     }
 
+    @classmethod
+    def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
+        return ChArUcoGeometry(backend or ARUCO1_BACKEND)
+
     def __init__(
         self,
         num_squares_x,
         num_squares_y,
         square_size,
         marker_fraction=0.8,
-        a_dict=cv2.aruco.DICT_4X4_1000,
+        a_dict=_DEFAULT_DICT_NAME,
         legacy=False,
         marker_backend: str = "aruco1",
         detection_options: dict | None = None,
@@ -69,23 +152,9 @@ class ChArUco(AbstractTarget):
         marker_size = marker_fraction * self.square_size  # 80% of the square size
         # convert to meters
 
-        # OpenCV does not refuse a board with a zero or one dimension: it
-        # raises SystemError and leaves its aruco module in a state where
-        # the next board built or image detected aborts the process, with
-        # no exception to catch.  So it never gets one.
-        if num_squares_x < _MIN_SQUARES or num_squares_y < _MIN_SQUARES:
-            raise ValueError(
-                f"A ChArUco board must be at least {_MIN_SQUARES}x{_MIN_SQUARES} "
-                f"squares; got {num_squares_x}x{num_squares_y}.")
-        corners = (num_squares_x - 1) * (num_squares_y - 1)
-        if corners < _MIN_CORNERS:
-            raise ValueError(
-                f"A ChArUco board needs at least {_MIN_CORNERS} chessboard "
-                f"corners; a {num_squares_x}x{num_squares_y} board has "
-                f"{corners}.")
-
         self.marker_backend = marker_backend
-        self._aruco_dict_int = int(a_dict)
+        self._aruco_dict_int = dictionary_id(a_dict, marker_backend)
+        a_dict = self._aruco_dict_int
         # Create the dictionary for the Charuco board (backend-specific bytes).
         self.a_dict = resolve_dictionary(a_dict, marker_backend)
         # Create the Charuco board

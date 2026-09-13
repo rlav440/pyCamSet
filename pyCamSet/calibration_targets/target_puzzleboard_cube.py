@@ -10,6 +10,7 @@ from PIL import Image  # Convert rasterised SVG data to PDF and texture arrays.
 import svgwrite  # Write compact vector rectangles, polygons, and circles.
 
 from pyCamSet.calibration_targets import AbstractTarget, FaceToShape, ImageDetection  # Reuse pyCamSet target contracts.
+from pyCamSet.calibration_targets.parameters import Parameter, Parameterisation
 from pyCamSet.calibration_targets.puzzleboard_detection import (
     PUZZLEBOARD_DETECTOR,
     detect_puzzleboard_image,
@@ -73,10 +74,39 @@ MAX_FACE_SQUARES = (  # Enforce the six-face horizontal packing limit from the 5
 ) // FACE_GRID_COLUMNS
 
 
+class PuzzleBoardCubeGeometry(Parameterisation):
+    """What decides where a PuzzleBoard cube's corners are."""
+
+    name = "PuzzleBoardCube"
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        return (
+            Parameter(
+                key="n_points", label="Corners per face", default=20,
+                dtype="int", minimum=2, maximum=160, step=1,
+                concept="Concept: corners along one edge of one of the "
+                        "cube's six faces. Each face is a separate window "
+                        "of the periodic code.",
+                suggested="10-30"),
+            Parameter(
+                key="length", label="Cube edge (mm)", default=200.0,
+                dtype="float", minimum=0.001, maximum=10000.0, step=1.0,
+                decimals=3,
+                concept="Concept: the printed edge length of the cube, in "
+                        "millimetres.",
+                suggested="100-300"),
+        )
+
+
 class PuzzleBoardCube(AbstractTarget):
     """Define a deterministic six-face PuzzleBoard calibration target."""
 
     DETECTOR_BACKENDS = {"puzzle_board": PUZZLEBOARD_DETECTOR}
+
+    @classmethod
+    def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
+        return PuzzleBoardCubeGeometry()
 
     def __init__(
         self,

@@ -11,6 +11,7 @@ from PIL import Image  # Convert SVG PNG output to a raster PDF when requested.
 import svgwrite  # Write compact SVG primitives directly to disk.
 
 from pyCamSet.calibration_targets import AbstractTarget, ImageDetection  # Reuse pyCamSet target contracts.
+from pyCamSet.calibration_targets.parameters import Parameter, Parameterisation
 from pyCamSet.calibration_targets.puzzleboard_detection import (
     PUZZLEBOARD_DETECTOR,
     detect_puzzleboard_image,
@@ -54,10 +55,79 @@ def _generate_code() -> np.ndarray:
 _CODE_FIELD = _generate_code()  # Build the immutable field once when this module is imported.
 
 
+class PuzzleBoardGeometry(Parameterisation):
+    """What decides where a PuzzleBoard's corners are, and how it prints."""
+
+    name = "PuzzleBoard"
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        return (
+            Parameter(
+                key="num_squares_x", label="Corners across", default=105,
+                dtype="int", minimum=2, maximum=_CODE_SIZE, step=1,
+                concept="Concept: corners along the printed board's x axis.",
+                suggested="fills the page at the chosen square size"),
+            Parameter(
+                key="num_squares_y", label="Corners down", default=148,
+                dtype="int", minimum=2, maximum=_CODE_SIZE, step=1,
+                concept="Concept: corners along the printed board's y axis.",
+                suggested="fills the page at the chosen square size"),
+            Parameter(
+                key="square_size", label="Square size (mm)", default=2.0,
+                dtype="float", minimum=0.001, maximum=1000.0, step=0.5,
+                decimals=3,
+                concept="Concept: the printed edge length of one square, in "
+                        "millimetres.",
+                suggested="2"),
+            Parameter(
+                key="start_x", label="Code origin x", default=0,
+                dtype="int", minimum=0, maximum=_CODE_SIZE, step=1,
+                concept="Concept: where in the periodic code this printed "
+                        "window begins. Two boards cut from different "
+                        "windows decode to different keys.",
+                suggested="0"),
+            Parameter(
+                key="start_y", label="Code origin y", default=0,
+                dtype="int", minimum=0, maximum=_CODE_SIZE, step=1,
+                concept="Concept: where in the periodic code this printed "
+                        "window begins, down the page.",
+                suggested="0"),
+            Parameter(
+                key="paper_width", label="Page width (mm)", default=210.0,
+                dtype="float", minimum=1.0, maximum=10000.0, step=10.0,
+                decimals=3,
+                concept="Concept: the page the board is centred on.",
+                suggested="210 (A4)"),
+            Parameter(
+                key="paper_height", label="Page height (mm)", default=297.0,
+                dtype="float", minimum=1.0, maximum=10000.0, step=10.0,
+                decimals=3,
+                concept="Concept: the page the board is centred on.",
+                suggested="297 (A4)"),
+        )
+
+    def validate(self, values: dict) -> list[str]:
+        """The window has to fit inside the finite periodic code."""
+        problems = []
+        for across, origin, axis in (("num_squares_x", "start_x", "x"),
+                                     ("num_squares_y", "start_y", "y")):
+            total = values.get(origin, 0) + values.get(across, 0)
+            if total > _CODE_SIZE:
+                problems.append(
+                    f"{origin} + {across} must not exceed {_CODE_SIZE}; "
+                    f"the {axis} window ends at {total}.")
+        return problems
+
+
 class PuzzleBoard(AbstractTarget):
     """Define a PuzzleBoard target, detector adapter, and vector export methods."""
 
     DETECTOR_BACKENDS = {"puzzle_board": PUZZLEBOARD_DETECTOR}
+
+    @classmethod
+    def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
+        return PuzzleBoardGeometry()
 
     def __init__(
         self,

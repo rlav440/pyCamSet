@@ -41,7 +41,11 @@ class Choice:
 #: still one of these -- OpenCV's corner refinement method is an ``int`` that
 #: happens to have four names -- because what it is typed as and what it is
 #: applied as are the same question.
-DTYPES = ("int", "float", "json_matrix_3x3", "json_vector")
+DTYPES = ("int", "float", "bool", "str", "json_matrix_3x3", "json_vector")
+
+#: What a person may write for a parameter that is on or off.
+_TRUE = {"true", "yes", "y", "on", "1"}
+_FALSE = {"false", "no", "n", "off", "0"}
 
 
 @dataclass(frozen=True)
@@ -102,6 +106,10 @@ class Parameter:
             return int(round(float(value)))
         if self.dtype == "float":
             return float(value)
+        if self.dtype == "bool":
+            return bool(value)
+        if self.dtype == "str":
+            return str(value)
         return value
 
     def coerce(self, value: Any) -> Any:
@@ -158,6 +166,19 @@ class Parameter:
                 kind = "an integer" if self.dtype == "int" else "a number"
                 raise ValueError(f"{self.key} must be {kind}.") from exc
             return self._checked(out)
+
+        if self.dtype == "bool":
+            if isinstance(value, bool):
+                return value
+            text = str(value).strip().lower()
+            if text in _TRUE:
+                return True
+            if text in _FALSE:
+                return False
+            raise ValueError(f"{self.key} must be true or false.")
+
+        if self.dtype == "str":
+            return str(value)
 
         if self.dtype == "json_matrix_3x3":
             data = self._as_json(value)

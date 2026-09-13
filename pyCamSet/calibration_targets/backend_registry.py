@@ -95,6 +95,38 @@ def available_marker_backends() -> tuple[str, ...]:
     )
 
 
+def dictionary_id(aruco_dict: int | str, marker_backend: str = ARUCO1_BACKEND) -> int:
+    """
+    The integer a dictionary name stands for, in one backend's id space.
+
+    :param aruco_dict: a name from :func:`dict_names_for_backend`, or an id
+    :param marker_backend: whose id space to read it in
+    :raises ValueError: for a name the backend does not have
+    :raises ImportError: for a backend that is not installed
+    """
+    if not isinstance(aruco_dict, str):
+        return int(aruco_dict)
+
+    name = aruco_dict.strip()
+    if not name:
+        raise ValueError("aruco_dict cannot be empty.")
+    if not name.startswith("DICT_"):
+        name = f"DICT_{name}"
+    try:
+        if marker_backend == ARUCO2_BACKEND:
+            import aruco2  # Lazy: aruco2 is an optional dependency.
+            return int(getattr(aruco2, name))
+        import cv2
+        return int(getattr(cv2.aruco, name))
+    except AttributeError as exc:
+        raise ValueError(f"Unknown ArUco dictionary name: {aruco_dict}") from exc
+    except ImportError as exc:
+        raise ImportError(
+            "aruco2 is not installed. Install it with `pip install aruco2` "
+            "to use marker_backend='aruco2'."
+        ) from exc
+
+
 def marker_backend_availability_text(marker_backend: str) -> str:
     """Return a concise, caller-neutral availability status string."""
     validate_marker_backend(marker_backend)

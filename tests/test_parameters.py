@@ -351,3 +351,111 @@ def test_the_smallest_usable_boards_are_still_built():
     assert ChArUco(num_squares_x=2, num_squares_y=3,
                    square_size=30.0).point_data.shape == (1, 2, 3)
     assert Ccube(n_points=3, length=20.0).point_data.shape == (6, 4, 3)
+
+
+# ---------------------------------------------------------------------------
+# What a target says it is
+# ---------------------------------------------------------------------------
+#
+# A target's constructor arguments were written into each interface, as a map
+# of which widget each target reads.  There were five such maps, subtly
+# different, and a target none of them named had no form at all.
+
+
+def _targets():
+    from pyCamSet.calibration_targets.target_registry import TARGET_NAMES, target_class
+
+    return [(name, target_class(name)) for name in TARGET_NAMES]
+
+
+@pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
+def test_every_declared_argument_is_one_the_constructor_takes(name, cls):
+    """The declaration is what a form builds itself from, so an argument
+    that has drifted from the constructor is a control that builds a target
+    nobody asked for -- or a TypeError."""
+    import inspect
+
+    accepted = set(inspect.signature(cls.__init__).parameters) - {"self"}
+    declared = {p.key for p in cls.construction_parameters().parameters}
+    assert declared <= accepted, sorted(declared - accepted)
+
+
+@pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
+def test_every_declared_default_is_the_constructors_own(name, cls):
+    """A form starts at these, so a default that disagrees with the
+    constructor quietly builds a different target than the one left alone."""
+    import inspect
+
+    signature = inspect.signature(cls.__init__).parameters
+    for parameter in cls.construction_parameters().parameters:
+        expected = signature[parameter.key].default
+        if expected is inspect.Parameter.empty:
+            continue
+        assert parameter.default == expected, parameter.key
+
+
+@pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
+def test_a_target_builds_from_the_arguments_it_declares(name, cls):
+    """The whole point: a form that knows nothing about this target can
+    still collect what it needs to build one."""
+    from pyCamSet.calibration_targets.target_registry import build_target
+
+    spec = {"type": name, **cls.construction_parameters().defaults()}
+    target = build_target(spec)
+
+    assert type(target) is cls
+    assert target.point_data is not None and target.point_data.size
+
+
+@pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
+def test_a_declared_numeric_argument_says_what_it_holds_between(name, cls):
+    """A form clamps to these, so a default outside them is a trap."""
+    for parameter in cls.construction_parameters().parameters:
+        if parameter.dtype not in ("int", "float"):
+            continue
+        assert parameter.minimum is not None, parameter.key
+        assert parameter.maximum is not None, parameter.key
+        low, high = parameter.cast(parameter.minimum), parameter.cast(parameter.maximum)
+        assert low <= parameter.cast(parameter.default) <= high, parameter.key
+
+
+def test_the_rules_a_target_states_are_applied_before_it_is_built():
+    """Which is how a board too small for OpenCV never reaches OpenCV."""
+    from pyCamSet.calibration_targets.target_charuco import ChArUco
+    from pyCamSet.calibration_targets.target_puzzleboard import PuzzleBoard
+
+    assert ChArUco.construction_parameters().validate(
+        {"num_squares_x": 2, "num_squares_y": 2}) == [
+        "A ChArUco board needs at least 2 chessboard corners; "
+        "a 2x2 board has 1."]
+
+    with pytest.raises(ValueError, match="chessboard corners"):
+        ChArUco(num_squares_x=2, num_squares_y=2, square_size=30.0)
+    with pytest.raises(ValueError, match="must not exceed 501"):
+        PuzzleBoard(num_squares_x=500, num_squares_y=10, start_x=100)
+
+
+def test_the_dictionary_a_marker_target_offers_depends_on_its_backend():
+    """aruco2 has two dictionaries OpenCV does not, so the names a form
+    offers are the selected backend's."""
+    from pyCamSet.calibration_targets.target_charuco import ChArUco
+
+    aruco1 = ChArUco.construction_parameters("aruco1").parameter("a_dict")
+    aruco2 = ChArUco.construction_parameters("aruco2").parameter("a_dict")
+
+    assert set(aruco1.choice_labels()) < set(aruco2.choice_labels())
+    assert "DICT_ALVAR_7X7_1000" in aruco2.choice_labels()
+
+
+def test_a_dictionary_is_named_rather_than_numbered():
+    """A spec carries the name someone picked; the target resolves it in
+    whichever backend's id space it is read with."""
+    import cv2
+
+    from pyCamSet.calibration_targets.target_charuco import ChArUco
+
+    target = ChArUco(num_squares_x=5, num_squares_y=5, square_size=4.0,
+                     a_dict="DICT_5X5_250")
+
+    assert target._aruco_dict_int == cv2.aruco.DICT_5X5_250
+    assert target.input_args["a_dict"] == "DICT_5X5_250", "the spec keeps the name"

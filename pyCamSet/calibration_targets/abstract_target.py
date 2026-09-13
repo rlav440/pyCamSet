@@ -22,6 +22,7 @@ from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.calibration_targets.parameters import (
     NO_PARAMETERS,
     DetectorParameterisation,
+    Parameterisation,
     combine,
 )
 from pyCamSet.calibration_targets.target_detections import TargetDetection, ImageDetection
@@ -86,6 +87,13 @@ class AbstractTarget(ABC):
     :meth:`detector_parameterisation`, which is what a form builds itself
     from and what a study sweeps. A target that is never detected declares
     neither and gets an empty parameterisation, which works.
+
+    What the target *is* is described the same way, by
+    :meth:`construction_parameters`: the arguments that decide where its
+    points are, each with the bounds and the prose a form needs to offer
+    it. An interface builds its target controls from that rather than from
+    a list of which widget each target reads, so a target it has never
+    heard of gets a form.
     """
 
     #: The detectors this target can read itself with, by the name its
@@ -106,6 +114,12 @@ class AbstractTarget(ABC):
         self.original_points = None # = self.point_data.copy()
         self.valid_map = True
 
+        problems = self.construction_parameters(backend).validate(inputs)
+        if problems:
+            # Before anything is built from them.  OpenCV, for one, does not
+            # refuse a board too small to exist; it corrupts its own state.
+            raise ValueError(" ".join(problems))
+
         self.detection_parameters = self.detector_parameterisation(backend)
         self.detection_options = self.detection_parameters.resolve(
             inputs.get("detection_options"))
@@ -114,6 +128,22 @@ class AbstractTarget(ABC):
             # exactly, whatever subset of the settings it was given.
             inputs["detection_options"] = self.detection_options
         self.input_args = inputs
+
+    @classmethod
+    def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
+        """
+        The arguments that decide what this target is.
+
+        Its geometry, and how it is drawn: everything a form asks for
+        besides which detector to read it with.  Declared rather than
+        written into each interface, so that a new target gets a form
+        without one being written for it.
+
+        :param backend: which detector the target will be read with, for
+            the arguments whose choices depend on it -- a marker dictionary
+            is named differently by each marker library
+        """
+        return NO_PARAMETERS
 
     @classmethod
     def own_detector_parameters(cls) -> DetectorParameterisation:

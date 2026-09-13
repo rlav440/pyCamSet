@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   test:
-    name: ${{ matrix.os }} · py${{ matrix.python }} · cv${{ matrix.opencv }}
+    name: ${{ matrix.os }} · py${{ matrix.python }} · cv${{ matrix.opencv }}${{ matrix.lean && ' · lean' || '' }}
     runs-on: ${{ matrix.os }}
     strategy:
       # Report every platform's result, not just the first failure.
@@ -28,6 +28,12 @@ jobs:
           - {os: ubuntu-latest, python: "3.12", opencv: "<5"}
           - {os: windows-latest, python: "3.12", opencv: "<5"}
           - {os: macos-14, python: "3.12", opencv: "<5"}
+          # One job keeps the lean install of requirements_core.txt honest.
+          # It adds a key to the ubuntu/3.11 combination above rather than
+          # making a tenth job.  Lean is orthogonal to the OpenCV major, so
+          # it is not attached to the 4.x entries: the GUI is worth testing
+          # against both majors, and the no-Qt path only needs one job.
+          - {os: ubuntu-latest, python: "3.11", opencv: ">=5", lean: true}
 
     steps:
       - uses: actions/checkout@v4
@@ -38,15 +44,46 @@ jobs:
           cache: pip
 
       - name: Install
-        # The lean install: the suite is headless, and PySide6 is a 1.2 GB
-        # download that none of it exercises.  This is also the path
-        # requirements_core.txt documents, so CI keeps it honest.
+        # requirements_core.txt is every [project] dependency except the GUI
+        # toolkit, so this is the lean install by itself; the step below adds
+        # PySide6 back on the jobs that are not testing the lean path.
         run: |
           python -m pip install --upgrade pip
           pip install -e . --no-deps
           pip install -r requirements_core.txt
           pip install pytest>=7.0 pytest-timeout pytest-cov
           pip install "opencv-python${{ matrix.opencv }}"
+
+      - name: Qt's native dependencies
+        # libQt6Gui links libEGL, libGL, libxkbcommon and libdbus even under
+        # the offscreen platform plugin, so a pip-only install can still fail
+        # to load.  Naming them here makes the job independent of what the
+        # runner image happens to ship.  Only these four: they keep the same
+        # package names across 22.04 and 24.04, where glib and fontconfig do
+        # not, so those are left to the image and the step below says
+        # plainly if that turns out to be wrong.
+        if: ${{ runner.os == 'Linux' && ! matrix.lean }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3
+
+      - name: Install the GUI toolkit
+        # PySide6 is a base dependency: `pip install pyCamSet` gets it, so
+        # most of the matrix tests what people actually install.  The tests
+        # themselves are headless -- conftest forces the offscreen platform
+        # plugin -- so this needs no display and no xvfb.
+        if: ${{ ! matrix.lean }}
+        run: pip install PySide6
+
+      - name: Check Qt starts
+        # A missing native library surfaces here, once, instead of as fifty
+        # errors with the same cause further down.
+        if: ${{ ! matrix.lean }}
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -c "import PySide6; from PySide6.QtWidgets import QApplication; QApplication([]); print('PySide6', PySide6.__version__, 'ok')"
 
       - name: Record the resolved native dependencies
         # The OpenCV major version is pinned per job, but the exact build still

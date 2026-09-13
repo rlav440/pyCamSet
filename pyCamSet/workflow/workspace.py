@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Optional
 
 from pyCamSet.utils.general_utils import get_subfolder_names
-from pyCamSet.workflow.recent_folders import remember_folder
 
 WORKSPACE_DIR_NAME = ".pycamset_workspace"
 
@@ -225,10 +224,11 @@ class WorkspaceManager:
         with open(_extended(meta_path), "w", encoding="utf-8") as fh:
             json.dump(metadata, fh, indent=2, default=str)
 
-        # A run has just been written here, so this workspace is real and
-        # worth offering again.  Recorded from the save rather than from a
-        # folder field, which changes on every keystroke.
-        remember_folder(self.workspace_path.parent)
+        # Deliberately not remembered here.  A run is written by tests, by a
+        # parameter search and by any script that calls a phase, and most of
+        # those workspaces are temporary directories that no person will ever
+        # go back to.  Where someone works is something only the interface
+        # knows, so the GUI records it: see pyCamSet.workflow.recent_folders.
         return meta_path
 
     def load_runs(self, phase: str) -> list[dict]:

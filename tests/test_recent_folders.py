@@ -176,11 +176,13 @@ def test_a_config_directory_that_cannot_be_written_is_survivable(
 # --------------------------------------------------------------------------
 
 
-def test_saving_a_run_records_its_image_folder(tmp_path):
-    """Recorded from the save, not the folder field.
+def test_saving_a_run_records_nothing(tmp_path):
+    """The regression: temporary folders in the list of places to go back to.
 
-    The field changes on every keystroke; a saved run means the workspace
-    is real, and its parent is the folder someone would pick again.
+    Runs are written by the tests, by a parameter search and by any script
+    that calls a phase, nearly always into a temporary directory.  Recording
+    them from the save put a trail of ``/tmp/tmp8f3k/images`` in front of the
+    person who had never seen any of them.
     """
     from pyCamSet.workflow.workspace import WorkspaceManager
 
@@ -189,7 +191,38 @@ def test_saving_a_run_records_its_image_folder(tmp_path):
 
     manager.save_run("phase1", "run_a", {"phase": "phase1"})
 
-    assert rf.load_recent_folders() == [image_folder.resolve()]
+    assert rf.load_recent_folders() == []
+
+
+@pytest.mark.gui
+def test_running_a_phase_records_the_folder_it_ran_on(tmp_path, monkeypatch):
+    """Where someone works is something only the interface knows: a folder
+    they set and then ran a phase on is one they will want offered again."""
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.gui import shared_functions as shared
+    from pyCamSet.gui.phase_1_detection import Phase1Tab
+    from pyCamSet.workflow import phase1
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    images = tmp_path / "images"
+    for camera in ("cam0", "cam1"):
+        (images / camera).mkdir(parents=True)
+    monkeypatch.setattr(phase1, "run", lambda *a, **k: {"run_id": "x"})
+    monkeypatch.setattr(shared.PhaseWorker, "start",
+                        lambda self: self._work_fn(lambda _line: None))
+
+    QApplication.instance() or QApplication([])
+    tab = Phase1Tab(notebook=QTabWidget(), info_cb=QCheckBox(),
+                    terminal_cb=QCheckBox(), workspace_mgr=WorkspaceManager(None))
+    try:
+        tab._floc_edit.setText(str(images))
+        tab.set_cameras(["cam0", "cam1"], ["cam0", "cam1"])
+        tab._run_phase1()
+    finally:
+        tab.deleteLater()
+
+    assert rf.load_recent_folders() == [images.resolve()]
 
 
 # --------------------------------------------------------------------------

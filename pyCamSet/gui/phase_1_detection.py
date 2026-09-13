@@ -89,6 +89,7 @@ from pyCamSet.calibration_targets.charuco_parameters import (
     label_for,
     typeable,
 )
+from pyCamSet.workflow.recent_folders import remember_folder
 from pyCamSet.workflow.recent_targets import (
     forget_target, load_recent_targets, remember_target)
 from pyCamSet.workflow.targets import (
@@ -776,6 +777,7 @@ class Phase1Tab(QWidget):
                 "pyCamSet calibration modules are unavailable.")
             return
 
+        remember_folder(params["f_loc"])
         remember_target(params[TARGET_KEY])
         self.refresh_recent_targets()
 

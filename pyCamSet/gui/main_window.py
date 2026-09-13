@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.shared_functions import (
-    TAB_CREATE_TARGET,
     TAB_EXPORT_CALIBRATION,
     TAB_OPTIMISATION,
     TAB_PHASE0,
@@ -39,6 +38,7 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE4,
     TAB_PHASE4_DIAG,
     WorkspaceManager,
+    make_blue_button,
 )
 
 
@@ -99,7 +99,6 @@ class PyCamSetApp(QMainWindow):
 
     def _build_ui(self) -> None:
         # Deferred imports so module is importable without a display server
-        from pyCamSet.gui.create_target import CreateTargetTab
         from pyCamSet.gui.export_calibration_tab import ExportCalibrationTab
         from pyCamSet.gui.phase_0_input import Phase0Tab
         from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab, Phase1Tab
@@ -116,6 +115,9 @@ class PyCamSetApp(QMainWindow):
 
         # ── Global controls ────────────────────────────────────────────
         ctrl_row = QHBoxLayout()
+        ctrl_row.addWidget(make_blue_button(
+            "Create Target…", self._open_create_target))
+        ctrl_row.addSpacing(16)
         ctrl_row.addWidget(self._info_cb)
         ctrl_row.addSpacing(16)
         ctrl_row.addWidget(self._terminal_cb)
@@ -132,14 +134,6 @@ class PyCamSetApp(QMainWindow):
 
         self._notebook = QTabWidget()
         root_layout.addWidget(self._notebook)
-
-        self.create_target_tab = CreateTargetTab(
-            notebook=self._notebook,
-            info_cb=self._info_cb,
-            terminal_cb=self._terminal_cb,
-            workspace_mgr=ws,
-        )
-        self._notebook.addTab(self.create_target_tab, TAB_CREATE_TARGET)
 
         self.phase0_tab = Phase0Tab(
             notebook=self._notebook,
@@ -592,6 +586,22 @@ class PyCamSetApp(QMainWindow):
         for index in self._diagnostics_indices:
             if index != current and bar.isTabVisible(index):
                 bar.setTabVisible(index, False)
+
+    def _open_create_target(self) -> None:
+        """Open the target maker, or raise the one already open.
+
+        Modeless and kept alive on the window: a target is compared against
+        the viewer it opens, and reopening the dialog should not throw away
+        the settings that drew what is on screen.
+        """
+        from pyCamSet.gui.create_target import CreateTargetDialog
+
+        if getattr(self, "_create_target_dialog", None) is None:
+            self._create_target_dialog = CreateTargetDialog(
+                terminal_cb=self._terminal_cb, parent=self)
+        self._create_target_dialog.show()
+        self._create_target_dialog.raise_()
+        self._create_target_dialog.activateWindow()
 
     def _on_info_toggle(self) -> None:
         """Enable or disable all Qt tool-tips application-wide."""

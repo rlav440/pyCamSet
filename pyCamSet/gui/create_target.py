@@ -1,6 +1,11 @@
-"""Create Target tab.
+"""Making a printable calibration target.
 
-Thin GUI wrapper around printable target generators.
+A thin wrapper around the target generators, and the one thing in the window
+that is not part of a calibration: a target is drawn once, printed, and then
+lived with for months of runs.  It sat as the first of the phase tabs, ahead
+of Phase 0, so every session opened on the one step almost no session takes.
+
+It is a dialog for that reason, opened from the button in the corner.
 """
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -21,7 +27,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QStackedWidget,
     QSpinBox,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -41,7 +46,6 @@ from pyCamSet.gui.viewer_process import spawn_viewer
 from pyCamSet.utils.visualise_target import TARGET_ARGUMENTS
 from pyCamSet.gui.shared_functions import (
     TerminalWidget,
-    WorkspaceManager,
     make_blue_button,
     make_section_label,
     make_separator,
@@ -66,21 +70,25 @@ _WINDOWS_RESERVED_NAMES = {
 }
 
 
-class CreateTargetTab(QWidget):
-    """Generate printable Ccube, ChArUco, or PuzzleBoard targets and visualise them externally."""
+class CreateTargetDialog(QDialog):
+    """Generate printable Ccube, ChArUco, or PuzzleBoard targets and visualise them externally.
+
+    Modeless: the target opens in a window of its own -- see
+    :mod:`pyCamSet.gui.viewer_process` -- and comparing it against the form
+    that drew it means having both.
+
+    :param terminal_cb: the window's "Show Terminal Output" checkbox
+    :param parent: the main window, which keeps the one instance
+    """
 
     def __init__(
         self,
-        notebook: QTabWidget,
-        info_cb: QCheckBox,
         terminal_cb: QCheckBox,
-        workspace_mgr: WorkspaceManager,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self._notebook = notebook
-        self._info_cb = info_cb
-        self._workspace_mgr = workspace_mgr
+        self.setWindowTitle("Create Target")
+        self.resize(620, 720)
         self._repopulating = False
         self._build_ui(terminal_cb)
 
@@ -298,6 +306,9 @@ class CreateTargetTab(QWidget):
         btn_row.addWidget(make_blue_button("Save Target", self._save_target))
         btn_row.addWidget(make_blue_button("Visualise Target", self._visualise_target))
         btn_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        btn_row.addWidget(close_btn)
         root.addLayout(btn_row)
 
         self._status = QLabel("")

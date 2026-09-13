@@ -1585,6 +1585,34 @@ def test_the_run_header_describes_the_target_it_was_given():
 
 
 @pytest.mark.gui
+def test_making_a_target_is_a_dialog_rather_than_a_tab():
+    """A target is drawn once and then lived with for months of runs, so it
+    is not one of the phases -- and as the first tab it was what every
+    session opened on."""
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui import main_window as mw
+
+    QApplication.instance() or QApplication([])
+    window = mw.PyCamSetApp()
+    try:
+        names = [window._notebook.tabText(i)
+                 for i in range(window._notebook.count())]
+        assert not any("Create Target" in name for name in names)
+
+        window._open_create_target()
+        dialog = window._create_target_dialog
+        assert dialog.isVisible()
+        assert dialog.windowTitle() == "Create Target"
+
+        # Reopening keeps the settings that drew what is already on screen.
+        window._open_create_target()
+        assert window._create_target_dialog is dialog
+    finally:
+        window.deleteLater()
+
+
+@pytest.mark.gui
 @pytest.mark.data
 @pytest.mark.slow
 def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,

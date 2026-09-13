@@ -64,12 +64,13 @@ def run(params: dict,
     run_dir = workspace.run_dir("phase4", run_id)
 
     diagnostics: dict = {}
+    report: Optional[dict] = None
     error: Optional[str] = None
     camset_out: Optional[Path] = None
 
     with captured_output(log):
         try:
-            camset_out, diagnostics = _solve(
+            camset_out, diagnostics, report = _solve(
                 params, run_dir, Path(phase3_camset), phase3_run, log)
         except Exception as exc:
             error = str(exc)
@@ -88,6 +89,7 @@ def run(params: dict,
         "phase": "phase4",
         "params": params,
         "diagnostics": diagnostics,
+        "report": report,
         "error": error,
         "inputs": {
             "phase3_run_id": phase3_run.get("run_id") if phase3_run else None,
@@ -136,7 +138,8 @@ def solve(previous_cams, target, detections, *,
 
 
 def _solve(params: dict, run_dir: Path, phase3_camset: Path,
-           phase3_run: Optional[dict], log: LogFn) -> tuple[Path, dict]:
+           phase3_run: Optional[dict],
+           log: LogFn) -> tuple[Path, dict, Optional[dict]]:
     """Run the self-calibration and compute its diagnostics."""
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet optimisation modules are not importable.")
@@ -167,16 +170,20 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
 
     diagnostics = _diagnostics(
         optimisation, handler, stats, phase3_run, log)
-    return camset_out, diagnostics
+    report = getattr(out_cams, "calibration_report", None)
+    return camset_out, diagnostics, (
+        report.to_dict() if report is not None else None)
 
 
 def _diagnostics(optimisation, handler, stats: dict,
                  phase3_run: Optional[dict], log: LogFn) -> dict:
     """The D4 series: how far the target moved, and whether it paid off."""
+    # The errors and the solver's own account of the run are the calibration
+    # summary's, printed by the solve itself.  What follows is what only this
+    # phase knows: how far the target's own shape moved, and whether letting
+    # it move paid for itself.
     initial_euclid = float(stats.get("initial_euclid", float("nan")))
     final_euclid = float(stats.get("final_euclid", float("nan")))
-    log(f"D4.3  Initial Euclidean reprojection error: {initial_euclid:.4f} px")
-    log(f"D4.3  Final Euclidean reprojection error: {final_euclid:.4f} px")
 
     phase3_final = float(
         (phase3_run.get("diagnostics") or {}).get(
@@ -217,7 +224,6 @@ def _diagnostics(optimisation, handler, stats: dict,
         f"indices={fixed_indices}")
     log(f"D4.5  Gauge scale factor: {scale:.6f}")
     log(f"D4.7  Mean target displacement: {displacement_mm:.5f} mm")
-    _log_extremes(per_camera, log)
     return diagnostics
 
 
@@ -248,18 +254,3 @@ def _target_shape_change(handler, optimisation, visible) -> tuple[float, float]:
     displacement_mm = (float(np.nanmean(displacement) * 1000.0)
                        if displacement.size else float("nan"))
     return scale, displacement_mm
-
-
-def _log_extremes(per_camera: dict[str, float], log: LogFn) -> None:
-    """Name the best and worst camera, when there is one to name."""
-    if not per_camera:
-        return
-    valid = {name: value for name, value in per_camera.items()
-             if np.isfinite(value)}
-    if not valid:
-        log("D4.12  Per-camera mean reprojection: no valid cameras")
-        return
-    best = min(valid, key=valid.get)
-    worst = max(valid, key=valid.get)
-    log(f"D4.12  Per-camera mean reprojection: best={best}={valid[best]:.2f}px, "
-        f"worst={worst}={valid[worst]:.2f}px")

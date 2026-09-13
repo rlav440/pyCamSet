@@ -87,6 +87,7 @@ def run(params: dict,
     run_dir = workspace.run_dir("phase3", run_id)
 
     diagnostics: dict = {}
+    report: Optional[dict] = None
     error: Optional[str] = None
     camset_in: Optional[Path] = None
     detections_path: Optional[Path] = None
@@ -98,7 +99,7 @@ def run(params: dict,
         try:
             camset_in = _initial_camset(phase2_run, camset_override, ws_path)
             detections_path = _detections_path(phase1_run, ws_path)
-            camset_out, diagnostics, pruned_path = _solve(
+            camset_out, diagnostics, pruned_path, report = _solve(
                 params, run_dir, camset_in, detections_path, prune, log)
         except Exception as exc:
             error = str(exc)
@@ -119,6 +120,7 @@ def run(params: dict,
         "phase": "phase3",
         "params": params,
         "diagnostics": diagnostics,
+        "report": report,
         "error": error,
         "inputs": {
             "phase2_run_id": phase2_run.get("run_id") if phase2_run else None,
@@ -281,7 +283,7 @@ def solve(cams, detections, target, *,
 
 def _solve(params: dict, run_dir: Path, camset_in: Path,
            detections_path: Path, prune: Optional[DetectionFilter],
-           log: LogFn) -> tuple[Path, dict, Optional[Path]]:
+           log: LogFn) -> tuple[Path, dict, Optional[Path], Optional[dict]]:
     """Run the bundle adjustment and compute its diagnostics."""
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet optimisation modules are not importable.")
@@ -317,21 +319,19 @@ def _solve(params: dict, run_dir: Path, camset_in: Path,
         lockbox_warm_start=lockbox_settings.get("warm_start", True),
     )
 
+    # The errors, the termination message and the timing are the calibration
+    # summary's, printed by the solve itself.
     initial_euclid = float(stats.get("initial_euclid", float("nan")))
     final_euclid = float(stats.get("final_euclid", float("nan")))
-    log(f"D3.5  Initial Euclidean reprojection error: {initial_euclid:.4f} px")
-    log(f"D3.6  Final Euclidean reprojection error: {final_euclid:.4f} px")
-    if not bool(stats.get("success", optimisation.success)):
-        log(f"Solver note: {stats.get('message', optimisation.message)}")
-    log(f"Optimisation finished in "
-        f"{float(stats.get('elapsed_sec', float('nan'))):.2f}s")
 
     camset_out = run_dir / "optimised_cameras.camset"
     out_cams.save(camset_out)
 
     diagnostics = _diagnostics(
         optimisation, handler, stats, initial_euclid, final_euclid, log)
-    return camset_out, diagnostics, pruned_path
+    report = getattr(out_cams, "calibration_report", None)
+    return camset_out, diagnostics, pruned_path, (
+        report.to_dict() if report is not None else None)
 
 
 def _diagnostics(optimisation, handler, stats: dict,

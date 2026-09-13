@@ -19,7 +19,6 @@ from pyCamSet.workflow.detections import (
     selected_camera_folders,
     staged_camera_root,
 )
-from pyCamSet.workflow.diagnostics import per_view_reprojection
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
 from pyCamSet.workflow.phase1 import target_of_params
 from pyCamSet.workflow.workspace import (
@@ -35,6 +34,7 @@ _LOG = logging.getLogger(__name__)
 try:
     from pyCamSet.calibration.camera_calibrator import (
         detect_datapoints_in_imfile,
+        report_initial_calibration,
         run_initial_calibration,
     )
     from pyCamSet.utils.saving import load_pickle
@@ -42,6 +42,7 @@ try:
     BACKEND_OK = True
 except ImportError as exc:
     detect_datapoints_in_imfile = None
+    report_initial_calibration = None
     run_initial_calibration = None
     load_pickle = None
     BACKEND_OK = False
@@ -77,13 +78,14 @@ def run(params: dict,
         phase1_run, override_pickle, ws_path, log)
 
     diagnostics: dict = {}
+    report: Optional[dict] = None
     error: Optional[str] = None
     camset_path: Optional[Path] = None
     pruned_path: Optional[Path] = None
 
     with captured_output(log):
         try:
-            camset_path, diagnostics, pruned_path = _calibrate(
+            camset_path, diagnostics, pruned_path, report = _calibrate(
                 params, run_dir, detections_path, prune, log)
         except Exception as exc:
             error = str(exc)
@@ -106,6 +108,7 @@ def run(params: dict,
         "phase": "phase2",
         "params": params,
         "diagnostics": diagnostics,
+        "report": report,
         "error": error,
         "inputs": {
             "phase1_run_id": phase1_run.get("run_id") if phase1_run else None,
@@ -199,7 +202,7 @@ def calibrate(detections, cam_res, target, *,
 
 def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
                prune: Optional[DetectionFilter],
-               log: LogFn) -> tuple[Path, dict, Optional[Path]]:
+               log: LogFn) -> tuple[Path, dict, Optional[Path], dict]:
     """Run the initial calibration and compute its diagnostics."""
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet calibration modules are not importable.")
@@ -211,9 +214,8 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
         # observations the prune was asked to leave out, so a pruned run reads
         # the saved detections and nothing else -- which also means it needs
         # no images, and no staging folder to point at them.
-        camset_path, diagnostics, pruned_path = _calibrate_pruned(
+        return _calibrate_pruned(
             params, run_dir, detections_path, prune, target, log)
-        return camset_path, diagnostics, pruned_path
 
     f_loc = Path(params["f_loc"])
     selected = list(params.get("selected_cameras") or [])
@@ -231,7 +233,6 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
             detections, cam_res, target,
             fixed_params=params["fixed_params"],
             min_detections_per_board=params.get("min_detections_per_board", 12))
-        log("2b  Initial calibration completed.")
 
         if params["high_distortion"]:
             log("2c  High-distortion mode: re-running detection with initial "
@@ -249,7 +250,6 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
                 fixed_params=params["fixed_params"],
                 min_detections_per_board=params.get(
                     "min_detections_per_board", 12))
-            log("2c  High-distortion refinement completed.")
 
     camset_path = run_dir / (
         "initial_cameras_high_distortion.camset"
@@ -258,15 +258,14 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
     )
     cams.save(camset_path)
 
-    diagnostics = diagnostics_of(detections, target, cams)
-    log("Diagnostics computed (D2.1-D2.7).")
-    return camset_path, diagnostics, None
+    diagnostics, report = diagnostics_of(detections, target, cams)
+    return camset_path, diagnostics, None, report
 
 
 def _calibrate_pruned(params: dict, run_dir: Path,
                       detections_path: Optional[Path],
                       prune: DetectionFilter, target,
-                      log: LogFn) -> tuple[Path, dict, Path]:
+                      log: LogFn) -> tuple[Path, dict, Path, dict]:
     """Calibrate from saved detections with some observations left out."""
     if detections_path is None or not path_exists(detections_path):
         raise RuntimeError(
@@ -287,14 +286,12 @@ def _calibrate_pruned(params: dict, run_dir: Path,
         filtered, cam_res, target,
         fixed_params=params.get("fixed_params"),
         min_detections_per_board=params.get("min_detections_per_board", 12))
-    log("Phase 2 calibration completed.")
 
     camset_path = run_dir / "initial_cameras.camset"
     cams.save(camset_path)
 
-    diagnostics = diagnostics_of(filtered, target, cams)
-    log("Diagnostics computed (D2.1-D2.7).")
-    return camset_path, diagnostics, pruned_path
+    diagnostics, report = diagnostics_of(filtered, target, cams)
+    return camset_path, diagnostics, pruned_path, report
 
 
 def _load_or_detect(params: dict, target, root: Path,
@@ -325,37 +322,40 @@ def _load_or_detect(params: dict, target, root: Path,
     return detections, cam_res
 
 
-def diagnostics_of(detections, target, cams) -> dict:
+def diagnostics_of(detections, target, cams) -> tuple[dict, dict]:
     """The D2 series: what each camera's own calibration came out as.
+
+    The numbers are the initial intrinsics report's own, so the block printed
+    here and the diagnostics recorded beside it cannot disagree.
 
     Public because the diagnostics tab builds a phase 2 run of its own, from
     detections it has pruned, and reports the same numbers about it.
+
+    :return: the diagnostics, and the report they were read off
     """
-    per_view, per_camera_rms = per_view_reprojection(detections, target, cams)
+    report = report_initial_calibration(cams, detections, target)
 
     intrinsics: dict[str, dict] = {}
     distortion: dict[str, dict] = {}
-    for cam_name, cam in zip(cams.get_names(), cams):
-        matrix = np.array(cam.intrinsic)
-        intrinsics[cam_name] = {
-            "fx": float(matrix[0, 0]),
-            "fy": float(matrix[1, 1]),
-            "cx": float(matrix[0, 2]),
-            "cy": float(matrix[1, 2]),
-            "res": np.array(cam.res).astype(float).tolist(),
+    for cam in report.per_camera:
+        intrinsics[cam.name] = {
+            "fx": cam.fx, "fy": cam.fy, "cx": cam.cx, "cy": cam.cy,
+            "res": np.array(cams[cam.name].res).astype(float).tolist(),
         }
-        coefficients = np.array(cam.distortion_coefs).reshape(-1)
-        distortion[cam_name] = {
-            "coeffs": coefficients.astype(float).tolist(),
-            "l2_norm": float(np.linalg.norm(coefficients)),
+        distortion[cam.name] = {
+            "coeffs": np.array(
+                cams[cam.name].distortion_coefs).reshape(-1).astype(float).tolist(),
+            "l2_norm": cam.distortion_l2,
         }
 
-    return {
-        "D2.1_per_camera_rms_reprojection": per_camera_rms,
+    diagnostics = {
+        "D2.1_per_camera_rms_reprojection": {
+            cam.name: cam.rms_px for cam in report.per_camera},
         "D2.2_intrinsics": intrinsics,
         "D2.3_distortion": distortion,
         "D2.5_intrinsic_stddev": "not available in current pyCamSet API",
-        "D2.6_per_view_reprojection": per_view,
+        "D2.6_per_view_reprojection": report.per_view,
         "D2.7_per_view_error_plot": (
             "rendered in diagnostics tab (true per-image reprojection RMS)"),
     }
+    return diagnostics, report.to_dict()

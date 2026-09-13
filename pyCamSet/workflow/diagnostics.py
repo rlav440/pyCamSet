@@ -9,11 +9,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import cv2
 import numpy as np
 
-from pyCamSet.calibration_targets.abstract_target import get_keys
-
+from pyCamSet.utils.calibration_report import reprojection_residuals
 from pyCamSet.workflow.logs import LogFn, discard
 
 logger = logging.getLogger(__name__)
@@ -32,16 +30,14 @@ def observation_residual_xy(residuals: Any, handler: Any) -> np.ndarray:
     :param handler: the bundle handler that produced it
     :return: an ``(n, 2)`` array of per-observation residuals
     """
-    values = np.asarray(residuals, dtype=float).reshape(-1)
-    base_count = int(getattr(handler, "get_base_residual_count", lambda: 0)())
-    if base_count <= 0:
-        base_count = values.size
-    if base_count > values.size or base_count % 2:
+    values, _ = reprojection_residuals(residuals, handler)
+    if values.size % 2:
         raise ValueError(
             "Invalid reprojection residual segment length: "
-            f"base_count={base_count}, total_count={values.size}"
+            f"reprojection_count={values.size} is not a whole number of "
+            f"two-scalar observations"
         )
-    return values[:base_count].reshape(-1, 2)
+    return values.reshape(-1, 2)
 
 
 def per_camera_mean_reprojection(
@@ -90,118 +86,3 @@ def per_camera_mean_reprojection(
         per_camera[name] = (
             float(np.mean(residual_norm[mask])) if np.any(mask) else float("nan"))
     return per_camera, residual_xy
-
-
-def per_view_reprojection(
-        detections, calibration_target, cams) -> tuple[dict[str, dict], dict[str, float]]:
-    """
-    True per-image RMS reprojection error, per camera.
-
-    Each image is posed against the target on its own and its points
-    reprojected, rather than reading a number the calibration reported, so an
-    image that contributed badly is visible as itself.
-
-    :return: the per-view series per camera, and each camera's pooled RMS
-    """
-    per_view: dict[str, dict] = {}
-    overall_rms: dict[str, float] = {}
-    max_ims = int(detections.max_ims)
-    pose_failures = 0
-
-    for cam_name in cams.get_names():
-        cam = cams[cam_name]
-        cam_detection = detections.get(cam=cam_name)
-        cam_has_any = cam_detection.has_data()
-
-        image_indices: list[int] = []
-        rms_px: list[float] = []
-        n_points: list[int] = []
-        has_detection: list[bool] = []
-        valid_pose: list[bool] = []
-
-        weighted_sq_sum = 0.0
-        total_points = 0
-
-        for im_idx in range(max_ims):
-            image_indices.append(im_idx)
-            if not cam_has_any:
-                rms_px.append(float("nan"))
-                n_points.append(0)
-                has_detection.append(False)
-                valid_pose.append(False)
-                continue
-
-            im_detect = cam_detection.get(global_im_num=im_idx)
-            data = im_detect.get_data()
-            if data is None or len(data) == 0:
-                rms_px.append(float("nan"))
-                n_points.append(0)
-                has_detection.append(False)
-                valid_pose.append(False)
-                continue
-
-            has_detection.append(True)
-            n_points.append(int(data.shape[0]))
-
-            try:
-                pose = calibration_target.target_pose_in_cam_image(
-                    im_detect, cam, mode="nan")
-            except Exception as exc:
-                # A view with no pose is a NaN by design.  A target that
-                # raised is also a NaN, but it is not the same thing, so it
-                # is counted and said out loud once at the end.
-                logger.debug(
-                    "target_pose_in_cam_image raised for cam=%s im=%d: %s",
-                    cam_name, im_idx, exc)
-                pose_failures += 1
-                pose = np.ones((4, 4), dtype=float) * np.nan
-
-            pose_arr = np.asarray(pose, dtype=float)
-            if pose_arr.shape != (4, 4) or np.any(np.isnan(pose_arr)):
-                rms_px.append(float("nan"))
-                valid_pose.append(False)
-                continue
-
-            valid_pose.append(True)
-            keys = get_keys(data).astype(int)
-            object_points = np.asarray(
-                calibration_target.point_data[tuple(keys.T)],
-                dtype=np.float32).reshape(-1, 3)
-            image_points = np.asarray(
-                data[:, -2:], dtype=np.float32).reshape(-1, 2)
-            rvec, _ = cv2.Rodrigues(pose_arr[:3, :3].astype(np.float64))
-            tvec = pose_arr[:3, 3].astype(np.float64)
-            projected, _ = cv2.projectPoints(
-                object_points,
-                rvec,
-                tvec,
-                np.asarray(cam.intrinsic, dtype=np.float64),
-                np.asarray(cam.distortion_coefs, dtype=np.float64).reshape(-1),
-            )
-            projected = projected.reshape(-1, 2).astype(np.float32)
-            sq_err = np.sum((projected - image_points) ** 2, axis=1)
-            rms_px.append(
-                float(np.sqrt(np.mean(sq_err))) if sq_err.size else float("nan"))
-            if sq_err.size:
-                weighted_sq_sum += float(np.sum(sq_err))
-                total_points += int(sq_err.size)
-
-        per_view[cam_name] = {
-            "image_indices": image_indices,
-            "rms_px": rms_px,
-            "n_points": n_points,
-            "has_detection": has_detection,
-            "valid_pose": valid_pose,
-        }
-        overall_rms[cam_name] = (
-            float(np.sqrt(weighted_sq_sum / total_points))
-            if total_points else float("nan"))
-
-    if pose_failures:
-        logger.warning(
-            "per_view_reprojection: %d target_pose_in_cam_image call(s) raised "
-            "exceptions (converted to NaN poses). Check debug logs for details.",
-            pose_failures,
-        )
-
-    return per_view, overall_rms

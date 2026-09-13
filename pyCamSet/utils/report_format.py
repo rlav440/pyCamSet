@@ -1,10 +1,11 @@
 """
 Shared layout for the blocks pyCamSet prints during a calibration.
 
-A calibration run reports at three points -- what the input data looks like,
-what the optimiser is doing, and what came out -- and those three only read as
-one system if they are laid out by one set of rules. Everything here exists to
-keep them to a single width, so nothing wraps in an 80 column terminal.
+A calibration run reports at four points -- what the input data looks like,
+what each camera's own calibration came out as, what the optimiser is doing,
+and what came out of it -- and those four only read as one system if they are
+laid out by one set of rules. Everything here exists to keep them to a single
+width, so nothing wraps in an 80 column terminal.
 """
 from __future__ import annotations
 

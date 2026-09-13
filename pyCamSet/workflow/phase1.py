@@ -64,12 +64,13 @@ def run(params: dict,
         workspace = WorkspaceManager(workspace_path_for(params["f_loc"]))
 
     diagnostics: dict = {}
+    report: Optional[dict] = None
     error: Optional[str] = None
     detections_source: Optional[Path] = None
 
     with captured_output(log):
         try:
-            detections_source, diagnostics = _detect(params, log)
+            detections_source, diagnostics, report = _detect(params, log)
         except Exception as exc:
             error = str(exc)
             diagnostics["error"] = error
@@ -80,6 +81,7 @@ def run(params: dict,
         "phase": "phase1",
         "params": params,
         "diagnostics": diagnostics,
+        "report": report,
         "error": error,
     }
     workspace.save_run("phase1", run_id, metadata)
@@ -108,7 +110,7 @@ def run(params: dict,
     return metadata
 
 
-def _detect(params: dict, log: LogFn) -> tuple[Optional[Path], dict]:
+def _detect(params: dict, log: LogFn) -> tuple[Optional[Path], dict, dict]:
     """Run the detection pass and compute its diagnostics."""
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet detection modules are not importable.")
@@ -155,30 +157,29 @@ def _detect(params: dict, log: LogFn) -> tuple[Optional[Path], dict]:
             if root != f_loc:
                 copy_file(cached, detections_source)
 
-    validate_detections(detections, target)
-    log("1c  Validation complete.")
+    report = validate_detections(
+        detections, target, image_counts=cam_img_counts, n_lim=params["n_lim"])
 
-    diagnostics = _diagnostics(
-        detections, cam_res, target, cam_img_counts, params["n_lim"], log)
+    diagnostics = _diagnostics(report, detections, cam_res, log)
     log("Phase 1 complete.")
-    return detections_source, diagnostics
+    return detections_source, diagnostics, report.to_dict()
 
 
-def _diagnostics(detections, cam_res, target, cam_img_counts,
-                 n_lim: Optional[int], log: LogFn) -> dict:
-    """The D1 series: how much of the target each camera actually saw."""
+def _diagnostics(report, detections, cam_res, log: LogFn) -> dict:
+    """The D1 series: how much of the target each camera actually saw.
+
+    The per camera detection rate and board completeness are the detection
+    summary's own numbers, taken off the report that has just been printed
+    rather than measured a second time here.
+    """
     diagnostics: dict = {}
     try:
-        diagnostics["D1.1_total_detections"] = _total_detections(detections)
-
-        detection_rate, completeness = _rate_and_completeness(
-            detections, target, cam_img_counts, n_lim)
-        diagnostics["D1.2_detection_rate"] = detection_rate
-        diagnostics["D1.3_board_completeness"] = completeness
-        for cam in detections.cam_names:
-            log(f"D1.2/D1.3  {cam}: "
-                f"rate={detection_rate.get(cam, 0.0) * 100.0:.1f}% "
-                f"completeness={completeness.get(cam, 0.0) * 100.0:.1f}%")
+        diagnostics["D1.1_total_detections"] = {
+            cam.name: cam.n_features for cam in report.per_camera}
+        diagnostics["D1.2_detection_rate"] = {
+            cam.name: cam.detection_rate for cam in report.per_camera}
+        diagnostics["D1.3_board_completeness"] = {
+            cam.name: cam.completeness for cam in report.per_camera}
 
         features = detections.features_per_im_per_cam()
         diagnostics["D1.4_features_matrix"] = features.tolist()
@@ -189,95 +190,12 @@ def _diagnostics(detections, cam_res, target, cam_img_counts,
 
         min_features = int(np.min(features[features > 0])) if np.any(features > 0) else 0
         diagnostics["D1.7_min_features"] = min_features
-        log(f"D1.7  Min features in any image-camera: {min_features}")
 
-        diagnostics["cam_names"] = detections.cam_names
-        diagnostics["n_images"] = int(detections.max_ims)
+        diagnostics["cam_names"] = list(report.camera_names)
+        diagnostics["n_images"] = report.n_images
     except Exception as exc:
         log(f"  (partial diagnostics: {exc})")
     return diagnostics
-
-
-def _total_detections(detections) -> dict[str, int]:
-    """How many points each camera contributed in total."""
-    totals: dict[str, int] = {}
-    for cam_detection in detections.get_cam_list():
-        data = cam_detection.get_data()
-        if data is None or len(data) == 0:
-            continue
-        totals[detections.cam_names[int(data[0, 0])]] = len(data)
-    return totals
-
-
-def _corners_per_face(target) -> int:
-    """How many points one face of the target holds.
-
-    PuzzleBoard's point data spans the whole 501x501 virtual code-lookup
-    field, not the printed window, so its printed size has to be asked for
-    directly.  Every other target's point data is the printed target.
-    """
-    if target.__class__.__name__ == "PuzzleBoard":
-        return int(target.num_squares_x * target.num_squares_y)
-    return int(target.point_data.shape[-2])
-
-
-def _rate_and_completeness(
-    detections, target, cam_img_counts, n_lim: Optional[int],
-) -> tuple[dict[str, float], dict[str, float]]:
-    """
-    Per camera: the fraction of images with a detection, and how much of the
-    target those detections covered.
-    """
-    corners_per_face = _corners_per_face(target)
-    detection_rate: dict[str, float] = {}
-    completeness: dict[str, float] = {}
-
-    for cam_detection in detections.get_cam_list():
-        data = cam_detection.get_data()
-        if data is None or len(data) == 0:
-            continue
-        cam_name = detections.cam_names[int(data[0, 0])]
-
-        expected = int(cam_img_counts.get(cam_name, detections.max_ims))
-        if n_lim is not None:
-            expected = min(expected, int(n_lim))
-        expected = max(expected, 1)
-
-        detected_images = 0
-        per_image_fraction: list[float] = []
-
-        for im_detection in cam_detection.get_image_list():
-            datum = im_detection.get_data()
-            if datum is None or len(datum) == 0:
-                continue
-            detected_images += 1
-
-            id_cols = datum[:, 2:-2]
-            if id_cols.ndim == 1:
-                id_cols = id_cols.reshape(-1, 1)
-            if id_cols.shape[1] <= 0:
-                continue
-
-            if id_cols.shape[1] == 1:
-                # A point id and nothing else: one board.
-                unique_points = len(np.unique(id_cols[:, 0]))
-                per_image_fraction.append(unique_points / max(corners_per_face, 1))
-            else:
-                # Board id columns, then the point id: average over boards.
-                board_cols, point_col = id_cols[:, :-1], id_cols[:, -1]
-                board_fractions = []
-                for board in np.unique(board_cols, axis=0):
-                    mask = np.all(board_cols == board, axis=1)
-                    unique_points = len(np.unique(point_col[mask]))
-                    board_fractions.append(unique_points / max(corners_per_face, 1))
-                if board_fractions:
-                    per_image_fraction.append(float(np.mean(board_fractions)))
-
-        detection_rate[cam_name] = float(detected_images) / float(expected)
-        completeness[cam_name] = (
-            float(np.mean(per_image_fraction)) if per_image_fraction else 0.0)
-
-    return detection_rate, completeness
 
 
 def _spatial_coverage(detections, cam_res) -> Optional[dict[str, float]]:

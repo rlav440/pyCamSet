@@ -24,7 +24,7 @@ from pyCamSet.optimisation.camera_lockbox import (
     apply_lockbox_bounds,
     make_disabled_prior,
 )
-from pyCamSet.optimisation.optimisation_handling import _split_residuals
+from pyCamSet.utils.calibration_report import reprojection_residuals
 
 
 class _StubHandler:
@@ -65,7 +65,7 @@ def test_odd_total_residual_count_no_longer_crashes():
     assert full.size == 19
     assert full.size % 2 == 1
 
-    reproj, priors = _split_residuals(full, _StubHandler(10))
+    reproj, priors = reprojection_residuals(full, _StubHandler(10))
     assert reproj.size == 10
     assert priors is not None and priors.size == 9
     # The reprojection prefix is even, so the reshape succeeds.
@@ -80,7 +80,7 @@ def test_even_total_residual_count_splits_correctly():
     # 10 base + 12 param + 6 centre = 28 (even).
     assert full.size == 28
 
-    reproj, priors = _split_residuals(full, _StubHandler(10))
+    reproj, priors = reprojection_residuals(full, _StubHandler(10))
     assert reproj.size == 10
     assert priors is not None and priors.size == 18
 
@@ -92,7 +92,7 @@ def test_rpe_is_not_diluted_by_priors():
     prior = _make_prior(n_cameras=1, center_sigma=1.0)
     full = append_lockbox_residuals(base, np.zeros(6), prior)
 
-    reproj, _ = _split_residuals(full, _StubHandler(8))
+    reproj, _ = reprojection_residuals(full, _StubHandler(8))
     rpe = float(np.mean(np.linalg.norm(np.reshape(reproj, (-1, 2)), axis=1)))
     assert rpe == 3.0  # exactly the reprojection error, priors excluded
 
@@ -100,7 +100,7 @@ def test_rpe_is_not_diluted_by_priors():
 def test_no_prior_returns_full_vector():
     """With no prior (disabled), the split returns the whole vector unchanged."""
     base = np.zeros(10, dtype=float)
-    reproj, priors = _split_residuals(base, _StubHandler(0))
+    reproj, priors = reprojection_residuals(base, _StubHandler(0))
     assert reproj.size == 10
     assert priors is None
 

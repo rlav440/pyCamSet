@@ -24,6 +24,7 @@ from pyCamSet.utils.general_utils import average_tforms, get_subfolder_names, gl
 import logging
 
 from pyCamSet.utils.logs import setup_logging_from_verbosity
+from pyCamSet.utils.intrinsics_report import IntrinsicsReport
 from pyCamSet.utils.setup_reports import DetectionReport
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,8 @@ def calibrate_cameras(
         threads=threads,
     )
 
-    validate_detections(detections, calibration_target)
+    validate_detections(detections, calibration_target,
+                        image_counts=images_per_camera(f_loc), n_lim=n_lim)
 
     string_tail = '.camset'
     if initial_cams is None:
@@ -121,6 +123,7 @@ def calibrate_cameras(
         logger.info("Using the provided initial cameras.")
 
     initial_cams.set_resolutions_from_file(floc=f_loc)
+    report_initial_calibration(initial_cams, detections, calibration_target)
     if len(initial_cams) == 1:
         logger.warning("Only found and calibrated one camera - returning single camera calibration")
         return initial_cams
@@ -418,7 +421,9 @@ def detect_datapoints_in_imfile(
     return detected, cam_res
 
 def validate_detections(detected: TargetDetection,
-                        target: AbstractTarget) -> DetectionReport:
+                        target: AbstractTarget,
+                        image_counts: dict[str, int] | None = None,
+                        n_lim: int | None = None) -> DetectionReport:
     """
     Reports how well each camera saw the target, before anything is solved.
 
@@ -428,9 +433,44 @@ def validate_detections(detected: TargetDetection,
 
     :param detected: the detections to describe
     :param target: the calibration target they were found with
+    :param image_counts: how many images each camera's folder holds
+    :param n_lim: the per camera image cap the detection ran under
     :return: the report, which is also logged
     """
-    report = DetectionReport.from_detection(detected, target)
+    report = DetectionReport.from_detection(
+        detected, target, image_counts=image_counts, n_lim=n_lim)
+    logger.info("\n" + report.summary())
+    return report
+
+
+def images_per_camera(f_loc: Path) -> dict[str, int]:
+    """
+    How many images each camera folder under *f_loc* holds.
+
+    The denominator of the detection rate: a camera is measured against what
+    it was given, not against the images another camera happened to have.
+
+    :param f_loc: the folder holding the per camera sub folders
+    """
+    return {folder.name: len(glob_ims(folder))
+            for folder in get_subfolder_names(f_loc, return_full_path=True)}
+
+
+def report_initial_calibration(cams: CameraSet, detection: TargetDetection,
+                               target: AbstractTarget) -> IntrinsicsReport:
+    """
+    Reports what each camera's own calibration came out as.
+
+    The stage between the detections and the bundle adjustment: every camera
+    has been solved on its own, and a camera whose intrinsics are already
+    wrong here will not be rescued by solving them all together.
+
+    :param cams: the per camera calibration to describe
+    :param detection: the detections it was solved from
+    :param target: the calibration target they were found with
+    :return: the report, which is also logged
+    """
+    report = IntrinsicsReport.from_calibration(cams, detection, target)
     logger.info("\n" + report.summary())
     return report
 

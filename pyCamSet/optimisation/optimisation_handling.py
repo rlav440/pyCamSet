@@ -20,24 +20,12 @@ from pyCamSet.optimisation.numba_schur import (
 
 from pyCamSet.calibration_targets import TargetDetection
 from pyCamSet.utils.calibration_report import (
-    CalibrationReport, HIGH_INITIAL_ERROR_PX)
+    CalibrationReport, HIGH_INITIAL_ERROR_PX, reprojection_residuals)
 from pyCamSet.utils.progress import OptimisationProgress
     
 if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
     from pyCamSet.cameras import CameraSet, Camera
-
-
-def _split_residuals(fun, param_handler):
-    """Separate reprojection residuals from optional lockbox priors."""
-    residuals = np.asarray(fun)
-    base_count = 0
-    if param_handler is not None:
-        base_count = int(getattr(
-            param_handler, "get_base_residual_count", lambda: 0)())
-    if base_count <= 0 or base_count >= residuals.size:
-        return residuals, None
-    return residuals[:base_count], residuals[base_count:]
 
 
 def make_optimisation_function(
@@ -212,10 +200,10 @@ def get_bundle_adjustment_stats(
         are added; when it does not, those keys are simply absent.
     :return: the statistics, keyed as described above
     """
-    init_reprojection, _ = _split_residuals(init_err, param_handler)
+    init_reprojection, _ = reprojection_residuals(init_err, param_handler)
     init_euclid = float(np.mean(np.linalg.norm(
         np.reshape(init_reprojection, (-1, 2)), axis=1)))
-    final_reprojection, final_priors = _split_residuals(
+    final_reprojection, final_priors = reprojection_residuals(
         optimisation.fun, param_handler)
     final_euclid = float(np.mean(np.linalg.norm(
         np.reshape(final_reprojection, (-1, 2)), axis=1)))
@@ -288,7 +276,7 @@ def _solve_bundle_adjustment(
     # split before measuring: with a lockbox the residual vector carries
     # prior terms after the reprojections, and averaging over both reports
     # an initial error that is neither one nor the other.
-    init_reprojection, _ = _split_residuals(init_err, param_handler)
+    init_reprojection, _ = reprojection_residuals(init_err, param_handler)
     init_euclid = np.mean(np.linalg.norm(
         np.reshape(init_reprojection, (-1, 2)), axis=1))
     logger.info(f'found {len(init_params)} parameters')

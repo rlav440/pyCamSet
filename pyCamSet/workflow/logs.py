@@ -69,13 +69,23 @@ def captured_output(log: LogFn) -> Iterator[None]:
     Send everything written inside the block to *log*, one line at a time.
 
     Covers ``stdout``, ``stderr`` and the root logger.  Whatever happens in
-    the block, the partial last line is flushed and the log handler removed.
+    the block, the partial last line is flushed, the log handler removed and
+    the root logger put back at the level it was found at.
+
+    The level is part of the job: a library's default root logger drops
+    ``INFO`` before any handler sees it, and ``INFO`` is where the reports
+    are -- the detection summary, the initial intrinsics, the calibration
+    summary.  Leaving it alone meant a phase showed its warnings and none of
+    its results.
 
     :param log: what to call with each line
     """
     stream = EmitStream(log)
     handler = EmitLogHandler(log)
     root_logger = logging.getLogger()
+    previous_level = root_logger.level
+    if not root_logger.isEnabledFor(logging.INFO):
+        root_logger.setLevel(logging.INFO)
     root_logger.addHandler(handler)
     try:
         with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
@@ -83,6 +93,7 @@ def captured_output(log: LogFn) -> Iterator[None]:
     finally:
         stream.flush()
         root_logger.removeHandler(handler)
+        root_logger.setLevel(previous_level)
 
 
 @contextlib.contextmanager

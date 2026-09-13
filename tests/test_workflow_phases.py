@@ -370,10 +370,57 @@ def test_phase_1_detects_and_records_a_run(charuco_image_folder, tmp_path):
     pickle_path = saved["artifacts"]["detected_datapoints_pickle"]
     assert pickle_path.endswith("detected_datapoints.pickle")
 
+    # The run carries the detection summary it printed, so what the phase
+    # reported and what a later reader judges it by are the same numbers.
+    report = metadata["report"]
+    assert [c["name"] for c in report["per_camera"]] == diagnostics["cam_names"]
+    assert (report["per_camera"][0]["detection_rate"]
+            == diagnostics["D1.2_detection_rate"][report["per_camera"][0]["name"]])
+
     # Every line of the phase's own output reached the callable it was given,
-    # rather than a terminal widget or the process's stdout.
+    # rather than a terminal widget or the process's stdout.  The detection
+    # summary is part of that output: it is logged by the detection pass, at
+    # INFO, which a default root logger drops before any handler sees it.
     assert any(line.startswith("1b") for line in lines)
     assert any("Run saved" in line for line in lines)
+    assert any("Detection summary" in line for line in lines)
+
+
+def test_a_phases_output_carries_its_reports_not_only_its_warnings():
+    """The blocks the library logs at INFO are the phase's results, so the
+    capture has to let INFO through -- a default root logger does not."""
+    import logging
+
+    from pyCamSet.workflow.logs import captured_output
+
+    root = logging.getLogger()
+    was = root.level
+    root.setLevel(logging.WARNING)
+    lines: list[str] = []
+    try:
+        with captured_output(lines.append):
+            logging.getLogger("pyCamSet.somewhere").info("Detection summary")
+        assert any("Detection summary" in line for line in lines)
+        assert root.level == logging.WARNING     # and put back afterwards
+    finally:
+        root.setLevel(was)
+
+
+def test_a_louder_root_logger_is_left_as_it_was():
+    """A caller debugging at DEBUG keeps their level through a phase."""
+    import logging
+
+    from pyCamSet.workflow.logs import captured_output
+
+    root = logging.getLogger()
+    was = root.level
+    root.setLevel(logging.DEBUG)
+    try:
+        with captured_output(lambda _line: None):
+            assert root.level == logging.DEBUG
+        assert root.level == logging.DEBUG
+    finally:
+        root.setLevel(was)
 
 
 @pytest.mark.data

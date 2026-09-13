@@ -41,13 +41,16 @@ class CameraDetectionStats:
     How well one camera saw the target.
 
     :param n_images_seen: images in which this camera detected anything
-    :param detection_rate: that count over the images in the run
+    :param n_images_expected: images this camera was asked to see: what its
+        folder holds, capped by the run's ``n_lim``
+    :param detection_rate: the first of those over the second
     :param completeness: mean fraction of a board resolved, when seen
     :param n_features: total detected features
     """
     name: str
     index: int
     n_images_seen: int
+    n_images_expected: int
     detection_rate: float
     completeness: float
     n_features: int
@@ -63,22 +66,30 @@ class DetectionReport:
     n_features: int
     per_camera: list[CameraDetectionStats] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
+    blocking_flags: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_detection(cls, detected, target) -> DetectionReport:
+    def from_detection(cls, detected, target,
+                       image_counts: dict[str, int] | None = None,
+                       n_lim: int | None = None) -> DetectionReport:
         """
         Measure a detection against the calibration target it was found with.
 
         :param detected: the TargetDetection to describe
         :param target: the calibration target, for its features per face
+        :param image_counts: how many images each camera's folder holds,
+            defaulting to the images the detection spans
+        :param n_lim: the per camera image cap the detection ran under
         """
         corners_per_face = _features_per_face(target)
         n_images = int(detected.max_ims)
+        counts = dict(image_counts or {})
         per_camera = []
 
         for index, name in enumerate(detected.cam_names):
             per_camera.append(_camera_detection_stats(
-                detected, index, name, corners_per_face, n_images))
+                detected, index, name, corners_per_face,
+                _expected_images(counts.get(name, n_images), n_lim)))
 
         report = cls(
             camera_names=list(detected.cam_names),
@@ -86,24 +97,41 @@ class DetectionReport:
             n_features=sum(c.n_features for c in per_camera),
             per_camera=per_camera,
         )
-        report.flags = report._find_flags()
+        report.flags, report.blocking_flags = report._find_flags()
         return report
 
-    def _find_flags(self) -> list[str]:
+    def _find_flags(self) -> tuple[list[str], list[str]]:
         """
         A rate or a completeness that is merely poor is shown by the colour of
         its cell, which says the same thing without a paragraph. Only a camera
         that saw nothing gets prose, because that one cannot be calibrated at
         all and the reason is usually a wrong folder or the wrong target
         rather than anything about the images.
+
+        Both concerns here are of that kind, so both also block the phases
+        that would read these detections.
+
+        :return: every concern, and the subset that blocks the next phase
         """
-        return [
-            f'camera "{cam.name}" detected the target in none of the '
-            f"{self.n_images} images, so it cannot be calibrated: check the "
-            f"images are in the right folder and that the target matches the "
-            f"one being detected"
-            for cam in self.per_camera if cam.n_features == 0
-        ]
+        blind = [cam for cam in self.per_camera if cam.n_features == 0]
+        if blind and len(blind) == len(self.per_camera):
+            # Naming every camera in turn would say the same thing once per
+            # camera, when the cause is one thing and it is not the cameras.
+            flags = [
+                f"no camera detected the target in any of the "
+                f"{self.n_images} images, so there is nothing to calibrate "
+                f"from: check the images are in the right folder and that "
+                f"the target matches the one being detected"
+            ]
+        else:
+            flags = [
+                f'camera "{cam.name}" detected the target in none of the '
+                f"{cam.n_images_expected} images, so it cannot be calibrated: "
+                f"check the images are in the right folder and that the target "
+                f"matches the one being detected"
+                for cam in blind
+            ]
+        return flags, list(flags)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -131,7 +159,7 @@ class DetectionReport:
         lines += [""]
         lines += fmt.table(
             ["camera", "images", "detected", "complete", "features"],
-            [[c.name, f"{c.n_images_seen}/{self.n_images}",
+            [[c.name, f"{c.n_images_seen}/{c.n_images_expected}",
               fmt.quality_cell(c.detection_rate),
               fmt.quality_cell(c.completeness),
               c.n_features]
@@ -165,9 +193,27 @@ def _features_per_face(target) -> int:
     return int(target.point_data.shape[-2])
 
 
+def _expected_images(n_images: int, n_lim: int | None) -> int:
+    """
+    How many images a camera was asked to see.
+
+    What its folder holds, capped by the ``n_lim`` the run was given, so a
+    detection deliberately limited to 20 of 200 images is not reported as
+    having missed nine tenths of them.  Every caller measures against this
+    one rule.
+
+    :param n_images: the images available to the camera
+    :param n_lim: the cap the detection ran under, or None for no cap
+    """
+    expected = int(n_images)
+    if n_lim is not None:
+        expected = min(expected, int(n_lim))
+    return max(expected, 1)
+
+
 def _camera_detection_stats(detected, index: int, name: str,
                             corners_per_face: int,
-                            n_images: int) -> CameraDetectionStats:
+                            n_expected: int) -> CameraDetectionStats:
     """
     The detection statistics for a single camera.
 
@@ -178,9 +224,9 @@ def _camera_detection_stats(detected, index: int, name: str,
     :param index: the camera's index in the detection
     :param name: the camera's name
     :param corners_per_face: features on one face of the target
-    :param n_images: images in the run, the detection rate denominator
+    :param n_expected: images it was asked to see, the rate's denominator
     """
-    empty = CameraDetectionStats(name, index, 0, 0.0, 0.0, 0)
+    empty = CameraDetectionStats(name, index, 0, n_expected, 0.0, 0.0, 0)
     cam_detection = detected.get(cam=name)
     if not cam_detection.has_data():
         return empty
@@ -203,7 +249,8 @@ def _camera_detection_stats(detected, index: int, name: str,
         return empty
     return CameraDetectionStats(
         name=name, index=index, n_images_seen=n_seen,
-        detection_rate=n_seen / n_images if n_images else 0.0,
+        n_images_expected=n_expected,
+        detection_rate=n_seen / n_expected,
         completeness=float(np.mean(completeness)),
         n_features=n_features,
     )
@@ -235,6 +282,7 @@ class RigConsistencyReport:
     reference_camera: str
     per_camera: list[CameraConsistencyStats] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
+    blocking_flags: list[str] = field(default_factory=list)
 
     @classmethod
     def from_transforms(cls, tforms: np.ndarray, ref_cam: int = 0,
@@ -276,10 +324,17 @@ class RigConsistencyReport:
                               else str(ref_cam)),
             per_camera=per_camera,
         )
-        report.flags = report._find_flags()
+        report.flags, report.blocking_flags = report._find_flags()
         return report
 
-    def _find_flags(self) -> list[str]:
+    def _find_flags(self) -> tuple[list[str], list[str]]:
+        """
+        Scatter in a rig that should be rigid is a warning rather than a
+        refusal: the solve still runs, and how much of it to believe is the
+        reader's call.
+
+        :return: every concern, and the subset that blocks the next phase
+        """
         cause = ("which usually means misordered images, a trigger that is "
                  "not synchronised, or detections bad enough to be "
                  "meaningless")
@@ -299,7 +354,7 @@ class RigConsistencyReport:
                     f'"{self.reference_camera}" across the images, over the '
                     f"{MAX_ANGLE_STDEV_DEG:.0f} degrees expected of a rigid "
                     f"rig, {cause}")
-        return flags
+        return flags, []
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

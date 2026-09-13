@@ -38,6 +38,30 @@ HIGH_FINAL_ERROR_PX = 5.0
 N_WORST_IMAGES = 5
 
 
+def reprojection_residuals(residuals, handler) -> tuple[np.ndarray, np.ndarray | None]:
+    """
+    The reprojection residuals, separated from any lockbox priors.
+
+    A lockbox appends one prior residual per constrained parameter after the
+    two-per-observation reprojection ones. Reading the whole vector as
+    reprojection error dilutes every figure drawn from it, and reshaping it
+    into pixel pairs crashes outright on an odd prior count, so everything
+    that reads a solver's residuals splits them here first.
+
+    :param residuals: the solver's residual vector
+    :param handler: the bundle handler that produced it, or None
+    :return: the reprojection segment, and the priors after it or None
+    """
+    values = np.asarray(residuals, dtype=float).reshape(-1)
+    base_count = 0
+    if handler is not None:
+        base_count = int(getattr(
+            handler, "get_base_residual_count", lambda: 0)())
+    if base_count <= 0 or base_count >= values.size:
+        return values, None
+    return values[:base_count], values[base_count:]
+
+
 def _distribution(values: np.ndarray) -> dict[str, float]:
     """
     The summary statistics used everywhere in the report.
@@ -122,6 +146,7 @@ class CalibrationReport:
     duration_s: float = float("nan")
 
     flags: list[str] = field(default_factory=list)
+    blocking_flags: list[str] = field(default_factory=list)
     save_path: str | None = None
 
     @property
@@ -146,8 +171,8 @@ class CalibrationReport:
         :param duration_s: wall clock seconds the solve took
         :param solver: which solver ran, 'schur' or 'trf'
         """
-        residuals = np.reshape(np.asarray(optimisation.fun, dtype=float), (-1, 2))
-        euclid = np.linalg.norm(residuals, axis=1)
+        reprojection, _ = reprojection_residuals(optimisation.fun, param_handler)
+        euclid = np.linalg.norm(reprojection.reshape(-1, 2), axis=1)
 
         detection = param_handler.detection
         overall = _distribution(euclid)
@@ -174,18 +199,26 @@ class CalibrationReport:
 
         report.per_camera, report.worst_images = _per_group_stats(
             euclid, detection)
-        report.flags = report._find_flags()
+        report.flags, report.blocking_flags = report._find_flags()
         return report
 
-    def _find_flags(self) -> list[str]:
+    def _find_flags(self) -> tuple[list[str], list[str]]:
         """
         The concerns worth raising, each naming its threshold and its value.
+
+        A high error or an image the solve could not pose is a warning: the
+        run produced a camera set, and whether to trust it is the reader's
+        call. A final error that is not a number is not, because there is
+        nothing there to carry into the next phase.
+
+        :return: every concern, and the subset that blocks the next phase
         """
-        flags = []
+        flags, blocking = [], []
         if np.isnan(self.mean_px):
             flags.append(
                 "the final error is NaN: the optimisation did not produce a "
                 "usable result")
+            blocking.append(flags[-1])
         elif self.mean_px > HIGH_FINAL_ERROR_PX:
             flags.append(
                 f"final mean error {self.mean_px:.2f} px is above the "
@@ -200,7 +233,7 @@ class CalibrationReport:
             flags.append(
                 f"{self.n_missing_poses} of {self.n_images} images had no "
                 f"usable target pose and did not constrain the solve")
-        return flags
+        return flags, blocking
 
     def to_dict(self) -> dict[str, Any]:
         """

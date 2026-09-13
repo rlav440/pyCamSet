@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -28,6 +29,8 @@ from pyCamSet.utils.calibration_report import (
     CalibrationReport,
     CameraErrorStats,
 )
+from pyCamSet.utils.intrinsics_report import (
+    HIGH_INITIAL_RMS_PX, IntrinsicsReport)
 from pyCamSet.utils.progress import OptimisationProgress
 from pyCamSet.utils.setup_reports import DetectionReport, RigConsistencyReport
 
@@ -350,6 +353,139 @@ def test_both_setup_summaries_fit_a_terminal():
 
     over = _over_width(rig.summary(colour=True))
     assert not over, f"rig consistency over {MAX_WIDTH}: {over}"
+
+
+def _detection_over(n_images: int, seen: int) -> TargetDetection:
+    """A one camera detection that saw *seen* of *n_images* images."""
+    detection = TargetDetection(cam_names=["cam"])
+    detection.max_ims = n_images
+    for im_num in range(seen):
+        detection.add_detection(
+            "cam", im_num,
+            ImageDetection(keys=np.arange(4),
+                           image_points=np.tile([1.0, 2.0], (4, 1))))
+    return detection
+
+
+def test_a_detection_rate_is_measured_against_the_images_asked_for():
+    """A run limited to 5 of 50 images saw everything it was asked to see,
+    and reporting that as 10% would send someone looking for a fault that is
+    not there."""
+    report = DetectionReport.from_detection(
+        _detection_over(5, 5), _Corners(4),
+        image_counts={"cam": 50}, n_lim=5)
+
+    assert report.per_camera[0].n_images_expected == 5
+    assert report.per_camera[0].detection_rate == 1.0
+
+
+def test_a_detection_rate_counts_the_images_a_camera_was_given():
+    """With no cap it is the folder's own image count, not the images that
+    happened to produce a detection."""
+    report = DetectionReport.from_detection(
+        _detection_over(5, 5), _Corners(4), image_counts={"cam": 10})
+
+    assert report.per_camera[0].n_images_expected == 10
+    assert report.per_camera[0].detection_rate == 0.5
+
+
+def test_a_wholly_blind_run_is_said_once_rather_than_per_camera():
+    detection = TargetDetection(cam_names=["a", "b", "c"])
+    detection.max_ims = 4
+
+    report = DetectionReport.from_detection(detection, _Corners(4))
+
+    assert len(report.flags) == 1
+    assert "no camera detected the target" in report.flags[0]
+
+
+# --------------------------------------------------------------------------
+# Initial intrinsics
+# --------------------------------------------------------------------------
+
+class _StubCamera:
+    """The three attributes the intrinsics report reads off a camera."""
+
+    def __init__(self, focal: float):
+        self.intrinsic = np.array(
+            [[focal, 0.0, 640.0], [0.0, focal, 480.0], [0.0, 0.0, 1.0]])
+        self.distortion_coefs = np.array([0.1, -0.05, 0.0, 0.0])
+        self.res = (1280, 960)
+
+
+class _StubCamSet:
+    def __init__(self, names, focal=1000.0):
+        self._cams = {name: _StubCamera(focal) for name in names}
+
+    def get_names(self):
+        return list(self._cams)
+
+    def __getitem__(self, name):
+        return self._cams[name]
+
+
+def _intrinsics(monkeypatch, rms: dict[str, float], focal=1000.0,
+                n_views=4) -> IntrinsicsReport:
+    """A report over cameras with the given pooled RMS, a NaN meaning the
+    camera was never posed."""
+    from pyCamSet.utils import intrinsics_report as module
+
+    per_view = {
+        name: {"valid_pose": [not np.isnan(value)] * n_views,
+               "n_points": [10] * n_views}
+        for name, value in rms.items()
+    }
+    monkeypatch.setattr(
+        module, "per_view_reprojection", lambda *_: (per_view, rms))
+    return IntrinsicsReport.from_calibration(
+        _StubCamSet(list(rms), focal), SimpleNamespace(max_ims=8), object())
+
+
+def test_the_intrinsics_summary_reports_each_camera(monkeypatch):
+    report = _intrinsics(monkeypatch, {"left": 0.4, "right": 0.6})
+
+    assert [c.name for c in report.per_camera] == ["left", "right"]
+    assert report.per_camera[0].n_views == 4
+    assert report.per_camera[0].n_points == 40
+    assert report.per_camera[0].fx == 1000.0
+    assert report.flags == []
+
+
+def test_a_camera_that_was_never_posed_is_flagged(monkeypatch):
+    report = _intrinsics(monkeypatch, {"left": 0.4, "right": float("nan")})
+
+    assert len(report.flags) == 1
+    assert 'camera "right"' in report.flags[0]
+    assert report.per_camera[1].n_views == 0
+
+
+def test_a_high_initial_rms_is_flagged_with_its_threshold(monkeypatch):
+    report = _intrinsics(monkeypatch, {"left": HIGH_INITIAL_RMS_PX + 1.0})
+
+    assert len(report.flags) == 1
+    assert f"{HIGH_INITIAL_RMS_PX:.0f} px" in report.flags[0]
+
+
+def test_the_intrinsics_summary_fits_a_terminal(monkeypatch):
+    """The fourth block shares the layout, so it shares its one hard
+    constraint: a long camera name and a wide focal length cannot push it
+    past the width."""
+    report = _intrinsics(
+        monkeypatch, {"a_very_long_camera_name_indeed" * 2: 123.456},
+        focal=123456.789)
+
+    over = _over_width(report.summary(colour=True))
+    assert not over, f"initial intrinsics over {MAX_WIDTH}: {over}"
+
+
+def test_the_intrinsics_report_keeps_its_working_out_of_the_record(monkeypatch):
+    """The per view series is one entry per image per camera: the report is
+    computed from it, and the phase records it as a diagnostic of its own."""
+    report = _intrinsics(monkeypatch, {"left": 0.4})
+
+    assert report.per_view
+    assert "per_view" not in report.to_dict()
+    assert report.to_dict()["per_camera"][0]["rms_px"] == 0.4
 
 
 class TestColourBands:

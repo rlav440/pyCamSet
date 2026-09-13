@@ -9,10 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
-from pyCamSet.calibration_targets.charuco_parameters import (
-    by_key,
-    coerce_value,
-)
+from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
 from pyCamSet.workflow.tuning.worker import ParameterRowConfig
 
 _LOG = logging.getLogger(__name__)
@@ -61,25 +58,20 @@ def suggest_for_row(trial: Any, row: ParameterRowConfig) -> Optional[Any]:
 
     Returns ``None`` when *row* is not optimised; otherwise an int or float.
     """
-    if not row.optimise:
+    if not row.optimise or row.key not in ARUCO_OPENCV_DETECTOR:
         return None
-    entry = by_key().get(row.key)
-    if entry is None:
-        return None
-    choices = [choice["value"] for choice in entry.get("choices", [])]
-    if choices:
-        return trial.suggest_categorical(row.key, choices)
+    parameter = ARUCO_OPENCV_DETECTOR.parameter(row.key)
+    if parameter.choices:
+        return trial.suggest_categorical(
+            row.key, [choice.value for choice in parameter.choices])
     if row.lower is None or row.upper is None:
         return None
-    lo = coerce_value(entry, row.lower)
-    hi = coerce_value(entry, row.upper)
+    lo, hi = parameter.cast(row.lower), parameter.cast(row.upper)
     if lo > hi:
         lo, hi = hi, lo
-    if entry["dtype"] == "int":
-        value = int(trial.suggest_int(row.key, int(lo), int(hi)))
-        if entry.get("odd"):  # Some OpenCV params (adaptive-threshold window sizes) must be odd.
-            value |= 1  # Force odd by setting the lowest bit (rounds up to the nearest odd).
-        return value
+    if parameter.dtype == "int":
+        # coerce rounds up to odd where OpenCV requires it of a window size.
+        return parameter.coerce(trial.suggest_int(row.key, int(lo), int(hi)))
     return float(trial.suggest_float(row.key, float(lo), float(hi)))
 
 
@@ -130,12 +122,7 @@ def run_optuna_study(
     Returns the :class:`pyCamSet.workflow.tuning.worker.SuccessRetention`
     populated by the run.
     """
-    from pyCamSet.workflow.tuning.worker import (
-        OptimisationStudy,
-        run_trial,
-        fixed_settings_only,
-        detection_options_from_settings,
-    )
+    from pyCamSet.workflow.tuning.worker import OptimisationStudy, run_trial
     require_optuna()
 
     sampler = make_optuna_sampler(seed=config.seed, sampler_name=config.sampler_name)

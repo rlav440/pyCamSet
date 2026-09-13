@@ -15,24 +15,26 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.calibration_targets.detector_parameters import DetectorParameter
+
 
 _FLOAT_SCALE = 1000  # scaler used when rendering float ranges on integer-only QSlider
 
 
-def _make_spin(entry: dict[str, Any]) -> QDoubleSpinBox | QSpinBox:
+def _make_spin(entry: DetectorParameter) -> QDoubleSpinBox | QSpinBox:
     """Build a spin box appropriate for *entry*'s dtype."""
-    if entry["dtype"] == "int":
+    if entry.dtype == "int":
         spin = QSpinBox()
-        spin.setRange(int(entry["min"]), int(entry["max"]))
-        spin.setSingleStep(int(entry.get("step", 1)) or 1)
-        spin.setValue(int(entry["default"]))
+        spin.setRange(int(entry.minimum), int(entry.maximum))
+        spin.setSingleStep(int(entry.step or 1) or 1)
+        spin.setValue(int(entry.default))
         return spin
     spin = QDoubleSpinBox()
-    spin.setRange(float(entry["min"]), float(entry["max"]))
-    step = float(entry.get("step", 0.01) or 0.01)
+    spin.setRange(float(entry.minimum), float(entry.maximum))
+    step = float(entry.step or 0.01)
     spin.setSingleStep(step)
-    spin.setDecimals(int(entry.get("decimals", 3)))
-    spin.setValue(float(entry["default"]))
+    spin.setDecimals(int((entry.decimals or 3)))
+    spin.setValue(float(entry.default))
     return spin
 
 
@@ -52,15 +54,15 @@ class BoundedSliderRow(QWidget):
     optimiseChanged = Signal(str, bool)
     boundsChanged = Signal(str, object, object)
 
-    def __init__(self, entry: dict[str, Any], parent: Optional[QWidget] = None) -> None:
+    def __init__(self, entry: DetectorParameter, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._entry = entry
-        self._key = entry["key"]
-        self._is_float = entry["dtype"] == "float"
-        self._choices = list(entry.get("choices") or [])
+        self._key = entry.key
+        self._is_float = entry.dtype == "float"
+        self._choices = list(entry.choices)
         self._is_choice = bool(self._choices)
 
-        self._label = QLabel(entry.get("label", entry["key"]))
+        self._label = QLabel(entry.label)
         self._label.setMinimumWidth(220)
 
         self._fixed_spin: QDoubleSpinBox | QSpinBox | None = None
@@ -69,11 +71,11 @@ class BoundedSliderRow(QWidget):
             self._fixed_combo = QComboBox()
             self._fixed_combo.setFixedWidth(170)
             for choice in self._choices:
-                self._fixed_combo.addItem(str(choice["label"]), choice["value"])
-            default_index = self._fixed_combo.findData(entry["default"])
+                self._fixed_combo.addItem(str(choice.label), choice.value)
+            default_index = self._fixed_combo.findData(entry.default)
             if default_index < 0:
                 raise ValueError(
-                    f"Choice metadata for {self._key!r} is missing default value {entry['default']!r}."
+                    f"Choice metadata for {self._key!r} is missing default value {entry.default!r}."
                 )
             self._fixed_combo.setCurrentIndex(default_index)
         else:
@@ -95,11 +97,11 @@ class BoundedSliderRow(QWidget):
             self._upper_spin.setEnabled(False)
             # Default search range = absolute bounds for numeric parameters.
             if self._is_float:
-                self._lower_spin.setValue(float(entry["min"]))
-                self._upper_spin.setValue(float(entry["max"]))
+                self._lower_spin.setValue(float(entry.minimum))
+                self._upper_spin.setValue(float(entry.maximum))
             else:
-                self._lower_spin.setValue(int(entry["min"]))
-                self._upper_spin.setValue(int(entry["max"]))
+                self._lower_spin.setValue(int(entry.minimum))
+                self._upper_spin.setValue(int(entry.maximum))
             self._slider = QSlider(Qt.Orientation.Horizontal)
             self._configure_slider()
 
@@ -138,16 +140,16 @@ class BoundedSliderRow(QWidget):
     def _configure_slider(self) -> None:
         entry = self._entry
         if self._is_float:
-            self._slider.setMinimum(round(float(entry["min"]) * _FLOAT_SCALE))
-            self._slider.setMaximum(round(float(entry["max"]) * _FLOAT_SCALE))
-            self._slider.setValue(self._slider_value(self._normalise_numeric(entry["default"])))
-            step = float(entry.get("step", 0.01) or 0.01)
+            self._slider.setMinimum(round(float(entry.minimum) * _FLOAT_SCALE))
+            self._slider.setMaximum(round(float(entry.maximum) * _FLOAT_SCALE))
+            self._slider.setValue(self._slider_value(self._normalise_numeric(entry.default)))
+            step = float(entry.step or 0.01)
             self._slider.setSingleStep(max(1, round(step * _FLOAT_SCALE)))
         else:
-            self._slider.setMinimum(int(entry["min"]))
-            self._slider.setMaximum(int(entry["max"]))
-            self._slider.setValue(self._slider_value(self._normalise_numeric(entry["default"])))
-            self._slider.setSingleStep(int(entry.get("step", 1)) or 1)
+            self._slider.setMinimum(int(entry.minimum))
+            self._slider.setMaximum(int(entry.maximum))
+            self._slider.setValue(self._slider_value(self._normalise_numeric(entry.default)))
+            self._slider.setSingleStep(int(entry.step or 1) or 1)
 
     # ------------------------------------------------------------------
 
@@ -259,12 +261,12 @@ class BoundedSliderRow(QWidget):
     def _normalise_numeric(self, value: Any) -> Any:
         """Return a value inside the declared range and metadata constraints."""
         if self._is_float:
-            return min(max(float(value), float(self._entry["min"])), float(self._entry["max"]))
+            return min(max(float(value), float(self._entry.minimum)), float(self._entry.maximum))
         result = int(round(float(value)))
-        minimum = int(self._entry["min"])
-        maximum = int(self._entry["max"])
+        minimum = int(self._entry.minimum)
+        maximum = int(self._entry.maximum)
         result = min(max(result, minimum), maximum)
-        if self._entry.get("odd") and result % 2 == 0:
+        if self._entry.odd and result % 2 == 0:
             candidates = [
                 candidate
                 for candidate in (result - 1, result + 1)

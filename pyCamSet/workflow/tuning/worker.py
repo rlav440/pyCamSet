@@ -30,14 +30,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from pyCamSet.calibration_targets.charuco_parameters import (
-    assemble_detection_options,
-    by_key,
-    clamp_to_bounds,
-    default_fixed_settings,
-    searchable,
-    validate_all_rows,
-)
+from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
 from pyCamSet.calibration_targets.target_registry import build_target
 from pyCamSet.workflow.tuning.study import (
     FAILURE_SCORE,
@@ -197,32 +190,24 @@ def build_effective_settings(
       value (coerced and clamped to absolute bounds);
     - otherwise use the row's fixed value (coerced and clamped).
     """
-    known = by_key()
-    out: dict[str, Any] = {}
+    detector = ARUCO_OPENCV_DETECTOR
     # Start from declared defaults so unspecified rows keep deterministic values.
-    for entry in searchable():
-        out[entry["key"]] = entry["default"]
+    out: dict[str, Any] = {p.key: p.default for p in detector.tunable()}
     sampled = sampled or {}
     for row in rows:
-        entry = known.get(row.key)
-        if entry is None:
+        if row.key not in detector:
             continue
         if row.optimise and row.key in sampled:
             value = sampled[row.key]
         else:
             value = row.fixed
-        out[row.key] = clamp_to_bounds(entry, value)
+        out[row.key] = detector.parameter(row.key).coerce(value)
     return out
 
 
 def fixed_settings_only(rows: list[ParameterRowConfig]) -> dict[str, Any]:
     """Return only the user-defined fixed values (used for baseline run)."""
     return build_effective_settings(rows, sampled=None)
-
-
-def detection_options_from_settings(values: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Group a flat settings dict back into the OpenCV sub-dict shape."""
-    return assemble_detection_options(values)
 
 
 # ---------------------------------------------------------------------------
@@ -499,7 +484,6 @@ def run_trial(
     policy.
     """
     effective = build_effective_settings(rows, sampled=sampled)
-    grouped = detection_options_from_settings(effective)
     optimised_keys = [r.key for r in rows if r.optimise]
     bounds = {
         r.key: {"lower": float(r.lower), "upper": float(r.upper)}
@@ -516,11 +500,11 @@ def run_trial(
         trial_params=dict(sampled or {}),
     )
 
-    payload: dict[str, Any] = {"detection_options": grouped}
+    payload: dict[str, Any] = {"detection_options": effective}
 
     # ---- Stage A: detection -------------------------------------------------
     try:
-        detection_payload = detection_fn(Path(config.f_loc), grouped, config.target)
+        detection_payload = detection_fn(Path(config.f_loc), effective, config.target)
     except Exception as exc:  # pragma: no cover - defensive; tests inject fakes
         result.failure_reason = f"detection_fn raised: {exc!r}"
         result.failure_stage = "detection"
@@ -758,27 +742,16 @@ class OptimisationStudy:
             trial_gating=self.config.trial_gating.as_dict(),
         )
         errors.extend(
-            validate_all_rows(
-                {
-                    "key": r.key,
-                    "fixed": r.fixed,
-                    "optimise": r.optimise,
-                    "lower": r.lower,
-                    "upper": r.upper,
-                }
-                for r in self.config.parameter_rows
-            )
-        )
+            ARUCO_OPENCV_DETECTOR.validate_rows(self.config.parameter_rows))
         return errors
 
     # ------------------------------------------------------------------
 
     def compute_baseline(self) -> Optional[int]:
         """Run detection once with fixed defaults to anchor :math:`point\\_ratio` ."""
-        baseline_settings = fixed_settings_only(self.config.parameter_rows)
-        grouped = detection_options_from_settings(baseline_settings)
+        effective = fixed_settings_only(self.config.parameter_rows)
         try:
-            payload = self.detection_fn(Path(self.config.f_loc), grouped, self.config.target)
+            payload = self.detection_fn(Path(self.config.f_loc), effective, self.config.target)
         except Exception as exc:
             _LOG.warning("Baseline detection failed: %r", exc)
             return None
@@ -965,7 +938,6 @@ __all__ = [
     "run_trial",
     "build_effective_settings",
     "fixed_settings_only",
-    "detection_options_from_settings",
     "default_detection_fn",
     "default_phase2_fn",
     "default_phase3_fn",

@@ -54,7 +54,9 @@ def test_charuco_renders_detects_and_returns_saved_path(tmp_path: Path) -> None:
 
 
 def test_charuco_factory_validates_backend_and_dictionary() -> None:
-    with pytest.raises(ValueError, match="marker_backend"):
+    # The refusal is the target's now rather than the factory's: a target
+    # names the detectors it can be read with, and this is not one of them.
+    with pytest.raises(ValueError, match="cannot be detected with 'unknown'"):
         build_charuco(5, 7, 4, marker_backend="unknown")
     with pytest.raises(ValueError, match="Unknown ArUco dictionary"):
         build_charuco(5, 7, 4, aruco_dict="NOT_A_DICTIONARY")

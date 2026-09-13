@@ -15,14 +15,12 @@ from tqdm import tqdm
 
 from pyCamSet.calibration_targets import AbstractTarget, ImageDetection, FaceToShape
 from pyCamSet.calibration_targets.aruco2_detection import (
+    ARUCO2_DETECTOR,
     detect_markers,
     interpolate_board_corners,
     resolve_dictionary,
 )
-from pyCamSet.calibration_targets.charuco_detection import (
-    build_charuco_detector_components,
-    construct_charuco_detector,
-)
+from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform, downsample_valid
 
@@ -82,6 +80,11 @@ class Ccube(AbstractTarget):
     This class defines a calibration target that consists of a Cube of ChArUco boards.
     """
 
+    DETECTOR_BACKENDS = {
+        "aruco1": ARUCO_OPENCV_DETECTOR,
+        "aruco2": ARUCO2_DETECTOR,
+    }
+
     def __init__(self, length=20, n_points=5,
                  aruco_dict=aruco.DICT_4X4_1000,
                  draw_res=(1000, 1000),
@@ -91,14 +94,10 @@ class Ccube(AbstractTarget):
                  marker_backend: str = "aruco1",
                  detection_options: dict | None = None,
                  ):
-        super().__init__(inputs=locals())
+        super().__init__(inputs=locals(), backend=marker_backend)
         self.input_border_fraction = border_fraction
         self.actual_border_fraction = None
         self.line_fraction = line_fraction
-        if marker_backend not in ("aruco1", "aruco2"):
-            raise ValueError(
-                f"marker_backend must be 'aruco1' or 'aruco2', got {marker_backend!r}"
-            )
         self.marker_backend = marker_backend
         # FIX 1 (R1): only coerce ints. The pre-existing API also accepts a
         # cv2.aruco.Dictionary object (split_aruco_dictionary handles both);
@@ -133,18 +132,6 @@ class Ccube(AbstractTarget):
             for a_dict in self.a_dicts][:6] #only need 6 of them!
         if legacy:
             [b.setLegacyPattern(True) for b in self.boards]
-        self.detection_options = detection_options or {}  # Store the shared ChArUco detector overrides.
-        if marker_backend == "aruco2" and self.detection_options:
-            if not getattr(self, "_warned_detection_options", False):
-                logger.warning(
-                    "Ccube: detection_options are OpenCV-only and are ignored "
-                    "with marker_backend='aruco2'."
-                )
-                self._warned_detection_options = True
-        self.detection_params, self.detector_params, self.refine_params = build_charuco_detector_components(
-            self.detection_options
-        )  # Build one shared parameter bundle for all six faces.
-
         self.n_points = n_points
         self.draw_res = draw_res
         self.dpi = self.draw_res[0] / self.length / 39.3701  # inch conversion
@@ -644,13 +631,10 @@ class Ccube(AbstractTarget):
             image = image.astype(np.uint8)
 
         if self.board_detectors is None:
+            # Built here rather than in __init__: six detectors are expensive
+            # and a cube is often made only to be printed.
             self.board_detectors = [
-                construct_charuco_detector(
-                    board,
-                    self.detection_params,
-                    self.detector_params,
-                    self.refine_params,
-                )  # Reuse the shared constructor/fallback path for each face detector.
+                ARUCO_OPENCV_DETECTOR.build_detector(board, self.detection_options)
                 for board in self.boards
             ]
 

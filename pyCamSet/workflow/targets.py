@@ -24,8 +24,8 @@ TARGET_KEY = "target"
 TARGET_CHOICES = list(TARGET_NAMES)
 
 #: The targets whose phase 1 detection reads ChArUco corners, and which
-#: therefore accept the detector options in
-#: :mod:`pyCamSet.calibration_targets.charuco_parameters`.
+#: therefore accept the detector options described by
+#: :class:`~pyCamSet.calibration_targets.charuco_detection.ArucoOpenCVDetector`.
 CHARUCO_BASED_TARGETS = {"Ccube", "ChArUco"}
 
 

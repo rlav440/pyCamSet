@@ -83,12 +83,7 @@ from pyCamSet.workflow.params import (
     require_image_folder,
     require_marker_backend,
 )
-from pyCamSet.calibration_targets.charuco_parameters import (
-    choice_labels,
-    collect_detection_options,
-    label_for,
-    typeable,
-)
+from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
 from pyCamSet.workflow.recent_folders import remember_folder
 from pyCamSet.workflow.recent_targets import (
     forget_target, load_recent_targets, remember_target)
@@ -527,34 +522,32 @@ class Phase1Tab(QWidget):
         self._charuco_opts_section.addRow(charuco_note)
 
         active_priority = None
-        for meta in typeable():
-            priority = meta["priority"]
-            if priority != active_priority:
-                active_priority = priority
-                p_lbl = QLabel(f"Priority {priority}")
+        for meta in ARUCO_OPENCV_DETECTOR.settable():
+            if meta.priority != active_priority:
+                active_priority = meta.priority
+                p_lbl = QLabel(f"Priority {meta.priority}")
                 p_lbl.setStyleSheet("color: #1976d2; font-weight: bold;")
                 self._charuco_opts_section.addRow(p_lbl)
 
             widget: QWidget
-            if meta["value_type"] == "enum":
+            if meta.choices:
                 combo = QComboBox()
-                combo.addItems(choice_labels(meta))
-                combo.setCurrentText(label_for(meta, meta["default"]))
+                combo.addItems(meta.choice_labels())
+                combo.setCurrentText(meta.label_for(meta.default))
                 combo.setFixedWidth(220)
                 widget = combo
             else:
-                edit = QLineEdit("" if meta["default"] == "" else str(meta["default"]))
+                edit = QLineEdit("" if meta.default == "" else str(meta.default))
                 edit.setFixedWidth(220)
-                if meta["value_type"] == "json_matrix":
+                if meta.dtype == "json_matrix_3x3":
                     edit.setPlaceholderText('e.g. [[fx,0,cx],[0,fy,cy],[0,0,1]] or blank')
-                elif meta["value_type"] == "json_vector":
+                elif meta.dtype == "json_vector":
                     edit.setPlaceholderText("e.g. [k1,k2,p1,p2,k3] or blank")
                 widget = edit
 
-            tooltip = build_charuco_option_tooltip(meta)
-            widget.setToolTip(tooltip)
-            self._charuco_opts_section.addRow(f"{meta['label']}:", widget)
-            self._charuco_option_widgets[meta["key"]] = widget
+            widget.setToolTip(build_charuco_option_tooltip(meta))
+            self._charuco_opts_section.addRow(f"{meta.label}:", widget)
+            self._charuco_option_widgets[meta.key] = widget
 
         # ── Camera selection (populated from Phase 0) ──────────────────
         form_root.addWidget(make_separator())
@@ -740,7 +733,7 @@ class Phase1Tab(QWidget):
                 elif isinstance(widget, QLineEdit):
                     raw_charuco_values[key] = widget.text().strip()
             try:
-                charuco_detection_options = collect_detection_options(
+                charuco_detection_options = ARUCO_OPENCV_DETECTOR.parse(
                     raw_charuco_values)
             except ValueError as exc:
                 raise ParamError(str(exc)) from None

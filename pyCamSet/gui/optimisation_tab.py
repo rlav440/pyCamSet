@@ -56,9 +56,7 @@ from pyCamSet.gui.shared_functions import (
     make_section_label,
     repopulate_dict_combo,
 )
-from pyCamSet.calibration_targets.charuco_parameters import (
-    searchable,
-)
+from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
 from pyCamSet.workflow.tuning.profiles import (
     CHARUCO_DETECTION_PROFILE_NAMES,
     get_charuco_detection_profile,
@@ -483,11 +481,11 @@ class OptimisationTab(QWidget):
         form_wrap.setLayout(form)
         v.addWidget(form_wrap)
         # Build one editable parameter row for each metadata entry.
-        for entry in searchable():
+        for entry in ARUCO_OPENCV_DETECTOR.tunable():
             row = BoundedSliderRow(entry)
             # Watch bound edits so manual changes can flip the selector to Custom.
             row.boundsChanged.connect(self._on_detection_profile_bounds_changed)
-            self._param_rows[entry["key"]] = row
+            self._param_rows[entry.key] = row
             v.addWidget(row)
         # Populate initial bounds from the default profile on first load.
         self._apply_detection_profile("Balanced")
@@ -742,7 +740,7 @@ class OptimisationTab(QWidget):
 
     def _parameter_key_to_label_map(self) -> dict[str, str]:
         """Return a stable key->label mapping for detector parameter UI text."""
-        return {entry["key"]: entry.get("label", entry["key"]) for entry in searchable()}
+        return {entry.key: entry.label for entry in ARUCO_OPENCV_DETECTOR.tunable()}
 
     def _on_detection_profile_changed(self, profile_name: str) -> None:
         # Ignore recursive signal traffic while profile bounds are being copied in.

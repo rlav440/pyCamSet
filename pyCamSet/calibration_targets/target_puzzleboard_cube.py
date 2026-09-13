@@ -10,7 +10,10 @@ from PIL import Image  # Convert rasterised SVG data to PDF and texture arrays.
 import svgwrite  # Write compact vector rectangles, polygons, and circles.
 
 from pyCamSet.calibration_targets import AbstractTarget, FaceToShape, ImageDetection  # Reuse pyCamSet target contracts.
-from pyCamSet.calibration_targets.puzzleboard_detection import detect_puzzleboard_image  # Use the credited PuzzleBoard detector.
+from pyCamSet.calibration_targets.puzzleboard_detection import (
+    PUZZLEBOARD_DETECTOR,
+    detect_puzzleboard_image,
+)  # Use the credited PuzzleBoard detector.
 from pyCamSet.calibration_targets.target_puzzleboard import _CODE_FIELD, _CODE_SIZE  # Reuse the exact generator code field.
 from pyCamSet.cameras import Camera  # Keep the standard find_in_image signature.
 from pyCamSet.utils.general_utils import make_4x4h_tform  # Convert cube face pose vectors to homogeneous transforms.
@@ -72,6 +75,8 @@ MAX_FACE_SQUARES = (  # Enforce the six-face horizontal packing limit from the 5
 
 class PuzzleBoardCube(AbstractTarget):
     """Define a deterministic six-face PuzzleBoard calibration target."""
+
+    DETECTOR_BACKENDS = {"puzzle_board": PUZZLEBOARD_DETECTOR}
 
     def __init__(
         self,
@@ -174,7 +179,6 @@ class PuzzleBoardCube(AbstractTarget):
                                                  if face_reassignment_intrinsics_cx is not None else None)
         self.face_reassignment_intrinsics_cy = (float(face_reassignment_intrinsics_cy)
                                                  if face_reassignment_intrinsics_cy is not None else None)
-        self.detection_options = detection_options or {}  # Retain a future detector-options extension point.
         self.layout_version = CODE_LAYOUT_VERSION  # Record the deterministic face-layout version on the target.
         self.face_origins = self.face_origins_for_size(self.n_points)  # Assign six disjoint code windows.
         self.face_length = self.length / 1000.0  # Convert the configured total cube edge to metres.

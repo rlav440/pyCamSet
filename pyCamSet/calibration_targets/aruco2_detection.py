@@ -20,6 +20,15 @@ from pyCamSet.calibration_targets.backend_registry import validate_marker_backen
 
 _LOG = logging.getLogger(__name__)
 
+from pyCamSet.calibration_targets.backend_registry import (
+    ARUCO2_BACKEND,
+    marker_backend_available,
+)
+from pyCamSet.calibration_targets.detector_parameters import (
+    DetectorParameter,
+    DetectorParameterisation,
+)
+
 # Module-level lazy aruco2 import guard (D3): the module must import cleanly
 # even when aruco2 is not installed. ARUCO2_AVAILABLE is the single source of
 # truth for availability checks in the target classes.
@@ -298,3 +307,33 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
 
     # step 10: return (corner_ids 1D, pts (N,2)).
     return corner_ids, refined
+
+
+class Aruco2Detector(DetectorParameterisation):
+    """
+    The aruco2 package's marker detector, which takes no settings.
+
+    ``aruco2.detect_fiducial_markers`` is given an image and a dictionary and
+    nothing else, so there is nothing here for a form to show or a study to
+    sweep.  Said as an empty parameterisation rather than left undescribed:
+    a target reading its markers this way used to accept OpenCV's settings,
+    warn that they were being ignored, and ignore them.
+    """
+
+    name = ARUCO2_BACKEND
+
+    @property
+    def parameters(self) -> tuple[DetectorParameter, ...]:
+        return ()
+
+    def unavailable_reason(self, values: dict | None = None) -> str | None:
+        if marker_backend_available(ARUCO2_BACKEND):
+            return None
+        return (
+            "ArUco 2 (aruco2) is selected but the 'aruco2' package is not "
+            "installed. Install it with `pip install aruco2` or switch the "
+            "marker backend to ArUco 1 (OpenCV).")
+
+
+#: Shared rather than built per target: it describes nothing per instance.
+ARUCO2_DETECTOR = Aruco2Detector()

@@ -11,7 +11,10 @@ from PIL import Image  # Convert SVG PNG output to a raster PDF when requested.
 import svgwrite  # Write compact SVG primitives directly to disk.
 
 from pyCamSet.calibration_targets import AbstractTarget, ImageDetection  # Reuse pyCamSet target contracts.
-from pyCamSet.calibration_targets.puzzleboard_detection import detect_puzzleboard_image  # Use the external detector adapter.
+from pyCamSet.calibration_targets.puzzleboard_detection import (
+    PUZZLEBOARD_DETECTOR,
+    detect_puzzleboard_image,
+)  # Use the external detector adapter.
 from pyCamSet.cameras import Camera  # Keep the find_in_image signature consistent with other targets.
 
 
@@ -54,6 +57,8 @@ _CODE_FIELD = _generate_code()  # Build the immutable field once when this modul
 class PuzzleBoard(AbstractTarget):
     """Define a PuzzleBoard target, detector adapter, and vector export methods."""
 
+    DETECTOR_BACKENDS = {"puzzle_board": PUZZLEBOARD_DETECTOR}
+
     def __init__(
         self,
         num_squares_x: int = 105,
@@ -76,7 +81,6 @@ class PuzzleBoard(AbstractTarget):
         self.paper_width = float(paper_width)  # Store the SVG page width in millimetres.
         self.paper_height = float(paper_height)  # Store the SVG page height in millimetres.
         self.min_width = int(min_width)  # Store the minimum detector grid width.
-        self.detection_options = detection_options or {}  # Retain a compatible extension point for detector settings.
         self._validate_dimensions()  # Reject invalid windows before object-point construction.
         self.point_data = self._make_point_data()  # Index object points by the detector's global grid position.
         self._process_data()  # Compute pyCamSet's local object-point representation.

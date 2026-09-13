@@ -1,101 +1,114 @@
-from __future__ import annotations  # Keep postponed annotations consistent with the package style.
+"""
+OpenCV's ChArUco detector, and everything it can be told.
 
-import logging  # Emit compatibility warnings from one shared location.
+The parameters themselves are stored beside this file rather than written
+here: twenty-one rows saying what each is called, what it defaults to, the
+bounds a study may search between, and the prose a person reads while typing
+one in.  This is what turns them into the three parameter objects OpenCV
+actually wants, and into the detector that holds them.
 
-import numpy as np  # Convert JSON-like matrix inputs to OpenCV-friendly arrays.
-from cv2 import aruco  # Reuse OpenCV's ArUco/ChArUco APIs in one place.
+Shared by ChArUco and Ccube, which read the same markers with the same
+library and differ only in how many boards they point it at.
+"""
+from __future__ import annotations
 
-_LOG = logging.getLogger(__name__)  # Reuse one logger for OpenCV constructor fallbacks.
+import logging
+from pathlib import Path
+from typing import Any
 
+import numpy as np
+from cv2 import aruco
 
-def _group_options(detection_options: dict | None, group_name: str) -> dict:
-    """Return one detector-option subgroup, normalised to a plain dict."""
-    options = detection_options or {}  # Treat omitted detection options as empty input.
-    group = options.get(group_name, {}) or {}  # Treat missing sub-groups as empty too.
-    return dict(group)  # Copy to avoid mutating caller-owned option mappings.
+from pyCamSet.calibration_targets.detector_parameters import (
+    DetectorParameter,
+    DetectorParameterisation,
+    parameters_from_json,
+)
 
+_LOG = logging.getLogger(__name__)
 
-def _coerce_corner_refinement_method(value):
-    """Resolve enum-like string values to OpenCV constants when needed."""
-    if isinstance(value, str):  # GUI values arrive as enum names.
-        resolved = getattr(aruco, value, None)  # Look up the OpenCV constant by name.
-        if resolved is None:  # Unknown name: fail clearly rather than passing a bad string to OpenCV.
-            raise ValueError(
-                f"Unknown corner refinement method {value!r}; expected one of "
-                "NONE, REFINE_SUBPIX, REFINE_CONTOUR, REFINE_APRILTAG."
-            )
-        return resolved
-    return value  # Pass through numeric/native values unchanged.
-
-
-def build_charuco_parameters(detection_options: dict | None) -> aruco.CharucoParameters:
-    """Build ``aruco.CharucoParameters`` from normalised GUI options."""
-    params = aruco.CharucoParameters()  # Start from OpenCV's default Charuco parameters.
-    params.tryRefineMarkers = True  # Preserve the existing default behaviour for both targets.
-    for key, value in _group_options(detection_options, "CharucoParameters").items():  # Apply user overrides.
-        if not hasattr(params, key):  # Ignore unknown keys for forward/backward compatibility.
-            continue  # Skip unsupported parameters on this OpenCV build.
-        if value is None:  # Optional GUI fields can intentionally stay unset.
-            continue  # Leave the OpenCV default intact.
-        if key in {"cameraMatrix", "distCoeffs"}:  # These fields cross the Python/C++ boundary.
-            value = np.asarray(value, dtype=np.float64)  # Normalise them to float64 numpy arrays.
-        setattr(params, key, value)  # Apply the validated option to OpenCV's parameter object.
-    return params  # Return the fully configured Charuco parameters.
+_PARAMETERS = parameters_from_json(
+    Path(__file__).parent / "charuco_parameters.json")
 
 
-def build_detector_parameters(detection_options: dict | None) -> aruco.DetectorParameters:
-    """Build ``aruco.DetectorParameters`` from normalised GUI options."""
-    params = aruco.DetectorParameters()  # Start from OpenCV's default detector parameters.
-    for key, value in _group_options(detection_options, "DetectorParameters").items():  # Apply user overrides.
-        if not hasattr(params, key):  # Ignore keys missing on this OpenCV build.
-            continue  # Preserve compatibility with older/newer bindings.
-        if value is None:  # Skip intentionally empty values.
-            continue  # Keep the OpenCV default for this field.
-        if key == "cornerRefinementMethod":  # Enum values can arrive as strings from the GUI.
-            value = _coerce_corner_refinement_method(value)  # Resolve names to OpenCV constants.
-        setattr(params, key, value)  # Apply the validated option.
-    return params  # Return the fully configured detector parameters.
+class ArucoOpenCVDetector(DetectorParameterisation):
+    """OpenCV's ``aruco.CharucoDetector``, and the settings it takes."""
 
+    name = "aruco1"
 
-def build_refine_parameters(detection_options: dict | None) -> aruco.RefineParameters:
-    """Build ``aruco.RefineParameters`` from normalised GUI options."""
-    params = aruco.RefineParameters()  # Start from OpenCV's default board-refinement parameters.
-    for key, value in _group_options(detection_options, "RefineParameters").items():  # Apply user overrides.
-        if not hasattr(params, key):  # Ignore unsupported keys for compatibility.
-            continue  # Leave unsupported fields untouched.
-        if value is None:  # Skip intentionally omitted values.
-            continue  # Preserve the OpenCV default.
-        setattr(params, key, value)  # Apply the validated option.
-    return params  # Return the configured refinement parameters.
+    @property
+    def parameters(self) -> tuple[DetectorParameter, ...]:
+        return _PARAMETERS
 
+    def validate(self, values: dict[str, Any]) -> list[str]:
+        """The one rule OpenCV holds between two of its parameters."""
+        low = values.get("adaptiveThreshWinSizeMin")
+        high = values.get("adaptiveThreshWinSizeMax")
+        if low is None or high is None or high >= low:
+            return []
+        return ["adaptiveThreshWinSizeMax must be >= adaptiveThreshWinSizeMin."]
 
-def build_charuco_detector_components(
-    detection_options: dict | None,
-) -> tuple[aruco.CharucoParameters, aruco.DetectorParameters, aruco.RefineParameters]:
-    """Build the three OpenCV parameter objects needed for ChArUco detection."""
-    charuco_parameters = build_charuco_parameters(detection_options)  # Build interpolation parameters first.
-    detector_parameters = build_detector_parameters(detection_options)  # Build marker-detection parameters next.
-    refine_parameters = build_refine_parameters(detection_options)  # Build board-guided refinement parameters last.
-    return charuco_parameters, detector_parameters, refine_parameters  # Return the shared parameter bundle.
+    # -- applying the settings -------------------------------------------
 
+    def grouped(self, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """
+        *values* arranged as the sub-objects OpenCV keeps them in.
 
-def construct_charuco_detector(
-    board,
-    charuco_parameters: aruco.CharucoParameters,
-    detector_parameters: aruco.DetectorParameters,
-    refine_parameters: aruco.RefineParameters,
-):
-    """Construct ``aruco.CharucoDetector`` with a backwards-compatible fallback."""
-    try:  # Prefer the full modern constructor when the OpenCV build supports it.
-        return aruco.CharucoDetector(  # Create the detector with all three parameter objects.
-            board,  # Pass the target board geometry.
-            charuco_parameters,  # Pass ChArUco interpolation parameters.
-            detector_parameters,  # Pass marker detector parameters.
-            refine_parameters,  # Pass board-refinement parameters.
+        A key this build of OpenCV does not know is dropped rather than
+        raised on, which is how :meth:`_apply` treats one too.
+        """
+        groups: dict[str, dict[str, Any]] = {}
+        for parameter in self.parameters:
+            if parameter.key in values:
+                groups.setdefault(parameter.group, {})[
+                    parameter.key] = values[parameter.key]
+        return groups
+
+    def _apply(self, params, group: dict[str, Any]):
+        """Set what *group* says on one of OpenCV's parameter objects."""
+        for key, value in group.items():
+            if value is None or not hasattr(params, key):
+                # An unset optional field keeps OpenCV's own default, and a
+                # field this build has never heard of is not ours to set.
+                continue
+            if key in ("cameraMatrix", "distCoeffs"):
+                value = np.asarray(value, dtype=np.float64)
+            setattr(params, key, value)
+        return params
+
+    def build_parameters(
+        self, values: dict[str, Any]
+    ) -> tuple[aruco.CharucoParameters, aruco.DetectorParameters, aruco.RefineParameters]:
+        """The three parameter objects ChArUco detection needs."""
+        groups = self.grouped(values)
+        charuco = aruco.CharucoParameters()
+        charuco.tryRefineMarkers = True
+        return (
+            self._apply(charuco, groups.get("CharucoParameters", {})),
+            self._apply(aruco.DetectorParameters(),
+                        groups.get("DetectorParameters", {})),
+            self._apply(aruco.RefineParameters(),
+                        groups.get("RefineParameters", {})),
         )
-    except TypeError:  # Older OpenCV builds only support ``(board, charucoParams)``.
-        _LOG.warning(  # Log the compatibility downgrade once per attempted construction.
-            "OpenCV CharucoDetector constructor does not support DetectorParameters/RefineParameters; "
-            "falling back to CharucoParameters-only detector construction."
-        )
-        return aruco.CharucoDetector(board, charuco_parameters)  # Fall back to the legacy constructor.
+
+    def build_detector(self, board, values: dict[str, Any]):
+        """
+        The detector *board* is read with, holding what *values* say.
+
+        :param board: the ``aruco.CharucoBoard`` to detect
+        :param values: the settings, as :meth:`resolve` returns them
+        """
+        charuco, detector, refine = self.build_parameters(values)
+        try:
+            return aruco.CharucoDetector(board, charuco, detector, refine)
+        except TypeError:
+            _LOG.warning(
+                "OpenCV CharucoDetector constructor does not support "
+                "DetectorParameters/RefineParameters; falling back to "
+                "CharucoParameters-only detector construction.")
+            return aruco.CharucoDetector(board, charuco)
+
+
+#: Shared rather than built per target: the settings live on the target, and
+#: this holds only the description of them.
+ARUCO_OPENCV_DETECTOR = ArucoOpenCVDetector()

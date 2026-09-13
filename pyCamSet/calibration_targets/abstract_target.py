@@ -19,6 +19,11 @@ import signal
 
 from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
+from pyCamSet.calibration_targets.detector_parameters import (
+    NO_DETECTOR_PARAMETERS,
+    DetectorParameterisation,
+    combine,
+)
 from pyCamSet.calibration_targets.target_detections import TargetDetection, ImageDetection
 
 
@@ -71,9 +76,24 @@ class AbstractTarget(ABC):
     the required parameters to initialise the target.
 
     Inheriting targets may also define: a printable shape, which is either the target, or can then be folded onto a base shape and a plotting function which draws some visualisation of the target.
+
+    A target is also detected somehow, and what that detection can be told is
+    described rather than hardcoded: :data:`DETECTOR_BACKENDS` names the
+    detectors this target can read itself with and
+    :meth:`own_detector_parameters` any settings of its own
+    ``find_in_image``, which are the ones that are nobody else's business --
+    a cube's face-consistency gate is not the detector's. Together they are
+    :meth:`detector_parameterisation`, which is what a form builds itself
+    from and what a study sweeps. A target that is never detected declares
+    neither and gets an empty parameterisation, which works.
     """
 
-    def __init__(self, inputs: dict):
+    #: The detectors this target can read itself with, by the name its
+    #: constructor selects them by. The first is the default. A target that
+    #: is never detected leaves this empty.
+    DETECTOR_BACKENDS: dict[str, DetectorParameterisation] = {}
+
+    def __init__(self, inputs: dict, backend: str | None = None):
         inputs.pop('self', None)
         inputs.pop('__class__', None)
         for k,v in inputs.items():
@@ -84,8 +104,50 @@ class AbstractTarget(ABC):
 
         self.point_local = None #: np.ndarray = self.make_local()
         self.original_points = None # = self.point_data.copy()
-        self.input_args = inputs
         self.valid_map = True
+
+        self.detection_parameters = self.detector_parameterisation(backend)
+        self.detection_options = self.detection_parameters.resolve(
+            inputs.get("detection_options"))
+        if "detection_options" in inputs:
+            # Written back so that a spec taken from this target rebuilds it
+            # exactly, whatever subset of the settings it was given.
+            inputs["detection_options"] = self.detection_options
+        self.input_args = inputs
+
+    @classmethod
+    def own_detector_parameters(cls) -> DetectorParameterisation:
+        """
+        The settings this target's own ``find_in_image`` takes.
+
+        Not the detector's: what the target does with what the detector
+        hands back. Targets that do nothing of their own declare nothing.
+        """
+        return NO_DETECTOR_PARAMETERS
+
+    @classmethod
+    def detector_parameterisation(cls, backend: str | None = None) -> DetectorParameterisation:
+        """
+        Everything that alters this target's detection, described as data.
+
+        This target's own settings beside those of the detector it is read
+        with, which is what a phase 1 form shows, what a study sweeps, and
+        what a target resolves its ``detection_options`` against.
+
+        :param backend: which of :data:`DETECTOR_BACKENDS` to describe;
+            defaults to the first
+        :raises ValueError: for a backend this target cannot be read with
+        """
+        if not cls.DETECTOR_BACKENDS:
+            return cls.own_detector_parameters()
+        if backend is None:
+            backend = next(iter(cls.DETECTOR_BACKENDS))
+        if backend not in cls.DETECTOR_BACKENDS:
+            raise ValueError(
+                f"{cls.__name__} cannot be detected with {backend!r}; "
+                f"expected one of {', '.join(cls.DETECTOR_BACKENDS)}.")
+        return combine(cls.own_detector_parameters(),
+                       cls.DETECTOR_BACKENDS[backend])
 
     def _process_data(self):
         """

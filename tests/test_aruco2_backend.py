@@ -31,8 +31,7 @@ from pyCamSet.calibration_targets.backend_registry import (
 from pyCamSet.calibration_targets.target_charuco import ChArUco
 from pyCamSet.calibration_targets.target_Ccube import Ccube
 from pyCamSet.calibration_targets.charuco_detection import (
-    build_charuco_detector_components,
-    construct_charuco_detector,
+    ARUCO_OPENCV_DETECTOR,
 )
 
 
@@ -257,8 +256,8 @@ def test_accuracy_vs_charuco_detector():
                 marker_backend="aruco2")
     img = b._render_board(px_per_mm=8.0).astype(np.uint8)
     b1 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0)
-    dp, dtp, rp = build_charuco_detector_components({})
-    gt_det = construct_charuco_detector(b1.board, dp, dtp, rp)
+    gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
+        b1.board, ARUCO_OPENCV_DETECTOR.resolve(None))
     # both warps are within the finding's stated 40-60% top-edge range; the
     # 0.8 case is excluded because its marker-corner differences are even
     # larger (max 5.86px) and its corner max (3.96px) exceeds the documented
@@ -293,8 +292,8 @@ def test_legacy_even_row_position_level_both_backends():
         img = board._render_board(px_per_mm=8.0).astype(np.uint8)
         det = board.find_in_image(img)
         assert _count(det) > 0, f"{backend}: no corners"
-        dp, dtp, rp = build_charuco_detector_components({})
-        gt_det = construct_charuco_detector(board.board, dp, dtp, rp)
+        gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
+            board.board, ARUCO_OPENCV_DETECTOR.resolve(None))
         gt_c, gt_ids, _, _ = gt_det.detectBoard(img)
         gt_map = {int(i): np.asarray(pt, float).reshape(-1)
                   for i, pt in zip(np.asarray(gt_ids).reshape(-1), gt_c[:, 0])}
@@ -319,8 +318,8 @@ def test_legacy_wrong_flag_auto_toggle():
     # once-per-target warning text.
     assert board.board.getLegacyPattern() is True, (
         "auto-toggle did not leave the board flagged legacy")
-    dp, dtp, rp = build_charuco_detector_components({})
-    gt_det = construct_charuco_detector(ref.board, dp, dtp, rp)
+    gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
+        ref.board, ARUCO_OPENCV_DETECTOR.resolve(None))
     gt_c, gt_ids, _, _ = gt_det.detectBoard(img)
     gt_map = {int(i): np.asarray(pt, float).reshape(-1)
               for i, pt in zip(np.asarray(gt_ids).reshape(-1), gt_c[:, 0])}

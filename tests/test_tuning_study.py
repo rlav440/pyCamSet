@@ -513,7 +513,6 @@ def test_the_real_stages_satisfy_the_contract_the_fakes_assume(session_data_dir)
     from pyCamSet.workflow.tuning.worker import (
         default_detection_fn,
         default_phase2_fn,
-        detection_options_from_settings,
         fixed_settings_only,
     )
 
@@ -525,7 +524,7 @@ def test_the_real_stages_satisfy_the_contract_the_fakes_assume(session_data_dir)
         target_type="ChArUco", num_squares_x=20, num_squares_y=20,
         square_size=4.0, a_dict=3, legacy=True)
     rows = [ParameterRowConfig(key=PARAMETER, fixed=0.03)]
-    options = detection_options_from_settings(fixed_settings_only(rows))
+    options = fixed_settings_only(rows)
 
     payload = default_detection_fn(
         session_data_dir / "calibration_charuco", options, target)

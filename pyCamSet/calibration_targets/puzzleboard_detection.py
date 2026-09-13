@@ -3,6 +3,11 @@ from __future__ import annotations  # Keep annotations consistent with pyCamSet 
 import cv2  # Convert pyCamSet's OpenCV images to the detector's expected colour order.
 import numpy as np  # Type and shape normalisation for detector inputs.
 
+from pyCamSet.calibration_targets.detector_parameters import (
+    DetectorParameter,
+    DetectorParameterisation,
+)
+
 
 def prepare_puzzleboard_image(image: np.ndarray) -> np.ndarray:
     """Convert a pyCamSet image to the RGB format expected by PuzzleBoard."""
@@ -28,3 +33,35 @@ def detect_puzzleboard_image(
 
     detector_image = prepare_puzzleboard_image(image)  # Normalise the image before external detection.
     return detect_puzzleboard(detector_image, min_width=int(min_width))  # Preserve the original detector output.
+
+
+class PuzzleBoardDetector(DetectorParameterisation):
+    """
+    The PuzzleBoard repository's detector.
+
+    Its settings are still constructor arguments of the two PuzzleBoard
+    targets, so it describes none of them yet. What it does describe is
+    whether it can run at all: ``puzzle_board`` is an optional install, and
+    without it a detection used to fail inside ``find_in_image``, one image
+    at a time, rather than before the run started.
+    """
+
+    name = "puzzle_board"
+
+    @property
+    def parameters(self) -> tuple[DetectorParameter, ...]:
+        return ()
+
+    def unavailable_reason(self, values: dict | None = None) -> str | None:
+        try:
+            import puzzle_board  # noqa: F401
+        except (ImportError, ModuleNotFoundError, OSError):
+            return (
+                "This target is read by the PuzzleBoard detector, which is "
+                "not installed. Install the 'puzzle_board' package to detect "
+                "with it.")
+        return None
+
+
+#: Shared rather than built per target: it describes nothing per instance.
+PUZZLEBOARD_DETECTOR = PuzzleBoardDetector()

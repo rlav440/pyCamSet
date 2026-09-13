@@ -14,19 +14,23 @@ logger = logging.getLogger(__name__)
 
 from pyCamSet.calibration_targets.abstract_target import AbstractTarget
 from pyCamSet.calibration_targets.aruco2_detection import (
+    ARUCO2_DETECTOR,
     detect_charuco_corners,
     resolve_dictionary,
 )
-from pyCamSet.calibration_targets.charuco_detection import (
-    build_charuco_detector_components,
-    construct_charuco_detector,
-)
+from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
 from pyCamSet.calibration_targets.target_detections import ImageDetection
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import downsample_valid
 
 
 class ChArUco(AbstractTarget):
+
+    DETECTOR_BACKENDS = {
+        "aruco1": ARUCO_OPENCV_DETECTOR,
+        "aruco2": ARUCO2_DETECTOR,
+    }
+
     def __init__(
         self,
         num_squares_x,
@@ -49,7 +53,7 @@ class ChArUco(AbstractTarget):
         :param marker_backend: the marker backend to use, "aruco1" (OpenCV) or
             "aruco2" (aruco2 package). Defaults to "aruco1".
         """
-        super().__init__(inputs=locals())
+        super().__init__(inputs=locals(), backend=marker_backend)
 
         # define checker and marker size
 
@@ -57,11 +61,6 @@ class ChArUco(AbstractTarget):
         marker_size = marker_fraction * self.square_size  # 80% of the square size
         # convert to meters
 
-        # Validate the marker backend and resolve the dictionary per D3.
-        if marker_backend not in ("aruco1", "aruco2"):
-            raise ValueError(
-                f"marker_backend must be 'aruco1' or 'aruco2', got {marker_backend!r}"
-            )
         self.marker_backend = marker_backend
         self._aruco_dict_int = int(a_dict)
         # Create the dictionary for the Charuco board (backend-specific bytes).
@@ -72,23 +71,11 @@ class ChArUco(AbstractTarget):
             self.board.setLegacyPattern(True)
         self.point_data = np.asarray(self.board.getChessboardCorners(), dtype=np.float64).squeeze()
 
-        self.detection_options = detection_options or {}  # Store the normalised detection overrides for reuse.
-        if marker_backend == "aruco2" and self.detection_options:
-            if not getattr(self, "_warned_detection_options", False):
-                logger.warning(
-                    "ChArUco: detection_options are OpenCV-only and are ignored "
-                    "with marker_backend='aruco2'."
-                )
-                self._warned_detection_options = True
-        self.detection_params, self.detector_params, self.refine_params = build_charuco_detector_components(
-            self.detection_options
-        )  # Build the shared OpenCV parameter objects in one place.
-        self.board_detectors = construct_charuco_detector(
-            self.board,
-            self.detection_params,
-            self.detector_params,
-            self.refine_params,
-        )  # Create the board detector with the shared fallback logic.
+        # aruco2 reads its markers with a call that takes no settings, so it
+        # has none to describe and no OpenCV detector to hold them.
+        self.board_detectors = (
+            None if marker_backend == "aruco2" else
+            ARUCO_OPENCV_DETECTOR.build_detector(self.board, self.detection_options))
         self.given_legacy_warning = False
 
         self._process_data()

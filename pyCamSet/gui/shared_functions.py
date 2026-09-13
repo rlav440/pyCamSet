@@ -23,12 +23,14 @@ from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -390,10 +392,20 @@ class CollapsibleSection(QWidget):
         """Return the internal :class:`QFormLayout`."""
         return self._form
 
+    def clear(self) -> None:
+        """Remove every row, so the section can be rebuilt for a new subject."""
+        while self._form.rowCount():
+            self._form.removeRow(0)
+
+    def set_title(self, title: str) -> None:
+        """Rename the section, keeping it expanded or collapsed as it is."""
+        self._title = title
+        self._update_label(self._btn.isChecked())
 
 
 
-def build_charuco_option_tooltip(meta) -> str:
+
+def build_detection_option_tooltip(meta) -> str:
     """Build canonical tooltip/info text from a detector parameter."""
     return (
         f"{meta.concept}\n\n"
@@ -402,6 +414,35 @@ def build_charuco_option_tooltip(meta) -> str:
         f"Range source: {meta.range_source}\n"
         f"Suggested value(s): {meta.suggested}"
     )
+
+
+def build_detection_option_widget(meta) -> QWidget:
+    """
+    The control one detector parameter is typed into.
+
+    A parameter with names offers them; everything else is typed, with the
+    shape of the value as the placeholder where it is not obvious.
+    """
+    if meta.choices:
+        widget = QComboBox()
+        widget.addItems(meta.choice_labels())
+        widget.setCurrentText(meta.label_for(meta.default))
+    else:
+        widget = QLineEdit("" if meta.default == "" else str(meta.default))
+        if meta.dtype == "json_matrix_3x3":
+            widget.setPlaceholderText('e.g. [[fx,0,cx],[0,fy,cy],[0,0,1]] or blank')
+        elif meta.dtype == "json_vector":
+            widget.setPlaceholderText("e.g. [k1,k2,p1,p2,k3] or blank")
+    widget.setFixedWidth(220)
+    widget.setToolTip(build_detection_option_tooltip(meta))
+    return widget
+
+
+def read_detection_option_widget(widget):
+    """What was typed into one of :func:`build_detection_option_widget`'s controls."""
+    if isinstance(widget, QComboBox):
+        return widget.currentText()
+    return widget.text().strip()
 
 
 
@@ -433,17 +474,26 @@ _TARGET_WIDGETS: dict[str, dict[str, tuple[str, type]]] = {
         "start_y": ("_pb_start_y_spin", int),
         "paper_width": ("_pb_paper_w_edit", float),
         "paper_height": ("_pb_paper_h_edit", float),
-        "min_width": ("_pb_min_width_spin", int),
     },
     "PuzzleBoardCube": {
         "n_points": ("_pbc_size_spin", int),
         "length": ("_pbc_square_edit", float),
-        "min_width": ("_pb_min_width_spin", int),
     },
 }
 
-#: The targets that read markers, and so take a backend from the form.
-_MARKER_TARGETS = {"Ccube", "ChArUco"}
+def _backend_argument(target_type: str) -> Optional[str]:
+    """
+    What the form's detector combo is called in *target_type*'s constructor.
+
+    A target with one detector is never asked which to use.  The name is
+    written here and in :func:`detector_parameterisation_of`, and nowhere
+    else outside the two targets that take one.
+    """
+    from pyCamSet.calibration_targets.target_registry import target_class
+
+    if len(target_class(target_type).DETECTOR_BACKENDS) > 1:
+        return "marker_backend"
+    return None
 
 
 def _widget_value(tab: Any, name: str, cast: type, label: str):
@@ -471,9 +521,8 @@ def read_target_spec(tab: Any, detection_options: dict | None = None) -> dict:
         value = _widget_value(tab, widget_name, cast, argument)
         if value is not None:
             spec[argument] = value
-    if target_type in _MARKER_TARGETS:
-        spec["marker_backend"] = str(
-            tab._marker_backend_combo.currentData() or "aruco1")
+    if (argument := _backend_argument(target_type)) is not None:
+        spec[argument] = str(tab._marker_backend_combo.currentData() or "aruco1")
     if detection_options is not None:
         spec["detection_options"] = detection_options
     return spec

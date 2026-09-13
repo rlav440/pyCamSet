@@ -39,18 +39,41 @@ class PuzzleBoardDetector(DetectorParameterisation):
     """
     The PuzzleBoard repository's detector.
 
-    Its settings are still constructor arguments of the two PuzzleBoard
-    targets, so it describes none of them yet. What it does describe is
-    whether it can run at all: ``puzzle_board`` is an optional install, and
-    without it a detection used to fail inside ``find_in_image``, one image
-    at a time, rather than before the run started.
+    ``min_width`` was a constructor argument of both PuzzleBoard targets,
+    which made it look like part of their geometry: a target detected at a
+    different ``min_width`` was refused as a different target, though the
+    printed board and the meaning of every key it returns are identical.
     """
 
     name = "puzzle_board"
 
     @property
     def parameters(self) -> tuple[DetectorParameter, ...]:
-        return ()
+        return (
+            DetectorParameter(
+                key="min_width",
+                label="Min Grid Width",
+                default=4,
+                dtype="int",
+                tunable=True,
+                settable=True,
+                minimum=1,
+                maximum=501,
+                step=1,
+                search_order=1,
+                priority="A",
+                concept=(
+                    "Concept: the smallest decoded grid the detector will "
+                    "accept. Detection: a recovered patch narrower than this "
+                    "is discarded before its position is decoded. "
+                    "Calibration: raising it drops small or oblique views of "
+                    "the board, lowering it admits patches too small to "
+                    "decode reliably and risks mislabelled keys."),
+                range_text="At least 1; the printed board is at most 501 squares across",
+                range_source="Estimated by us",
+                suggested="4",
+            ),
+        )
 
     def unavailable_reason(self, values: dict | None = None) -> str | None:
         try:

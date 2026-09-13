@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 import pickle
 
 import numpy as np
@@ -62,7 +62,7 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE2,
     TerminalWidget,
     apply_target_spec_to_widgets,
-    build_charuco_option_tooltip,
+    build_detection_option_widget,
     gate_continue_button,
     make_blue_button,
     make_continue_button,
@@ -70,6 +70,7 @@ from pyCamSet.gui.shared_functions import (
     make_scrollable_tab,
     make_section_label,
     make_separator,
+    read_detection_option_widget,
     read_target_spec,
     render_predecessor_chain_section,
     show_tab,
@@ -81,15 +82,15 @@ from pyCamSet.workflow.params import (
     as_optional_positive_int,
     as_positive_float,
     require_image_folder,
-    require_marker_backend,
+    require_detector_available,
 )
-from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
+
 from pyCamSet.workflow.recent_folders import remember_folder
 from pyCamSet.workflow.recent_targets import (
     forget_target, load_recent_targets, remember_target)
+from pyCamSet.calibration_targets.target_registry import target_class
 from pyCamSet.workflow.targets import (
     describe_target,
-    CHARUCO_BASED_TARGETS as _CHARUCO_BASED_TARGETS,
     TARGET_CHOICES as _TARGET_CHOICES,
     TARGET_KEY,
 )
@@ -391,13 +392,6 @@ class Phase1Tab(QWidget):
         self._pb_paper_h_edit.setFixedWidth(100)
         target_sect.addRow(self._pb_paper_h_label, self._pb_paper_h_edit)
 
-        self._pb_min_width_label = QLabel("PB min_width:")
-        self._pb_min_width_spin = QSpinBox()
-        self._pb_min_width_spin.setRange(1, 501)
-        self._pb_min_width_spin.setValue(4)
-        self._pb_min_width_spin.setFixedWidth(80)
-        target_sect.addRow(self._pb_min_width_label, self._pb_min_width_spin)
-
         # ── PuzzleBoardCube-specific fields ───────────────────────────
         self._pbc_size_label = QLabel("PBC n_points / pieces per face:")
         self._pbc_size_spin = QSpinBox()
@@ -410,13 +404,6 @@ class Phase1Tab(QWidget):
         self._pbc_square_edit = QLineEdit("200.0")
         self._pbc_square_edit.setFixedWidth(100)
         target_sect.addRow(self._pbc_square_label, self._pbc_square_edit)
-
-        self._pbc_min_width_label = QLabel("PBC min_width:")
-        self._pbc_min_width_spin = QSpinBox()
-        self._pbc_min_width_spin.setRange(1, 501)
-        self._pbc_min_width_spin.setValue(4)
-        self._pbc_min_width_spin.setFixedWidth(80)
-        target_sect.addRow(self._pbc_min_width_label, self._pbc_min_width_spin)
 
         # ── Detection options ──────────────────────────────────────────
         form_root.addWidget(make_separator())
@@ -511,43 +498,12 @@ class Phase1Tab(QWidget):
         )
         detect_form.addRow("Problem options (JSON):", self._po_edit)
 
-        # ── ChArUco-specific detection options ─────────────────────────
+        # ── The selected detector's options, built in _rebuild_detection_options
         form_root.addWidget(make_separator())
-        self._charuco_opts_section = CollapsibleSection("ChArUco Detection Options", expanded=False)
-        form_root.addWidget(self._charuco_opts_section)
-        self._charuco_option_widgets: dict[str, QWidget] = {}
-
-        charuco_note = QLabel("Applies to ChArUco and Ccube targets.")  # Both targets use ChArUco boards.
-        charuco_note.setStyleSheet("color: gray; font-size: 10px;")
-        self._charuco_opts_section.addRow(charuco_note)
-
-        active_priority = None
-        for meta in ARUCO_OPENCV_DETECTOR.settable():
-            if meta.priority != active_priority:
-                active_priority = meta.priority
-                p_lbl = QLabel(f"Priority {meta.priority}")
-                p_lbl.setStyleSheet("color: #1976d2; font-weight: bold;")
-                self._charuco_opts_section.addRow(p_lbl)
-
-            widget: QWidget
-            if meta.choices:
-                combo = QComboBox()
-                combo.addItems(meta.choice_labels())
-                combo.setCurrentText(meta.label_for(meta.default))
-                combo.setFixedWidth(220)
-                widget = combo
-            else:
-                edit = QLineEdit("" if meta.default == "" else str(meta.default))
-                edit.setFixedWidth(220)
-                if meta.dtype == "json_matrix_3x3":
-                    edit.setPlaceholderText('e.g. [[fx,0,cx],[0,fy,cy],[0,0,1]] or blank')
-                elif meta.dtype == "json_vector":
-                    edit.setPlaceholderText("e.g. [k1,k2,p1,p2,k3] or blank")
-                widget = edit
-
-            widget.setToolTip(build_charuco_option_tooltip(meta))
-            self._charuco_opts_section.addRow(f"{meta.label}:", widget)
-            self._charuco_option_widgets[meta.key] = widget
+        self._detection_opts_section = CollapsibleSection(
+            "Detection Options", expanded=False)
+        form_root.addWidget(self._detection_opts_section)
+        self._detection_option_widgets: dict[str, QWidget] = {}
 
         # ── Camera selection (populated from Phase 0) ──────────────────
         form_root.addWidget(make_separator())
@@ -665,10 +621,50 @@ class Phase1Tab(QWidget):
         forget_target(spec)
         self.refresh_recent_targets()
 
+    def _current_detector_parameterisation(self):
+        """
+        What the selected target's detection can be told.
+
+        One detector combo serves every target, so only a target with a
+        choice of detector takes its selection from it.
+        """
+        cls = target_class(self._target_combo.currentText())
+        backend = (str(self._marker_backend_combo.currentData() or "")
+                   if len(cls.DETECTOR_BACKENDS) > 1 else "")
+        return cls.detector_parameterisation(backend or None)
+
+    def _rebuild_detection_options(self) -> None:
+        """
+        Show the settings the selected target's detection actually takes.
+
+        Rebuilt rather than shown and hidden: the section used to hold one
+        detector's parameters and appear for the two targets that used it,
+        which left every other target's settings unreachable.
+        """
+        detector = self._current_detector_parameterisation()
+        parameters = detector.settable()
+        self._detection_option_widgets = {}
+        self._detection_opts_section.clear()
+        self._detection_opts_section.setVisible(bool(parameters))
+        if not parameters:
+            return
+
+        self._detection_opts_section.set_title(
+            f"Detection Options ({detector.name})")
+        active_priority = None
+        for meta in parameters:
+            if meta.priority and meta.priority != active_priority:
+                active_priority = meta.priority
+                heading = QLabel(f"Priority {meta.priority}")
+                heading.setStyleSheet("color: #1976d2; font-weight: bold;")
+                self._detection_opts_section.addRow(heading)
+            widget = build_detection_option_widget(meta)
+            self._detection_opts_section.addRow(f"{meta.label}:", widget)
+            self._detection_option_widgets[meta.key] = widget
+
     def _on_target_type_changed(self, target_type: str) -> None:
-        is_charuco = target_type in _CHARUCO_BASED_TARGETS  # Only ChArUco-based targets need this section.
-        if hasattr(self, "_charuco_opts_section"):
-            self._charuco_opts_section.setVisible(is_charuco)
+        if hasattr(self, "_detection_opts_section"):
+            self._rebuild_detection_options()
         is_ccube = target_type == "Ccube"
         is_charuco_only = target_type == "ChArUco"
         is_puzzleboard = target_type == "PuzzleBoard"
@@ -682,21 +678,20 @@ class Phase1Tab(QWidget):
         self._npts_spin.setVisible(is_ccube or is_charuco_only)
         self._length_label.setVisible(is_ccube or is_charuco_only)
         self._length_edit.setVisible(is_ccube or is_charuco_only)
-        self._marker_backend_combo.setVisible(is_ccube or is_charuco_only)
-        self._marker_backend_status.setVisible(is_ccube or is_charuco_only)
+        has_choice = len(target_class(target_type).DETECTOR_BACKENDS) > 1
+        self._marker_backend_combo.setVisible(has_choice)
+        self._marker_backend_status.setVisible(has_choice)
         # PuzzleBoard fields — toggle labels and field widgets in lockstep.
         for w in (self._pb_x_label, self._pb_x_spin, self._pb_y_label, self._pb_y_spin,
                   self._pb_square_label, self._pb_square_edit,
                   self._pb_start_x_label, self._pb_start_x_spin,
                   self._pb_start_y_label, self._pb_start_y_spin,
                   self._pb_paper_w_label, self._pb_paper_w_edit,
-                  self._pb_paper_h_label, self._pb_paper_h_edit,
-                  self._pb_min_width_label, self._pb_min_width_spin):
+                  self._pb_paper_h_label, self._pb_paper_h_edit):
             w.setVisible(is_puzzleboard)
         # PuzzleBoardCube fields — toggle labels and field widgets in lockstep.
         for w in (self._pbc_size_label, self._pbc_size_spin,
-                  self._pbc_square_label, self._pbc_square_edit,
-                  self._pbc_min_width_label, self._pbc_min_width_spin):
+                  self._pbc_square_label, self._pbc_square_edit):
             w.setVisible(is_puzzleboard_cube)
 
     def _on_marker_backend_changed(self) -> None:
@@ -706,6 +701,8 @@ class Phase1Tab(QWidget):
         self._marker_backend_status.setStyleSheet(
             "color: #2a7a2a;" if marker_backend_available(backend) else "color: #8a4a00;"
         )
+        if hasattr(self, "_detection_opts_section"):
+            self._rebuild_detection_options()
 
     def _collect_params(self) -> Optional[dict]:
         """Read the form, or say which field is wrong and return None."""
@@ -724,17 +721,12 @@ class Phase1Tab(QWidget):
         if not selected_cameras:
             raise ParamError("Select at least one camera.")
 
-        charuco_detection_options = None
-        if self._target_combo.currentText() in _CHARUCO_BASED_TARGETS:
-            raw_charuco_values: dict[str, Any] = {}
-            for key, widget in self._charuco_option_widgets.items():
-                if isinstance(widget, QComboBox):
-                    raw_charuco_values[key] = widget.currentText()
-                elif isinstance(widget, QLineEdit):
-                    raw_charuco_values[key] = widget.text().strip()
+        detection_options = None
+        if self._detection_option_widgets:
+            typed = {key: read_detection_option_widget(widget)
+                     for key, widget in self._detection_option_widgets.items()}
             try:
-                charuco_detection_options = ARUCO_OPENCV_DETECTOR.parse(
-                    raw_charuco_values)
+                detection_options = self._current_detector_parameterisation().parse(typed)
             except ValueError as exc:
                 raise ParamError(str(exc)) from None
 
@@ -750,8 +742,7 @@ class Phase1Tab(QWidget):
                 self._fp_edit.text(), "Fixed params JSON"),
             "problem_options": as_json_object(
                 self._po_edit.text(), "Problem options JSON"),
-            "charuco_detection_options": charuco_detection_options,
-            "target": read_target_spec(self, charuco_detection_options),
+            "target": read_target_spec(self, detection_options),
             "selected_cameras": selected_cameras,
         }
 
@@ -760,9 +751,9 @@ class Phase1Tab(QWidget):
         if params is None:
             return
         try:
-            require_marker_backend(params)
+            require_detector_available(params)
         except ParamError as exc:
-            QMessageBox.warning(self, "Marker backend unavailable", str(exc))
+            QMessageBox.warning(self, "Detector unavailable", str(exc))
             return
         if not _PYCAMSET_OK:
             QMessageBox.critical(

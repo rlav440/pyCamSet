@@ -16,6 +16,7 @@ from pyCamSet.calibration_targets.target_registry import (
     TARGET_NAMES,
     TYPE_KEY as TARGET_KEY_TYPE,
     build_target,
+    target_class,
 )
 
 #: Where a phase's parameters keep the target's spec.
@@ -23,10 +24,29 @@ TARGET_KEY = "target"
 
 TARGET_CHOICES = list(TARGET_NAMES)
 
-#: The targets whose phase 1 detection reads ChArUco corners, and which
-#: therefore accept the detector options described by
-#: :class:`~pyCamSet.calibration_targets.charuco_detection.ArucoOpenCVDetector`.
-CHARUCO_BASED_TARGETS = {"Ccube", "ChArUco"}
+
+def detector_parameterisation_of(spec: dict):
+    """
+    What the detection of the target a spec describes can be told.
+
+    Which is the target's own settings beside those of the detector it is
+    read with -- so an interface that shows detector settings, and a study
+    that sweeps them, ask this rather than knowing which target they have.
+
+    ``marker_backend`` is written here and in :func:`read_target_spec`, and
+    nowhere else outside the two targets that take one; it is what those
+    constructors call the detector they select.  A target offering one
+    detector is never asked, so a spec that names one anyway -- a saved run
+    from before the target had a choice -- is read with its only detector
+    rather than refused.
+
+    :param spec: a target spec
+    :raises ValueError: for an unknown target, or a detector it cannot use
+    """
+    cls = target_class(spec[TARGET_KEY_TYPE])
+    backend = (spec.get("marker_backend")
+               if len(cls.DETECTOR_BACKENDS) > 1 else None)
+    return cls.detector_parameterisation(backend)
 
 
 def target_of_params(params: dict):

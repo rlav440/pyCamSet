@@ -13,7 +13,6 @@ import math
 from typing import Any, Optional
 
 from pyCamSet.workflow.targets import (
-    CHARUCO_BASED_TARGETS,
     target_spec_of,
     describe_target_mismatch,
     target_mismatch_message,
@@ -101,29 +100,24 @@ def require_image_folder(text: Any) -> str:
     return folder
 
 
-def require_marker_backend(params: dict) -> None:
+def require_detector_available(params: dict) -> None:
     """
-    Refuse a marker backend the target needs and the install does not have.
+    Refuse a detector this install cannot run.
 
-    PuzzleBoard and PuzzleBoardCube never read ArUco markers, so the backend
-    is not their business and an absent one does not stop them.
+    Each detector says for itself whether its optional dependency is here,
+    so a target read some new way is checked the same as the rest and a
+    missing package is named before the run rather than during it.
 
     :param params: a phase's collected parameters
-    :raises ParamError: when the selected target cannot read its markers
+    :raises ParamError: when the selected detector cannot run
     """
-    from pyCamSet.calibration_targets.backend_registry import marker_backend_available
+    from pyCamSet.workflow.targets import detector_parameterisation_of
 
     spec = target_spec_of(params)
-    if spec.get("type") not in CHARUCO_BASED_TARGETS:
-        return
-    backend = spec.get("marker_backend", "aruco1")
-    if marker_backend_available(backend):
-        return
-    raise ParamError(
-        "ArUco 2 (aruco2) is selected but the 'aruco2' package is not "
-        "installed. Install it with `pip install aruco2` or switch the "
-        "marker backend to ArUco 1 (OpenCV)."
-    )
+    reason = detector_parameterisation_of(spec).unavailable_reason(
+        spec.get("detection_options"))
+    if reason is not None:
+        raise ParamError(reason)
 
 
 def require_target_match(run: Optional[dict], params: dict) -> None:

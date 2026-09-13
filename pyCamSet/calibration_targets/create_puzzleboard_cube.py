@@ -9,13 +9,11 @@ _DEFAULT_OUTPUT_DIR = Path.cwd() / "calibration_targets" / "2D"
 def build_puzzleboard_cube(
     n_points: int = 20,
     length: float = 200.0,
-    min_width: int = 4,
 ) -> pbc.PuzzleBoardCube:
     """Instantiate a deterministic PuzzleBoard cube from explicit parameters."""
     return pbc.PuzzleBoardCube(  # Construct the bounded six-face target.
         n_points=int(n_points),  # Normalise the face dimension.
         length=float(length),  # Normalise the physical square size in millimetres.
-        min_width=int(min_width),  # Normalise the detector minimum width.
     )
 
 
@@ -32,7 +30,6 @@ def default_output_name(
 def generate_puzzleboard_cube_target(
     n_points: int = 20,
     length: float = 200.0,
-    min_width: int = 4,
     output_dir: Path | str = _DEFAULT_OUTPUT_DIR,
     file_name: str | None = None,
     export_kind: str = "svg",
@@ -48,7 +45,6 @@ def generate_puzzleboard_cube_target(
     cube = build_puzzleboard_cube(  # Build the target through the public factory.
         n_points=n_points,
         length=length,
-        min_width=min_width,
     )
     out_path = out_dir / file_name  # Combine the destination directory and requested filename.
     if export_kind == "svg":  # Save an editable vector net.

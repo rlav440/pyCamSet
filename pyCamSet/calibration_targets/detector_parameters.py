@@ -487,10 +487,12 @@ def combine(*parts: DetectorParameterisation) -> DetectorParameterisation:
     """
     The parameterisations *parts* read as one.
 
-    Parts that take nothing drop out, so composing a target that adds nothing
-    of its own with a backend gives back the backend itself.
+    Only the one that stands for nothing drops out, so composing a target
+    that adds nothing of its own with a backend gives back the backend
+    itself.  A part with no parameters is not nothing: aruco2 takes no
+    settings and still says whether it is installed.
     """
-    kept = [part for part in parts if len(part)]
+    kept = [part for part in parts if part is not NO_DETECTOR_PARAMETERS]
     if not kept:
         return NO_DETECTOR_PARAMETERS
     if len(kept) == 1:

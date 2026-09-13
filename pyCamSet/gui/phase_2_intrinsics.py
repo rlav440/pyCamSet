@@ -69,7 +69,7 @@ from pyCamSet.workflow.params import (
     as_optional_positive_int,
     as_positive_float,
     require_image_folder,
-    require_marker_backend,
+    require_detector_available,
     require_target_match,
 )
 from pyCamSet.workflow.targets import (
@@ -359,11 +359,6 @@ class Phase2Tab(QWidget):
         self._pb_paper_h_edit.setFixedWidth(110)
         target_sect.addRow("PB paper_height (mm):", self._pb_paper_h_edit)
 
-        self._pb_min_width_spin = QSpinBox()
-        self._pb_min_width_spin.setRange(1, 501)
-        self._pb_min_width_spin.setValue(4)
-        self._pb_min_width_spin.setFixedWidth(90)
-        target_sect.addRow("PB min_width:", self._pb_min_width_spin)
 
         # ── PuzzleBoardCube-specific fields ───────────────────────────
         self._pbc_size_spin = QSpinBox()
@@ -376,11 +371,6 @@ class Phase2Tab(QWidget):
         self._pbc_square_edit.setFixedWidth(110)
         target_sect.addRow("PBC length (mm):", self._pbc_square_edit)
 
-        self._pbc_min_width_spin = QSpinBox()
-        self._pbc_min_width_spin.setRange(1, 501)
-        self._pbc_min_width_spin.setValue(4)
-        self._pbc_min_width_spin.setFixedWidth(90)
-        target_sect.addRow("PBC min_width:", self._pbc_min_width_spin)
 
         self._target_combo.currentTextChanged.connect(self._on_target_type_changed)
         self._marker_backend_combo.currentIndexChanged.connect(self._on_marker_backend_changed)
@@ -555,10 +545,10 @@ class Phase2Tab(QWidget):
         # PuzzleBoard fields.
         for w in (self._pb_x_spin, self._pb_y_spin, self._pb_square_edit,
                   self._pb_start_x_spin, self._pb_start_y_spin,
-                  self._pb_paper_w_edit, self._pb_paper_h_edit, self._pb_min_width_spin):
+                  self._pb_paper_w_edit, self._pb_paper_h_edit):
             w.setVisible(is_puzzleboard)
         # PuzzleBoardCube fields.
-        for w in (self._pbc_size_spin, self._pbc_square_edit, self._pbc_min_width_spin):
+        for w in (self._pbc_size_spin, self._pbc_square_edit):
             w.setVisible(is_puzzleboard_cube)
 
     def _on_marker_backend_changed(self) -> None:
@@ -649,9 +639,9 @@ class Phase2Tab(QWidget):
         if params is None:
             return
         try:
-            require_marker_backend(params)
+            require_detector_available(params)
         except ParamError as exc:
-            QMessageBox.warning(self, "Marker backend unavailable", str(exc))
+            QMessageBox.warning(self, "Detector unavailable", str(exc))
             return
         if not _PYCAMSET_OK:
             QMessageBox.critical(

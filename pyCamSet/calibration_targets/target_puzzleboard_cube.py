@@ -82,7 +82,6 @@ class PuzzleBoardCube(AbstractTarget):
         self,
         n_points: int = 20,
         length: float = 200.0,
-        min_width: int = 4,
         plane_consistency_gate: bool = False,
         plane_gate_inlier_squares: float = 0.5,
         plane_gate_contam_squares: float = 2.0,
@@ -159,7 +158,6 @@ class PuzzleBoardCube(AbstractTarget):
         super().__init__(inputs=locals())  # Save constructor inputs for pyCamSet serialisation and multiprocessing.
         self.n_points = int(n_points)  # Store the puzzle-piece count along one cube-face edge.
         self.length = float(length)  # Store the total physical cube edge length in millimetres.
-        self.min_width = int(min_width)  # Store the detector's minimum accepted grid width.
         self._validate_dimensions()  # Reject invalid counts/lengths before deriving the pitch.
         self.square_size = self.length / self.n_points  # Retain the derived puzzle-piece pitch for rendering/detection.
         self.plane_consistency_gate = bool(plane_consistency_gate)  # Opt-in geometric gate.
@@ -222,8 +220,6 @@ class PuzzleBoardCube(AbstractTarget):
             raise ValueError(f"n_points must be between 2 and {MAX_FACE_SQUARES}.")
         if self.length <= 0.0:  # Physical geometry cannot use a zero or negative cube edge length.
             raise ValueError("length must be greater than zero.")
-        if self.min_width < 1:  # The external detector requires a positive minimum width.
-            raise ValueError("min_width must be at least 1.")
 
     def _make_local_face_points(self) -> np.ndarray:
         """Create the six identical local point grids before cube-face transforms."""
@@ -913,7 +909,7 @@ class PuzzleBoardCube(AbstractTarget):
     ) -> ImageDetection:
         """Detect PuzzleBoard points and assign each point to its deterministic cube face."""
         del camera  # The current PuzzleBoard detector does not use camera intrinsics.
-        point_ids, point_coords = detect_puzzleboard_image(image, min_width=self.min_width)  # Decode global code positions.
+        point_ids, point_coords = detect_puzzleboard_image(image, min_width=self.detection_options["min_width"])  # Decode global code positions.
         if len(point_ids) == 0:  # Return the standard empty result when no face was found.
             return ImageDetection()
         positions = np.asarray(point_ids, dtype=np.int64)  # Detector positions are [row, column].

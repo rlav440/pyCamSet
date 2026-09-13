@@ -25,13 +25,12 @@ TARGET_ARGUMENTS: dict[str, tuple[str, ...]] = {
     "ChArUco": ("num_squares_x", "num_squares_y", "square_size",
                 "marker_fraction", "aruco_dict", "marker_backend"),
     "PuzzleBoard": ("num_squares_x", "num_squares_y", "square_size",
-                    "start_x", "start_y", "paper_width", "paper_height",
-                    "min_width"),
-    "PuzzleBoardCube": ("n_points", "length", "min_width"),
+                    "start_x", "start_y", "paper_width", "paper_height"),
+    "PuzzleBoardCube": ("n_points", "length"),
 }
 
 _INTEGERS = {"n_points", "num_squares_x", "num_squares_y", "start_x",
-             "start_y", "min_width"}
+             "start_y"}
 _FLOATS = {"length", "square_size", "marker_fraction", "paper_width",
            "paper_height"}
 

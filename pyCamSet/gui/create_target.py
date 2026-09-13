@@ -236,11 +236,6 @@ class CreateTargetDialog(QDialog):
         self._puzzleboard_page_height_edit.setFixedWidth(110)
         puzzleboard_form.addRow("paper_height (mm):", self._puzzleboard_page_height_edit)
 
-        self._puzzleboard_min_width_spin = QSpinBox()
-        self._puzzleboard_min_width_spin.setRange(1, 501)
-        self._puzzleboard_min_width_spin.setValue(4)
-        self._puzzleboard_min_width_spin.setFixedWidth(110)
-        puzzleboard_form.addRow("detector min_width:", self._puzzleboard_min_width_spin)
 
         self._param_stack.addWidget(puzzleboard_params)
 
@@ -260,11 +255,6 @@ class CreateTargetDialog(QDialog):
         self._puzzleboard_cube_square_edit.textChanged.connect(self._sync_default_name)
         puzzleboard_cube_form.addRow("length (mm):", self._puzzleboard_cube_square_edit)
 
-        self._puzzleboard_cube_min_width_spin = QSpinBox()
-        self._puzzleboard_cube_min_width_spin.setRange(1, 501)
-        self._puzzleboard_cube_min_width_spin.setValue(4)
-        self._puzzleboard_cube_min_width_spin.setFixedWidth(110)
-        puzzleboard_cube_form.addRow("detector min_width:", self._puzzleboard_cube_min_width_spin)
 
         self._puzzleboard_cube_border_edit = QLineEdit("10")
         self._puzzleboard_cube_border_edit.setFixedWidth(110)
@@ -395,11 +385,9 @@ class CreateTargetDialog(QDialog):
                 payload["start_y"] = int(self._puzzleboard_start_y_spin.value())
                 payload["paper_width"] = float(self._puzzleboard_page_width_edit.text().strip())
                 payload["paper_height"] = float(self._puzzleboard_page_height_edit.text().strip())
-                payload["min_width"] = int(self._puzzleboard_min_width_spin.value())
             else:
                 payload["n_points"] = int(self._puzzleboard_cube_size_spin.value())
                 payload["length"] = float(self._puzzleboard_cube_square_edit.text().strip())
-                payload["min_width"] = int(self._puzzleboard_cube_min_width_spin.value())
                 payload["border_width"] = float(self._puzzleboard_cube_border_edit.text().strip())
                 payload["draw_cut_outline"] = self._puzzleboard_cube_outline_check.isChecked()
                 payload["draw_face_ids"] = self._puzzleboard_cube_ids_check.isChecked()
@@ -567,7 +555,6 @@ class CreateTargetDialog(QDialog):
                     start_y=int(collected["start_y"]),
                     paper_width=float(collected["paper_width"]),
                     paper_height=float(collected["paper_height"]),
-                    min_width=int(collected["min_width"]),
                     output_dir=collected["out_dir"],
                     file_name=collected["file_name"],
                     export_kind=collected["export_kind"],
@@ -576,7 +563,6 @@ class CreateTargetDialog(QDialog):
                 _, out_path = generate_puzzleboard_cube_target(
                     n_points=int(collected["n_points"]),
                     length=float(collected["length"]),
-                    min_width=int(collected["min_width"]),
                     border_width=float(collected["border_width"]),
                     draw_cut_outline=bool(collected["draw_cut_outline"]),
                     draw_face_ids=bool(collected["draw_face_ids"]),

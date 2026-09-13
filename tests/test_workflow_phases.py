@@ -165,31 +165,33 @@ def test_the_outlier_mode_falls_back_to_off(text, expected):
     assert as_outlier_mode(text) == expected
 
 
-def test_a_marker_backend_the_install_lacks_is_refused():
+def test_a_detector_the_install_lacks_is_refused():
     """A guard that reads the target has to read where the target now is.
 
     Moving the target under its own key silently bypassed this one: it
     looked for a top-level ``target_type`` that no longer existed, found
     None, and returned as though the target did not use markers at all.
+
+    Every detector answers this now, not only the two that read markers:
+    PuzzleBoard's is an optional install too, and a missing one used to
+    surface inside ``find_in_image``, one image at a time.
     """
-    from pyCamSet.workflow.params import require_marker_backend
+    from pyCamSet.workflow.params import require_detector_available
 
-    # PuzzleBoard reads no markers, so an absent backend does not stop it.
-    require_marker_backend({"target": {"type": "PuzzleBoard"}})
+    # OpenCV's ChArUco detector is always here, so the default never stops.
+    require_detector_available({"target": dict(CHARUCO_SPEC)})
 
-    spec = {**CHARUCO_SPEC, "marker_backend": "aruco2"}
-    try:
-        from pyCamSet.calibration_targets.backend_registry import (
-            marker_backend_available)
-        available = marker_backend_available("aruco2")
-    except Exception:
-        available = False
-
-    if available:
-        require_marker_backend({"target": spec})
-    else:
-        with pytest.raises(ParamError, match="aruco2"):
-            require_marker_backend({"target": spec})
+    for spec, missing in (({**CHARUCO_SPEC, "marker_backend": "aruco2"}, "aruco2"),
+                          ({"type": "PuzzleBoard"}, "puzzle_board")):
+        try:
+            available = __import__(missing) is not None
+        except Exception:
+            available = False
+        if available:
+            require_detector_available({"target": spec})
+        else:
+            with pytest.raises(ParamError, match=missing):
+                require_detector_available({"target": spec})
 
 
 def test_a_target_that_cannot_read_its_detections_is_refused():

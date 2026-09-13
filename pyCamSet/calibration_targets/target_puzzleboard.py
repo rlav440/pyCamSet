@@ -68,7 +68,6 @@ class PuzzleBoard(AbstractTarget):
         start_y: int = 0,
         paper_width: float = 210.0,
         paper_height: float = 297.0,
-        min_width: int = 4,
         detection_options: dict | None = None,
     ):
         """Initialise a PuzzleBoard target with dimensions expressed in millimetres."""
@@ -80,7 +79,6 @@ class PuzzleBoard(AbstractTarget):
         self.start_y = int(start_y)  # Store the vertical code origin used by the printed window.
         self.paper_width = float(paper_width)  # Store the SVG page width in millimetres.
         self.paper_height = float(paper_height)  # Store the SVG page height in millimetres.
-        self.min_width = int(min_width)  # Store the minimum detector grid width.
         self._validate_dimensions()  # Reject invalid windows before object-point construction.
         self.point_data = self._make_point_data()  # Index object points by the detector's global grid position.
         self._process_data()  # Compute pyCamSet's local object-point representation.
@@ -248,7 +246,7 @@ class PuzzleBoard(AbstractTarget):
     ) -> ImageDetection:
         """Detect PuzzleBoard grid points and return pyCamSet-compatible IDs."""
         del camera  # PuzzleBoard's detector does not currently use camera intrinsics.
-        point_ids, point_coords = detect_puzzleboard_image(image, min_width=self.min_width)  # Run the external detector.
+        point_ids, point_coords = detect_puzzleboard_image(image, min_width=self.detection_options["min_width"])  # Run the external detector.
         if not point_ids:  # Return the standard empty result when no board was found.
             return ImageDetection()
         positions = np.asarray(point_ids, dtype=np.int64)  # Convert decoded [row, column] positions to an array.

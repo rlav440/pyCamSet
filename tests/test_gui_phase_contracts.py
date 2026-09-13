@@ -1294,7 +1294,7 @@ def test_every_target_type_can_be_built_from_its_payload(target_type):
         "marker_fraction": 0.8, "aruco_dict": "DICT_4X4_1000",
         "marker_backend": "aruco1",
         "start_x": 0, "start_y": 0,
-        "paper_width": 210.0, "paper_height": 297.0, "min_width": 4,
+        "paper_width": 210.0, "paper_height": 297.0,
     }
 
     target = visualise_target.build_target(payload)
@@ -1794,3 +1794,96 @@ def test_the_terminal_drops_the_escapes_that_move_a_cursor():
         assert terminal.toPlainText() == "detecting  50%\n"
     finally:
         terminal.deleteLater()
+
+
+# --------------------------------------------------------------------------
+# Phase 1 shows the settings the selected target's detection takes
+# --------------------------------------------------------------------------
+#
+# The form held one detector's parameters and appeared for the two targets
+# that used that detector.  So a ChArUco read with aruco2 was offered
+# seventeen OpenCV settings that the aruco2 call cannot be given -- the
+# target logged that it was ignoring them -- and a PuzzleBoard was offered
+# none, though its detector takes one.
+
+
+def _phase1_tab():
+    """A Phase 1 tab with no workspace, which is enough to read its form."""
+    from PySide6.QtWidgets import QCheckBox, QTabWidget
+
+    from pyCamSet.gui.phase_1_detection import Phase1Tab
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    return Phase1Tab(QTabWidget(), QCheckBox(), QCheckBox(), WorkspaceManager(None))
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize(
+    ("target_type", "backend", "detector", "keys"),
+    [
+        ("ChArUco", "aruco1", "aruco1", None),
+        ("Ccube", "aruco1", "aruco1", None),
+        ("ChArUco", "aruco2", "aruco2", ()),
+        ("PuzzleBoard", None, "puzzle_board", ("min_width",)),
+        ("PuzzleBoardCube", None, "puzzle_board", ("min_width",)),
+    ],
+)
+def test_the_detection_form_shows_what_the_chosen_detector_takes(
+        target_type, backend, detector, keys):
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    tab = _phase1_tab()
+    try:
+        tab._target_combo.setCurrentText(target_type)
+        if backend is not None:
+            tab._marker_backend_combo.setCurrentIndex(
+                tab._marker_backend_combo.findData(backend))
+
+        parameterisation = tab._current_detector_parameterisation()
+        assert parameterisation.name == detector
+        shown = tuple(tab._detection_option_widgets)
+        if keys is None:
+            # OpenCV's, whatever the table currently says they are.
+            keys = tuple(p.key for p in parameterisation.settable())
+        assert shown == keys
+        assert tab._detection_opts_section.isHidden() is (not keys)
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize(
+    ("target_type", "offered"),
+    [("ChArUco", True), ("Ccube", True),
+     ("PuzzleBoard", False), ("PuzzleBoardCube", False)],
+)
+def test_only_a_target_with_a_choice_of_detector_is_asked_for_one(
+        target_type, offered):
+    """The combo used to appear for a named pair of targets."""
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    tab = _phase1_tab()
+    try:
+        tab._target_combo.setCurrentText(target_type)
+        assert tab._marker_backend_combo.isHidden() is (not offered)
+    finally:
+        tab.deleteLater()
+
+
+def test_a_detector_setting_does_not_make_it_a_different_target():
+    """``min_width`` was a PuzzleBoard constructor argument, so two boards
+    detected at different widths read as different point layouts -- and the
+    detections of one were refused to the other, though every key means the
+    same thing in both."""
+    from pyCamSet.workflow.targets import describe_target_mismatch
+
+    def spec(min_width):
+        return {"target": {"type": "PuzzleBoard", "num_squares_x": 10,
+                           "num_squares_y": 10,
+                           "detection_options": {"min_width": min_width}}}
+
+    assert describe_target_mismatch(spec(4), spec(9)) == []
+    assert describe_target_mismatch(
+        spec(4), {"target": {**spec(4)["target"], "num_squares_x": 11}})

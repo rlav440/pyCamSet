@@ -112,7 +112,18 @@ def test_composing_a_target_with_its_backend_reads_as_one_detector():
 def test_composing_with_nothing_gives_back_the_other_part():
     """Which is why a target that adds nothing of its own costs nothing."""
     assert combine(NO_DETECTOR_PARAMETERS, ARUCO_OPENCV_DETECTOR) is ARUCO_OPENCV_DETECTOR
-    assert combine(NO_DETECTOR_PARAMETERS, ARUCO2_DETECTOR) is NO_DETECTOR_PARAMETERS
+    assert combine(NO_DETECTOR_PARAMETERS, NO_DETECTOR_PARAMETERS) is NO_DETECTOR_PARAMETERS
+
+
+def test_a_detector_with_no_parameters_is_not_nothing():
+    """aruco2 takes no settings and still says whether it is installed.
+
+    Dropping it for having no parameters lost that, and a target read with
+    a backend that is not installed was accepted right up until detection.
+    """
+    composed = combine(NO_DETECTOR_PARAMETERS, ARUCO2_DETECTOR)
+    assert composed is ARUCO2_DETECTOR
+    assert composed.unavailable_reason() == ARUCO2_DETECTOR.unavailable_reason()
 
 
 def test_two_parts_cannot_describe_the_same_parameter():

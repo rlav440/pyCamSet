@@ -14,8 +14,7 @@ def _resolve_inputs(
     start_y: int,
     paper_width: float,
     paper_height: float,
-    min_width: int,
-) -> tuple[int, int, float, int, int, float, float, int]:
+) -> tuple[int, int, float, int, int, float, float]:
     """Apply defaults and normalise the public PuzzleBoard generator inputs."""
     if num_squares_x is None:  # Use the A4-width default from the 2 mm target workflow.
         num_squares_x = 105
@@ -31,7 +30,6 @@ def _resolve_inputs(
         int(start_y),  # Normalise vertical code origin.
         float(paper_width),  # Normalise page width in millimetres.
         float(paper_height),  # Normalise page height in millimetres.
-        int(min_width),  # Normalise detector minimum width.
     )
 
 
@@ -43,10 +41,9 @@ def build_puzzleboard(
     start_y: int = 0,
     paper_width: float = 210.0,
     paper_height: float = 297.0,
-    min_width: int = 4,
 ) -> pb.PuzzleBoard:
     """Instantiate a PuzzleBoard target from explicit board parameters."""
-    x, y, size, sx, sy, page_w, page_h, detector_width = _resolve_inputs(  # Resolve all public defaults once.
+    x, y, size, sx, sy, page_w, page_h = _resolve_inputs(  # Resolve all public defaults once.
         num_squares_x,
         num_squares_y,
         square_size,
@@ -54,7 +51,6 @@ def build_puzzleboard(
         start_y,
         paper_width,
         paper_height,
-        min_width,
     )
     return pb.PuzzleBoard(  # Construct the target with the normalised parameters.
         num_squares_x=x,
@@ -64,7 +60,6 @@ def build_puzzleboard(
         start_y=sy,
         paper_width=page_w,
         paper_height=page_h,
-        min_width=detector_width,
     )
 
 
@@ -90,13 +85,12 @@ def generate_puzzleboard_target(
     start_y: int = 0,
     paper_width: float = 210.0,
     paper_height: float = 297.0,
-    min_width: int = 4,
     output_dir: Path | str = _DEFAULT_OUTPUT_DIR,
     file_name: str | None = None,
     export_kind: str = "svg",
 ) -> tuple[pb.PuzzleBoard, Path]:
     """Create and save a PuzzleBoard target."""
-    x, y, size, sx, sy, page_w, page_h, detector_width = _resolve_inputs(  # Resolve parameters before naming files.
+    x, y, size, sx, sy, page_w, page_h = _resolve_inputs(  # Resolve parameters before naming files.
         num_squares_x,
         num_squares_y,
         square_size,
@@ -104,7 +98,6 @@ def generate_puzzleboard_target(
         start_y,
         paper_width,
         paper_height,
-        min_width,
     )
     out_dir = Path(output_dir)  # Accept strings and Path objects like create_charuco.py.
     out_dir.mkdir(parents=True, exist_ok=True)  # Create the requested destination when needed.
@@ -118,7 +111,6 @@ def generate_puzzleboard_target(
         start_y=sy,
         paper_width=page_w,
         paper_height=page_h,
-        min_width=detector_width,
     )
     out_path = out_dir / file_name  # Combine the destination directory and requested filename.
     if export_kind == "svg":  # Save a directly editable vector file.

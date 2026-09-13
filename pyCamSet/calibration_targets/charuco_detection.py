@@ -20,8 +20,8 @@ from typing import Any
 import numpy as np
 from cv2 import aruco
 
-from pyCamSet.calibration_targets.detector_parameters import (
-    DetectorParameter,
+from pyCamSet.calibration_targets.parameters import (
+    Parameter,
     DetectorParameterisation,
     Profile,
     parameters_from_json,
@@ -42,7 +42,7 @@ class ArucoOpenCVDetector(DetectorParameterisation):
     name = "aruco1"
 
     @property
-    def parameters(self) -> tuple[DetectorParameter, ...]:
+    def parameters(self) -> tuple[Parameter, ...]:
         return _PARAMETERS
 
     def profiles(self) -> dict[str, Profile]:

@@ -24,8 +24,8 @@ from pyCamSet.calibration_targets.backend_registry import (
     ARUCO2_BACKEND,
     marker_backend_available,
 )
-from pyCamSet.calibration_targets.detector_parameters import (
-    DetectorParameter,
+from pyCamSet.calibration_targets.parameters import (
+    Parameter,
     DetectorParameterisation,
 )
 
@@ -323,7 +323,7 @@ class Aruco2Detector(DetectorParameterisation):
     name = ARUCO2_BACKEND
 
     @property
-    def parameters(self) -> tuple[DetectorParameter, ...]:
+    def parameters(self) -> tuple[Parameter, ...]:
         return ()
 
     def unavailable_reason(self, values: dict | None = None) -> str | None:

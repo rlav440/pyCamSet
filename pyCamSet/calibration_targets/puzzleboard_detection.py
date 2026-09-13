@@ -3,8 +3,8 @@ from __future__ import annotations  # Keep annotations consistent with pyCamSet 
 import cv2  # Convert pyCamSet's OpenCV images to the detector's expected colour order.
 import numpy as np  # Type and shape normalisation for detector inputs.
 
-from pyCamSet.calibration_targets.detector_parameters import (
-    DetectorParameter,
+from pyCamSet.calibration_targets.parameters import (
+    Parameter,
     DetectorParameterisation,
 )
 
@@ -48,9 +48,9 @@ class PuzzleBoardDetector(DetectorParameterisation):
     name = "puzzle_board"
 
     @property
-    def parameters(self) -> tuple[DetectorParameter, ...]:
+    def parameters(self) -> tuple[Parameter, ...]:
         return (
-            DetectorParameter(
+            Parameter(
                 key="min_width",
                 label="Min Grid Width",
                 default=4,

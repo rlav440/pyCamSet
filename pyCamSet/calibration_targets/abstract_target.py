@@ -19,8 +19,8 @@ import signal
 
 from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
-from pyCamSet.calibration_targets.detector_parameters import (
-    NO_DETECTOR_PARAMETERS,
+from pyCamSet.calibration_targets.parameters import (
+    NO_PARAMETERS,
     DetectorParameterisation,
     combine,
 )
@@ -123,7 +123,7 @@ class AbstractTarget(ABC):
         Not the detector's: what the target does with what the detector
         hands back. Targets that do nothing of their own declare nothing.
         """
-        return NO_DETECTOR_PARAMETERS
+        return NO_PARAMETERS
 
     @classmethod
     def detector_parameterisation(cls, backend: str | None = None) -> DetectorParameterisation:

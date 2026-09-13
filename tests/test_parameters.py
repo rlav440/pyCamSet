@@ -15,10 +15,10 @@ from cv2 import aruco
 
 from pyCamSet.calibration_targets.aruco2_detection import ARUCO2_DETECTOR
 from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
-from pyCamSet.calibration_targets.detector_parameters import (
-    NO_DETECTOR_PARAMETERS,
+from pyCamSet.calibration_targets.parameters import (
+    NO_PARAMETERS,
     Choice,
-    DetectorParameter,
+    Parameter,
     DetectorParameterisation,
     Profile,
     combine,
@@ -35,10 +35,10 @@ class Pair(DetectorParameterisation):
     @property
     def parameters(self):
         return (
-            DetectorParameter(
+            Parameter(
                 key="width", label="Width", default=4, dtype="int",
                 tunable=True, minimum=2, maximum=10, step=1),
-            DetectorParameter(
+            Parameter(
                 key="mode", label="Mode", default=0, dtype="int",
                 choices=(Choice("fast", 0), Choice("careful", 1))),
         )
@@ -56,10 +56,10 @@ class Pair(DetectorParameterisation):
 
 def test_a_detector_that_takes_nothing_still_works():
     """The case a target that is never detected lands in."""
-    assert len(NO_DETECTOR_PARAMETERS) == 0
-    assert NO_DETECTOR_PARAMETERS.resolve({"anything": 1}) == {}
-    assert NO_DETECTOR_PARAMETERS.parse({}) == {}
-    assert NO_DETECTOR_PARAMETERS.unavailable_reason() is None
+    assert len(NO_PARAMETERS) == 0
+    assert NO_PARAMETERS.resolve({"anything": 1}) == {}
+    assert NO_PARAMETERS.parse({}) == {}
+    assert NO_PARAMETERS.unavailable_reason() is None
 
 
 def test_resolving_fills_in_defaults_and_coerces_what_it_is_given():
@@ -76,7 +76,7 @@ def test_resolving_drops_a_key_the_detector_does_not_take():
 
 def test_a_tunable_parameter_must_say_what_to_search_between():
     with pytest.raises(ValueError, match="needs both a minimum and a maximum"):
-        DetectorParameter(key="k", label="K", default=1, dtype="int", tunable=True)
+        Parameter(key="k", label="K", default=1, dtype="int", tunable=True)
 
 
 def test_a_study_is_refused_a_parameter_with_no_bounds():
@@ -112,8 +112,8 @@ def test_composing_a_target_with_its_backend_reads_as_one_detector():
 
 def test_composing_with_nothing_gives_back_the_other_part():
     """Which is why a target that adds nothing of its own costs nothing."""
-    assert combine(NO_DETECTOR_PARAMETERS, ARUCO_OPENCV_DETECTOR) is ARUCO_OPENCV_DETECTOR
-    assert combine(NO_DETECTOR_PARAMETERS, NO_DETECTOR_PARAMETERS) is NO_DETECTOR_PARAMETERS
+    assert combine(NO_PARAMETERS, ARUCO_OPENCV_DETECTOR) is ARUCO_OPENCV_DETECTOR
+    assert combine(NO_PARAMETERS, NO_PARAMETERS) is NO_PARAMETERS
 
 
 def test_a_detector_with_no_parameters_is_not_nothing():
@@ -122,7 +122,7 @@ def test_a_detector_with_no_parameters_is_not_nothing():
     Dropping it for having no parameters lost that, and a target read with
     a backend that is not installed was accepted right up until detection.
     """
-    composed = combine(NO_DETECTOR_PARAMETERS, ARUCO2_DETECTOR)
+    composed = combine(NO_PARAMETERS, ARUCO2_DETECTOR)
     assert composed is ARUCO2_DETECTOR
     assert composed.unavailable_reason() == ARUCO2_DETECTOR.unavailable_reason()
 
@@ -293,7 +293,7 @@ def test_every_preset_sits_inside_the_bounds_its_parameters_allow():
 def test_a_detector_with_no_presets_says_so():
     """Rather than the selector offering ChArUco's over another detector."""
     assert Pair().profiles() == {}
-    assert NO_DETECTOR_PARAMETERS.profiles() == {}
+    assert NO_PARAMETERS.profiles() == {}
 
 
 def test_a_preset_renders_as_hover_text_over_the_form_labels():

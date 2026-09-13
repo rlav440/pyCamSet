@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from pyCamSet.calibration_targets.detector_parameters import DetectorParameterisation
+from pyCamSet.calibration_targets.parameters import DetectorParameterisation
 from pyCamSet.calibration_targets.target_registry import build_target
 from pyCamSet.workflow.tuning.study import (
     FAILURE_SCORE,

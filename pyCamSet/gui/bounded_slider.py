@@ -15,13 +15,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyCamSet.calibration_targets.detector_parameters import DetectorParameter
+from pyCamSet.calibration_targets.parameters import Parameter
 
 
 _FLOAT_SCALE = 1000  # scaler used when rendering float ranges on integer-only QSlider
 
 
-def _make_spin(entry: DetectorParameter) -> QDoubleSpinBox | QSpinBox:
+def _make_spin(entry: Parameter) -> QDoubleSpinBox | QSpinBox:
     """Build a spin box appropriate for *entry*'s dtype."""
     if entry.dtype == "int":
         spin = QSpinBox()
@@ -54,7 +54,7 @@ class BoundedSliderRow(QWidget):
     optimiseChanged = Signal(str, bool)
     boundsChanged = Signal(str, object, object)
 
-    def __init__(self, entry: DetectorParameter, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, entry: Parameter, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._entry = entry
         self._key = entry.key

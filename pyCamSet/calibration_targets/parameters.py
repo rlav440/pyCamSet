@@ -1,26 +1,24 @@
 """
-What a detector can be told, described as data.
+What a target and its detector can be told, described as data.
 
-A target's ``find_in_image`` is not one implementation: it picks a detector
-backend, and each backend takes its own settings.  Those settings were
-previously ChArUco's alone, written down once as a table and imported by name
-from the phase 1 form, the optimisation tab, the tuning worker and the optuna
-adapter -- so a target that read its markers some other way had nowhere to say
-what it could be told, and the twelve settings PuzzleBoardCube already takes
-were reachable from nothing.
+Both halves were once written into the things that read them: ChArUco's
+detector settings as a table imported by name from four places, and every
+target's constructor arguments as a map of widget names in the interface.
+A target that read its markers some other way had nowhere to say what its
+detection could be told, and a target the interface had never heard of had
+no form at all.
 
-So a backend describes itself.  :class:`DetectorParameter` is one setting --
-what it is called, what it defaults to, the bounds a study may search between
-and the prose a person reads while typing it in.  :class:`DetectorParameterisation`
-is a backend's set of them, plus the three things that genuinely differ
-between backends: rules that span more than one parameter, whether the
-backend's optional dependency is installed, and the named bound presets a
-study may start from.
+So they describe themselves.  :class:`Parameter` is one setting -- what it
+is called, what it defaults to, the bounds it holds between, and the prose
+a person reads while typing it in.  :class:`Parameterisation` is a set of
+them, with the rules that span more than one.
 
-A target composes these.  Its own ``find_in_image`` may take settings of its
-own -- PuzzleBoardCube's plane gate is not the PuzzleBoard detector's
-business -- so what the interface and the tuner see is the target's own
-parameters beside the selected backend's, joined by :func:`combine`.
+:class:`DetectorParameterisation` adds the two things that are a detector's
+alone: whether its optional dependency is installed, and the named bound
+presets a study may start from.  A target composes these -- its own
+``find_in_image`` may take settings that are not the detector's -- so what
+the interface and the tuner see is the target's own parameters beside the
+selected backend's, joined by :func:`combine`.
 """
 from __future__ import annotations
 
@@ -47,7 +45,7 @@ DTYPES = ("int", "float", "json_matrix_3x3", "json_vector")
 
 
 @dataclass(frozen=True)
-class DetectorParameter:
+class Parameter:
     """
     One setting of one detector, and everything said about it anywhere.
 
@@ -281,7 +279,7 @@ class DetectorParameter:
     # -- construction ----------------------------------------------------
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> "DetectorParameter":
+    def from_row(cls, row: dict[str, Any]) -> "Parameter":
         """Build a parameter from its stored row."""
         fields = dict(row)
         fields["choices"] = tuple(
@@ -290,10 +288,10 @@ class DetectorParameter:
         return cls(**fields)
 
 
-def parameters_from_json(path: Path) -> tuple[DetectorParameter, ...]:
+def parameters_from_json(path: Path) -> tuple[Parameter, ...]:
     """Every parameter described by a stored table, in the table's order."""
     rows = json.loads(Path(path).read_text(encoding="utf-8"))
-    return tuple(DetectorParameter.from_row(row) for row in rows)
+    return tuple(Parameter.from_row(row) for row in rows)
 
 
 @dataclass(frozen=True)
@@ -351,23 +349,23 @@ def profiles_from_json(path: Path) -> dict[str, Profile]:
     return {row["name"]: Profile.from_row(row) for row in rows}
 
 
-class DetectorParameterisation(ABC):
+class Parameterisation(ABC):
     """
-    What one detector can be told.
+    A set of parameters, and the rules that span more than one.
 
-    A backend subclasses this to describe its settings; a target subclasses
-    it too when its own ``find_in_image`` takes settings that are not the
-    backend's.  The two are joined by :func:`combine`, and everything that
-    varies a detection -- the phase 1 form, the optimisation tab, the tuning
-    worker -- reads the result rather than knowing which detector it has.
+    Subclassed to describe what something can be told: a detector's
+    settings, or the arguments that define a target's geometry.  Everything
+    that offers those to a person, or varies them -- a phase's form, the
+    optimisation tab, the tuning worker -- reads one of these rather than
+    knowing which target or detector it has.
     """
 
-    #: What this detector is called, where one is named.
+    #: What this set is called, where one is named.
     name: str = ""
 
     @property
     @abstractmethod
-    def parameters(self) -> tuple[DetectorParameter, ...]:
+    def parameters(self) -> tuple[Parameter, ...]:
         """Every parameter this detector takes, in the order a form shows them."""
 
     # -- looking parameters up -------------------------------------------
@@ -378,7 +376,7 @@ class DetectorParameterisation(ABC):
     def __contains__(self, key: str) -> bool:
         return any(parameter.key == key for parameter in self.parameters)
 
-    def parameter(self, key: str) -> DetectorParameter:
+    def parameter(self, key: str) -> Parameter:
         """
         The parameter *key* names.
 
@@ -390,13 +388,13 @@ class DetectorParameterisation(ABC):
         raise KeyError(
             f"{self.name or type(self).__name__} has no parameter {key!r}.")
 
-    def tunable(self) -> list[DetectorParameter]:
+    def tunable(self) -> list[Parameter]:
         """The parameters a study may search over, in the order it sweeps them."""
         return sorted(
             (p for p in self.parameters if p.tunable),
             key=lambda parameter: parameter.search_order)
 
-    def settable(self) -> list[DetectorParameter]:
+    def settable(self) -> list[Parameter]:
         """The parameters a person may type a value for, in form order."""
         return [p for p in self.parameters if p.settable]
 
@@ -479,6 +477,14 @@ class DetectorParameterisation(ABC):
         """
         return []
 
+
+class DetectorParameterisation(Parameterisation):
+    """
+    What one detector can be told.
+
+    A parameterisation, plus the two things that are a detector's alone.
+    """
+
     def unavailable_reason(self, values: dict[str, Any] | None = None) -> str | None:
         """
         Why this detector cannot run here, when it cannot.
@@ -492,19 +498,19 @@ class DetectorParameterisation(ABC):
         return {}
 
 
-class NoDetectorParameters(DetectorParameterisation):
+class NoParameters(DetectorParameterisation):
     """A detector that takes no settings, and a target that is never detected."""
 
     name = "none"
 
     @property
-    def parameters(self) -> tuple[DetectorParameter, ...]:
+    def parameters(self) -> tuple[Parameter, ...]:
         return ()
 
 
 #: The parameterisation of a target with nothing to tune.  Shared rather than
 #: built per target, because it holds nothing to tell apart.
-NO_DETECTOR_PARAMETERS = NoDetectorParameters()
+NO_PARAMETERS = NoParameters()
 
 
 class CompositeParameterisation(DetectorParameterisation):
@@ -529,7 +535,7 @@ class CompositeParameterisation(DetectorParameterisation):
                 seen.add(parameter.key)
 
     @property
-    def parameters(self) -> tuple[DetectorParameter, ...]:
+    def parameters(self) -> tuple[Parameter, ...]:
         return tuple(p for part in self._parts for p in part.parameters)
 
     def validate(self, values: dict[str, Any]) -> list[str]:
@@ -559,9 +565,9 @@ def combine(*parts: DetectorParameterisation) -> DetectorParameterisation:
     itself.  A part with no parameters is not nothing: aruco2 takes no
     settings and still says whether it is installed.
     """
-    kept = [part for part in parts if part is not NO_DETECTOR_PARAMETERS]
+    kept = [part for part in parts if part is not NO_PARAMETERS]
     if not kept:
-        return NO_DETECTOR_PARAMETERS
+        return NO_PARAMETERS
     if len(kept) == 1:
         return kept[0]
     return CompositeParameterisation(kept)

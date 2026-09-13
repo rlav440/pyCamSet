@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
-from pyCamSet.calibration_targets.detector_parameters import (
-    DetectorParameter,
+from pyCamSet.calibration_targets.parameters import (
+    Parameter,
     DetectorParameterisation,
 )
 from pyCamSet.workflow.tuning.worker import ParameterRowConfig
@@ -59,7 +59,7 @@ def make_optuna_sampler(
 def suggest_for_row(
     trial: Any,
     row: ParameterRowConfig,
-    parameter: DetectorParameter,
+    parameter: Parameter,
 ) -> Optional[Any]:
     """Sample one parameter from an Optuna trial, honouring its dtype.
 

@@ -51,6 +51,7 @@ from pyCamSet.gui.shared_functions import (
     TerminalWidget,
     apply_target_spec_to_widgets,
     make_blue_button,
+    gate_continue_button,
     make_continue_button,
     make_orange_button,
     make_scrollable_tab,
@@ -446,7 +447,8 @@ class Phase2Tab(QWidget):
         diag_btn = make_orange_button("Diagnostics ▼", self._open_diagnostics)
         diag_btn.setToolTip("Open Phase 2 diagnostics view.")
         btn_row.addWidget(diag_btn)
-        btn_row.addWidget(make_continue_button(self._continue_to_next))
+        self._continue_btn = make_continue_button(self._continue_to_next)
+        btn_row.addWidget(self._continue_btn)
         btn_row.addStretch()
         form_root.addLayout(btn_row)
         form_root.addStretch()
@@ -720,6 +722,7 @@ class Phase2Tab(QWidget):
         self._worker.start()
 
     def _on_run_finished(self, metadata: dict) -> None:
+        gate_continue_button(self._continue_btn, self._terminal, metadata)
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
 

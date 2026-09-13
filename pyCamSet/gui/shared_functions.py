@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QTextEdit,
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from pyCamSet.workflow.params import ParamError, as_positive_float
+from pyCamSet.workflow.run_quality import blocking_reasons
 from pyCamSet.workflow.workspace import WorkspaceManager
 
 #: What a dictionary combo falls back to when the backend it is being
@@ -100,6 +102,8 @@ ORANGE = "#e07b00"
 DARK_ORANGE = "#c06000"
 GREEN = "#2e7d32"
 DARK_GREEN = "#1b5e20"
+DULL_RED = "#8c3b3b"
+DARK_DULL_RED = "#733030"
 SECTION_COLOR = "#1976d2"
 BABY_BLUE = "#8fd3ff"
 DARK_BABY_BLUE = "#67bde8"
@@ -123,6 +127,16 @@ BLUE_BTN_STYLE = (
     f" border-radius: 4px; padding: 4px 10px; }}"
     f"QPushButton:hover {{ background-color: {DARK_BABY_BLUE}; }}"
     f"QPushButton:pressed {{ background-color: {DARK_BABY_BLUE}; }}"
+)
+
+#: A continue button whose run produced nothing worth carrying forward. Dull
+#: rather than bright, because it is a warning against going on rather than
+#: an action of its own.
+BLOCKED_BTN_STYLE = (
+    f"QPushButton {{ background-color: {DULL_RED}; color: white; font-weight: bold;"
+    f" border-radius: 4px; padding: 4px 10px; }}"
+    f"QPushButton:hover {{ background-color: {DARK_DULL_RED}; }}"
+    f"QPushButton:pressed {{ background-color: {DARK_DULL_RED}; }}"
 )
 
 SECTION_STYLE = "QLabel { color: #1976d2; font-weight: bold; margin-top: 6px; }"
@@ -176,12 +190,70 @@ def make_blue_button(text: str, callback: Callable) -> QPushButton:
     return btn
 
 
-def make_continue_button(callback: Callable) -> QPushButton:
-    """Return a green "Continue to Next Phase" button."""
-    btn = QPushButton("Continue to Next Phase ▶")
-    btn.setStyleSheet(GREEN_BTN_STYLE)
-    btn.clicked.connect(callback)
+def make_continue_button(callback: Callable,
+                         text: str = "Continue to Next Phase ▶") -> QPushButton:
+    """Return a green button that hands the phase's work on.
+
+    The button carries the reasons the run behind it should not be carried
+    forward: :func:`set_continue_blocked` puts them there and colours it, and
+    while it is red a click explains itself and asks first.
+
+    :param callback: what to call once the click is allowed through
+    :param text: the button's label
+    """
+    btn = QPushButton(text)
+    set_continue_blocked(btn, [])
+    btn.clicked.connect(lambda: _continue_clicked(btn, callback))
     return btn
+
+
+def set_continue_blocked(btn: QPushButton, reasons: list[str]) -> None:
+    """Colour a continue button by whether its run is worth carrying on.
+
+    The button stays enabled: a run being unusable is a strong statement, and
+    the person holding the images may know something this does not, so it
+    says so and asks rather than locking them out.
+
+    :param btn: the button, as :func:`make_continue_button` built it
+    :param reasons: why the run cannot be carried forward, empty when it can
+    """
+    btn._blocked_reasons = list(reasons)
+    if reasons:
+        if not hasattr(btn, "_unblocked_tooltip"):
+            btn._unblocked_tooltip = btn.toolTip()
+        btn.setStyleSheet(BLOCKED_BTN_STYLE)
+        btn.setToolTip("This run cannot be carried forward:\n\n"
+                       + "\n\n".join(reasons))
+        return
+    btn.setStyleSheet(GREEN_BTN_STYLE)
+    btn.setToolTip(getattr(btn, "_unblocked_tooltip", btn.toolTip()))
+
+
+def gate_continue_button(btn: QPushButton, terminal, metadata: dict) -> None:
+    """Judge a finished run, and say so on the button and in the terminal.
+
+    :param btn: the phase's continue button
+    :param terminal: the phase's terminal pane
+    :param metadata: the run record the phase just produced
+    """
+    reasons = blocking_reasons(metadata)
+    set_continue_blocked(btn, reasons)
+    for reason in reasons:
+        terminal.append_line(f"Cannot continue: {reason}")
+
+
+def _continue_clicked(btn: QPushButton, callback: Callable) -> None:
+    """Ask before carrying a run that said it should not be carried."""
+    reasons = getattr(btn, "_blocked_reasons", [])
+    if reasons:
+        answer = QMessageBox.warning(
+            btn.window(), "This run is not worth continuing from",
+            "\n\n".join(reasons) + "\n\nContinue anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+    callback()
 
 
 class MatplotlibFigureCard(QWidget):

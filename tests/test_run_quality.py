@@ -122,6 +122,7 @@ def qt_app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.mark.gui
 def test_a_blocked_run_turns_the_button_red_and_says_why(qt_app, monkeypatch):
     from pyCamSet.gui import shared_functions as sf
 
@@ -153,6 +154,7 @@ def test_a_blocked_run_turns_the_button_red_and_says_why(qt_app, monkeypatch):
     assert clicks == [1]
 
 
+@pytest.mark.gui
 def test_a_clean_run_leaves_the_button_green(qt_app):
     from pyCamSet.gui import shared_functions as sf
 

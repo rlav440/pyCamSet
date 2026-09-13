@@ -83,6 +83,19 @@ except ImportError:
 # the skip reason instead.
 collect_ignore_glob = [] if ARUCO2_AVAILABLE else ["test_aruco2_backend.py"]
 
+# PySide6 is a base dependency, but requirements_core.txt documents a lean
+# install that leaves it out, and CI keeps one job on that path.  Unlike
+# aruco2 this needs no collect_ignore: no test module imports Qt at module
+# level, so the ``gui`` marker is enough and the non-Qt tests in the same
+# files still run.
+try:
+    import PySide6  # noqa: F401
+
+    PYSIDE6_AVAILABLE = True
+except ImportError:
+    PySide6 = None  # type: ignore[assignment]
+    PYSIDE6_AVAILABLE = False
+
 # Regression test gated on the legacy ChArUco calibration API availability.
 BUNDLE_TEST_BASENAME = "bundle_correctness_test.py"
 
@@ -122,11 +135,15 @@ def pytest_collection_modifyitems(
     jit_disabled = os.environ.get("NUMBA_DISABLE_JIT", "") not in ("", "0")
     skip_no_jit = pytest.mark.skip(reason="NUMBA_DISABLE_JIT is set; numba is not compiling")
 
+    skip_no_gui = pytest.mark.skip(reason="PySide6 is not installed")
+
     for item in items:
         if not have_data and "data" in item.keywords:
             item.add_marker(skip_no_data)
         if jit_disabled and "needs_jit" in item.keywords:
             item.add_marker(skip_no_jit)
+        if not PYSIDE6_AVAILABLE and "gui" in item.keywords:
+            item.add_marker(skip_no_gui)
 
     if not HAS_LEGACY_CHARUCO_CALIBRATION:
         skip_legacy_api = pytest.mark.skip(

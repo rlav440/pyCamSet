@@ -106,10 +106,17 @@ omit = [
 
 [tool.coverage.report]
 show_missing = true
-# Report against the fast suite run under NUMBA_DISABLE_JIT=1 (see
-# .github/workflows/test.yml).  With JIT enabled, every @njit body is compiled
-# rather than interpreted, so coverage sees none of it: 273 of the 291
-# "missing" lines in compiled_helpers.py were kernels the tests do exercise.
+# Coverage is reported from the fast suite with JIT ON (see
+# .github/workflows/test.yml), so it measures the code that ships.
+#
+# The consequence is that @njit kernel bodies read as unexecuted: CPython
+# never runs them, numba compiles them.  compiled_helpers.py therefore reports
+# about 14% rather than the 46% an interpreted run shows, and the project total
+# is roughly a point lower (33% against 34%).  Those kernels are covered
+# behaviourally -- by the bundle adjustments in the data-marked tests -- not by
+# line counting.  Do not re-enable NUMBA_DISABLE_JIT to flatter this number:
+# it also skips every needs_jit test, which is where the compiled path's own
+# regressions are caught.
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",

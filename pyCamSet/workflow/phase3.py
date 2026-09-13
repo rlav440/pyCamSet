@@ -25,7 +25,7 @@ from pyCamSet.workflow.logs import (
     discard,
     non_interactive_plotting,
 )
-from pyCamSet.workflow.phase1 import target_from_params
+from pyCamSet.workflow.phase1 import target_of_params
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
     as_io_path,
@@ -304,7 +304,7 @@ def _solve(params: dict, run_dir: Path, camset_in: Path,
             run_dir / "filtered_detected_datapoints.pickle", detections)
         log(f"Saved filtered detections: {pruned_path}")
 
-    target = target_from_params(params)
+    target = target_of_params(params)
     lockbox_config, lockbox_source, lockbox_settings = _lockbox(params, cams, log)
 
     handler, optimisation, out_cams, stats = solve(

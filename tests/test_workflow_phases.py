@@ -38,13 +38,17 @@ from pyCamSet.workflow.workspace import (
     workspace_path_for,
 )
 
-CHARUCO_PARAMS = dict(
-    target_type="ChArUco",
-    n_points=20,
-    length=4.0,
-    marker_fraction=0.8,
-    marker_backend="aruco1",
-)
+CHARUCO_SPEC = {
+    "type": "ChArUco",
+    "num_squares_x": 20,
+    "num_squares_y": 20,
+    "square_size": 4.0,
+    "marker_fraction": 0.8,
+    "marker_backend": "aruco1",
+    "a_dict": 3,
+    "legacy": True,
+}
+CHARUCO_PARAMS = {"target": CHARUCO_SPEC}
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +165,33 @@ def test_the_outlier_mode_falls_back_to_off(text, expected):
     assert as_outlier_mode(text) == expected
 
 
+def test_a_marker_backend_the_install_lacks_is_refused():
+    """A guard that reads the target has to read where the target now is.
+
+    Moving the target under its own key silently bypassed this one: it
+    looked for a top-level ``target_type`` that no longer existed, found
+    None, and returned as though the target did not use markers at all.
+    """
+    from pyCamSet.workflow.params import require_marker_backend
+
+    # PuzzleBoard reads no markers, so an absent backend does not stop it.
+    require_marker_backend({"target": {"type": "PuzzleBoard"}})
+
+    spec = {**CHARUCO_SPEC, "marker_backend": "aruco2"}
+    try:
+        from pyCamSet.calibration_targets.backend_registry import (
+            marker_backend_available)
+        available = marker_backend_available("aruco2")
+    except Exception:
+        available = False
+
+    if available:
+        require_marker_backend({"target": spec})
+    else:
+        with pytest.raises(ParamError, match="aruco2"):
+            require_marker_backend({"target": spec})
+
+
 def test_a_target_that_cannot_read_its_detections_is_refused():
     """The check that used to be three copies of itself, one per phase.
 
@@ -170,15 +201,34 @@ def test_a_target_that_cannot_read_its_detections_is_refused():
     run = {"run_id": "r1", "params": dict(CHARUCO_PARAMS)}
 
     require_target_match(run, dict(CHARUCO_PARAMS))
-    require_target_match(None, {"target_type": "Ccube", "n_points": 6})
+    require_target_match(None, {"target": {"type": "Ccube", "n_points": 6}})
+
+    # A marker dictionary changes which points are found, not what a found
+    # key means, so it is not a mismatch.
+    require_target_match(run, {"target": {**CHARUCO_SPEC, "a_dict": 1}})
 
     with pytest.raises(ParamError) as caught:
-        require_target_match(run, {**CHARUCO_PARAMS, "n_points": 6})
+        require_target_match(
+            run, {"target": {**CHARUCO_SPEC, "num_squares_x": 6}})
 
     message = str(caught.value)
     assert "r1" in message
-    assert "n_points" in message
+    assert "num_squares_x" in message
     assert "20" in message and "6" in message
+
+
+def test_a_run_whose_target_cannot_be_read_is_refused_not_skipped(tmp_path):
+    """A run from before targets were kept as a spec must not pass silently.
+
+    The check used to return early when either side had no target type,
+    which after this change would have meant an old run quietly skipping
+    the guard rather than failing it.
+    """
+    old_run = {"run_id": "old", "params": {"target_type": "ChArUco",
+                                           "n_points": 20, "length": 4.0}}
+
+    with pytest.raises(ValueError, match="no target spec"):
+        require_target_match(old_run, dict(CHARUCO_PARAMS))
 
 
 # ---------------------------------------------------------------------------
@@ -298,8 +348,6 @@ def test_phase_1_detects_and_records_a_run(charuco_image_folder, tmp_path):
             "upscale_factor": 1,
             "fixed_params": None,
             "problem_options": None,
-            "charuco_detection_options": None,
-            "border_fraction": 0.1,
             "selected_cameras": [],
         },
         workspace,
@@ -350,8 +398,6 @@ def test_a_phase_records_its_failure_rather_than_raising(tmp_path):
             "upscale_factor": 1,
             "fixed_params": None,
             "problem_options": None,
-            "charuco_detection_options": None,
-            "border_fraction": 0.1,
             "selected_cameras": [],
         },
         workspace,
@@ -505,3 +551,63 @@ def test_a_high_distortion_camset_wins_over_the_plain_one(tmp_path):
 
     resolved = resolve_artifact({"run_id": "r3"}, "phase2", workspace.workspace_path)
     assert resolved.name == "initial_cameras_high_distortion.camset"
+
+
+# ---------------------------------------------------------------------------
+# A target is a class and the arguments it was built with
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [{"type": "Ccube", "n_points": 5, "length": 20.0},
+     {"type": "ChArUco", "num_squares_x": 5, "num_squares_y": 7,
+      "square_size": 10.0},
+     {"type": "PuzzleBoardCube", "n_points": 8, "length": 100.0}],
+    ids=["Ccube", "ChArUco", "PuzzleBoardCube"],
+)
+def test_every_target_rebuilds_from_what_it_recorded(spec):
+    """The property the registry rests on, and that a new target must keep.
+
+    ``AbstractTarget`` stores its constructor arguments, the detection pool
+    rebuilds a target from them in each worker, and loading a camset does
+    the same.  ``build_target`` is now that same step rather than a fourth
+    hand-written one.
+    """
+    from pyCamSet.calibration_targets.target_registry import (
+        TARGET_NAMES, build_target, spec_of,
+    )
+
+    assert spec["type"] in TARGET_NAMES
+
+    built = build_target(spec)
+    again = build_target(spec_of(built))
+
+    assert type(again) is type(built)
+    assert again.input_args == built.input_args
+    assert (again.point_data == built.point_data).all()
+
+
+def test_a_target_nobody_registered_says_so():
+    from pyCamSet.calibration_targets.target_registry import build_target
+
+    with pytest.raises(ValueError, match="Unknown target type"):
+        build_target({"type": "Dodecahedron"})
+    with pytest.raises(ValueError, match="must say which target"):
+        build_target({"num_squares_x": 5})
+
+
+def test_adding_a_target_is_one_line():
+    """Every registered name resolves to a class, and nothing else is needed.
+
+    This is the whole claim of the registry: the mapping is the only place
+    that has to know a target exists.
+    """
+    from pyCamSet.calibration_targets.target_registry import (
+        TARGET_CLASSES, target_class,
+    )
+
+    for name in TARGET_CLASSES:
+        if name == "PuzzleBoard":
+            pytest.importorskip("puzzle_board")
+        assert isinstance(target_class(name), type)

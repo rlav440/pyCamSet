@@ -412,10 +412,12 @@ def test_camset_save_load_legacy_input_defaults_to_aruco1(tmp_path):
 
 
 def test_build_target_threads_marker_backend():
-    from pyCamSet.workflow.targets import build_target
-    t = build_target("ChArUco", n_points=5, length=10.0, marker_backend="aruco2")
+    from pyCamSet.calibration_targets.target_registry import build_target
+    spec = {"type": "ChArUco", "num_squares_x": 5, "num_squares_y": 5,
+            "square_size": 10.0}
+    t = build_target({**spec, "marker_backend": "aruco2"})
     assert t.input_args["marker_backend"] == "aruco2"
-    t_default = build_target("ChArUco", n_points=5, length=10.0)
+    t_default = build_target(spec)
     assert t_default.input_args["marker_backend"] == "aruco1"
 
 

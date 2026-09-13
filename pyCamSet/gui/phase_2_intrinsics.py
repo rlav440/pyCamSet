@@ -49,13 +49,14 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE2,
     TAB_PHASE3,
     TerminalWidget,
-    apply_target_params_to_widgets,
+    apply_target_spec_to_widgets,
     make_blue_button,
     make_continue_button,
     make_orange_button,
     make_scrollable_tab,
     make_section_label,
     make_separator,
+    read_target_spec,
     render_predecessor_chain_section,
     show_tab,
 )
@@ -587,29 +588,7 @@ class Phase2Tab(QWidget):
             "min_detections_per_board": self._min_dtct_spin.value(),
             "fixed_params": as_json_object(
                 self._fp_edit.text(), "Fixed params JSON"),
-            "target_type": self._target_combo.currentText(),
-            "n_points": self._npts_spin.value(),
-            "length": as_positive_float(self._length_edit.text(), "Length"),
-            "marker_backend": str(
-                self._marker_backend_combo.currentData() or "aruco1"),
-            "border_fraction": self._border_spin.value(),
-            "marker_fraction": self._marker_spin.value(),
-            # PuzzleBoard:
-            "num_squares_x": self._pb_x_spin.value(),
-            "num_squares_y": self._pb_y_spin.value(),
-            "square_size": as_positive_float(
-                self._pb_square_edit.text(), "PuzzleBoard square_size"),
-            "start_x": self._pb_start_x_spin.value(),
-            "start_y": self._pb_start_y_spin.value(),
-            "paper_width": as_positive_float(
-                self._pb_paper_w_edit.text(), "PuzzleBoard paper_width"),
-            "paper_height": as_positive_float(
-                self._pb_paper_h_edit.text(), "PuzzleBoard paper_height"),
-            "min_width": self._pb_min_width_spin.value(),
-            # PuzzleBoardCube:
-            "pbc_n_points": self._pbc_size_spin.value(),
-            "pbc_length": as_positive_float(
-                self._pbc_square_edit.text(), "PuzzleBoardCube length"),
+            "target": read_target_spec(self),
         }
 
     def _load_phase1_run(self) -> Optional[dict]:
@@ -642,7 +621,7 @@ class Phase2Tab(QWidget):
         if run_id is None or run_id == self._adopted_target_run_id:
             return
         self._adopted_target_run_id = run_id
-        apply_target_params_to_widgets(self, target_params_of_run(run))
+        apply_target_spec_to_widgets(self, target_params_of_run(run))
 
     def _update_detection_source_label(self) -> None:
         override = self._det_pickle_edit.text().strip() if hasattr(self, "_det_pickle_edit") else ""

@@ -19,7 +19,7 @@ from pyCamSet.workflow.detections import (
     staged_camera_root,
 )
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
-from pyCamSet.workflow.targets import target_from_params
+from pyCamSet.workflow.targets import target_of_params
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
     copy_file,
@@ -131,7 +131,7 @@ def _detect(params: dict, log: LogFn) -> tuple[Optional[Path], dict]:
         raise RuntimeError(
             "Camera folders must contain equal non-zero image counts.")
 
-    target = target_from_params(params)
+    target = target_of_params(params)
     cache_name = detection_cache_name(upscale_factor)
 
     with staged_camera_root(f_loc, cam_folders, log, "pycamset_phase1_") as root:

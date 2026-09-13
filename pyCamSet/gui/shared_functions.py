@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pyCamSet.workflow.params import ParamError, as_positive_float
 from pyCamSet.workflow.workspace import WorkspaceManager
 
 #: What a dictionary combo falls back to when the backend it is being
@@ -339,66 +340,115 @@ def build_charuco_option_tooltip(meta: dict[str, Any]) -> str:
 
 
 
-def apply_target_params_to_widgets(tab: Any, params: dict) -> None:
+#: Which of the form's controls each target takes its arguments from.  The
+#: form is one set of widgets serving four targets, showing and hiding as the
+#: type changes, so this is where that flat set becomes each target's own
+#: constructor arguments.  It is the only mapping of its kind left: every
+#: other place a target is described, it is described as a spec.
+_TARGET_WIDGETS: dict[str, dict[str, tuple[str, type]]] = {
+    "Ccube": {
+        "n_points": ("_npts_spin", int),
+        "length": ("_length_edit", float),
+        "border_fraction": ("_border_spin", float),
+    },
+    "ChArUco": {
+        "num_squares_x": ("_npts_spin", int),
+        "num_squares_y": ("_npts_spin", int),
+        "square_size": ("_length_edit", float),
+        "marker_fraction": ("_marker_spin", float),
+    },
+    "PuzzleBoard": {
+        "num_squares_x": ("_pb_x_spin", int),
+        "num_squares_y": ("_pb_y_spin", int),
+        "square_size": ("_pb_square_edit", float),
+        "start_x": ("_pb_start_x_spin", int),
+        "start_y": ("_pb_start_y_spin", int),
+        "paper_width": ("_pb_paper_w_edit", float),
+        "paper_height": ("_pb_paper_h_edit", float),
+        "min_width": ("_pb_min_width_spin", int),
+    },
+    "PuzzleBoardCube": {
+        "n_points": ("_pbc_size_spin", int),
+        "length": ("_pbc_square_edit", float),
+        "min_width": ("_pb_min_width_spin", int),
+    },
+}
+
+#: The targets that read markers, and so take a backend from the form.
+_MARKER_TARGETS = {"Ccube", "ChArUco"}
+
+
+def _widget_value(tab: Any, name: str, cast: type, label: str):
+    """Read one control, as the value its target's argument takes."""
+    widget = getattr(tab, name, None)
+    if widget is None:
+        return None
+    if hasattr(widget, "value"):
+        return cast(widget.value())
+    text = widget.text().strip()
+    return as_positive_float(text, label) if cast is float else cast(text)
+
+
+def read_target_spec(tab: Any, detection_options: dict | None = None) -> dict:
     """
-    Set a phase tab's target controls from a saved run's parameters.
+    The target spec a phase tab's controls describe.
+
+    :param tab: the phase tab, holding the target widgets
+    :param detection_options: the detector tuning, when the tab collects it
+    :raises ParamError: for a control whose value the target cannot take
+    """
+    target_type = tab._target_combo.currentText()
+    spec: dict[str, Any] = {"type": target_type}
+    for argument, (widget_name, cast) in _TARGET_WIDGETS[target_type].items():
+        value = _widget_value(tab, widget_name, cast, argument)
+        if value is not None:
+            spec[argument] = value
+    if target_type in _MARKER_TARGETS:
+        spec["marker_backend"] = str(
+            tab._marker_backend_combo.currentData() or "aruco1")
+    if detection_options is not None:
+        spec["detection_options"] = detection_options
+    return spec
+
+
+def apply_target_spec_to_widgets(tab: Any, spec: dict) -> None:
+    """
+    Set a phase tab's target controls from a saved run's target.
 
     Phases 2 and 3 build their own target and pair it with detections made
-    by an earlier run, so the default that is right almost always is the
-    one the detections were made with.  Only the fields present in
-    ``params`` are touched.
+    by an earlier run, so the default that is right almost always is the one
+    the detections were made with.
 
     Spin boxes clamp to their own ranges, so a value the interface cannot
     represent is silently narrowed here; :func:`describe_target_mismatch`
     is what catches that before it reaches the solver.
 
     :param tab: the phase tab, holding the target widgets
-    :param params: the run parameters to adopt
+    :param spec: the target spec to adopt
     """
-    if not params:
+    if not spec or "type" not in spec:
         return
-
-    def _spin(name: str, key: str, cast=int) -> None:
-        widget = getattr(tab, name, None)
-        if widget is not None and params.get(key) is not None:
-            widget.setValue(cast(params[key]))
-
-    def _text(name: str, key: str) -> None:
-        widget = getattr(tab, name, None)
-        if widget is not None and params.get(key) is not None:
-            widget.setText(f"{float(params[key]):g}")
-
-    target_type = params.get("target_type")
     combo = getattr(tab, "_target_combo", None)
-    if combo is not None and target_type:
-        combo.setCurrentText(str(target_type))
+    if combo is not None:
+        combo.setCurrentText(str(spec["type"]))
 
-    _spin("_npts_spin", "n_points")
-    _text("_length_edit", "length")
-    _spin("_border_spin", "border_fraction", float)
-    _spin("_marker_spin", "marker_fraction", float)
+    for argument, (widget_name, cast) in _TARGET_WIDGETS.get(spec["type"], {}).items():
+        if spec.get(argument) is None:
+            continue
+        widget = getattr(tab, widget_name, None)
+        if widget is None:
+            continue
+        if hasattr(widget, "setValue"):
+            widget.setValue(cast(spec[argument]))
+        else:
+            widget.setText(f"{float(spec[argument]):g}")
 
-    _spin("_pb_x_spin", "num_squares_x")
-    _spin("_pb_y_spin", "num_squares_y")
-    _text("_pb_square_edit", "square_size")
-    _spin("_pb_start_x_spin", "start_x")
-    _spin("_pb_start_y_spin", "start_y")
-    _text("_pb_paper_w_edit", "paper_width")
-    _text("_pb_paper_h_edit", "paper_height")
-    _spin("_pb_min_width_spin", "min_width")
-
-    _spin("_pbc_size_spin", "pbc_n_points")
-    _text("_pbc_square_edit", "pbc_length")
-    _spin("_pbc_min_width_spin", "min_width")
-
-    backend = params.get("marker_backend")
+    backend = spec.get("marker_backend")
     backend_combo = getattr(tab, "_marker_backend_combo", None)
     if backend_combo is not None and backend:
         index = backend_combo.findData(str(backend))
         if index >= 0:
             backend_combo.setCurrentIndex(index)
-
-
 
 
 # ---------------------------------------------------------------------------

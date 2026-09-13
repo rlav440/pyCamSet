@@ -38,7 +38,7 @@ from pyCamSet.calibration_targets.charuco_parameters import (
     searchable,
     validate_all_rows,
 )
-from pyCamSet.workflow.targets import target_from_params
+from pyCamSet.calibration_targets.target_registry import build_target
 from pyCamSet.workflow.tuning.study import (
     FAILURE_SCORE,
     SuccessRetention,
@@ -91,27 +91,35 @@ class TargetSettings:
     legacy: bool = False
     marker_backend: str = "aruco1"
 
-    def as_params(self) -> dict[str, Any]:
-        """These settings in the vocabulary :mod:`pyCamSet.workflow.targets` speaks.
+    def as_spec(self) -> dict[str, Any]:
+        """
+        These settings as a target spec.
 
         ChArUco takes its size from ``square_size`` and its shape from
         ``num_squares_x``/``num_squares_y``; Ccube takes both from
         ``n_points`` and ``length``.  Those fields sit side by side on this
-        dataclass, so which of them means what depends on the target type --
-        and resolving that is what this is for.
+        dataclass, so which of them a target wants depends on the target --
+        and choosing is all this does.
         """
-        charuco = self.target_type != "Ccube"
+        if self.target_type == "Ccube":
+            return {
+                "type": "Ccube",
+                "n_points": self.n_points,
+                "length": self.length,
+                "border_fraction": self.border_fraction,
+                "aruco_dict": self.a_dict,
+                "legacy": self.legacy,
+                "marker_backend": self.marker_backend,
+            }
         return {
-            "target_type": self.target_type,
-            "n_points": self.n_points,
-            "length": self.square_size if charuco else self.length,
-            "border_fraction": self.border_fraction,
+            "type": self.target_type,
+            "num_squares_x": self.num_squares_x,
+            "num_squares_y": self.num_squares_y,
+            "square_size": self.square_size,
             "marker_fraction": self.marker_fraction,
-            "marker_backend": self.marker_backend,
+            "a_dict": self.a_dict,
             "legacy": self.legacy,
-            "aruco_dict": self.a_dict,
-            "charuco_squares_x": self.num_squares_x,
-            "charuco_squares_y": self.num_squares_y,
+            "marker_backend": self.marker_backend,
         }
 
     def as_dict(self) -> dict[str, Any]:
@@ -249,9 +257,9 @@ def default_detection_fn(
     """
     from pyCamSet.calibration.camera_calibrator import detect_datapoints_in_imfile
 
-    target = target_from_params({
-        **target_settings.as_params(),
-        "charuco_detection_options": detection_options,
+    target = build_target({
+        **target_settings.as_spec(),
+        "detection_options": detection_options,
     })
     detections, cam_res = detect_datapoints_in_imfile(
         f_loc=f_loc,

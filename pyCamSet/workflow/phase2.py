@@ -21,7 +21,7 @@ from pyCamSet.workflow.detections import (
 )
 from pyCamSet.workflow.diagnostics import per_view_reprojection
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
-from pyCamSet.workflow.phase1 import target_from_params
+from pyCamSet.workflow.phase1 import target_of_params
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
     as_io_path,
@@ -204,7 +204,7 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet calibration modules are not importable.")
 
-    target = target_from_params(params)
+    target = target_of_params(params)
 
     if prune is not None:
         # Nothing re-detects here.  Detecting again would put back exactly the

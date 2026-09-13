@@ -417,20 +417,26 @@ def test_the_stats_agree_with_the_calibration_report(short_charuco_handler):
 # refuse the run when the two still disagree.
 
 from pyCamSet.gui.shared_functions import (  # noqa: E402
-    apply_target_params_to_widgets,
+    apply_target_spec_to_widgets,
 )
+from pyCamSet.calibration_targets.target_Ccube import Ccube  # noqa: E402
 from pyCamSet.workflow.targets import (  # noqa: E402
-    TARGET_IDENTITY_KEYS,
+    READING_ONLY_FIELDS,
     describe_target_mismatch,
     target_mismatch_message,
     target_params_of_run,
 )
 
 # The two Ccube targets behind the reported failure.
-CCUBE_12 = {"target_type": "Ccube", "n_points": 12, "length": 80.0,
-            "border_fraction": 0.1, "marker_backend": "aruco1"}
-CCUBE_6 = {"target_type": "Ccube", "n_points": 6, "length": 30.0,
-           "border_fraction": 0.1, "marker_backend": "aruco1"}
+CCUBE_12 = {"target": {"type": "Ccube", "n_points": 12, "length": 80.0,
+                       "border_fraction": 0.1, "marker_backend": "aruco1"}}
+CCUBE_6 = {"target": {"type": "Ccube", "n_points": 6, "length": 30.0,
+                      "border_fraction": 0.1, "marker_backend": "aruco1"}}
+
+
+def _with(params, **changes):
+    """The same parameters, with the target's spec altered."""
+    return {"target": {**params["target"], **changes}}
 
 
 def _run(params, run_id="20260910_180530_fe4431"):
@@ -453,7 +459,7 @@ def test_the_reported_mismatch_is_caught():
 def test_a_different_target_type_is_reported_on_its_own():
     """No point listing field differences between incomparable targets."""
     differences = describe_target_mismatch(
-        CCUBE_12, {**CCUBE_12, "target_type": "ChArUco"})
+        CCUBE_12, _with(CCUBE_12, type="ChArUco"))
 
     assert len(differences) == 1
     assert "target type" in differences[0]
@@ -461,31 +467,46 @@ def test_a_different_target_type_is_reported_on_its_own():
 
 def test_detection_only_settings_are_not_a_mismatch():
     """The backend changes which points are found, not what a key means."""
-    other_backend = {**CCUBE_12, "marker_backend": "aruco2"}
+    other_backend = _with(CCUBE_12, marker_backend="aruco2")
 
     assert describe_target_mismatch(CCUBE_12, other_backend) == []
 
 
 def test_numbers_are_compared_as_numbers():
     """Run metadata round-trips through JSON, so 80 may arrive as "80.0"."""
-    as_text = {**CCUBE_12, "n_points": "12", "length": "80"}
+    as_text = _with(CCUBE_12, n_points="12", length="80")
 
     assert describe_target_mismatch(CCUBE_12, as_text) == []
 
 
-def test_only_the_fields_that_matter_for_the_type_are_compared():
-    """Phase 1 records every field, whichever target was actually used."""
-    # PuzzleBoard fields differ, but a Ccube run does not use them
-    noisy = {**CCUBE_12, "num_squares_x": 999, "paper_width": 1.0}
+def test_a_spec_carries_its_own_targets_arguments_and_no_others():
+    """A run used to record every field whichever target it used, so the
+    comparison had to name the ones that mattered per type.  A spec is the
+    target's own constructor arguments, so there is nothing else in it."""
+    assert "num_squares_x" not in CCUBE_12["target"]
+    assert set(CCUBE_12["target"]) - {"type"} <= set(
+        Ccube.__init__.__code__.co_varnames)
 
-    assert describe_target_mismatch(CCUBE_12, noisy) == []
-    assert "num_squares_x" not in TARGET_IDENTITY_KEYS["Ccube"]
+
+def test_what_is_ignored_is_named_rather_than_what_is_compared():
+    """Stated as an exclusion so that a new target, or a new argument on an
+    existing one, is compared by default instead of quietly left out."""
+    assert "marker_backend" in READING_ONLY_FIELDS
+    assert "aruco_dict" in READING_ONLY_FIELDS
+    assert "n_points" not in READING_ONLY_FIELDS
 
 
-def test_a_missing_run_is_not_a_mismatch():
-    """A pickle override or a first run has nothing to compare against."""
-    assert describe_target_mismatch({}, CCUBE_6) == []
-    assert describe_target_mismatch(CCUBE_12, {}) == []
+def test_a_run_whose_target_cannot_be_read_is_refused():
+    """Under the shape this replaced, a run with no recognisable target made
+    the check return early -- so it did not fail, it was skipped, and the
+    index error it exists to prevent came back."""
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="no target spec"):
+        describe_target_mismatch({}, CCUBE_6)
+    with _pytest.raises(ValueError, match="no target spec"):
+        describe_target_mismatch(CCUBE_12, {})
+
     assert target_params_of_run(None) == {}
     assert target_params_of_run({}) == {}
 
@@ -567,24 +588,24 @@ class _FakeTab:
 def test_adopting_a_run_sets_the_target_to_match_it():
     tab = _FakeTab()
 
-    apply_target_params_to_widgets(tab, CCUBE_12)
+    apply_target_spec_to_widgets(tab, CCUBE_12["target"])
 
     assert tab._target_combo.text_ == "Ccube"
     assert tab._npts_spin.value_ == 12
     assert tab._length_edit.text_ == "80"
     assert describe_target_mismatch(
         CCUBE_12,
-        {"target_type": tab._target_combo.text_,
-         "n_points": tab._npts_spin.value_,
-         "length": tab._length_edit.text_,
-         "border_fraction": tab._border_spin.value_},
+        {"target": {"type": tab._target_combo.text_,
+                    "n_points": tab._npts_spin.value_,
+                    "length": tab._length_edit.text_,
+                    "border_fraction": tab._border_spin.value_}},
     ) == []
 
 
 def test_adopting_selects_the_marker_backend_by_value():
     tab = _FakeTab()
 
-    apply_target_params_to_widgets(tab, {**CCUBE_12, "marker_backend": "aruco2"})
+    apply_target_spec_to_widgets(tab, _with(CCUBE_12, marker_backend="aruco2")["target"])
 
     assert tab._marker_backend_combo.index_ == 1
 
@@ -592,7 +613,7 @@ def test_adopting_selects_the_marker_backend_by_value():
 def test_adopting_nothing_changes_nothing():
     tab = _FakeTab()
 
-    apply_target_params_to_widgets(tab, {})
+    apply_target_spec_to_widgets(tab, {})
 
     assert tab._npts_spin.value_ == 6
     assert tab._length_edit.text_ == "30.0"
@@ -605,7 +626,7 @@ def test_adopting_ignores_widgets_a_tab_does_not_have():
             self._npts_spin = _Spin(6, 2, 30)
 
     tab = _Sparse()
-    apply_target_params_to_widgets(tab, CCUBE_12)
+    apply_target_spec_to_widgets(tab, CCUBE_12["target"])
 
     assert tab._npts_spin.value_ == 12
 
@@ -614,13 +635,12 @@ def test_a_value_the_interface_cannot_hold_is_still_caught():
     """Spin boxes clamp silently; the mismatch check is the backstop."""
     tab = _FakeTab()  # n_points range is 2..30
 
-    apply_target_params_to_widgets(tab, {**CCUBE_12, "n_points": 99})
+    apply_target_spec_to_widgets(tab, _with(CCUBE_12, n_points=99)["target"])
 
     assert tab._npts_spin.value_ == 30
     assert describe_target_mismatch(
-        {**CCUBE_12, "n_points": 99},
-        {"target_type": "Ccube", "n_points": tab._npts_spin.value_,
-         "length": 80.0, "border_fraction": 0.1},
+        _with(CCUBE_12, n_points=99),
+        _with(CCUBE_12, n_points=tab._npts_spin.value_),
     ) != []
 
 

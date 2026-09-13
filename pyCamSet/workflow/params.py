@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from pyCamSet.workflow.targets import (
     CHARUCO_BASED_TARGETS,
+    target_spec_of,
     describe_target_mismatch,
     target_mismatch_message,
     target_params_of_run,
@@ -112,9 +113,10 @@ def require_marker_backend(params: dict) -> None:
     """
     from pyCamSet.calibration_targets.backend_registry import marker_backend_available
 
-    if params.get("target_type") not in CHARUCO_BASED_TARGETS:
+    spec = target_spec_of(params)
+    if spec.get("type") not in CHARUCO_BASED_TARGETS:
         return
-    backend = params.get("marker_backend", "aruco1")
+    backend = spec.get("marker_backend", "aruco1")
     if marker_backend_available(backend):
         return
     raise ParamError(

@@ -392,7 +392,7 @@ def test_a_retained_trial_becomes_a_chain_of_workspace_runs(tmp_path):
     record.write_text(json.dumps({
         "identity": {"success_stage": "phase3"},
         "paths": {"f_loc": str(tmp_path)},
-        "target": {"target_type": "ChArUco"},
+        "target": {"type": "ChArUco"},
         "detector_settings": {"DetectorParameters.minMarkerPerimeterRate": 0.03},
         "extra": {
             "artifacts": {
@@ -449,11 +449,11 @@ def test_a_study_builds_its_target_the_way_the_phases_do(settings):
     ``num_squares_x``, a phase says ``length`` and ``n_points``, and a
     phase's ``num_squares_x`` belongs to PuzzleBoard entirely -- so
     ``as_params`` translates rather than the study keeping a second builder.
-    A rectangular ChArUco is the case that needed ``build_target`` widening.
+    A rectangular ChArUco is the case a single flat signature could not put.
     """
     from pyCamSet.calibration_targets.target_Ccube import Ccube
     from pyCamSet.calibration_targets.target_charuco import ChArUco
-    from pyCamSet.workflow.targets import target_from_params
+    from pyCamSet.calibration_targets.target_registry import build_target
 
     options = {"DetectorParameters": {"minMarkerPerimeterRate": 0.03}}
     if settings.target_type == "Ccube":
@@ -471,30 +471,29 @@ def test_a_study_builds_its_target_the_way_the_phases_do(settings):
             legacy=settings.legacy, marker_backend=settings.marker_backend,
             detection_options=options)
 
-    built = target_from_params(
-        {**settings.as_params(), "charuco_detection_options": options})
+    built = build_target({**settings.as_spec(), "detection_options": options})
 
     assert type(built) is type(expected)
     assert built.input_args == expected.input_args
     assert built.point_data.shape == expected.point_data.shape
 
 
-def test_a_phase_still_reads_num_squares_as_puzzleboard_s(tmp_path):
-    """The key that made this a translation and not a rename.
+def test_a_targets_arguments_are_its_own_and_nobody_elses(tmp_path):
+    """What the flat parameter namespace made impossible.
 
-    Every phase's parameter dict carries ``num_squares_x``/``num_squares_y``
-    from the PuzzleBoard controls, whatever target is selected.  A ChArUco
-    built from those would be 105 by 148 squares.
+    ``num_squares_x`` used to belong to PuzzleBoard, so a ChArUco could not
+    use the name and needed ``charuco_squares_x`` to mean the same thing.
+    Under its own key each target just says what it takes.
     """
-    from pyCamSet.workflow.targets import target_from_params
+    from pyCamSet.calibration_targets.target_registry import build_target
 
-    built = target_from_params({
-        "target_type": "ChArUco", "n_points": 6, "length": 30.0,
-        "num_squares_x": 105, "num_squares_y": 148,
-    })
+    charuco = build_target({"type": "ChArUco", "num_squares_x": 6,
+                            "num_squares_y": 6, "square_size": 30.0})
+    board = build_target({"type": "PuzzleBoard", "num_squares_x": 105,
+                          "num_squares_y": 148})
 
-    assert built.input_args["num_squares_x"] == 6
-    assert built.input_args["num_squares_y"] == 6
+    assert charuco.input_args["num_squares_x"] == 6
+    assert board.input_args["num_squares_x"] == 105
 
 
 # ---------------------------------------------------------------------------

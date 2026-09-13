@@ -156,6 +156,11 @@ def build_target(
     marker_fraction: float = 0.8,
     marker_backend: str = "aruco1",
     aruco_dict: int | None = None,
+    legacy: bool = False,
+    # ChArUco, when it is not square.  A square board is the ordinary case
+    # and says so once, as n_points; these are for a board that is not.
+    charuco_squares_x: int | None = None,
+    charuco_squares_y: int | None = None,
     # PuzzleBoard-only parameters:
     num_squares_x: int = 105,
     num_squares_y: int = 148,
@@ -179,6 +184,7 @@ def build_target(
             "length": length,
             "border_fraction": border_fraction,
             "marker_backend": marker_backend,
+            "legacy": legacy,
             "detection_options": charuco_detection_options,  # Ccube detection also runs through ChArUco boards.
         }
         if aruco_dict is not None:
@@ -186,11 +192,12 @@ def build_target(
         return Ccube(**ccube_kwargs)
     if target_type == "ChArUco":
         charuco_kwargs: dict[str, Any] = {
-            "num_squares_x": n_points,
-            "num_squares_y": n_points,
+            "num_squares_x": charuco_squares_x or n_points,
+            "num_squares_y": charuco_squares_y or n_points,
             "square_size": length,
             "marker_fraction": marker_fraction,
             "marker_backend": marker_backend,
+            "legacy": legacy,
             "detection_options": charuco_detection_options,
         }
         if aruco_dict is not None:
@@ -239,6 +246,10 @@ def target_from_params(params: dict):
         border_fraction=params.get("border_fraction", 0.1),
         marker_fraction=params.get("marker_fraction", 0.8),
         marker_backend=params.get("marker_backend", "aruco1"),
+        aruco_dict=params.get("aruco_dict"),
+        legacy=params.get("legacy", False),
+        charuco_squares_x=params.get("charuco_squares_x"),
+        charuco_squares_y=params.get("charuco_squares_y"),
         num_squares_x=params.get("num_squares_x", 105),
         num_squares_y=params.get("num_squares_y", 148),
         square_size=params.get("square_size", 2.0),
@@ -266,7 +277,8 @@ def target_from_params(params: dict):
 # which points are found, not what a found key means.
 TARGET_IDENTITY_KEYS: dict[str, tuple[str, ...]] = {
     "Ccube": ("n_points", "length", "border_fraction"),
-    "ChArUco": ("n_points", "length", "marker_fraction"),
+    "ChArUco": ("n_points", "length", "marker_fraction",
+                "charuco_squares_x", "charuco_squares_y"),
     "PuzzleBoard": (
         "num_squares_x", "num_squares_y", "square_size",
         "start_x", "start_y", "paper_width", "paper_height", "min_width",
@@ -289,6 +301,8 @@ TARGET_KEY_LABELS: dict[str, str] = {
     "paper_width": "paper width",
     "paper_height": "paper height",
     "min_width": "min width",
+    "charuco_squares_x": "squares across",
+    "charuco_squares_y": "squares down",
     "pbc_n_points": "n_points",
     "pbc_length": "length",
 }

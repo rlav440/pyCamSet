@@ -165,6 +165,38 @@ def _detections_path(phase1_run: Optional[dict],
     return None
 
 
+def calibrate(detections, cam_res, target, *,
+              fixed_params: Optional[dict] = None,
+              min_detections_per_board: int = 12):
+    """
+    Calibrate each camera on its own, from detections already in hand.
+
+    The solve, with nothing around it: no workspace, no image folder, no run
+    record.  The phase runner below wraps it in those; a parameter search
+    calls it directly, per trial.
+
+    :param detections: the target detections to calibrate from
+    :param cam_res: each camera's resolution
+    :param target: the calibration target the detections were made against
+    :param fixed_params: parameters to pin rather than solve for
+    :param min_detections_per_board: how much of a board a view must show
+    :return: the calibrated camera set
+    """
+    if not BACKEND_OK:
+        raise RuntimeError("pyCamSet calibration modules are not importable.")
+
+    cams, _, _ = run_initial_calibration(
+        detection=detections,
+        calibration_target=target,
+        cam_res=cam_res,
+        save=False,
+        fixed_params=fixed_params,
+        return_poses_and_costs=True,
+        min_detections_per_board=int(min_detections_per_board),
+    )
+    return cams
+
+
 def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
                prune: Optional[DetectionFilter],
                log: LogFn) -> tuple[Path, dict, Optional[Path]]:
@@ -195,16 +227,10 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
         detections, cam_res = _load_or_detect(
             params, target, root, detections_path, set(selected), log)
 
-        cams, _, _ = run_initial_calibration(
-            detection=detections,
-            calibration_target=target,
-            cam_res=cam_res,
-            save=False,
+        cams = calibrate(
+            detections, cam_res, target,
             fixed_params=params["fixed_params"],
-            return_poses_and_costs=True,
-            min_detections_per_board=int(
-                params.get("min_detections_per_board", 12)),
-        )
+            min_detections_per_board=params.get("min_detections_per_board", 12))
         log("2b  Initial calibration completed.")
 
         if params["high_distortion"]:
@@ -218,16 +244,11 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
                 n_lim=params["n_lim"],
                 camset=cams,
             )
-            cams, _, _ = run_initial_calibration(
-                detection=detections,
-                calibration_target=target,
-                cam_res=cam_res,
-                save=False,
+            cams = calibrate(
+                detections, cam_res, target,
                 fixed_params=params["fixed_params"],
-                return_poses_and_costs=True,
-                min_detections_per_board=int(
-                    params.get("min_detections_per_board", 12)),
-            )
+                min_detections_per_board=params.get(
+                    "min_detections_per_board", 12))
             log("2c  High-distortion refinement completed.")
 
     camset_path = run_dir / (
@@ -262,16 +283,10 @@ def _calibrate_pruned(params: dict, run_dir: Path,
     log(f"Saved filtered detections: {pruned_path}")
 
     log("Running Phase 2 initial calibration on filtered detections…")
-    cams, _, _ = run_initial_calibration(
-        detection=filtered,
-        calibration_target=target,
-        cam_res=cam_res,
-        save=False,
+    cams = calibrate(
+        filtered, cam_res, target,
         fixed_params=params.get("fixed_params"),
-        return_poses_and_costs=True,
-        min_detections_per_board=int(
-            params.get("min_detections_per_board", 12)),
-    )
+        min_detections_per_board=params.get("min_detections_per_board", 12))
     log("Phase 2 calibration completed.")
 
     camset_path = run_dir / "initial_cameras.camset"

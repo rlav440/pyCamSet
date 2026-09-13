@@ -39,6 +39,7 @@ from pyCamSet.workflow.tuning.detector_parameters import (
     metadata_by_key,
     validate_all_rows,
 )
+from pyCamSet.workflow.targets import target_from_params
 from pyCamSet.workflow.tuning.study import (
     FAILURE_SCORE,
     SuccessRetention,
@@ -90,6 +91,29 @@ class TargetSettings:
     border_fraction: float = 0.1
     legacy: bool = False
     marker_backend: str = "aruco1"
+
+    def as_params(self) -> dict[str, Any]:
+        """These settings in the vocabulary :mod:`pyCamSet.workflow.targets` speaks.
+
+        ChArUco takes its size from ``square_size`` and its shape from
+        ``num_squares_x``/``num_squares_y``; Ccube takes both from
+        ``n_points`` and ``length``.  Those fields sit side by side on this
+        dataclass, so which of them means what depends on the target type --
+        and resolving that is what this is for.
+        """
+        charuco = self.target_type != "Ccube"
+        return {
+            "target_type": self.target_type,
+            "n_points": self.n_points,
+            "length": self.square_size if charuco else self.length,
+            "border_fraction": self.border_fraction,
+            "marker_fraction": self.marker_fraction,
+            "marker_backend": self.marker_backend,
+            "legacy": self.legacy,
+            "aruco_dict": self.a_dict,
+            "charuco_squares_x": self.num_squares_x,
+            "charuco_squares_y": self.num_squares_y,
+        }
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -225,32 +249,11 @@ def default_detection_fn(
     Caching is disabled because each trial uses different detector settings.
     """
     from pyCamSet.calibration.camera_calibrator import detect_datapoints_in_imfile
-    if target_settings.target_type == "Ccube":
-        from pyCamSet.calibration_targets.target_Ccube import Ccube
 
-        target = Ccube(
-            n_points=target_settings.n_points,
-            length=target_settings.length,
-            # Ccube names the dictionary field aruco_dict; ChArUco names it a_dict.
-            aruco_dict=target_settings.a_dict,
-            border_fraction=target_settings.border_fraction,
-            legacy=target_settings.legacy,
-            marker_backend=target_settings.marker_backend,
-            detection_options=detection_options,
-        )
-    else:
-        from pyCamSet.calibration_targets.target_charuco import ChArUco
-
-        target = ChArUco(
-            num_squares_x=target_settings.num_squares_x,
-            num_squares_y=target_settings.num_squares_y,
-            square_size=target_settings.square_size,
-            marker_fraction=target_settings.marker_fraction,
-            a_dict=target_settings.a_dict,
-            legacy=target_settings.legacy,
-            marker_backend=target_settings.marker_backend,
-            detection_options=detection_options,
-        )
+    target = target_from_params({
+        **target_settings.as_params(),
+        "charuco_detection_options": detection_options,
+    })
     detections, cam_res = detect_datapoints_in_imfile(
         f_loc=f_loc,
         calibration_target=target,
@@ -310,21 +313,12 @@ def default_phase2_fn(
     *,
     controls: CalibrationControls,
 ) -> dict[str, Any]:
-    """Run a fresh phase-2 initial calibration from one trial's detections."""
-    from pyCamSet.calibration.camera_calibrator import run_initial_calibration
+    """Calibrate each camera from one trial's detections."""
+    from pyCamSet.workflow import phase2
 
     detections, target, cam_res = _require_detection_payload_fields(
-        detection_payload,
-        require_cam_res=True,
-    )
-    cams = run_initial_calibration(
-        detection=detections,
-        calibration_target=target,
-        cam_res=cam_res,
-        save=False,
-        fixed_params=None,
-    )
-    return {"camset": cams}
+        detection_payload, require_cam_res=True)
+    return {"camset": phase2.calibrate(detections, cam_res, target)}
 
 
 def default_phase3_fn(
@@ -333,35 +327,19 @@ def default_phase3_fn(
     *,
     controls: CalibrationControls,
 ) -> dict[str, Any]:
-    """Run phase 3 from this trial's fresh phase-2 initial calibration."""
-    from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment_with_stats
-    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+    """Bundle-adjust one trial, from its own phase 2 calibration."""
+    from pyCamSet.workflow import phase3
 
     cams = phase2_payload.get("camset")
-    detections, target, _cam_res = _require_detection_payload_fields(
-        detection_payload,
-        require_cam_res=False,
-    )
     if cams is None:
         raise RuntimeError("Phase 3 requires the fresh phase-2 camset.")
-    handler = TemplateBundleHandler(
-        camset=cams,
-        target=target,
-        detection=detections,
-        fixed_params=None,
-        options=_bundle_options(controls.max_nfev_phase3, controls.outliers),
-    )
-    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
-        handler,
-        threads=1,
-    )
-    final_rpe = float(stats.get("final_euclid", float("nan")))
-    return {
-        "rpe": final_rpe,
-        "camset": out_cams,
-        "optimisation": optimisation,
-        "stats": dict(stats),
-    }
+    detections, target, _ = _require_detection_payload_fields(
+        detection_payload, require_cam_res=False)
+
+    _handler, optimisation, out_cams, stats = phase3.solve(
+        cams, detections, target,
+        options=_bundle_options(controls.max_nfev_phase3, controls.outliers))
+    return _stage_result(optimisation, out_cams, stats)
 
 
 def default_phase4_fn(
@@ -370,32 +348,25 @@ def default_phase4_fn(
     *,
     controls: CalibrationControls,
 ) -> dict[str, Any]:
-    """Run a phase-4 self-calibration starting from the phase-3 camset."""
-    from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment_with_stats
-    from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
+    """Self-calibrate one trial, from its own phase 3 solve."""
+    from pyCamSet.workflow import phase4
 
     phase3_cams = phase3_payload.get("camset")
-    detections, target, _cam_res = _require_detection_payload_fields(
-        detection_payload,
-        require_cam_res=False,
-    )
     if phase3_cams is None:
         raise RuntimeError("Phase 4 requires the fresh phase-3 camset.")
-    handler = SelfBundleHandler(
-        camset=phase3_cams,
-        target=target,
-        detection=detections,
-        fixed_params=None,
-        options=_bundle_options(controls.max_nfev_phase4, controls.outliers),
-    )
-    handler.set_from_templated_camset(phase3_cams)
-    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
-        handler,
-        threads=1,
-    )
-    final_rpe = float(stats.get("final_euclid", float("nan")))
+    detections, target, _ = _require_detection_payload_fields(
+        detection_payload, require_cam_res=False)
+
+    _handler, optimisation, out_cams, stats = phase4.solve(
+        phase3_cams, target, detections,
+        options=_bundle_options(controls.max_nfev_phase4, controls.outliers))
+    return _stage_result(optimisation, out_cams, stats)
+
+
+def _stage_result(optimisation, out_cams, stats: dict) -> dict[str, Any]:
+    """What a solved stage hands back to :func:`run_trial`."""
     return {
-        "rpe": final_rpe,
+        "rpe": float(stats.get("final_euclid", float("nan"))),
         "camset": out_cams,
         "optimisation": optimisation,
         "stats": dict(stats),

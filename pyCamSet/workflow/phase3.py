@@ -236,6 +236,49 @@ def _lockbox(params: dict, cams, log: LogFn):
     return config, source_camset, settings
 
 
+def solve(cams, detections, target, *,
+          fixed_params: Optional[dict] = None,
+          options: Optional[dict] = None,
+          threads: int = 1,
+          lockbox_config=None,
+          lockbox_source_camset=None,
+          lockbox_warm_start: bool = True):
+    """
+    Bundle-adjust a camera set against a target, from objects in hand.
+
+    The solve, with nothing around it: no workspace, no artifact paths, no
+    run record.  The phase runner below wraps it in those; a parameter
+    search calls it directly, once per trial.
+
+    :param cams: the camera set to start from
+    :param detections: the detections to solve against
+    :param target: the calibration target they were made against
+    :param fixed_params: parameters to pin rather than solve for
+    :param options: the solver options, as the handler reads them
+    :param threads: Jacobian evaluation threads
+    :param lockbox_config: the rig priors, or None for no priors
+    :param lockbox_source_camset: the rig the priors hold the cameras near
+    :param lockbox_warm_start: start from the lockbox rig rather than *cams*
+    :return: the handler, the solver result, the solved cameras, the stats
+    """
+    if not BACKEND_OK:
+        raise RuntimeError("pyCamSet optimisation modules are not importable.")
+
+    handler = TemplateBundleHandler(
+        camset=cams,
+        target=target,
+        detection=detections,
+        fixed_params=fixed_params,
+        options=options,
+        lockbox_config=lockbox_config,
+        lockbox_source_camset=lockbox_source_camset,
+        lockbox_warm_start=bool(lockbox_warm_start),
+    )
+    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
+        handler, threads=threads)
+    return handler, optimisation, out_cams, stats
+
+
 def _solve(params: dict, run_dir: Path, camset_in: Path,
            detections_path: Path, prune: Optional[DetectionFilter],
            log: LogFn) -> tuple[Path, dict, Optional[Path]]:
@@ -264,18 +307,15 @@ def _solve(params: dict, run_dir: Path, camset_in: Path,
     target = target_from_params(params)
     lockbox_config, lockbox_source, lockbox_settings = _lockbox(params, cams, log)
 
-    handler = TemplateBundleHandler(
-        camset=cams,
-        target=target,
-        detection=detections,
+    handler, optimisation, out_cams, stats = solve(
+        cams, detections, target,
         fixed_params=params["fixed_params"],
         options=params["problem_options"],
+        threads=params["threads"],
         lockbox_config=lockbox_config,
         lockbox_source_camset=lockbox_source,
-        lockbox_warm_start=bool(lockbox_settings.get("warm_start", True)),
+        lockbox_warm_start=lockbox_settings.get("warm_start", True),
     )
-    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
-        handler, threads=params["threads"])
 
     initial_euclid = float(stats.get("initial_euclid", float("nan")))
     final_euclid = float(stats.get("final_euclid", float("nan")))

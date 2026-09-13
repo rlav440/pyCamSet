@@ -427,6 +427,77 @@ def test_a_trial_that_did_not_succeed_cannot_be_promoted(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# One target builder
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [TargetSettings(),
+     TargetSettings(target_type="ChArUco", num_squares_x=20, num_squares_y=20,
+                    square_size=4.0, a_dict=3, legacy=True),
+     TargetSettings(target_type="ChArUco", num_squares_x=11, num_squares_y=7,
+                    square_size=15.0, marker_fraction=0.75, a_dict=1),
+     TargetSettings(target_type="Ccube", n_points=10, length=40.0,
+                    border_fraction=0.2, a_dict=3, legacy=True)],
+    ids=["charuco-default", "charuco-corpus", "charuco-rectangular", "ccube"],
+)
+def test_a_study_builds_its_target_the_way_the_phases_do(settings):
+    """``TargetSettings`` and a phase's params describe the same target.
+
+    They name it differently -- a study says ``square_size`` and
+    ``num_squares_x``, a phase says ``length`` and ``n_points``, and a
+    phase's ``num_squares_x`` belongs to PuzzleBoard entirely -- so
+    ``as_params`` translates rather than the study keeping a second builder.
+    A rectangular ChArUco is the case that needed ``build_target`` widening.
+    """
+    from pyCamSet.calibration_targets.target_Ccube import Ccube
+    from pyCamSet.calibration_targets.target_charuco import ChArUco
+    from pyCamSet.workflow.targets import target_from_params
+
+    options = {"DetectorParameters": {"minMarkerPerimeterRate": 0.03}}
+    if settings.target_type == "Ccube":
+        expected = Ccube(
+            n_points=settings.n_points, length=settings.length,
+            aruco_dict=settings.a_dict, border_fraction=settings.border_fraction,
+            legacy=settings.legacy, marker_backend=settings.marker_backend,
+            detection_options=options)
+    else:
+        expected = ChArUco(
+            num_squares_x=settings.num_squares_x,
+            num_squares_y=settings.num_squares_y,
+            square_size=settings.square_size,
+            marker_fraction=settings.marker_fraction, a_dict=settings.a_dict,
+            legacy=settings.legacy, marker_backend=settings.marker_backend,
+            detection_options=options)
+
+    built = target_from_params(
+        {**settings.as_params(), "charuco_detection_options": options})
+
+    assert type(built) is type(expected)
+    assert built.input_args == expected.input_args
+    assert built.point_data.shape == expected.point_data.shape
+
+
+def test_a_phase_still_reads_num_squares_as_puzzleboard_s(tmp_path):
+    """The key that made this a translation and not a rename.
+
+    Every phase's parameter dict carries ``num_squares_x``/``num_squares_y``
+    from the PuzzleBoard controls, whatever target is selected.  A ChArUco
+    built from those would be 105 by 148 squares.
+    """
+    from pyCamSet.workflow.targets import target_from_params
+
+    built = target_from_params({
+        "target_type": "ChArUco", "n_points": 6, "length": 30.0,
+        "num_squares_x": 105, "num_squares_y": 148,
+    })
+
+    assert built.input_args["num_squares_x"] == 6
+    assert built.input_args["num_squares_y"] == 6
+
+
+# ---------------------------------------------------------------------------
 # The real stages, once
 # ---------------------------------------------------------------------------
 

@@ -100,6 +100,41 @@ def run(params: dict,
     return metadata
 
 
+def solve(previous_cams, target, detections, *,
+          fixed_params: Optional[dict] = None,
+          options: Optional[dict] = None,
+          threads: int = 1):
+    """
+    Self-calibrate from a solved camera set, from objects in hand.
+
+    The solve, with nothing around it: no workspace, no artifact paths, no
+    run record.  The phase runner below wraps it in those; a parameter
+    search calls it directly, once per trial.
+
+    :param previous_cams: the phase 3 cameras to start from
+    :param target: the calibration target, whose points become free
+    :param detections: the detections to solve against
+    :param fixed_params: parameters to pin rather than solve for
+    :param options: the solver options, as the handler reads them
+    :param threads: Jacobian evaluation threads
+    :return: the handler, the solver result, the solved cameras, the stats
+    """
+    if not BACKEND_OK:
+        raise RuntimeError("pyCamSet optimisation modules are not importable.")
+
+    handler = SelfBundleHandler(
+        camset=previous_cams,
+        target=target,
+        detection=detections,
+        fixed_params=fixed_params,
+        options=options,
+    )
+    handler.set_from_templated_camset(previous_cams)
+    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
+        handler, threads=threads)
+    return handler, optimisation, out_cams, stats
+
+
 def _solve(params: dict, run_dir: Path, phase3_camset: Path,
            phase3_run: Optional[dict], log: LogFn) -> tuple[Path, dict]:
     """Run the self-calibration and compute its diagnostics."""
@@ -118,17 +153,12 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
         raise RuntimeError(
             "Selected Phase 3 camset has no calibration handler metadata.")
 
-    handler = SelfBundleHandler(
-        camset=previous_cams,
-        target=previous_handler.target,
-        detection=previous_handler.detection,
+    handler, optimisation, out_cams, stats = solve(
+        previous_cams, previous_handler.target, previous_handler.detection,
         fixed_params=params["fixed_params"],
         options=params["problem_options"],
+        threads=params["threads"],
     )
-    handler.set_from_templated_camset(previous_cams)
-
-    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
-        handler, threads=params["threads"])
 
     # A fixed short filename, so a long source folder does not push the run
     # past Windows' path limit.

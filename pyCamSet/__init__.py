@@ -20,14 +20,14 @@ from .utils.cairo_dll_helper import ensure_cairo_dll_available  # noqa: E402
 ensure_cairo_dll_available()
 
 try:
-    from .calibration_targets.target_charuco import ChArUco
+    from .calibration_targets.charuco.target import ChArUco
 except Exception:
     # cairosvg requires the Cairo native library, which may not be present
     # in all environments. ChArUco generation is optional for reconstruction.
     ChArUco = None  # type: ignore[assignment,misc]
 
 try:
-    from .calibration_targets.target_Ccube import Ccube
+    from .calibration_targets.ccube.target import Ccube
 except Exception:
     # Ccube generation has the same optional Cairo/native-graphics dependency.
     Ccube = None  # type: ignore[assignment,misc]
@@ -45,7 +45,7 @@ class _MissingPuzzleBoard:
 
 
 try:
-    from .calibration_targets.target_puzzleboard import PuzzleBoard
+    from .calibration_targets.puzzleboard.target import PuzzleBoard
 except ModuleNotFoundError as _e:
     if (_e.name or "").split(".")[0] == "puzzle_board":
         PuzzleBoard = _MissingPuzzleBoard  # type: ignore[assignment]
@@ -68,7 +68,7 @@ class _MissingPuzzleBoardCube:
 
 
 try:
-    from .calibration_targets.target_puzzleboard_cube import PuzzleBoardCube
+    from .calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
 except ModuleNotFoundError as _e:
     if (_e.name or "").split(".")[0] == "puzzle_board":
         PuzzleBoardCube = _MissingPuzzleBoardCube  # type: ignore[assignment]

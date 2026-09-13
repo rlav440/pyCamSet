@@ -16,15 +16,15 @@ import logging
 import cv2
 import numpy as np
 
-from pyCamSet.calibration_targets.backend_registry import validate_marker_backend
+from pyCamSet.calibration_targets.markers.backend_registry import validate_marker_backend
 
 _LOG = logging.getLogger(__name__)
 
-from pyCamSet.calibration_targets.backend_registry import (
+from pyCamSet.calibration_targets.markers.backend_registry import (
     ARUCO2_BACKEND,
     marker_backend_available,
 )
-from pyCamSet.calibration_targets.parameters import (
+from pyCamSet.calibration_targets.core.parameters import (
     Parameter,
     DetectorParameterisation,
 )

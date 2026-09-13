@@ -20,7 +20,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from pyCamSet.calibration_targets.abstract_target import get_keys
+from pyCamSet.calibration_targets.core.abstract_target import get_keys
 from pyCamSet.utils import report_format as fmt
 
 logger = logging.getLogger(__name__)

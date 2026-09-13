@@ -2,7 +2,7 @@
 
 A design-time tool, not library code: ``print_net_tforms`` emits the
 ``NET_FORMS`` constant that is checked in at
-``pyCamSet/calibration_targets/target_Ccube.py``, so the output is already
+``pyCamSet/calibration_targets/ccube/target.py``, so the output is already
 baked into the package and nothing imports this at runtime.  Run it directly
 to regenerate that constant, alongside calculate_shape_transforms.py.
 

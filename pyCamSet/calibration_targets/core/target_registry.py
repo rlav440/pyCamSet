@@ -2,7 +2,7 @@
 Building a calibration target from a description of it.
 
 A target is a class and the arguments it was constructed with.  That is not
-a new idea here: :class:`~pyCamSet.calibration_targets.abstract_target.AbstractTarget`
+a new idea here: :class:`~pyCamSet.calibration_targets.core.abstract_target.AbstractTarget`
 records those arguments as ``input_args``, the detection pool rebuilds a
 target from them in each worker process, and loading a camset rebuilds one
 the same way.  This is that mechanism, named, so a phase can use it too.
@@ -26,12 +26,12 @@ from typing import Any
 #: costs nothing and so that PuzzleBoard, whose detector is an optional
 #: dependency, is only imported when one is actually asked for.
 TARGET_CLASSES: dict[str, tuple[str, str]] = {
-    "Ccube": ("pyCamSet.calibration_targets.target_Ccube", "Ccube"),
-    "ChArUco": ("pyCamSet.calibration_targets.target_charuco", "ChArUco"),
+    "Ccube": ("pyCamSet.calibration_targets.ccube.target", "Ccube"),
+    "ChArUco": ("pyCamSet.calibration_targets.charuco.target", "ChArUco"),
     "PuzzleBoard": (
-        "pyCamSet.calibration_targets.target_puzzleboard", "PuzzleBoard"),
+        "pyCamSet.calibration_targets.puzzleboard.target", "PuzzleBoard"),
     "PuzzleBoardCube": (
-        "pyCamSet.calibration_targets.target_puzzleboard_cube", "PuzzleBoardCube"),
+        "pyCamSet.calibration_targets.puzzleboard_cube.target", "PuzzleBoardCube"),
 }
 
 #: The target names, in the order an interface should offer them.

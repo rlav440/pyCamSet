@@ -1,8 +1,8 @@
 from pathlib import Path
 
 
-from pyCamSet.calibration_targets import target_Ccube as cc
-from pyCamSet.calibration_targets.backend_registry import dictionary_id
+from pyCamSet.calibration_targets.ccube import target as cc
+from pyCamSet.calibration_targets.markers.backend_registry import dictionary_id
 
 _DEFAULT_OUTPUT_DIR = Path.cwd() / "calibration_targets" / "2D"
 _DEFAULT_DICT_NAME = "DICT_4X4_1000"

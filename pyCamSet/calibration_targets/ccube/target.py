@@ -13,25 +13,25 @@ import svgwrite
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
-from pyCamSet.calibration_targets import AbstractTarget, ImageDetection, FaceToShape
-from pyCamSet.calibration_targets.backend_registry import (
+from pyCamSet.calibration_targets.core import AbstractTarget, ImageDetection, FaceToShape
+from pyCamSet.calibration_targets.markers.backend_registry import (
     ARUCO1_BACKEND,
     dict_names_for_backend,
     dictionary_id,
 )
-from pyCamSet.calibration_targets.abstract_target import EXPORT_SUFFIXES
-from pyCamSet.calibration_targets.parameters import (
+from pyCamSet.calibration_targets.core.abstract_target import EXPORT_SUFFIXES
+from pyCamSet.calibration_targets.core.parameters import (
     Choice,
     Parameter,
     Parameterisation,
 )
-from pyCamSet.calibration_targets.aruco2_detection import (
+from pyCamSet.calibration_targets.markers.aruco2 import (
     ARUCO2_DETECTOR,
     detect_markers,
     interpolate_board_corners,
     resolve_dictionary,
 )
-from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
+from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform, downsample_valid
 

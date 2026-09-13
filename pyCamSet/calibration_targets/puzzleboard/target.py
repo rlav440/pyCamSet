@@ -10,10 +10,10 @@ import numpy as np  # Store code tables, object points, and detector results.
 from PIL import Image  # Convert SVG PNG output to a raster PDF when requested.
 import svgwrite  # Write compact SVG primitives directly to disk.
 
-from pyCamSet.calibration_targets import AbstractTarget, ImageDetection  # Reuse pyCamSet target contracts.
-from pyCamSet.calibration_targets.abstract_target import EXPORT_SUFFIXES
-from pyCamSet.calibration_targets.parameters import Parameter, Parameterisation
-from pyCamSet.calibration_targets.puzzleboard_detection import (
+from pyCamSet.calibration_targets.core import AbstractTarget, ImageDetection  # Reuse pyCamSet target contracts.
+from pyCamSet.calibration_targets.core.abstract_target import EXPORT_SUFFIXES
+from pyCamSet.calibration_targets.core.parameters import Parameter, Parameterisation
+from pyCamSet.calibration_targets.markers.puzzleboard import (
     PUZZLEBOARD_DETECTOR,
     detect_puzzleboard_image,
 )  # Use the external detector adapter.

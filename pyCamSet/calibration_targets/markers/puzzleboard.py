@@ -3,7 +3,7 @@ from __future__ import annotations  # Keep annotations consistent with pyCamSet 
 import cv2  # Convert pyCamSet's OpenCV images to the detector's expected colour order.
 import numpy as np  # Type and shape normalisation for detector inputs.
 
-from pyCamSet.calibration_targets.parameters import (
+from pyCamSet.calibration_targets.core.parameters import (
     Parameter,
     DetectorParameterisation,
 )

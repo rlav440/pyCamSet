@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyCamSet.calibration_targets.parameters import Parameter
+from pyCamSet.calibration_targets.core.parameters import Parameter
 
 
 _FLOAT_SCALE = 1000  # scaler used when rendering float ranges on integer-only QSlider

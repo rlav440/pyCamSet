@@ -13,9 +13,9 @@ from __future__ import annotations
 import pytest
 from cv2 import aruco
 
-from pyCamSet.calibration_targets.aruco2_detection import ARUCO2_DETECTOR
-from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
-from pyCamSet.calibration_targets.parameters import (
+from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_DETECTOR
+from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
+from pyCamSet.calibration_targets.core.parameters import (
     NO_PARAMETERS,
     Choice,
     Parameter,
@@ -323,7 +323,7 @@ def test_a_board_too_small_for_opencv_is_refused_before_opencv_sees_it(size):
     catch.  A study validates its target by building it, so a board size
     someone typed reaches this constructor directly.
     """
-    from pyCamSet.calibration_targets.target_charuco import ChArUco
+    from pyCamSet.calibration_targets.charuco.target import ChArUco
 
     with pytest.raises(ValueError, match="at least 2"):
         ChArUco(num_squares_x=size[0], num_squares_y=size[1], square_size=30.0)
@@ -332,7 +332,7 @@ def test_a_board_too_small_for_opencv_is_refused_before_opencv_sees_it(size):
 @pytest.mark.parametrize("n_points", [0, 1, 2])
 def test_a_cube_face_too_small_for_opencv_is_refused_too(n_points):
     """Every Ccube face is a ChArUco board, with the same landmine under it."""
-    from pyCamSet.calibration_targets.target_Ccube import Ccube
+    from pyCamSet.calibration_targets.ccube.target import Ccube
 
     with pytest.raises(ValueError, match="at least 3x3"):
         Ccube(n_points=n_points, length=20.0)
@@ -345,8 +345,8 @@ def test_the_smallest_usable_boards_are_still_built():
     point and takes ``make_local`` out with an IndexError; 2x3 has two, and
     is the smallest board this class can describe.
     """
-    from pyCamSet.calibration_targets.target_Ccube import Ccube
-    from pyCamSet.calibration_targets.target_charuco import ChArUco
+    from pyCamSet.calibration_targets.ccube.target import Ccube
+    from pyCamSet.calibration_targets.charuco.target import ChArUco
 
     assert ChArUco(num_squares_x=2, num_squares_y=3,
                    square_size=30.0).point_data.shape == (1, 2, 3)
@@ -363,7 +363,7 @@ def test_the_smallest_usable_boards_are_still_built():
 
 
 def _targets():
-    from pyCamSet.calibration_targets.target_registry import TARGET_NAMES, target_class
+    from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES, target_class
 
     return [(name, target_class(name)) for name in TARGET_NAMES]
 
@@ -398,7 +398,7 @@ def test_every_declared_default_is_the_constructors_own(name, cls):
 def test_a_target_builds_from_the_arguments_it_declares(name, cls):
     """The whole point: a form that knows nothing about this target can
     still collect what it needs to build one."""
-    from pyCamSet.calibration_targets.target_registry import build_target
+    from pyCamSet.calibration_targets.core.target_registry import build_target
 
     spec = {"type": name, **cls.construction_parameters().defaults()}
     target = build_target(spec)
@@ -421,8 +421,8 @@ def test_a_declared_numeric_argument_says_what_it_holds_between(name, cls):
 
 def test_the_rules_a_target_states_are_applied_before_it_is_built():
     """Which is how a board too small for OpenCV never reaches OpenCV."""
-    from pyCamSet.calibration_targets.target_charuco import ChArUco
-    from pyCamSet.calibration_targets.target_puzzleboard import PuzzleBoard
+    from pyCamSet.calibration_targets.charuco.target import ChArUco
+    from pyCamSet.calibration_targets.puzzleboard.target import PuzzleBoard
 
     assert ChArUco.construction_parameters().validate(
         {"num_squares_x": 2, "num_squares_y": 2}) == [
@@ -438,7 +438,7 @@ def test_the_rules_a_target_states_are_applied_before_it_is_built():
 def test_the_dictionary_a_marker_target_offers_depends_on_its_backend():
     """aruco2 has two dictionaries OpenCV does not, so the names a form
     offers are the selected backend's."""
-    from pyCamSet.calibration_targets.target_charuco import ChArUco
+    from pyCamSet.calibration_targets.charuco.target import ChArUco
 
     aruco1 = ChArUco.construction_parameters("aruco1").parameter("a_dict")
     aruco2 = ChArUco.construction_parameters("aruco2").parameter("a_dict")
@@ -452,7 +452,7 @@ def test_a_dictionary_is_named_rather_than_numbered():
     whichever backend's id space it is read with."""
     import cv2
 
-    from pyCamSet.calibration_targets.target_charuco import ChArUco
+    from pyCamSet.calibration_targets.charuco.target import ChArUco
 
     target = ChArUco(num_squares_x=5, num_squares_y=5, square_size=4.0,
                      a_dict="DICT_5X5_250")
@@ -490,7 +490,7 @@ def test_every_declared_export_default_is_savings_own(name, cls):
 def test_a_target_names_its_own_file_from_its_own_arguments(name, cls):
     """Named from the values rather than a built target, because a form
     shows the name as it is typed into."""
-    from pyCamSet.calibration_targets.abstract_target import EXPORT_KINDS
+    from pyCamSet.calibration_targets.core.abstract_target import EXPORT_KINDS
 
     values = cls.construction_parameters().defaults()
     for kind in EXPORT_KINDS:
@@ -502,7 +502,7 @@ def test_a_target_names_its_own_file_from_its_own_arguments(name, cls):
 def test_every_target_writes_itself_as_every_format(tmp_path):
     """One export path, rather than the four copies of the same dispatch
     the target generators each carried."""
-    from pyCamSet.calibration_targets.target_registry import build_target
+    from pyCamSet.calibration_targets.core.target_registry import build_target
 
     # Small enough to draw quickly; the point is the path, not the page.
     small = {
@@ -528,7 +528,7 @@ def test_everything_a_target_detects_with_is_a_detector_parameterisation(name, c
     """A composite asks each of its parts whether its dependency is
     installed and what presets it offers, so a part that is only a
     Parameterisation takes the whole thing down at the first lookup."""
-    from pyCamSet.calibration_targets.parameters import DetectorParameterisation
+    from pyCamSet.calibration_targets.core.parameters import DetectorParameterisation
 
     assert isinstance(cls.own_detector_parameters(), DetectorParameterisation)
     for backend, parameterisation in cls.DETECTOR_BACKENDS.items():
@@ -551,7 +551,7 @@ def test_everything_a_target_detects_with_is_a_detector_parameterisation(name, c
 
 
 def test_the_cube_declares_the_stages_it_runs_over_its_detections():
-    from pyCamSet.calibration_targets.target_puzzleboard_cube import PuzzleBoardCube
+    from pyCamSet.calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
 
     own = PuzzleBoardCube.own_detector_parameters()
     assert {"plane_consistency_gate", "face_reassignment"} <= {
@@ -585,7 +585,7 @@ def test_the_cube_sweeps_its_own_thresholds_and_its_detectors():
     assert swept["min_width"] == 6
 
     # And a trial's settings build the target it will detect with.
-    from pyCamSet.calibration_targets.target_registry import build_target
+    from pyCamSet.calibration_targets.core.target_registry import build_target
     target = build_target({**config.target_spec, "detection_options": swept})
     assert target.plane_gate_inlier_squares == 0.31
     assert target.min_width == 6
@@ -593,7 +593,7 @@ def test_the_cube_sweeps_its_own_thresholds_and_its_detectors():
 
 def test_a_row_from_another_detector_is_still_refused():
     """Composition widens what a target takes; it does not open it up."""
-    from pyCamSet.calibration_targets.target_puzzleboard_cube import PuzzleBoardCube
+    from pyCamSet.calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
 
     errors = PuzzleBoardCube.detector_parameterisation().validate_rows(
         [{"key": "adaptiveThreshWinSizeMin", "fixed": 3, "optimise": False}])
@@ -601,7 +601,7 @@ def test_a_row_from_another_detector_is_still_refused():
 
 
 def test_reassignment_needs_the_gate_that_finds_what_it_reassigns():
-    from pyCamSet.calibration_targets.target_puzzleboard_cube import PuzzleBoardCube
+    from pyCamSet.calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
 
     detector = PuzzleBoardCube.detector_parameterisation()
     assert detector.validate({"face_reassignment": True,
@@ -617,7 +617,7 @@ def test_reassignment_needs_the_gate_that_finds_what_it_reassigns():
 def test_each_part_of_a_composite_orders_its_own_sweep():
     """``search_order`` is what a parameterisation says about its own
     parameters; two of them saying "first" is not a disagreement."""
-    from pyCamSet.calibration_targets.target_puzzleboard_cube import PuzzleBoardCube
+    from pyCamSet.calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
 
     swept = [p.key for p in PuzzleBoardCube.detector_parameterisation().tunable()]
     own = [p.key for p in PuzzleBoardCube.own_detector_parameters().tunable()]

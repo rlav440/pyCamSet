@@ -55,7 +55,7 @@ MARKERS = {
 # ``aruco2`` is an optional compiled backend package; its regression tests
 # import it at module level, so the file cannot be collected (let alone
 # skipped via a marker) when the package is absent.  This mirrors the guarded
-# import used by ``pyCamSet.calibration_targets.aruco2_detection``.
+# import used by ``pyCamSet.calibration_targets.markers.aruco2``.
 try:
     import aruco2  # noqa: F401
 

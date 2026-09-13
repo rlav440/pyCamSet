@@ -17,7 +17,7 @@ import argparse
 import json
 import sys
 
-from pyCamSet.calibration_targets.target_registry import build_target
+from pyCamSet.calibration_targets.core.target_registry import build_target
 
 def main(argv: list[str] | None = None) -> int:
     """

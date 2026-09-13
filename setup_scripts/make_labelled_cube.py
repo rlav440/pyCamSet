@@ -1,6 +1,6 @@
 import numpy as np
 import pyvista as pv
-from pyCamSet.calibration_targets.shape_by_faces import make_tforms
+from pyCamSet.calibration_targets.core.shape_by_faces import make_tforms
 from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
 faces = np.array([

@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 from cv2 import aruco
 
-from pyCamSet.calibration_targets.parameters import (
+from pyCamSet.calibration_targets.core.parameters import (
     Parameter,
     DetectorParameterisation,
     Profile,

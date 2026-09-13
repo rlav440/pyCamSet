@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from pyCamSet.calibration_targets.target_registry import build_target
+from pyCamSet.calibration_targets.core.target_registry import build_target
 from pyCamSet.utils.general_utils import get_subfolder_names
 
 

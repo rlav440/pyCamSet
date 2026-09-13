@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from pyCamSet import ChArUco, calibrate_cameras
-from pyCamSet.calibration_targets.create_charuco import (
+from pyCamSet.calibration_targets.charuco.generate import (
     build_charuco,
     generate_charuco_target,
 )
@@ -64,7 +64,7 @@ def test_charuco_factory_validates_backend_and_dictionary() -> None:
 
 def test_puzzleboard_factory_is_headless_when_dependency_is_available(tmp_path: Path) -> None:
     pytest.importorskip("puzzle_board")
-    from pyCamSet.calibration_targets.create_puzzleboard import generate_puzzleboard_target
+    from pyCamSet.calibration_targets.puzzleboard.generate import generate_puzzleboard_target
 
     _, saved = generate_puzzleboard_target(
         num_squares_x=5,
@@ -81,7 +81,7 @@ def test_puzzleboard_factory_is_headless_when_dependency_is_available(tmp_path: 
 
 def test_puzzleboard_cube_factory_is_headless_when_dependency_is_available(tmp_path: Path) -> None:
     pytest.importorskip("puzzle_board")
-    from pyCamSet.calibration_targets.create_puzzleboard_cube import generate_puzzleboard_cube_target
+    from pyCamSet.calibration_targets.puzzleboard_cube.generate import generate_puzzleboard_cube_target
 
     _, saved = generate_puzzleboard_cube_target(
         n_points=5,

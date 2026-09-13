@@ -1,6 +1,6 @@
 from pathlib import Path  # Keep output-path handling consistent with other target generators.
 
-from pyCamSet.calibration_targets import target_puzzleboard_cube as pbc  # Import the PuzzleBoard cube target.
+from pyCamSet.calibration_targets.puzzleboard_cube import target as pbc  # Import the PuzzleBoard cube target.
 
 # Match the existing printable-target location.
 _DEFAULT_OUTPUT_DIR = Path.cwd() / "calibration_targets" / "2D"

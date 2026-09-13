@@ -63,7 +63,7 @@ def test_a_merely_poor_run_is_not_blocked():
 # --------------------------------------------------------------------------
 
 def test_a_detection_report_blocks_on_a_camera_that_saw_nothing():
-    from pyCamSet.calibration_targets.target_detections import (
+    from pyCamSet.calibration_targets.core.target_detections import (
         ImageDetection, TargetDetection)
     from pyCamSet.utils.setup_reports import DetectionReport
 
@@ -87,7 +87,7 @@ def test_a_detection_report_blocks_on_a_camera_that_saw_nothing():
 def test_a_calibration_report_blocks_on_a_nan_result():
     from scipy.optimize import OptimizeResult
 
-    from pyCamSet.calibration_targets.target_detections import (
+    from pyCamSet.calibration_targets.core.target_detections import (
         ImageDetection, TargetDetection)
     from pyCamSet.utils.calibration_report import CalibrationReport
 

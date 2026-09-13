@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
-from pyCamSet.calibration_targets.parameters import (
+from pyCamSet.calibration_targets.core.parameters import (
     Parameter,
     DetectorParameterisation,
 )

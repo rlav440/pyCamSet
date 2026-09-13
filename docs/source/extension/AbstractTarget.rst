@@ -35,7 +35,7 @@ There are 2 tasks that need to be completed to implement the wrapper.
 
 The first task takes the form of the __init__ method of the class.
 
-.. literalinclude:: ../../../pyCamSet/calibration_targets/target_charuco.py
+.. literalinclude:: ../../../pyCamSet/calibration_targets/charuco/target.py
    :pyobject: ChArUco.__init__
 
 There are three sections of this code. 
@@ -47,7 +47,7 @@ The final call to _process_data() generates a local coordinate system for each f
 With this defined, we can write the find_in_image class method.
 
 
-.. literalinclude:: ../../../pyCamSet/calibration_targets/target_charuco.py
+.. literalinclude:: ../../../pyCamSet/calibration_targets/charuco/target.py
    :pyobject: ChArUco.find_in_image
 
 This is a standard implementation of target detection using the ChArUco board, with an optional draw flag.

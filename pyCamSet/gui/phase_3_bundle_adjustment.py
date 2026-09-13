@@ -73,7 +73,7 @@ from pyCamSet.gui.shared_functions import (
     show_tab,
 )
 from pyCamSet.workflow.detections import DetectionFilter
-from pyCamSet.calibration_targets.target_registry import build_target
+from pyCamSet.calibration_targets.core.target_registry import build_target
 from pyCamSet.workflow.targets import (
     TARGET_KEY,
     target_params_of_run,

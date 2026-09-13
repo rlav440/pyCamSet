@@ -18,7 +18,7 @@ import pytest
 
 aruco2 = pytest.importorskip("aruco2")
 
-from pyCamSet.calibration_targets.backend_registry import (
+from pyCamSet.calibration_targets.markers.backend_registry import (
     ARUCO1_DICT_NAMES,
     ARUCO2_DICT_NAMES,
     MARKER_BACKEND_LABELS,
@@ -28,9 +28,9 @@ from pyCamSet.calibration_targets.backend_registry import (
     marker_backend_available,
     validate_marker_backend,
 )
-from pyCamSet.calibration_targets.target_charuco import ChArUco
-from pyCamSet.calibration_targets.target_Ccube import Ccube
-from pyCamSet.calibration_targets.charuco_detection import (
+from pyCamSet.calibration_targets.charuco.target import ChArUco
+from pyCamSet.calibration_targets.ccube.target import Ccube
+from pyCamSet.calibration_targets.markers.aruco_opencv import (
     ARUCO_OPENCV_DETECTOR,
 )
 
@@ -64,7 +64,7 @@ def test_headless_backend_registry_validates_and_reports_optional_backend():
 
 
 def test_headless_backend_registry_checks_real_optional_import(monkeypatch):
-    import pyCamSet.calibration_targets.backend_registry as registry
+    import pyCamSet.calibration_targets.markers.backend_registry as registry
 
     def broken_import(_name):
         raise OSError("missing native extension")
@@ -78,7 +78,7 @@ def test_headless_backend_registry_checks_real_optional_import(monkeypatch):
 
 
 def test_dictionary_resolution_validates_backend_before_dictionary_type():
-    from pyCamSet.calibration_targets.aruco2_detection import resolve_dictionary
+    from pyCamSet.calibration_targets.markers.aruco2 import resolve_dictionary
 
     dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
     with pytest.raises(ValueError, match="marker_backend"):
@@ -86,14 +86,14 @@ def test_dictionary_resolution_validates_backend_before_dictionary_type():
 
 
 def test_aruco2_detection_rejects_non_uint8_values_outside_byte_range():
-    from pyCamSet.calibration_targets.aruco2_detection import detect_markers
+    from pyCamSet.calibration_targets.markers.aruco2 import detect_markers
 
     with pytest.raises(ValueError, match="uint8"):
         detect_markers(np.full((8, 8), 256.0, dtype=np.float64), 0)
 
 
 def test_interpolation_skips_malformed_marker_quads():
-    from pyCamSet.calibration_targets.aruco2_detection import interpolate_board_corners
+    from pyCamSet.calibration_targets.markers.aruco2 import interpolate_board_corners
 
     board = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0).board
     ids, points = interpolate_board_corners(
@@ -349,7 +349,7 @@ def _make_camset_with_handler(marker_backend="aruco2"):
     TemplateBundleHandler so the REAL save_camset/load_CameraSet path is
     exercised, not a json proxy."""
     from pyCamSet.cameras import CameraSet, Camera
-    from pyCamSet.calibration_targets.target_detections import TargetDetection
+    from pyCamSet.calibration_targets.core.target_detections import TargetDetection
     from pyCamSet.optimisation.template_handler import TemplateBundleHandler
 
     cam_dict = {}
@@ -411,7 +411,7 @@ def test_camset_save_load_legacy_input_defaults_to_aruco1(tmp_path):
 
 
 def test_build_target_threads_marker_backend():
-    from pyCamSet.calibration_targets.target_registry import build_target
+    from pyCamSet.calibration_targets.core.target_registry import build_target
     spec = {"type": "ChArUco", "num_squares_x": 5, "num_squares_y": 5,
             "square_size": 10.0}
     t = build_target({**spec, "marker_backend": "aruco2"})
@@ -434,7 +434,7 @@ def test_default_detection_fn_plumbing(tmp_path, monkeypatch):
     documented in the comment below.
     """
     import cv2
-    from pyCamSet.calibration_targets.target_detections import TargetDetection
+    from pyCamSet.calibration_targets.core.target_detections import TargetDetection
     from pyCamSet.workflow.tuning.worker import (
         TargetSettings, default_detection_fn)
 
@@ -474,7 +474,7 @@ def test_default_detection_fn_plumbing(tmp_path, monkeypatch):
 
 def test_a_target_spec_carries_the_backend_through_to_the_detector():
     """A study describes its target the way a phase does, as a spec."""
-    from pyCamSet.calibration_targets.target_registry import build_target
+    from pyCamSet.calibration_targets.core.target_registry import build_target
 
     spec = {"type": "ChArUco", "num_squares_x": 5, "num_squares_y": 5,
             "square_size": 10.0, "marker_backend": "aruco2"}
@@ -528,7 +528,7 @@ def test_validate_run_settings_accepts_aruco2(tmp_path):
 def test_missing_aruco2_import_error_hint():
     """With aruco2 unavailable (flag forced off), construction raises an
     actionable ImportError."""
-    from pyCamSet.calibration_targets import aruco2_detection as a2d
+    from pyCamSet.calibration_targets.markers import aruco2 as a2d
     real = a2d.ARUCO2_AVAILABLE
     a2d.ARUCO2_AVAILABLE = False
     try:

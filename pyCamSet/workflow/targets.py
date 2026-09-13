@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from pyCamSet.calibration_targets.target_registry import (
+from pyCamSet.calibration_targets.core.target_registry import (
     TARGET_NAMES,
     TYPE_KEY as TARGET_KEY_TYPE,
     build_target,

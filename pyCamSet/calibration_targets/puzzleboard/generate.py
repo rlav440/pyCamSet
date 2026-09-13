@@ -1,6 +1,6 @@
-from pathlib import Path  # Keep output-path handling consistent with create_charuco.py.
+from pathlib import Path  # Keep output-path handling consistent with charuco/generate.py.
 
-from pyCamSet.calibration_targets import target_puzzleboard as pb  # Import the PuzzleBoard target implementation.
+from pyCamSet.calibration_targets.puzzleboard import target as pb  # Import the PuzzleBoard target implementation.
 
 # Match the existing target-generation location.
 _DEFAULT_OUTPUT_DIR = Path.cwd() / "calibration_targets" / "2D"
@@ -96,7 +96,7 @@ def generate_puzzleboard_target(
         paper_width,
         paper_height,
     )
-    out_dir = Path(output_dir)  # Accept strings and Path objects like create_charuco.py.
+    out_dir = Path(output_dir)  # Accept strings and Path objects like charuco/generate.py.
     out_dir.mkdir(parents=True, exist_ok=True)  # Create the requested destination when needed.
     if file_name is None or not str(file_name).strip():  # Generate a descriptive filename by default.
         file_name = default_output_name(x, y, size, export_kind)
@@ -119,7 +119,7 @@ def main() -> None:
     num_squares_y = 148  # Fill 296 mm of the 297 mm A4 height.
     square_size = 2.0  # Keep the requested physical edge length.
     file_name = f"puzzleboard_{num_squares_x}x{num_squares_y}_{square_size:g}mm.svg"  # Name the vector output.
-    generate_puzzleboard_target(  # Use the same direct-script style as create_charuco.py.
+    generate_puzzleboard_target(  # Use the same direct-script style as charuco/generate.py.
         num_squares_x=num_squares_x,
         num_squares_y=num_squares_y,
         square_size=square_size,

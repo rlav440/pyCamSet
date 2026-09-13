@@ -623,7 +623,7 @@ def test_every_target_rebuilds_from_what_it_recorded(spec):
     the same.  ``build_target`` is now that same step rather than a fourth
     hand-written one.
     """
-    from pyCamSet.calibration_targets.target_registry import (
+    from pyCamSet.calibration_targets.core.target_registry import (
         TARGET_NAMES, build_target, spec_of,
     )
 
@@ -638,7 +638,7 @@ def test_every_target_rebuilds_from_what_it_recorded(spec):
 
 
 def test_a_target_nobody_registered_says_so():
-    from pyCamSet.calibration_targets.target_registry import build_target
+    from pyCamSet.calibration_targets.core.target_registry import build_target
 
     with pytest.raises(ValueError, match="Unknown target type"):
         build_target({"type": "Dodecahedron"})
@@ -652,7 +652,7 @@ def test_adding_a_target_is_one_line():
     This is the whole claim of the registry: the mapping is the only place
     that has to know a target exists.
     """
-    from pyCamSet.calibration_targets.target_registry import (
+    from pyCamSet.calibration_targets.core.target_registry import (
         TARGET_CLASSES, target_class,
     )
 

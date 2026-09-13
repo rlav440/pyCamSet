@@ -16,15 +16,15 @@ import os
 
 def test_cairo_present_import_succeeds():
     """When cairo IS installed (the normal case on this machine), importing
-    target_charuco should succeed with no behavior change."""
-    import pyCamSet.calibration_targets.target_charuco
-    assert hasattr(pyCamSet.calibration_targets.target_charuco, "ChArUco")
+    charuco.target should succeed with no behavior change."""
+    import pyCamSet.calibration_targets.charuco.target
+    assert hasattr(pyCamSet.calibration_targets.charuco.target, "ChArUco")
 
 
 def test_cairo_present_import_ccube_succeeds():
-    """target_Ccube should also import normally when cairo is present."""
-    import pyCamSet.calibration_targets.target_Ccube
-    assert hasattr(pyCamSet.calibration_targets.target_Ccube, "Ccube")
+    """ccube.target should also import normally when cairo is present."""
+    import pyCamSet.calibration_targets.ccube.target
+    assert hasattr(pyCamSet.calibration_targets.ccube.target, "Ccube")
 
 
 # --- Subprocess script: block cairosvg, then test import + find_in_image ---
@@ -50,14 +50,14 @@ from cv2 import aruco
 
 # --- Test 1: import succeeds without cairo ---
 try:
-    import pyCamSet.calibration_targets.target_charuco as tc
+    import pyCamSet.calibration_targets.charuco.target as tc
     print("IMPORT_CHARUCO_OK")
 except OSError as e:
     print(f"IMPORT_CHARUCO_FAILED: {e}")
     sys.exit(1)
 
 try:
-    import pyCamSet.calibration_targets.target_Ccube as tcc
+    import pyCamSet.calibration_targets.ccube.target as tcc
     print("IMPORT_CCUBE_OK")
 except OSError as e:
     print(f"IMPORT_CCUBE_FAILED: {e}")
@@ -111,7 +111,7 @@ sys.exit(0)
 
 
 def test_import_and_find_in_image_without_cairo():
-    """Gate 1 + Gate 4: importing target_charuco and calling find_in_image()
+    """Gate 1 + Gate 4: importing charuco.target and calling find_in_image()
     succeeds in a subprocess where cairosvg is blocked, and cairosvg is never
     imported as a side effect."""
     result = subprocess.run(

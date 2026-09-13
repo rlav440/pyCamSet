@@ -350,7 +350,7 @@ def test_a_gating_profile_nobody_has_heard_of_is_caught_before_the_study_runs(tm
     and the presets a detector offers for its own bounds.  Passing one where
     the other belongs is the mistake this catches.
     """
-    from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
+    from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
 
     settings = make_trial_gating_settings("Balanced")
     assert settings.profile_name == "Balanced"
@@ -443,7 +443,7 @@ def test_the_real_stages_satisfy_the_contract_the_fakes_assume(session_data_dir)
         default_phase2_fn,
         fixed_settings_only,
     )
-    from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
+    from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
 
     # a_dict=3 is DICT_4X4_1000, which a 20x20 board needs: DICT_4X4_50 is
     # exhausted by it, and OpenCV asserts rather than saying so.

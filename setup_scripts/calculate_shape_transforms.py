@@ -1,6 +1,6 @@
 import numpy as np
 
-from pyCamSet.calibration_targets.shape_by_faces import make_tforms, print_formatted_transforms
+from pyCamSet.calibration_targets.core.shape_by_faces import make_tforms, print_formatted_transforms
 
 
 

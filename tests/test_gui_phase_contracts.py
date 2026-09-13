@@ -416,7 +416,7 @@ def test_the_stats_agree_with_the_calibration_report(short_charuco_handler):
 # 5x5 one.  The tabs now adopt the run's target when the run changes, and
 # refuse the run when the two still disagree.
 
-from pyCamSet.calibration_targets.target_Ccube import Ccube  # noqa: E402
+from pyCamSet.calibration_targets.ccube.target import Ccube  # noqa: E402
 from pyCamSet.workflow.targets import (  # noqa: E402
     READING_ONLY_FIELDS,
     describe_target_mismatch,
@@ -1156,7 +1156,7 @@ def test_a_camset_with_no_calibration_says_so(charuco_problem, tmp_path, capsys)
 # diagnosing it from crash reports.
 
 from pyCamSet.gui import create_target as create_target_module  # noqa: E402
-from pyCamSet.calibration_targets.target_registry import TARGET_NAMES  # noqa: E402
+from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES  # noqa: E402
 from pyCamSet.utils import gui_safety, visualise_target  # noqa: E402
 
 
@@ -1188,7 +1188,7 @@ def test_every_target_type_can_be_built_from_what_the_dialog_sends(target_type):
     arguments each target takes -- a table that had drifted from the
     constructors it named.
     """
-    from pyCamSet.calibration_targets.target_registry import target_class
+    from pyCamSet.calibration_targets.core.target_registry import target_class
 
     spec = {"type": target_type,
             **target_class(target_type).construction_parameters().defaults()}
@@ -1810,7 +1810,7 @@ def _optimisation_tab():
 def test_the_sweepable_rows_follow_the_selected_detector():
     from PySide6.QtWidgets import QApplication
 
-    from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
+    from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
 
     QApplication.instance() or QApplication([])
     tab = _optimisation_tab()
@@ -1863,7 +1863,7 @@ def test_a_preset_still_sets_the_bounds_of_the_rows_it_covers():
         tab._detection_profile_combo.setCurrentText("Aggressive Recovery")
         row = tab._param_rows["adaptiveThreshWinSizeMax"]
 
-        from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
+        from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
         expected = ARUCO_OPENCV_DETECTOR.profiles()[
             "Aggressive Recovery"].bounds_for("adaptiveThreshWinSizeMax")
         assert row.bounds() == expected
@@ -1974,7 +1974,7 @@ def test_the_form_offers_every_target_the_registry_knows():
     """Which is the point: adding a target is a line in the registry."""
     from PySide6.QtWidgets import QApplication
 
-    from pyCamSet.calibration_targets.target_registry import TARGET_NAMES
+    from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES
 
     QApplication.instance() or QApplication([])
     form = _target_form()
@@ -1988,7 +1988,7 @@ def test_the_form_offers_every_target_the_registry_knows():
             spec = form.spec()
             assert spec["type"] == name
             # What it collects is enough to build the target it describes.
-            from pyCamSet.calibration_targets.target_registry import build_target
+            from pyCamSet.calibration_targets.core.target_registry import build_target
             assert build_target(spec) is not None
     finally:
         form.deleteLater()

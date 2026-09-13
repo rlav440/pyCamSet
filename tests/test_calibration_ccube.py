@@ -7,7 +7,7 @@ import pytest
 from cv2 import aruco
 
 from pyCamSet import Ccube, calibrate_cameras
-from pyCamSet.calibration_targets.create_Ccube import build_ccube, generate_ccube_target
+from pyCamSet.calibration_targets.ccube.generate import build_ccube, generate_ccube_target
 
 MAX_MEAN_REPROJECTION_PX = 5.10
 

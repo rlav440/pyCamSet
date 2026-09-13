@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 from scipy.optimize import OptimizeResult
 
-from pyCamSet.calibration_targets.target_detections import (
+from pyCamSet.calibration_targets.core.target_detections import (
     ImageDetection, TargetDetection)
 from pyCamSet.utils import logs
 from pyCamSet.utils import report_format as fmt

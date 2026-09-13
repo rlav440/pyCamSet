@@ -9,18 +9,18 @@ import numpy as np  # Store face origins, object points, and detected coordinate
 from PIL import Image  # Convert rasterised SVG data to PDF and texture arrays.
 import svgwrite  # Write compact vector rectangles, polygons, and circles.
 
-from pyCamSet.calibration_targets import AbstractTarget, FaceToShape, ImageDetection  # Reuse pyCamSet target contracts.
-from pyCamSet.calibration_targets.abstract_target import EXPORT_SUFFIXES
-from pyCamSet.calibration_targets.parameters import (
+from pyCamSet.calibration_targets.core import AbstractTarget, FaceToShape, ImageDetection  # Reuse pyCamSet target contracts.
+from pyCamSet.calibration_targets.core.abstract_target import EXPORT_SUFFIXES
+from pyCamSet.calibration_targets.core.parameters import (
     DetectorParameterisation,
     Parameter,
     Parameterisation,
 )
-from pyCamSet.calibration_targets.puzzleboard_detection import (
+from pyCamSet.calibration_targets.markers.puzzleboard import (
     PUZZLEBOARD_DETECTOR,
     detect_puzzleboard_image,
 )  # Use the credited PuzzleBoard detector.
-from pyCamSet.calibration_targets.target_puzzleboard import _CODE_FIELD, _CODE_SIZE  # Reuse the exact generator code field.
+from pyCamSet.calibration_targets.puzzleboard.target import _CODE_FIELD, _CODE_SIZE  # Reuse the exact generator code field.
 from pyCamSet.cameras import Camera  # Keep the standard find_in_image signature.
 from pyCamSet.utils.general_utils import make_4x4h_tform  # Convert cube face pose vectors to homogeneous transforms.
 

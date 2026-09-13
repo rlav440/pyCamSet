@@ -8,8 +8,8 @@ import pytest
 
 from pyCamSet import ChArUco, calibrate_cameras
 from pyCamSet.calibration.camera_calibrator import run_bundle_adjustment
-from pyCamSet.calibration_targets.create_charuco import build_charuco
-from pyCamSet.calibration_targets.target_detections import ImageDetection, TargetDetection
+from pyCamSet.calibration_targets.charuco.generate import build_charuco
+from pyCamSet.calibration_targets.core.target_detections import ImageDetection, TargetDetection
 from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
 
 MAX_MEAN_REPROJECTION_PX = 1.07

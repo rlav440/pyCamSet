@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from pyCamSet.calibration_targets.backend_registry import (
+from pyCamSet.calibration_targets.markers.backend_registry import (
     MARKER_BACKEND_LABELS,
     marker_backend_availability_text,
     marker_backend_available,
@@ -86,7 +86,7 @@ def repopulate_dict_combo(combo, marker_backend: str) -> None:
     the new list, the combo falls back to ``DICT_4X4_1000``. Signals are
     blocked for the whole repopulation and restored in ``finally``.
     """
-    from pyCamSet.calibration_targets.backend_registry import dict_names_for_backend
+    from pyCamSet.calibration_targets.markers.backend_registry import dict_names_for_backend
 
     current_name = combo.currentText()
     combo.blockSignals(True)
@@ -424,7 +424,7 @@ def detector_parameterisation_for(target_type: str, backend: str | None):
     :param backend: what the form's detector combo holds
     :raises ValueError: for an unknown target, or a detector it cannot use
     """
-    from pyCamSet.calibration_targets.target_registry import target_class
+    from pyCamSet.calibration_targets.core.target_registry import target_class
 
     cls = target_class(target_type)
     if len(cls.DETECTOR_BACKENDS) < 2:
@@ -529,7 +529,7 @@ class TargetSettingsForm(QWidget):
     def __init__(self, parent: Optional[QWidget] = None,
                  targets: Optional[list[str]] = None) -> None:
         super().__init__(parent)
-        from pyCamSet.calibration_targets.target_registry import TARGET_NAMES
+        from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES
 
         self._widgets: dict[str, QWidget] = {}
         form = QFormLayout(self)
@@ -579,14 +579,14 @@ class TargetSettingsForm(QWidget):
 
     def construction_parameters(self):
         """What the selected target says it is described by."""
-        from pyCamSet.calibration_targets.target_registry import target_class
+        from pyCamSet.calibration_targets.core.target_registry import target_class
 
         return target_class(self.target_type()).construction_parameters(
             self.backend() if self._backend_offered() else None)
 
     def _backend_offered(self) -> bool:
         """Whether this target has a choice of detector to be asked about."""
-        from pyCamSet.calibration_targets.target_registry import target_class
+        from pyCamSet.calibration_targets.core.target_registry import target_class
 
         return len(target_class(self.target_type()).DETECTOR_BACKENDS) > 1
 
@@ -624,7 +624,7 @@ class TargetSettingsForm(QWidget):
             collecting this also collects that
         :raises ParamError: for a value the target cannot take
         """
-        from pyCamSet.calibration_targets.target_registry import TYPE_KEY
+        from pyCamSet.calibration_targets.core.target_registry import TYPE_KEY
 
         parameters = self.construction_parameters()
         try:
@@ -654,7 +654,7 @@ class TargetSettingsForm(QWidget):
         :func:`~pyCamSet.workflow.targets.describe_target_mismatch` is what
         catches that before it reaches the solver.
         """
-        from pyCamSet.calibration_targets.target_registry import TYPE_KEY
+        from pyCamSet.calibration_targets.core.target_registry import TYPE_KEY
 
         if not spec or TYPE_KEY not in spec:
             return

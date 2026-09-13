@@ -46,7 +46,7 @@ def _target_mean_distance(target) -> float:
         nsy = int(getattr(target, "num_squares_y", 148))
         start_x = int(getattr(target, "start_x", 0))
         start_y = int(getattr(target, "start_y", 0))
-        from pyCamSet.calibration_targets.target_puzzleboard import _CODE_SIZE
+        from pyCamSet.calibration_targets.puzzleboard.target import _CODE_SIZE
         # Gather only the printed-window point coordinates from point_data.
         pts = []
         for row in range(start_y, start_y + nsy):

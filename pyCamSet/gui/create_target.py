@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyCamSet.calibration_targets.target_registry import build_target, target_class
+from pyCamSet.calibration_targets.core.target_registry import build_target, target_class
 from pyCamSet.gui.viewer_process import spawn_viewer
 from pyCamSet.gui.shared_functions import (
     TargetSettingsForm,

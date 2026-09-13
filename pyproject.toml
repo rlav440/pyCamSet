@@ -82,7 +82,7 @@ include-package-data = true
 # there: with no MANIFEST.in and no VCS plugin, setuptools has nothing to
 # discover it from.
 [tool.setuptools.package-data]
-"pyCamSet.calibration_targets" = ["*.json"]
+"pyCamSet.calibration_targets.markers" = ["*.json"]
 
 [tool.setuptools.packages.find]
 exclude = ["tests*", "examples*"]

@@ -219,7 +219,7 @@ def resolve_object_centre(target: object | None) -> dict:
         # PuzzleBoard's point_data spans the full 501x501 periodic code field, not just
         # the physically printed window — the naive centroid would land far outside the
         # actual board. Compute the centre of the printed window from the target's own
-        # dimensions using the same coordinate formula as target_puzzleboard._make_point_data.
+        # dimensions using the same coordinate formula as puzzleboard.target._make_point_data.
         nsx = int(getattr(target, "num_squares_x", 105))
         nsy = int(getattr(target, "num_squares_y", 148))
         ss = float(getattr(target, "square_size", 2.0))

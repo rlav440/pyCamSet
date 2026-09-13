@@ -20,7 +20,7 @@ import pytest
 
 from pyCamSet import Camera
 from pyCamSet.calibration_targets import AbstractTarget, ImageDetection, TargetDetection
-from pyCamSet.calibration_targets.abstract_target import get_keys
+from pyCamSet.calibration_targets.core.abstract_target import get_keys
 from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
 from conftest import make_camera

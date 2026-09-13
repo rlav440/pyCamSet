@@ -19,13 +19,13 @@ import signal
 
 from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
-from pyCamSet.calibration_targets.parameters import (
+from pyCamSet.calibration_targets.core.parameters import (
     NO_PARAMETERS,
     DetectorParameterisation,
     Parameterisation,
     combine,
 )
-from pyCamSet.calibration_targets.target_detections import TargetDetection, ImageDetection
+from pyCamSet.calibration_targets.core.target_detections import TargetDetection, ImageDetection
 
 
 #: The printable formats a target can be written as, by the name the

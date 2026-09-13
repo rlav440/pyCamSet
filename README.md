@@ -115,7 +115,7 @@ pip install "pyCamSet[puzzle]"
 <!---->
 <!-- After installing the native library, `pip install cairosvg` (or -->
 <!-- `conda install -c conda-forge cairosvg`) should work without errors, and -->
-<!-- `import pyCamSet.calibration_targets.target_charuco` will succeed. -->
+<!-- `import pyCamSet.calibration_targets.charuco.target` will succeed. -->
 
 
 <!-- ### PuzzleBoard target -->

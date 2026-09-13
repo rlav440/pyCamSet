@@ -518,5 +518,5 @@ def test_the_option_table_loads_from_the_package(repo_root):
     assert len(CHARUCO_DETECTION_OPTION_METADATA) == 17
     for option in CHARUCO_DETECTION_OPTION_METADATA:
         assert set(option) >= {"key", "label", "default", "parser_type",
-                               "widget_type", "concept"}
+                               "value_type", "concept"}
         assert "." in option["key"], option["key"]

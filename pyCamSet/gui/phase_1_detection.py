@@ -509,7 +509,7 @@ class Phase1Tab(QWidget):
                 self._charuco_opts_section.addRow(p_lbl)
 
             widget: QWidget
-            if meta["widget_type"] == "enum":
+            if meta["value_type"] == "enum":
                 combo = QComboBox()
                 combo.addItems(list(meta.get("choices", [])))
                 combo.setCurrentText(str(meta["default"]))
@@ -518,9 +518,9 @@ class Phase1Tab(QWidget):
             else:
                 edit = QLineEdit("" if meta["default"] == "" else str(meta["default"]))
                 edit.setFixedWidth(220)
-                if meta["widget_type"] == "json_matrix":
+                if meta["value_type"] == "json_matrix":
                     edit.setPlaceholderText('e.g. [[fx,0,cx],[0,fy,cy],[0,0,1]] or blank')
-                elif meta["widget_type"] == "json_vector":
+                elif meta["value_type"] == "json_vector":
                     edit.setPlaceholderText("e.g. [k1,k2,p1,p2,k3] or blank")
                 widget = edit
 

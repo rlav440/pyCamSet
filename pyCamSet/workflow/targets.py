@@ -22,10 +22,15 @@ CHARUCO_BASED_TARGETS = {"Ccube", "ChArUco"}
 
 
 
-#: The ChArUco detector options a phase may set: the rules for reading each
-#: one, and the prose the interface shows beside it.  Kept as data rather than
-#: as a literal, because it is a table of settings, it is edited as a table,
-#: and as a literal it was half of this module.
+#: The ChArUco detector options a phase may set: what each one is called, how
+#: to read a typed value for it, and the prose describing it.  Kept as data
+#: rather than as a literal, because it is a table of settings, it is edited
+#: as a table, and as a literal it was half of this module.
+#:
+#: The prose is for whoever is asking -- a form's help text, a docstring, a
+#: command line's --help -- and not for one toolkit, which is why it lives
+#: here with the parameter rather than with the widgets.  ``value_type`` says
+#: what kind of value the option takes, not what control should collect it.
 CHARUCO_DETECTION_OPTION_METADATA: list[dict[str, Any]] = json.loads(
     (Path(__file__).parent / "charuco_detection_options.json")
     .read_text(encoding="utf-8")

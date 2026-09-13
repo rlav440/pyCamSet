@@ -9,7 +9,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
-from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
+from pyCamSet.calibration_targets.detector_parameters import (
+    DetectorParameter,
+    DetectorParameterisation,
+)
 from pyCamSet.workflow.tuning.worker import ParameterRowConfig
 
 _LOG = logging.getLogger(__name__)
@@ -53,14 +56,17 @@ def make_optuna_sampler(
         return cls()
 
 
-def suggest_for_row(trial: Any, row: ParameterRowConfig) -> Optional[Any]:
+def suggest_for_row(
+    trial: Any,
+    row: ParameterRowConfig,
+    parameter: DetectorParameter,
+) -> Optional[Any]:
     """Sample one parameter from an Optuna trial, honouring its dtype.
 
     Returns ``None`` when *row* is not optimised; otherwise an int or float.
     """
-    if not row.optimise or row.key not in ARUCO_OPENCV_DETECTOR:
+    if not row.optimise:
         return None
-    parameter = ARUCO_OPENCV_DETECTOR.parameter(row.key)
     if parameter.choices:
         return trial.suggest_categorical(
             row.key, [choice.value for choice in parameter.choices])
@@ -78,6 +84,7 @@ def suggest_for_row(trial: Any, row: ParameterRowConfig) -> Optional[Any]:
 def build_optuna_sampler_callable(
     *,
     study: Any,
+    detector: DetectorParameterisation,
 ) -> Callable[[int, list[ParameterRowConfig]], dict[str, Any]]:
     """Return a sampler callable suitable for ``OptimisationStudy(sampler=...)``.
 
@@ -96,7 +103,9 @@ def build_optuna_sampler_callable(
         state["trial"] = trial
         sampled: dict[str, Any] = {}
         for row in rows:
-            value = suggest_for_row(trial, row)
+            if row.key not in detector:
+                continue
+            value = suggest_for_row(trial, row, detector.parameter(row.key))
             if value is not None:
                 sampled[row.key] = value
         state["params"] = sampled
@@ -154,6 +163,7 @@ def run_optuna_study(
     started = time.time()
     driver._started_at = started  # noqa: SLF001
     completed = 0
+    detector = config.detector()
 
     for trial_number in range(config.n_trials):
         if driver.cancel_token.is_cancelled():
@@ -161,7 +171,9 @@ def run_optuna_study(
         trial = study.ask()
         sampled: dict[str, Any] = {}
         for row in config.parameter_rows:
-            value = suggest_for_row(trial, row)
+            if row.key not in detector:
+                continue
+            value = suggest_for_row(trial, row, detector.parameter(row.key))
             if value is not None:
                 sampled[row.key] = value
         result, _payload = run_trial(

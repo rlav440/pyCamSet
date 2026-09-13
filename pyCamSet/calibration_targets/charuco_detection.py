@@ -4,7 +4,8 @@ OpenCV's ChArUco detector, and everything it can be told.
 The parameters themselves are stored beside this file rather than written
 here: twenty-one rows saying what each is called, what it defaults to, the
 bounds a study may search between, and the prose a person reads while typing
-one in.  This is what turns them into the three parameter objects OpenCV
+one in, beside five named presets narrowing those bounds to one kind of
+image.  This is what turns them into the three parameter objects OpenCV
 actually wants, and into the detector that holds them.
 
 Shared by ChArUco and Ccube, which read the same markers with the same
@@ -22,13 +23,17 @@ from cv2 import aruco
 from pyCamSet.calibration_targets.detector_parameters import (
     DetectorParameter,
     DetectorParameterisation,
+    Profile,
     parameters_from_json,
+    profiles_from_json,
 )
 
 _LOG = logging.getLogger(__name__)
 
 _PARAMETERS = parameters_from_json(
     Path(__file__).parent / "charuco_parameters.json")
+_PROFILES = profiles_from_json(
+    Path(__file__).parent / "charuco_profiles.json")
 
 
 class ArucoOpenCVDetector(DetectorParameterisation):
@@ -39,6 +44,9 @@ class ArucoOpenCVDetector(DetectorParameterisation):
     @property
     def parameters(self) -> tuple[DetectorParameter, ...]:
         return _PARAMETERS
+
+    def profiles(self) -> dict[str, Profile]:
+        return dict(_PROFILES)
 
     def validate(self, values: dict[str, Any]) -> list[str]:
         """The one rule OpenCV holds between two of its parameters."""

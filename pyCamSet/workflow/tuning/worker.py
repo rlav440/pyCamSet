@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
+from pyCamSet.calibration_targets.detector_parameters import DetectorParameterisation
 from pyCamSet.calibration_targets.target_registry import build_target
 from pyCamSet.workflow.tuning.study import (
     FAILURE_SCORE,
@@ -69,69 +69,6 @@ class ParameterRowConfig:
 
 
 @dataclass
-class TargetSettings:
-    """Calibration target definition for ChArUco and Ccube trials."""
-
-    target_type: str = "ChArUco"
-    num_squares_x: int = 5
-    num_squares_y: int = 5
-    square_size: float = 30.0  # mm
-    marker_fraction: float = 0.8
-    a_dict: int = 0  # cv2.aruco.DICT_4X4_1000 numerically; resolved by the GUI
-    n_points: int = 6
-    length: float = 30.0  # mm
-    border_fraction: float = 0.1
-    legacy: bool = False
-    marker_backend: str = "aruco1"
-
-    def as_spec(self) -> dict[str, Any]:
-        """
-        These settings as a target spec.
-
-        ChArUco takes its size from ``square_size`` and its shape from
-        ``num_squares_x``/``num_squares_y``; Ccube takes both from
-        ``n_points`` and ``length``.  Those fields sit side by side on this
-        dataclass, so which of them a target wants depends on the target --
-        and choosing is all this does.
-        """
-        if self.target_type == "Ccube":
-            return {
-                "type": "Ccube",
-                "n_points": self.n_points,
-                "length": self.length,
-                "border_fraction": self.border_fraction,
-                "aruco_dict": self.a_dict,
-                "legacy": self.legacy,
-                "marker_backend": self.marker_backend,
-            }
-        return {
-            "type": self.target_type,
-            "num_squares_x": self.num_squares_x,
-            "num_squares_y": self.num_squares_y,
-            "square_size": self.square_size,
-            "marker_fraction": self.marker_fraction,
-            "a_dict": self.a_dict,
-            "legacy": self.legacy,
-            "marker_backend": self.marker_backend,
-        }
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "target_type": self.target_type,
-            "num_squares_x": self.num_squares_x,
-            "num_squares_y": self.num_squares_y,
-            "square_size": self.square_size,
-            "marker_fraction": self.marker_fraction,
-            "a_dict": self.a_dict,
-            "n_points": self.n_points,
-            "length": self.length,
-            "border_fraction": self.border_fraction,
-            "legacy": self.legacy,
-            "marker_backend": self.marker_backend,
-        }
-
-
-@dataclass
 class CalibrationControls:
     """Non-detector optimisation settings."""
 
@@ -161,10 +98,22 @@ class RunConfig:
     seed: Optional[int] = None
     sampler_name: Optional[str] = None
     parameter_rows: list[ParameterRowConfig] = field(default_factory=list)
-    target: TargetSettings = field(default_factory=TargetSettings)
+    target_spec: dict[str, Any] = field(default_factory=dict)
     controls: CalibrationControls = field(default_factory=CalibrationControls)
     trial_gating: TrialGatingSettings = field(default_factory=make_trial_gating_settings)
     output_dir: Optional[Path] = None  # derived from f_loc when None
+
+    def detector(self) -> "DetectorParameterisation":
+        """
+        What this run's detection can be told.
+
+        The study sweeps whatever the target says its detection takes, so a
+        target read some new way is swept without the worker being told
+        about it.
+        """
+        from pyCamSet.workflow.targets import detector_parameterisation_of
+
+        return detector_parameterisation_of(self.target_spec)
 
     def resolved_output_dir(self, study_id: str) -> Path:
         if self.output_dir is not None:
@@ -179,6 +128,7 @@ class RunConfig:
 
 def build_effective_settings(
     rows: list[ParameterRowConfig],
+    detector: DetectorParameterisation,
     *,
     sampled: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
@@ -190,7 +140,6 @@ def build_effective_settings(
       value (coerced and clamped to absolute bounds);
     - otherwise use the row's fixed value (coerced and clamped).
     """
-    detector = ARUCO_OPENCV_DETECTOR
     # Start from declared defaults so unspecified rows keep deterministic values.
     out: dict[str, Any] = {p.key: p.default for p in detector.tunable()}
     sampled = sampled or {}
@@ -205,9 +154,12 @@ def build_effective_settings(
     return out
 
 
-def fixed_settings_only(rows: list[ParameterRowConfig]) -> dict[str, Any]:
+def fixed_settings_only(
+    rows: list[ParameterRowConfig],
+    detector: DetectorParameterisation,
+) -> dict[str, Any]:
     """Return only the user-defined fixed values (used for baseline run)."""
-    return build_effective_settings(rows, sampled=None)
+    return build_effective_settings(rows, detector, sampled=None)
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +186,7 @@ Optional keys:
 def default_detection_fn(
     f_loc: Path,
     detection_options: dict[str, dict[str, Any]],
-    target_settings: TargetSettings,
+    target_spec: dict[str, Any],
 ) -> DetectionResult:
     """Wrap :func:`pyCamSet.calibration.camera_calibrator.detect_datapoints_in_imfile`.
 
@@ -242,10 +194,7 @@ def default_detection_fn(
     """
     from pyCamSet.calibration.camera_calibrator import detect_datapoints_in_imfile
 
-    target = build_target({
-        **target_settings.as_spec(),
-        "detection_options": detection_options,
-    })
+    target = build_target({**target_spec, "detection_options": detection_options})
     detections, cam_res = detect_datapoints_in_imfile(
         f_loc=f_loc,
         calibration_target=target,
@@ -469,7 +418,7 @@ def run_trial(
     config: RunConfig,
     sampled: Optional[dict[str, Any]] = None,
     baseline_point_count: Optional[int],
-    detection_fn: Callable[[Path, dict, TargetSettings], DetectionResult],
+    detection_fn: Callable[[Path, dict, dict], DetectionResult],
     phase2_fn: Optional[Callable[..., dict[str, Any]]] = None,
     phase3_fn: Optional[Callable[..., dict[str, Any]]] = None,
     phase4_fn: Optional[Callable[..., dict[str, Any]]] = None,
@@ -483,7 +432,7 @@ def run_trial(
     rather than re-raised; this matches the per-trial recoverable failure
     policy.
     """
-    effective = build_effective_settings(rows, sampled=sampled)
+    effective = build_effective_settings(rows, config.detector(), sampled=sampled)
     optimised_keys = [r.key for r in rows if r.optimise]
     bounds = {
         r.key: {"lower": float(r.lower), "upper": float(r.upper)}
@@ -504,7 +453,7 @@ def run_trial(
 
     # ---- Stage A: detection -------------------------------------------------
     try:
-        detection_payload = detection_fn(Path(config.f_loc), effective, config.target)
+        detection_payload = detection_fn(Path(config.f_loc), effective, config.target_spec)
     except Exception as exc:  # pragma: no cover - defensive; tests inject fakes
         result.failure_reason = f"detection_fn raised: {exc!r}"
         result.failure_stage = "detection"
@@ -738,20 +687,27 @@ class OptimisationStudy:
             max_nfev_phase3=self.config.controls.max_nfev_phase3,
             max_nfev_phase4=self.config.controls.max_nfev_phase4,
             retain_successes=self.config.controls.retain_successes,
-            target_settings=self.config.target.as_dict(),
+            target_spec=self.config.target_spec,
             trial_gating=self.config.trial_gating.as_dict(),
         )
-        errors.extend(
-            ARUCO_OPENCV_DETECTOR.validate_rows(self.config.parameter_rows))
+        try:
+            detector = self.config.detector()
+        except (KeyError, ValueError):
+            # The target is already reported above; a detector cannot be
+            # named for a target that cannot be built.
+            return errors
+        errors.extend(detector.validate_rows(self.config.parameter_rows))
         return errors
 
     # ------------------------------------------------------------------
 
     def compute_baseline(self) -> Optional[int]:
         """Run detection once with fixed defaults to anchor :math:`point\\_ratio` ."""
-        effective = fixed_settings_only(self.config.parameter_rows)
+        effective = fixed_settings_only(
+            self.config.parameter_rows, self.config.detector())
         try:
-            payload = self.detection_fn(Path(self.config.f_loc), effective, self.config.target)
+            payload = self.detection_fn(
+                Path(self.config.f_loc), effective, self.config.target_spec)
         except Exception as exc:
             _LOG.warning("Baseline detection failed: %r", exc)
             return None
@@ -815,7 +771,7 @@ class OptimisationStudy:
                 result,
                 study_id=study_id,
                 f_loc=cfg.f_loc,
-                target_settings=cfg.target.as_dict(),
+                target_spec=cfg.target_spec,
                 calibration_controls=cfg.controls.as_dict(),
                 trial_gating=cfg.trial_gating.as_dict(),
                 sampler_name=cfg.sampler_name,
@@ -928,7 +884,6 @@ class OptimisationStudy:
 
 __all__ = [
     "ParameterRowConfig",
-    "TargetSettings",
     "CalibrationControls",
     "RunConfig",
     "CancelToken",

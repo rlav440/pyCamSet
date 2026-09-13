@@ -23,6 +23,14 @@ from pyCamSet.calibration_targets.target_detections import ImageDetection
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import downsample_valid
 
+#: The smallest board OpenCV will build.  Below this it does not raise a
+#: catchable error; it corrupts its own module state.
+_MIN_SQUARES = 2
+
+#: The fewest chessboard corners a board can have and still be described as
+#: an array of them -- one corner squeezes down to a bare point.
+_MIN_CORNERS = 2
+
 
 class ChArUco(AbstractTarget):
 
@@ -60,6 +68,21 @@ class ChArUco(AbstractTarget):
         self.square_size = square_size / 1000
         marker_size = marker_fraction * self.square_size  # 80% of the square size
         # convert to meters
+
+        # OpenCV does not refuse a board with a zero or one dimension: it
+        # raises SystemError and leaves its aruco module in a state where
+        # the next board built or image detected aborts the process, with
+        # no exception to catch.  So it never gets one.
+        if num_squares_x < _MIN_SQUARES or num_squares_y < _MIN_SQUARES:
+            raise ValueError(
+                f"A ChArUco board must be at least {_MIN_SQUARES}x{_MIN_SQUARES} "
+                f"squares; got {num_squares_x}x{num_squares_y}.")
+        corners = (num_squares_x - 1) * (num_squares_y - 1)
+        if corners < _MIN_CORNERS:
+            raise ValueError(
+                f"A ChArUco board needs at least {_MIN_CORNERS} chessboard "
+                f"corners; a {num_squares_x}x{num_squares_y} board has "
+                f"{corners}.")
 
         self.marker_backend = marker_backend
         self._aruco_dict_int = int(a_dict)

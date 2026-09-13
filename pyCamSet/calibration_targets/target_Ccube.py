@@ -24,6 +24,12 @@ from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform, downsample_valid
 
+#: The smallest face a cube can have.  Two is where OpenCV stops building a
+#: board at all -- below it OpenCV does not raise a catchable error, it
+#: corrupts its own module state -- and three is where a face has more than
+#: the single chessboard corner that squeezes down to a bare point.
+_MIN_POINTS = 3
+
 # TFORMS = [
 # 	([-1.209,-1.209, 1.209],[ 0.5,-0.5, 0.5]),
 # 	([ 1.209,-1.209, 1.209],[ 0.5, 0.5,-0.5]),
@@ -98,6 +104,15 @@ class Ccube(AbstractTarget):
         self.input_border_fraction = border_fraction
         self.actual_border_fraction = None
         self.line_fraction = line_fraction
+        # Each face is a ChArUco board, and OpenCV does not refuse one that
+        # is too small: it raises SystemError and leaves its aruco module in
+        # a state where the next board built or image detected aborts the
+        # process.  So it never gets one.
+        if n_points < _MIN_POINTS:
+            raise ValueError(
+                f"A Ccube face must be at least {_MIN_POINTS}x{_MIN_POINTS} "
+                f"squares; got n_points={n_points}.")
+
         self.marker_backend = marker_backend
         # FIX 1 (R1): only coerce ints. The pre-existing API also accepts a
         # cv2.aruco.Dictionary object (split_aruco_dictionary handles both);

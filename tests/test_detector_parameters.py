@@ -20,6 +20,7 @@ from pyCamSet.calibration_targets.detector_parameters import (
     Choice,
     DetectorParameter,
     DetectorParameterisation,
+    Profile,
     combine,
 )
 
@@ -253,3 +254,100 @@ def test_a_detector_built_from_defaults_is_the_one_detection_uses():
                                aruco.getPredefinedDictionary(aruco.DICT_4X4_1000))
     assert ARUCO_OPENCV_DETECTOR.build_detector(
         board, ARUCO_OPENCV_DETECTOR.resolve(None)) is not None
+
+
+# ---------------------------------------------------------------------------
+# The presets a detector offers for its own bounds
+# ---------------------------------------------------------------------------
+
+
+def test_a_detector_offers_only_presets_for_parameters_it_has():
+    """A preset narrows a study's search, so a key the detector does not
+    take is a bound that can never be applied."""
+    for name, profile in ARUCO_OPENCV_DETECTOR.profiles().items():
+        keys = set(profile.lower_bounds) | set(profile.upper_bounds)
+        unknown = keys - {p.key for p in ARUCO_OPENCV_DETECTOR.parameters}
+        assert not unknown, f"{name}: {sorted(unknown)}"
+        assert set(profile.recommended_keys) <= keys, name
+
+
+def test_a_preset_says_nothing_about_a_parameter_it_does_not_cover():
+    """Which is how a row keeps the bounds it has."""
+    balanced = ARUCO_OPENCV_DETECTOR.profiles()["Balanced"]
+    assert balanced.bounds_for("adaptiveThreshWinSizeMax") == (23, 61)
+    assert balanced.bounds_for("cameraMatrix") is None
+
+
+def test_every_preset_sits_inside_the_bounds_its_parameters_allow():
+    """A study clamps to the parameter, so a preset outside it is a lie
+    about where the search will go."""
+    for name, profile in ARUCO_OPENCV_DETECTOR.profiles().items():
+        for key in profile.lower_bounds:
+            parameter = ARUCO_OPENCV_DETECTOR.parameter(key)
+            low, high = profile.bounds_for(key)
+            assert parameter.cast(parameter.minimum) <= parameter.cast(low), (name, key)
+            assert parameter.cast(high) <= parameter.cast(parameter.maximum), (name, key)
+            assert parameter.cast(low) <= parameter.cast(high), (name, key)
+
+
+def test_a_detector_with_no_presets_says_so():
+    """Rather than the selector offering ChArUco's over another detector."""
+    assert Pair().profiles() == {}
+    assert NO_DETECTOR_PARAMETERS.profiles() == {}
+
+
+def test_a_preset_renders_as_hover_text_over_the_form_labels():
+    profile = Profile(
+        name="P", description="What it is for.",
+        lower_bounds={"width": 2}, upper_bounds={"width": 8},
+        recommended_keys=("width",))
+    assert profile.tooltip({"width": "Width"}) == (
+        "What it is for.\n\n"
+        "Recommended parameters to check for optimisation:\n"
+        "- Width")
+    assert "(none)" in Profile("P", "d").tooltip({})
+
+
+# ---------------------------------------------------------------------------
+# A board OpenCV cannot build
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("size", [(0, 0), (1, 1), (1, 5), (5, 1), (2, 2)])
+def test_a_board_too_small_for_opencv_is_refused_before_opencv_sees_it(size):
+    """OpenCV does not refuse a zero- or one-dimension ChArUco board.
+
+    ``aruco.CharucoBoard((0, 0), ...)`` raises SystemError and leaves the
+    aruco module in a state where the *next* board built, or image
+    detected, aborts the process -- no exception, no traceback, nothing to
+    catch.  A study validates its target by building it, so a board size
+    someone typed reaches this constructor directly.
+    """
+    from pyCamSet.calibration_targets.target_charuco import ChArUco
+
+    with pytest.raises(ValueError, match="at least 2"):
+        ChArUco(num_squares_x=size[0], num_squares_y=size[1], square_size=30.0)
+
+
+@pytest.mark.parametrize("n_points", [0, 1, 2])
+def test_a_cube_face_too_small_for_opencv_is_refused_too(n_points):
+    """Every Ccube face is a ChArUco board, with the same landmine under it."""
+    from pyCamSet.calibration_targets.target_Ccube import Ccube
+
+    with pytest.raises(ValueError, match="at least 3x3"):
+        Ccube(n_points=n_points, length=20.0)
+
+
+def test_the_smallest_usable_boards_are_still_built():
+    """The guards refuse what breaks, and nothing more.
+
+    A 2x2 ChArUco has one chessboard corner, which squeezes down to a bare
+    point and takes ``make_local`` out with an IndexError; 2x3 has two, and
+    is the smallest board this class can describe.
+    """
+    from pyCamSet.calibration_targets.target_Ccube import Ccube
+    from pyCamSet.calibration_targets.target_charuco import ChArUco
+
+    assert ChArUco(num_squares_x=2, num_squares_y=3,
+                   square_size=30.0).point_data.shape == (1, 2, 3)
+    assert Ccube(n_points=3, length=20.0).point_data.shape == (6, 4, 3)

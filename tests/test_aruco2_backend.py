@@ -472,14 +472,22 @@ def test_default_detection_fn_plumbing(tmp_path, monkeypatch):
     assert np.asarray(feats).shape[1] == 1  # one camera folder
 
 
-def test_target_settings_carries_backend():
-    from pyCamSet.workflow.tuning.worker import TargetSettings
-    s = TargetSettings(marker_backend="aruco2")
-    assert s.as_dict()["marker_backend"] == "aruco2"
+def test_a_target_spec_carries_the_backend_through_to_the_detector():
+    """A study describes its target the way a phase does, as a spec."""
+    from pyCamSet.calibration_targets.target_registry import build_target
+
+    spec = {"type": "ChArUco", "num_squares_x": 5, "num_squares_y": 5,
+            "square_size": 10.0, "marker_backend": "aruco2"}
+    target = build_target(spec)
+
+    assert target.marker_backend == "aruco2"
+    assert target.detection_parameters.name == "aruco2"
+    # aruco2's call takes no settings, so it describes none.
+    assert target.detection_options == {}
 
 
 def test_validate_run_settings_rejects_unknown_backend():
-    # validate_run_settings collects errors in a list (existing contract).
+    """The refusal is the target's now: a study validates by building it."""
     from pyCamSet.workflow.tuning.study import validate_run_settings
     errors = validate_run_settings(
         f_loc="unused",
@@ -488,9 +496,10 @@ def test_validate_run_settings_rejects_unknown_backend():
         max_nfev_phase3=1,
         max_nfev_phase4=1,
         retain_successes=1,
-        target_settings={"marker_backend": "aruco3"},
+        target_spec={"type": "ChArUco", "num_squares_x": 5, "num_squares_y": 5,
+                     "square_size": 10.0, "marker_backend": "aruco3"},
     )
-    assert any("marker_backend" in e for e in errors)
+    assert any("cannot be detected with 'aruco3'" in e for e in errors), errors
 
 
 def test_validate_run_settings_accepts_aruco2(tmp_path):
@@ -510,10 +519,10 @@ def test_validate_run_settings_accepts_aruco2(tmp_path):
         max_nfev_phase3=1,
         max_nfev_phase4=1,
         retain_successes=1,
-        target_settings={"marker_backend": "aruco2", "target_type": "ChArUco",
-                         "num_squares_x": 5, "num_squares_y": 5, "square_size": 10.0},
+        target_spec={"type": "ChArUco", "marker_backend": "aruco2",
+                     "num_squares_x": 5, "num_squares_y": 5, "square_size": 10.0},
     )
-    assert not any("marker_backend" in e for e in errors), errors
+    assert not any("Target" in e for e in errors), errors
 
 
 def test_missing_aruco2_import_error_hint():

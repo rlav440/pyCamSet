@@ -57,11 +57,6 @@ from pyCamSet.gui.shared_functions import (
     repopulate_dict_combo,
 )
 from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
-from pyCamSet.workflow.tuning.profiles import (
-    CHARUCO_DETECTION_PROFILE_NAMES,
-    get_charuco_detection_profile,
-    make_profile_tooltip,
-)
 from pyCamSet.workflow.tuning.study import (
     MAX_SUCCESSES_HARD_CAP,
     TRIAL_GATING_PROFILE_NAMES,
@@ -78,7 +73,6 @@ from pyCamSet.workflow.tuning.worker import (
     ParameterRowConfig,
     RunConfig,
     StudyProgress,
-    TargetSettings,
 )
 
 try:
@@ -93,6 +87,8 @@ except Exception:  # pragma: no cover - module always importable
 
 _LOG = logging.getLogger(__name__)
 _TARGET_CHOICES = ("ChArUco", "Ccube")
+#: Not a preset but a state of the preset selector: bounds edited by hand.
+_CUSTOM_PROFILE = "Custom"
 _MIN_BOARD_DIMENSION = 2
 _MAX_BOARD_DIMENSION = 50
 
@@ -461,20 +457,20 @@ class OptimisationTab(QWidget):
     def _build_detector_section(self) -> QWidget:
         gb = QGroupBox()
         v = QVBoxLayout(gb)
-        # Keep a stable key->label map for profile hover/help text.
-        key_to_label = self._parameter_key_to_label_map()
         # Add a profile selector so users can pre-fill bounds quickly.
         self._detection_profile_combo = QComboBox()
-        # Use the fixed display ordering defined in the profile module.
-        self._detection_profile_combo.addItems(list(CHARUCO_DETECTION_PROFILE_NAMES))
+        # The detector's own display order, then the hand-edited state.
+        self._detection_profile_combo.addItems(
+            list(ARUCO_OPENCV_DETECTOR.profiles()) + [_CUSTOM_PROFILE])
         # Re-apply profile bounds whenever the selected profile changes.
         self._detection_profile_combo.currentTextChanged.connect(self._on_detection_profile_changed)
         # Attach per-item and combo-level hover text in the existing tooltip pattern.
         for idx in range(self._detection_profile_combo.count()):
-            profile_name = self._detection_profile_combo.itemText(idx)
-            tooltip = make_profile_tooltip(profile_name, key_to_label)
-            self._detection_profile_combo.setItemData(idx, tooltip, Qt.ItemDataRole.ToolTipRole)
-        self._detection_profile_combo.setToolTip(make_profile_tooltip("Balanced", key_to_label))
+            self._detection_profile_combo.setItemData(
+                idx,
+                self._profile_tooltip(self._detection_profile_combo.itemText(idx)),
+                Qt.ItemDataRole.ToolTipRole)
+        self._detection_profile_combo.setToolTip(self._profile_tooltip("Balanced"))
         form = QFormLayout()
         form.addRow("Detection Profile:", self._detection_profile_combo)
         form_wrap = QWidget()
@@ -609,7 +605,7 @@ class OptimisationTab(QWidget):
             "color: #2a7a2a;" if marker_backend_available(backend) else "color: #8a4a00;"
         )
 
-    def _collect_target(self) -> TargetSettings:
+    def _collect_target(self) -> dict:
         # ArUco dict name → enum, looked up lazily to avoid hard cv2/aruco2
         # dependencies at import. The lookup is backend-aware (plan v4 D9):
         # aruco2 names resolve through the aruco2 package, aruco1 through
@@ -632,19 +628,30 @@ class OptimisationTab(QWidget):
                 f"Could not resolve ArUco dictionary {dict_name!r} for marker "
                 f"backend {marker_backend!r}: {exc}"
             ) from exc
-        return TargetSettings(
-            target_type=self._target_type_combo.currentText(),
-            num_squares_x=int(self._cols_spin.value()),
-            num_squares_y=int(self._rows_spin.value()),
-            square_size=float(self._square_spin.value()),
-            marker_fraction=float(self._marker_spin.value()),
-            a_dict=a_dict_value,
-            n_points=int(self._rows_spin.value()),
-            length=float(self._square_spin.value()),
-            border_fraction=float(self._border_spin.value()),
-            legacy=self._legacy_cb.isChecked(),
-            marker_backend=marker_backend,
-        )
+        # One set of controls serves both targets, so which of them each
+        # takes its arguments from is decided here -- a ChArUco sizes itself
+        # by square and count, a Ccube by edge length and points per face.
+        target_type = self._target_type_combo.currentText()
+        if target_type == "Ccube":
+            return {
+                "type": "Ccube",
+                "n_points": int(self._rows_spin.value()),
+                "length": float(self._square_spin.value()),
+                "border_fraction": float(self._border_spin.value()),
+                "aruco_dict": a_dict_value,
+                "legacy": self._legacy_cb.isChecked(),
+                "marker_backend": marker_backend,
+            }
+        return {
+            "type": target_type,
+            "num_squares_x": int(self._cols_spin.value()),
+            "num_squares_y": int(self._rows_spin.value()),
+            "square_size": float(self._square_spin.value()),
+            "marker_fraction": float(self._marker_spin.value()),
+            "a_dict": a_dict_value,
+            "legacy": self._legacy_cb.isChecked(),
+            "marker_backend": marker_backend,
+        }
 
     def _collect_controls(self) -> CalibrationControls:
         return CalibrationControls(
@@ -732,7 +739,7 @@ class OptimisationTab(QWidget):
             seed=seed,
             sampler_name=self._sampler_combo.currentText(),
             parameter_rows=self._collect_parameter_rows(),
-            target=self._collect_target(),
+            target_spec=self._collect_target(),
             controls=self._collect_controls(),
             trial_gating=self._collect_trial_gating(),
             output_dir=Path(out) if out else None,
@@ -742,36 +749,40 @@ class OptimisationTab(QWidget):
         """Return a stable key->label mapping for detector parameter UI text."""
         return {entry.key: entry.label for entry in ARUCO_OPENCV_DETECTOR.tunable()}
 
+    def _profile_tooltip(self, profile_name: str) -> str:
+        """One profile's hover text, over the labels this form shows."""
+        if profile_name == _CUSTOM_PROFILE:
+            return (
+                "Custom bounds edited manually.\n"
+                "Recommended parameters to check for optimisation: keep this "
+                "user-selected.")
+        return ARUCO_OPENCV_DETECTOR.profiles()[profile_name].tooltip(
+            self._parameter_key_to_label_map())
+
     def _on_detection_profile_changed(self, profile_name: str) -> None:
         # Ignore recursive signal traffic while profile bounds are being copied in.
         if self._applying_detection_profile:
             return
         # Keep the current bounds untouched when the selector is set to Custom.
-        if profile_name == "Custom":
+        if profile_name == _CUSTOM_PROFILE:
             return
         # Copy the selected profile's lower/upper bounds into supported rows.
         self._apply_detection_profile(profile_name)
 
     def _apply_detection_profile(self, profile_name: str) -> None:
         # Resolve profile payload once to keep copies deterministic.
-        profile = get_charuco_detection_profile(profile_name)
-        # Prepare labels for hover/help text formatting.
-        key_to_label = self._parameter_key_to_label_map()
+        profile = ARUCO_OPENCV_DETECTOR.profiles()[profile_name]
         # Block recursive state flips while bounds are applied row by row.
         self._applying_detection_profile = True
         try:
-            # Keep the selector text aligned with the applied profile.
+            # Keep the selector text and its hover text aligned with it.
             self._detection_profile_combo.setCurrentText(profile_name)
-            # Keep combo hover text aligned with the active profile.
-            self._detection_profile_combo.setToolTip(make_profile_tooltip(profile_name, key_to_label))
-            # Copy only lower/upper bound values into each supported row.
+            self._detection_profile_combo.setToolTip(
+                self._profile_tooltip(profile_name))
+            # Copy bounds into the rows this profile actually covers.
             for key, row in self._param_rows.items():
-                lower = profile["lower_bounds"].get(key)
-                upper = profile["upper_bounds"].get(key)
-                # Skip rows that are not explicitly covered by this profile.
-                if lower is None or upper is None:
-                    continue
-                row.set_bounds(lower, upper)
+                if (bounds := profile.bounds_for(key)) is not None:
+                    row.set_bounds(*bounds)
         finally:
             # Re-enable normal profile-change handling after copy finishes.
             self._applying_detection_profile = False
@@ -781,15 +792,15 @@ class OptimisationTab(QWidget):
         if self._applying_detection_profile:
             return
         # Keep current selector text when already in Custom mode.
-        if self._detection_profile_combo.currentText() == "Custom":
+        if self._detection_profile_combo.currentText() == _CUSTOM_PROFILE:
             return
         # Switch selector state to Custom while preserving edited bounds.
         self._applying_detection_profile = True
         try:
             # Update only the selector label and its hover/help text.
-            self._detection_profile_combo.setCurrentText("Custom")
-            key_to_label = self._parameter_key_to_label_map()
-            self._detection_profile_combo.setToolTip(make_profile_tooltip("Custom", key_to_label))
+            self._detection_profile_combo.setCurrentText(_CUSTOM_PROFILE)
+            self._detection_profile_combo.setToolTip(
+                self._profile_tooltip(_CUSTOM_PROFILE))
         finally:
             # Re-enable normal selector handling after the state flip.
             self._applying_detection_profile = False

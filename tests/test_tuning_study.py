@@ -35,7 +35,6 @@ from pyCamSet.workflow.tuning.worker import (
     OptimisationStudy,
     ParameterRowConfig,
     RunConfig,
-    TargetSettings,
     run_trial,
 )
 from pyCamSet.workflow.workspace import WorkspaceManager, workspace_path_for
@@ -84,13 +83,18 @@ def dataset(tmp_path):
     return root
 
 
+#: A small ChArUco, which is all the faked stages need of a target.
+CHARUCO_TARGET = {"type": "ChArUco", "num_squares_x": 5, "num_squares_y": 5,
+                  "square_size": 30.0}
+
+
 def config(tmp_path, **overrides) -> RunConfig:
     settings = dict(
         f_loc=str(tmp_path),
         mode="full",
         n_trials=1,
         parameter_rows=[ParameterRowConfig(key=PARAMETER, fixed=0.03)],
-        target=TargetSettings(),
+        target_spec=dict(CHARUCO_TARGET),
         controls=CalibrationControls(target_rpe=1.0),
         trial_gating=make_trial_gating_settings("Moderate"),
         output_dir=str(tmp_path / "study"),
@@ -343,10 +347,10 @@ def test_a_gating_profile_nobody_has_heard_of_is_caught_before_the_study_runs(tm
     look usable and fail only at :meth:`OptimisationStudy.run`.
 
     Two profile vocabularies exist and read alike: the gating profiles here,
-    and the detector presets in ``tuning/profiles``.  Passing one where the
-    other belongs is the mistake this catches.
+    and the presets a detector offers for its own bounds.  Passing one where
+    the other belongs is the mistake this catches.
     """
-    from pyCamSet.workflow.tuning.profiles import CHARUCO_DETECTION_PROFILE_NAMES
+    from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
 
     settings = make_trial_gating_settings("Balanced")
     assert settings.profile_name == "Balanced"
@@ -354,7 +358,7 @@ def test_a_gating_profile_nobody_has_heard_of_is_caught_before_the_study_runs(tm
     assert settings.validate()
 
     # "Balanced" is a detector preset, not a gating profile.
-    assert "Balanced" in CHARUCO_DETECTION_PROFILE_NAMES
+    assert "Balanced" in ARUCO_OPENCV_DETECTOR.profiles()
 
 
 def test_a_study_writes_a_summary_and_a_record_per_success(tmp_path, dataset):
@@ -426,82 +430,6 @@ def test_a_trial_that_did_not_succeed_cannot_be_promoted(tmp_path):
         promote_retained_trial(workspace, record)
 
 
-# ---------------------------------------------------------------------------
-# One target builder
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "settings",
-    [TargetSettings(),
-     TargetSettings(target_type="ChArUco", num_squares_x=20, num_squares_y=20,
-                    square_size=4.0, a_dict=3, legacy=True),
-     TargetSettings(target_type="ChArUco", num_squares_x=11, num_squares_y=7,
-                    square_size=15.0, marker_fraction=0.75, a_dict=1),
-     TargetSettings(target_type="Ccube", n_points=10, length=40.0,
-                    border_fraction=0.2, a_dict=3, legacy=True)],
-    ids=["charuco-default", "charuco-corpus", "charuco-rectangular", "ccube"],
-)
-def test_a_study_builds_its_target_the_way_the_phases_do(settings):
-    """``TargetSettings`` and a phase's params describe the same target.
-
-    They name it differently -- a study says ``square_size`` and
-    ``num_squares_x``, a phase says ``length`` and ``n_points``, and a
-    phase's ``num_squares_x`` belongs to PuzzleBoard entirely -- so
-    ``as_params`` translates rather than the study keeping a second builder.
-    A rectangular ChArUco is the case a single flat signature could not put.
-    """
-    from pyCamSet.calibration_targets.target_Ccube import Ccube
-    from pyCamSet.calibration_targets.target_charuco import ChArUco
-    from pyCamSet.calibration_targets.target_registry import build_target
-
-    options = {"DetectorParameters": {"minMarkerPerimeterRate": 0.03}}
-    if settings.target_type == "Ccube":
-        expected = Ccube(
-            n_points=settings.n_points, length=settings.length,
-            aruco_dict=settings.a_dict, border_fraction=settings.border_fraction,
-            legacy=settings.legacy, marker_backend=settings.marker_backend,
-            detection_options=options)
-    else:
-        expected = ChArUco(
-            num_squares_x=settings.num_squares_x,
-            num_squares_y=settings.num_squares_y,
-            square_size=settings.square_size,
-            marker_fraction=settings.marker_fraction, a_dict=settings.a_dict,
-            legacy=settings.legacy, marker_backend=settings.marker_backend,
-            detection_options=options)
-
-    built = build_target({**settings.as_spec(), "detection_options": options})
-
-    assert type(built) is type(expected)
-    assert built.input_args == expected.input_args
-    assert built.point_data.shape == expected.point_data.shape
-
-
-def test_a_targets_arguments_are_its_own_and_nobody_elses(tmp_path):
-    """What the flat parameter namespace made impossible.
-
-    ``num_squares_x`` used to belong to PuzzleBoard, so a ChArUco could not
-    use the name and needed ``charuco_squares_x`` to mean the same thing.
-    Under its own key each target just says what it takes.
-    """
-    from pyCamSet.calibration_targets.target_registry import build_target
-
-    charuco = build_target({"type": "ChArUco", "num_squares_x": 6,
-                            "num_squares_y": 6, "square_size": 30.0})
-    board = build_target({"type": "PuzzleBoard", "num_squares_x": 105,
-                          "num_squares_y": 148})
-
-    assert charuco.input_args["num_squares_x"] == 6
-    assert board.input_args["num_squares_x"] == 105
-
-
-# ---------------------------------------------------------------------------
-# The real stages, once
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.data
 @pytest.mark.slow
 def test_the_real_stages_satisfy_the_contract_the_fakes_assume(session_data_dir):
     """Detection and phase 2, for real, against the shape the driver reads.
@@ -515,16 +443,14 @@ def test_the_real_stages_satisfy_the_contract_the_fakes_assume(session_data_dir)
         default_phase2_fn,
         fixed_settings_only,
     )
+    from pyCamSet.calibration_targets.charuco_detection import ARUCO_OPENCV_DETECTOR
 
-    # a_dict=3 is DICT_4X4_1000, which is what ChArUco itself defaults to and
-    # what the corpus was printed with.  TargetSettings defaults a_dict to 0
-    # -- DICT_4X4_50 -- which a 20x20 board exhausts, and OpenCV asserts
-    # rather than saying so.
-    target = TargetSettings(
-        target_type="ChArUco", num_squares_x=20, num_squares_y=20,
-        square_size=4.0, a_dict=3, legacy=True)
+    # a_dict=3 is DICT_4X4_1000, which a 20x20 board needs: DICT_4X4_50 is
+    # exhausted by it, and OpenCV asserts rather than saying so.
+    target = {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
+              "square_size": 4.0, "a_dict": 3, "legacy": True}
     rows = [ParameterRowConfig(key=PARAMETER, fixed=0.03)]
-    options = fixed_settings_only(rows)
+    options = fixed_settings_only(rows, ARUCO_OPENCV_DETECTOR)
 
     payload = default_detection_fn(
         session_data_dir / "calibration_charuco", options, target)
@@ -538,3 +464,66 @@ def test_the_real_stages_satisfy_the_contract_the_fakes_assume(session_data_dir)
 
     phase2 = default_phase2_fn(payload, controls=CalibrationControls())
     assert phase2["camset"] is not None
+
+
+# ---------------------------------------------------------------------------
+# A study sweeps whatever its target says its detection takes
+# ---------------------------------------------------------------------------
+#
+# The worker imported ChArUco's parameters by name, so a study over any
+# other target swept ChArUco's settings and passed them to a detector that
+# had never heard of them.
+
+
+def test_the_detector_a_study_sweeps_comes_from_its_target(tmp_path):
+    charuco = config(tmp_path)
+    puzzleboard = config(tmp_path, target_spec={
+        "type": "PuzzleBoard", "num_squares_x": 20, "num_squares_y": 20})
+
+    assert charuco.detector().name == "aruco1"
+    assert puzzleboard.detector().name == "puzzle_board"
+    assert "min_width" in puzzleboard.detector()
+    assert "min_width" not in charuco.detector()
+
+
+def test_a_trial_sweeps_the_settings_that_targets_detector_takes(tmp_path):
+    """``min_width`` is PuzzleBoard's to sweep and nobody else's."""
+    from pyCamSet.workflow.tuning.worker import build_effective_settings
+
+    detector = config(tmp_path, target_spec={
+        "type": "PuzzleBoard", "num_squares_x": 20,
+        "num_squares_y": 20}).detector()
+    rows = [ParameterRowConfig(key="min_width", fixed=4, optimise=True,
+                               lower=2, upper=12)]
+
+    assert build_effective_settings(rows, detector) == {"min_width": 4}
+    assert build_effective_settings(
+        rows, detector, sampled={"min_width": 9}) == {"min_width": 9}
+    assert detector.validate_rows(rows) == []
+
+
+def test_a_row_the_targets_detector_does_not_take_is_refused(tmp_path):
+    """Sweeping OpenCV's threshold window over a PuzzleBoard is a mistake
+    that used to reach the detector."""
+    detector = config(tmp_path, target_spec={
+        "type": "PuzzleBoard", "num_squares_x": 20,
+        "num_squares_y": 20}).detector()
+    rows = [ParameterRowConfig(key="adaptiveThreshWinSizeMin", fixed=3)]
+
+    errors = detector.validate_rows(rows)
+    assert errors and "Unknown parameter" in errors[0]
+
+
+def test_a_target_that_cannot_be_built_stops_the_study(tmp_path, dataset):
+    """Validation builds the target, which is what a trial does.
+
+    It used to list the fields two named targets need, which said nothing
+    about a third and drifted from what their constructors accept.
+    """
+    driver = OptimisationStudy(
+        config(tmp_path, f_loc=str(dataset),
+               target_spec={"type": "ChArUco", "num_squares_x": 1,
+                            "num_squares_y": 1, "square_size": 30.0}),
+        sampler=lambda i, rows: {})
+
+    assert any("Target cannot be built" in e for e in driver.validate())

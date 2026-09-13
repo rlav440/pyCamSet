@@ -12,9 +12,10 @@ were reachable from nothing.
 So a backend describes itself.  :class:`DetectorParameter` is one setting --
 what it is called, what it defaults to, the bounds a study may search between
 and the prose a person reads while typing it in.  :class:`DetectorParameterisation`
-is a backend's set of them, plus the two things that genuinely differ between
-backends: rules that span more than one parameter, and whether the backend's
-optional dependency is installed.
+is a backend's set of them, plus the three things that genuinely differ
+between backends: rules that span more than one parameter, whether the
+backend's optional dependency is installed, and the named bound presets a
+study may start from.
 
 A target composes these.  Its own ``find_in_image`` may take settings of its
 own -- PuzzleBoardCube's plane gate is not the PuzzleBoard detector's
@@ -25,7 +26,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -295,6 +296,61 @@ def parameters_from_json(path: Path) -> tuple[DetectorParameter, ...]:
     return tuple(DetectorParameter.from_row(row) for row in rows)
 
 
+@dataclass(frozen=True)
+class Profile:
+    """
+    Named bounds for a study to start from.
+
+    A preset narrows the range of some parameters to the part worth
+    searching for one kind of image -- dim, distant, close -- and names the
+    ones worth optimising at all.  Parameters it does not mention keep the
+    bounds they have.
+    """
+
+    name: str
+    description: str
+    lower_bounds: dict[str, Any] = field(default_factory=dict)
+    upper_bounds: dict[str, Any] = field(default_factory=dict)
+    recommended_keys: tuple[str, ...] = ()
+
+    def bounds_for(self, key: str) -> tuple[Any, Any] | None:
+        """What this profile searches *key* between, or None if it says nothing."""
+        low, high = self.lower_bounds.get(key), self.upper_bounds.get(key)
+        if low is None or high is None:
+            return None
+        return low, high
+
+    def tooltip(self, labels: dict[str, str]) -> str:
+        """
+        This profile as hover text, over the labels a form shows.
+
+        :param labels: parameter key to the name the form gives it
+        """
+        recommended = "\n".join(
+            f"- {labels.get(key, key)}" for key in self.recommended_keys)
+        return (
+            f"{self.description}\n\n"
+            "Recommended parameters to check for optimisation:\n"
+            f"{recommended or '- (none)'}")
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> "Profile":
+        """Build a profile from its stored row."""
+        return cls(
+            name=row["name"],
+            description=row["description"],
+            lower_bounds=dict(row.get("lower_bounds", {})),
+            upper_bounds=dict(row.get("upper_bounds", {})),
+            recommended_keys=tuple(row.get("recommended_keys", ())),
+        )
+
+
+def profiles_from_json(path: Path) -> dict[str, Profile]:
+    """Every profile a stored table describes, in the order it offers them."""
+    rows = json.loads(Path(path).read_text(encoding="utf-8"))
+    return {row["name"]: Profile.from_row(row) for row in rows}
+
+
 class DetectorParameterisation(ABC):
     """
     What one detector can be told.
@@ -431,6 +487,10 @@ class DetectorParameterisation(ABC):
         """
         return None
 
+    def profiles(self) -> dict[str, Profile]:
+        """The named bound presets this detector offers, in display order."""
+        return {}
+
 
 class NoDetectorParameters(DetectorParameterisation):
     """A detector that takes no settings, and a target that is never detected."""
@@ -452,7 +512,8 @@ class CompositeParameterisation(DetectorParameterisation):
     Several parameterisations read as one.
 
     A target's own detection settings beside its backend's.  Problems and
-    unavailability come from whichever part reported them.
+    unavailability come from whichever part reported them; presets from the
+    first part that offers any, which is the backend in practice.
     """
 
     def __init__(self, parts: Sequence[DetectorParameterisation], name: str = ""):
@@ -481,6 +542,12 @@ class CompositeParameterisation(DetectorParameterisation):
             if reason is not None:
                 return reason
         return None
+
+    def profiles(self) -> dict[str, Profile]:
+        for part in self._parts:
+            if presets := part.profiles():
+                return presets
+        return {}
 
 
 def combine(*parts: DetectorParameterisation) -> DetectorParameterisation:

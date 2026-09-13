@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from pyCamSet.calibration_targets.target_registry import build_target
 from pyCamSet.utils.general_utils import get_subfolder_names
 
 
@@ -512,7 +513,7 @@ def validate_run_settings(
     max_nfev_phase3: int,
     max_nfev_phase4: int,
     retain_successes: int,
-    target_settings: dict[str, Any],
+    target_spec: dict[str, Any],
     trial_gating: Optional[dict[str, Any]] = None,
 ) -> list[str]:
     """Validate global run settings.  Returns a list of error messages."""
@@ -542,30 +543,17 @@ def validate_run_settings(
     if not isinstance(retain_successes, int) or not (1 <= retain_successes <= MAX_SUCCESSES_HARD_CAP):
         errors.append(f"Retain successes must be an integer in [1, {MAX_SUCCESSES_HARD_CAP}].")
 
-    # Target validation: check fields needed by the selected target type.
-    if target_settings is None or not isinstance(target_settings, dict):
+    # Target validation: build it.  Which is what a trial does, and what
+    # each target already checks its own arguments for -- the alternative
+    # was a list of the fields two named targets need, which said nothing
+    # about a third and drifted from what their constructors accept.
+    if not target_spec or not isinstance(target_spec, dict):
         errors.append("Target settings are missing.")
         return errors
-    target_type = target_settings.get("target_type", "ChArUco")
-    required_fields = (
-        ("num_squares_x", "num_squares_y", "square_size")
-        if target_type == "ChArUco"
-        else ("n_points", "length", "border_fraction")
-    )
-    for required in required_fields:
-        value = target_settings.get(required)
-        try:
-            if value is None or float(value) <= 0:
-                errors.append(f"Target field '{required}' must be > 0.")
-        except (TypeError, ValueError):
-            errors.append(f"Target field '{required}' must be numeric.")
-    if target_type not in {"ChArUco", "Ccube"}:
-        errors.append(f"Unknown target type: {target_type!r}.")
-    marker_backend = target_settings.get("marker_backend")
-    if marker_backend is not None and marker_backend not in {"aruco1", "aruco2"}:
-        errors.append(
-            f"marker_backend must be one of 'aruco1' or 'aruco2'; got {marker_backend!r}."
-        )
+    try:
+        build_target(target_spec)
+    except Exception as exc:
+        errors.append(f"Target cannot be built: {exc}")
     if trial_gating is not None:
         try:
             gating = TrialGatingSettings(**trial_gating)
@@ -607,7 +595,7 @@ def write_trial_metadata(
     *,
     study_id: str,
     f_loc: Path | str,
-    target_settings: dict[str, Any],
+    target_spec: dict[str, Any],
     calibration_controls: dict[str, Any],
     trial_gating: dict[str, Any],
     sampler_name: Optional[str] = None,
@@ -636,7 +624,7 @@ def write_trial_metadata(
             "trial_dir": str(out_dir),
             "camset_path": str(camset_path) if camset_path else None,
         },
-        "target": dict(target_settings),
+        "target": dict(target_spec),
         "trial_gating": dict(trial_gating),
         "detector_settings": {
             "effective": dict(result.effective_detector_settings),

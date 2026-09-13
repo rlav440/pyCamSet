@@ -77,12 +77,12 @@ pycamset = "pyCamSet.gui.__main__:main"
 [tool.setuptools]
 include-package-data = true
 
-# The ChArUco detector option table is data the workflow reads at import, so
-# it has to be in the wheel.  include-package-data alone does not put it
+# The ChArUco detector parameter table is data the library reads at import,
+# so it has to be in the wheel.  include-package-data alone does not put it
 # there: with no MANIFEST.in and no VCS plugin, setuptools has nothing to
 # discover it from.
 [tool.setuptools.package-data]
-"pyCamSet.workflow" = ["*.json"]
+"pyCamSet.calibration_targets" = ["*.json"]
 
 [tool.setuptools.packages.find]
 exclude = ["tests*", "examples*"]

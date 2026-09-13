@@ -9,145 +9,18 @@ an out-of-bounds index that says nothing about targets.
 """
 from __future__ import annotations
 
-import json
 import math
-from pathlib import Path
 from typing import Any
 
 TARGET_CHOICES = ["Ccube", "ChArUco", "PuzzleBoard", "PuzzleBoardCube"]
 
 #: The targets whose phase 1 detection reads ChArUco corners, and which
-#: therefore accept the detector options below.
+#: therefore accept the detector options in
+#: :mod:`pyCamSet.calibration_targets.charuco_parameters`.
 CHARUCO_BASED_TARGETS = {"Ccube", "ChArUco"}
 
 
-
-#: The ChArUco detector options a phase may set: what each one is called, how
-#: to read a typed value for it, and the prose describing it.  Kept as data
-#: rather than as a literal, because it is a table of settings, it is edited
-#: as a table, and as a literal it was half of this module.
-#:
-#: The prose is for whoever is asking -- a form's help text, a docstring, a
-#: command line's --help -- and not for one toolkit, which is why it lives
-#: here with the parameter rather than with the widgets.  ``value_type`` says
-#: what kind of value the option takes, not what control should collect it.
-CHARUCO_DETECTION_OPTION_METADATA: list[dict[str, Any]] = json.loads(
-    (Path(__file__).parent / "charuco_detection_options.json")
-    .read_text(encoding="utf-8")
-)
-
-def _parse_charuco_value(meta: dict[str, Any], raw_value: Any):
-    key = meta["key"]
-    parser = meta["parser_type"]
-    value = raw_value
-    if isinstance(value, str):
-        value = value.strip()
-    if value in (None, ""):
-        value = meta["default"]
-
-    if parser == "enum":
-        choices = list(meta.get("choices", []))
-        if value not in choices:
-            raise ValueError(f"{key} must be one of {choices}.")
-        return value
-
-    if parser in {"int", "positive_int", "int_range"}:
-        try:
-            out = int(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{key} must be an integer.") from exc
-        if parser == "positive_int" and out <= 0:
-            raise ValueError(f"{key} must be >= 1.")
-        if parser == "int_range":
-            min_value = int(meta.get("min_value", out))
-            max_value = int(meta.get("max_value", out))
-            if out < min_value or out > max_value:
-                raise ValueError(f"{key} must be between {min_value} and {max_value}.")
-        return out
-
-    if parser in {"float", "positive_float", "non_negative_float"}:
-        try:
-            out = float(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{key} must be a number.") from exc
-        if parser == "positive_float" and out <= 0:
-            raise ValueError(f"{key} must be > 0.")
-        if parser == "non_negative_float" and out < 0:
-            raise ValueError(f"{key} must be >= 0.")
-        return out
-
-    if parser == "optional_json_matrix_3x3":
-        if value in ("", None):
-            return None
-        try:
-            data = json.loads(value) if isinstance(value, str) else value
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{key} must be valid JSON.") from exc
-        if not isinstance(data, list) or len(data) != 3:
-            raise ValueError(f"{key} must be a 3x3 JSON array.")
-        for row in data:
-            if not isinstance(row, list) or len(row) != 3:
-                raise ValueError(f"{key} must be a 3x3 JSON array.")
-            for elem in row:
-                try:
-                    float(elem)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(f"{key} entries must be numeric.") from exc
-        return data
-
-    if parser == "optional_json_vector":
-        if value in ("", None):
-            return None
-        try:
-            data = json.loads(value) if isinstance(value, str) else value
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{key} must be valid JSON.") from exc
-        if not isinstance(data, list):
-            raise ValueError(f"{key} must be a JSON array.")
-        for elem in data:
-            if isinstance(elem, list):
-                for sub_elem in elem:
-                    try:
-                        float(sub_elem)
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError(f"{key} entries must be numeric.") from exc
-            else:
-                try:
-                    float(elem)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(f"{key} entries must be numeric.") from exc
-        return data
-
-    raise ValueError(f"Unsupported parser type {parser!r} for {key}.")
-
-
-def collect_charuco_detection_options(raw_options: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Validate and normalise ChArUco detector options from raw text values."""
-    parsed_by_key: dict[str, Any] = {}
-    for meta in CHARUCO_DETECTION_OPTION_METADATA:
-        key = meta["key"]
-        parsed_by_key[key] = _parse_charuco_value(meta, raw_options.get(key))
-
-    min_key = "DetectorParameters.adaptiveThreshWinSizeMin"
-    max_key = "DetectorParameters.adaptiveThreshWinSizeMax"
-    if parsed_by_key[max_key] < parsed_by_key[min_key]:
-        raise ValueError(f"{max_key} must be >= {min_key}.")
-
-    options: dict[str, dict[str, Any]] = {
-        "DetectorParameters": {},
-        "CharucoParameters": {},
-        "RefineParameters": {},
-    }
-    meta_by_key = {meta["key"]: meta for meta in CHARUCO_DETECTION_OPTION_METADATA}
-    for key, value in parsed_by_key.items():
-        group, name = key.split(".", 1)
-        if value is None and meta_by_key.get(key, {}).get("drop_if_none", False):
-            continue
-        options[group][name] = value
-    return options
-
-
-def build_target(
+def build_target( #somewhat concerned here that this makes adding future targets to workflows hard.
     target_type: str,
     n_points: int,
     length: float,

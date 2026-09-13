@@ -9,9 +9,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
-from pyCamSet.workflow.tuning.detector_parameters import (
+from pyCamSet.calibration_targets.charuco_parameters import (
+    by_key,
     coerce_value,
-    metadata_by_key,
 )
 from pyCamSet.workflow.tuning.worker import ParameterRowConfig
 
@@ -63,7 +63,7 @@ def suggest_for_row(trial: Any, row: ParameterRowConfig) -> Optional[Any]:
     """
     if not row.optimise:
         return None
-    entry = metadata_by_key().get(row.key)
+    entry = by_key().get(row.key)
     if entry is None:
         return None
     choices = [choice["value"] for choice in entry.get("choices", [])]

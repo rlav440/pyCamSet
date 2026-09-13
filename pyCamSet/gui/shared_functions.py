@@ -323,10 +323,12 @@ class CollapsibleSection(QWidget):
 
 
 def build_charuco_option_tooltip(meta: dict[str, Any]) -> str:
-    """Build canonical tooltip/info text from a ChArUco option metadata row."""
+    """Build canonical tooltip/info text from a ChArUco parameter row."""
+    from pyCamSet.calibration_targets.charuco_parameters import label_for
+
     return (
         f"{meta['concept']}\n\n"
-        f"Default: {meta['default']}\n"
+        f"Default: {label_for(meta, meta['default'])}\n"
         f"Range: {meta['range']}\n"
         f"Range source: {meta['range_source']}\n"
         f"Suggested value(s): {meta['suggested']}"

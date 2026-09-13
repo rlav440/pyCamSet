@@ -56,8 +56,8 @@ from pyCamSet.gui.shared_functions import (
     make_section_label,
     repopulate_dict_combo,
 )
-from pyCamSet.workflow.tuning.detector_parameters import (
-    CHARUCO_PARAMETER_METADATA,
+from pyCamSet.calibration_targets.charuco_parameters import (
+    searchable,
 )
 from pyCamSet.workflow.tuning.profiles import (
     CHARUCO_DETECTION_PROFILE_NAMES,
@@ -483,7 +483,7 @@ class OptimisationTab(QWidget):
         form_wrap.setLayout(form)
         v.addWidget(form_wrap)
         # Build one editable parameter row for each metadata entry.
-        for entry in CHARUCO_PARAMETER_METADATA:
+        for entry in searchable():
             row = BoundedSliderRow(entry)
             # Watch bound edits so manual changes can flip the selector to Custom.
             row.boundsChanged.connect(self._on_detection_profile_bounds_changed)
@@ -742,7 +742,7 @@ class OptimisationTab(QWidget):
 
     def _parameter_key_to_label_map(self) -> dict[str, str]:
         """Return a stable key->label mapping for detector parameter UI text."""
-        return {entry["key"]: entry.get("label", entry["key"]) for entry in CHARUCO_PARAMETER_METADATA}
+        return {entry["key"]: entry.get("label", entry["key"]) for entry in searchable()}
 
     def _on_detection_profile_changed(self, profile_name: str) -> None:
         # Ignore recursive signal traffic while profile bounds are being copied in.

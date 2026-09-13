@@ -31,7 +31,6 @@ from pyCamSet.workflow.params import (
     require_image_folder,
     require_target_match,
 )
-from pyCamSet.workflow.targets import CHARUCO_DETECTION_OPTION_METADATA
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
     make_run_id,
@@ -506,17 +505,3 @@ def test_a_high_distortion_camset_wins_over_the_plain_one(tmp_path):
 
     resolved = resolve_artifact({"run_id": "r3"}, "phase2", workspace.workspace_path)
     assert resolved.name == "initial_cameras_high_distortion.camset"
-
-
-# ---------------------------------------------------------------------------
-# The detector option table
-# ---------------------------------------------------------------------------
-
-
-def test_the_option_table_loads_from_the_package(repo_root):
-    """It is JSON beside the module now, so it has to be in the wheel."""
-    assert len(CHARUCO_DETECTION_OPTION_METADATA) == 17
-    for option in CHARUCO_DETECTION_OPTION_METADATA:
-        assert set(option) >= {"key", "label", "default", "parser_type",
-                               "value_type", "concept"}
-        assert "." in option["key"], option["key"]

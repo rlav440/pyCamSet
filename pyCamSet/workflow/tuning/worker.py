@@ -30,13 +30,12 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from pyCamSet.workflow.tuning.detector_parameters import (
-    CHARUCO_PARAMETER_METADATA,
+from pyCamSet.calibration_targets.charuco_parameters import (
     assemble_detection_options,
+    by_key,
     clamp_to_bounds,
-    coerce_value,
     default_fixed_settings,
-    metadata_by_key,
+    searchable,
     validate_all_rows,
 )
 from pyCamSet.workflow.targets import target_from_params
@@ -190,14 +189,14 @@ def build_effective_settings(
       value (coerced and clamped to absolute bounds);
     - otherwise use the row's fixed value (coerced and clamped).
     """
-    by_key = metadata_by_key()
+    known = by_key()
     out: dict[str, Any] = {}
     # Start from declared defaults so unspecified rows keep deterministic values.
-    for entry in CHARUCO_PARAMETER_METADATA:
+    for entry in searchable():
         out[entry["key"]] = entry["default"]
     sampled = sampled or {}
     for row in rows:
-        entry = by_key.get(row.key)
+        entry = known.get(row.key)
         if entry is None:
             continue
         if row.optimise and row.key in sampled:

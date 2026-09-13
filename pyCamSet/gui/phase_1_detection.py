@@ -80,11 +80,15 @@ from pyCamSet.workflow.params import (
     require_image_folder,
     require_marker_backend,
 )
+from pyCamSet.calibration_targets.charuco_parameters import (
+    choice_labels,
+    collect_detection_options,
+    label_for,
+    typeable,
+)
 from pyCamSet.workflow.targets import (
     CHARUCO_BASED_TARGETS as _CHARUCO_BASED_TARGETS,
-    CHARUCO_DETECTION_OPTION_METADATA,
     TARGET_CHOICES as _TARGET_CHOICES,
-    collect_charuco_detection_options,
 )
 from pyCamSet.workflow.workspace import (
     IMAGE_EXTS as _IMAGE_EXTS,
@@ -500,7 +504,7 @@ class Phase1Tab(QWidget):
         self._charuco_opts_section.addRow(charuco_note)
 
         active_priority = None
-        for meta in CHARUCO_DETECTION_OPTION_METADATA:
+        for meta in typeable():
             priority = meta["priority"]
             if priority != active_priority:
                 active_priority = priority
@@ -511,8 +515,8 @@ class Phase1Tab(QWidget):
             widget: QWidget
             if meta["value_type"] == "enum":
                 combo = QComboBox()
-                combo.addItems(list(meta.get("choices", [])))
-                combo.setCurrentText(str(meta["default"]))
+                combo.addItems(choice_labels(meta))
+                combo.setCurrentText(label_for(meta, meta["default"]))
                 combo.setFixedWidth(220)
                 widget = combo
             else:
@@ -680,7 +684,7 @@ class Phase1Tab(QWidget):
                 elif isinstance(widget, QLineEdit):
                     raw_charuco_values[key] = widget.text().strip()
             try:
-                charuco_detection_options = collect_charuco_detection_options(
+                charuco_detection_options = collect_detection_options(
                     raw_charuco_values)
             except ValueError as exc:
                 raise ParamError(str(exc)) from None

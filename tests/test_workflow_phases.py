@@ -18,7 +18,8 @@ import sys
 
 import pytest
 
-from pyCamSet.workflow import phase1, phase2
+from pyCamSet.workflow import phase1, phase2, phase3
+from pyCamSet.workflow.detections import DetectionFilter
 from pyCamSet.workflow.params import (
     ParamError,
     as_int,
@@ -30,9 +31,11 @@ from pyCamSet.workflow.params import (
     require_image_folder,
     require_target_match,
 )
+from pyCamSet.workflow.targets import CHARUCO_DETECTION_OPTION_METADATA
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
     make_run_id,
+    resolve_artifact,
     workspace_path_for,
 )
 
@@ -69,7 +72,8 @@ class RefuseQt:
 sys.meta_path.insert(0, RefuseQt())
 
 from pyCamSet.workflow import phase1, phase2, phase3, phase4  # noqa: F401
-from pyCamSet.workflow import diagnostics, logs, params, targets, workspace  # noqa: F401
+from pyCamSet.workflow import detections, diagnostics, logs, params  # noqa: F401
+from pyCamSet.workflow import lockbox_geometry, targets, workspace  # noqa: F401
 
 assert all(p.BACKEND_OK for p in (phase1, phase2, phase3, phase4)), (
     "a phase lost its backend when the GUI toolkit was taken away")
@@ -362,3 +366,157 @@ def test_a_phase_records_its_failure_rather_than_raising(tmp_path):
 def test_phase_2_refuses_a_workspace_it_has_not_been_given():
     with pytest.raises(RuntimeError, match="Workspace path is not set"):
         phase2.run({"f_loc": "/nowhere"}, WorkspaceManager(), lambda _line: None)
+
+
+# ---------------------------------------------------------------------------
+# Re-running a phase without some of its observations
+# ---------------------------------------------------------------------------
+
+
+class _FakeDetections:
+    """Records which filter it was asked for, the way a detection would be."""
+
+    def __init__(self):
+        self.deleted = None
+
+    def delete_row(self, **kwargs):
+        self.deleted = kwargs
+        return self
+
+
+def test_a_filter_drops_images_across_every_camera():
+    prune = DetectionFilter(images=[3, 7, 11])
+    detections = _FakeDetections()
+
+    prune.apply(detections)
+
+    assert detections.deleted == {"global_im_num": [3, 7, 11]}
+    assert prune.count == 3
+
+
+def test_a_filter_can_drop_an_image_from_one_camera_only():
+    """Phase 2's threshold is per camera: one camera's bad view of an image
+    should not cost every other camera that image."""
+    prune = DetectionFilter(camera_images={"cam0": [1, 2], "cam1": [5]})
+    detections = _FakeDetections()
+
+    prune.apply(detections)
+
+    assert detections.deleted == {"cam_im_num": {"cam0": [1, 2], "cam1": [5]}}
+    assert prune.count == 3
+
+
+def test_a_filter_says_what_it_did_while_it_does_it():
+    lines: list[str] = []
+    DetectionFilter(images=[4]).apply(_FakeDetections(), lines.append)
+
+    assert any("global_im_num" in line and "1 image(s)" in line for line in lines)
+
+
+@pytest.mark.parametrize("phase", [phase2, phase3])
+def test_a_rerun_repeats_the_source_run_s_settings(phase, tmp_path, monkeypatch):
+    """A re-run differs from its source only by what was pruned.
+
+    Both re-runs used to be their own copy of the phase; this asserts the
+    thing that replaced them -- that ``rerun`` hands the runner the source's
+    own parameters and its own inputs, and links the new run back to it.
+    """
+    workspace = WorkspaceManager(workspace_path_for(tmp_path))
+    workspace.save_run("phase1", "p1", {"phase": "phase1"})
+    workspace.save_run("phase2", "p2",
+                       {"phase": "phase2", "inputs": {"phase1_run_id": "p1"}})
+    source = {
+        "run_id": "src",
+        "phase": phase.__name__.rsplit(".", 1)[-1],
+        "params": {"f_loc": str(tmp_path), "n_points": 11, "length": 7.5},
+        "inputs": {"phase1_run_id": "p1", "phase2_run_id": "p2"},
+    }
+
+    seen = {}
+
+    def fake_run(params, ws, log=None, **kwargs):
+        seen.update(params=params, kwargs=kwargs)
+        return {"run_id": "new"}
+
+    monkeypatch.setattr(phase, "run", fake_run)
+    prune = DetectionFilter(images=[2], record={"n_removed": 1})
+
+    phase.rerun(source, workspace, lambda _line: None, prune)
+
+    assert seen["params"] == source["params"]
+    assert seen["kwargs"]["prune"] is prune
+    assert seen["kwargs"]["source_run"] is source
+    assert seen["kwargs"]["phase1_run"]["run_id"] == "p1"
+    if phase is phase3:
+        assert seen["kwargs"]["phase2_run"]["run_id"] == "p2"
+
+
+def test_a_rerun_falls_back_to_the_latest_input_run(tmp_path):
+    """An old run whose linked input is gone should still find inputs."""
+    workspace = WorkspaceManager(workspace_path_for(tmp_path))
+    workspace.save_run("phase1", "older", {"created_at": "2026-01-01T00:00:00"})
+    workspace.save_run("phase1", "newer", {"created_at": "2026-06-01T00:00:00"})
+
+    linked = workspace.linked_run("phase1", {"inputs": {"phase1_run_id": "gone"}})
+    assert linked["run_id"] == "newer"
+
+    exact = workspace.linked_run("phase1", {"inputs": {"phase1_run_id": "older"}})
+    assert exact["run_id"] == "older"
+
+    assert workspace.linked_run("phase4", {"inputs": {}}) is None
+
+
+# ---------------------------------------------------------------------------
+# Resolving a run's output
+# ---------------------------------------------------------------------------
+
+
+def test_an_artifact_resolves_from_the_run_s_own_record(tmp_path):
+    workspace = WorkspaceManager(workspace_path_for(tmp_path))
+    ws_path = workspace.workspace_path
+    directory = workspace.run_dir("phase3", "r1")
+    recorded = directory / "somewhere_else.camset"
+    recorded.write_text("")
+
+    run = {"run_id": "r1", "artifacts": {"optimised_camset": str(recorded)}}
+    assert resolve_artifact(run, "phase3", ws_path) == recorded
+
+
+def test_an_artifact_resolves_by_convention_when_the_record_is_stale(tmp_path):
+    """A run whose recorded path moved with the folder still resolves, which
+    is why the conventional filename is tried after the recorded one."""
+    workspace = WorkspaceManager(workspace_path_for(tmp_path))
+    ws_path = workspace.workspace_path
+    directory = workspace.run_dir("phase2", "r2")
+    (directory / "initial_cameras.camset").write_text("")
+
+    run = {"run_id": "r2", "artifacts": {"initial_camset": "/gone/away.camset"}}
+    assert resolve_artifact(run, "phase2", ws_path).name == "initial_cameras.camset"
+
+    assert resolve_artifact({"run_id": "nothing"}, "phase2", ws_path) is None
+
+
+def test_a_high_distortion_camset_wins_over_the_plain_one(tmp_path):
+    """Phase 2 writes one name or the other, never both -- but if both are
+    there the refined one is the run's output."""
+    workspace = WorkspaceManager(workspace_path_for(tmp_path))
+    directory = workspace.run_dir("phase2", "r3")
+    (directory / "initial_cameras.camset").write_text("")
+    (directory / "initial_cameras_high_distortion.camset").write_text("")
+
+    resolved = resolve_artifact({"run_id": "r3"}, "phase2", workspace.workspace_path)
+    assert resolved.name == "initial_cameras_high_distortion.camset"
+
+
+# ---------------------------------------------------------------------------
+# The detector option table
+# ---------------------------------------------------------------------------
+
+
+def test_the_option_table_loads_from_the_package(repo_root):
+    """It is JSON beside the module now, so it has to be in the wheel."""
+    assert len(CHARUCO_DETECTION_OPTION_METADATA) == 17
+    for option in CHARUCO_DETECTION_OPTION_METADATA:
+        assert set(option) >= {"key", "label", "default", "parser_type",
+                               "widget_type", "concept"}
+        assert "." in option["key"], option["key"]

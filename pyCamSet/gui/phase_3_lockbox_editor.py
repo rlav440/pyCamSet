@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyCamSet.gui.lockbox_geometry import (
+from pyCamSet.workflow.lockbox_geometry import (
     CameraEditRecord,
     PlaneGroup,
     build_lockbox_metadata,

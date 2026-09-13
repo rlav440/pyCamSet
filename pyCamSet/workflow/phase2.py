@@ -13,7 +13,9 @@ from typing import Optional
 import numpy as np
 
 from pyCamSet.workflow.detections import (
+    DetectionFilter,
     extract_detection_and_cam_res,
+    save_detections,
     selected_camera_folders,
     staged_camera_root,
 )
@@ -25,7 +27,7 @@ from pyCamSet.workflow.workspace import (
     as_io_path,
     make_run_id,
     path_exists,
-    resolve_phase1_pickle_artifact,
+    resolve_artifact,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -50,7 +52,9 @@ def run(params: dict,
         workspace: WorkspaceManager,
         log: LogFn = discard,
         phase1_run: Optional[dict] = None,
-        override_pickle: Optional[Path] = None) -> dict:
+        override_pickle: Optional[Path] = None,
+        prune: Optional[DetectionFilter] = None,
+        source_run: Optional[dict] = None) -> dict:
     """
     Calibrate each camera's intrinsics from phase 1's detections.
 
@@ -59,6 +63,8 @@ def run(params: dict,
     :param log: what to call with each line of output
     :param phase1_run: the run supplying the detections, if there is one
     :param override_pickle: a detections file to read instead of the run's
+    :param prune: observations to leave out; see :func:`rerun`
+    :param source_run: the phase 2 run this one is a re-run of
     :return: the run's metadata record, saved to the workspace
     """
     ws_path = workspace.workspace_path
@@ -73,11 +79,12 @@ def run(params: dict,
     diagnostics: dict = {}
     error: Optional[str] = None
     camset_path: Optional[Path] = None
+    pruned_path: Optional[Path] = None
 
     with captured_output(log):
         try:
-            camset_path, diagnostics = _calibrate(
-                params, run_dir, detections_path, log)
+            camset_path, diagnostics, pruned_path = _calibrate(
+                params, run_dir, detections_path, prune, log)
         except Exception as exc:
             error = str(exc)
             log(f"ERROR: {error}")
@@ -90,6 +97,9 @@ def run(params: dict,
     }
     if camset_path is not None:
         artifacts["initial_camset"] = str(camset_path)
+    if pruned_path is not None:
+        artifacts["filtered_detection_pickle"] = str(pruned_path)
+        artifacts["detection_source_override"] = str(pruned_path)
 
     metadata = {
         "run_id": run_id,
@@ -99,13 +109,44 @@ def run(params: dict,
         "error": error,
         "inputs": {
             "phase1_run_id": phase1_run.get("run_id") if phase1_run else None,
+            "phase2_run_id": source_run.get("run_id") if source_run else None,
         },
         "artifacts": artifacts,
     }
+    if prune is not None and prune.record:
+        metadata["threshold_pruning"] = prune.record
+
     workspace.save_run("phase2", run_id, metadata)
     if error is None:
         log(f"Run saved: {run_id}")
     return metadata
+
+
+def rerun(source_run: dict,
+          workspace: WorkspaceManager,
+          log: LogFn = discard,
+          prune: Optional[DetectionFilter] = None) -> dict:
+    """
+    Run phase 2 again on *source_run*'s settings, minus what *prune* drops.
+
+    The settings and the detections both come from the run being repeated, so
+    the new run differs from it only by what was left out.  The source is not
+    touched.
+
+    :param source_run: the phase 2 run to repeat
+    :param workspace: the workspace holding it
+    :param log: what to call with each line of output
+    :param prune: observations to leave out
+    :return: the new run's metadata record
+    """
+    return run(
+        dict(source_run.get("params") or {}),
+        workspace,
+        log,
+        phase1_run=workspace.linked_run("phase1", source_run),
+        prune=prune,
+        source_run=source_run,
+    )
 
 
 def _detections_path(phase1_run: Optional[dict],
@@ -120,17 +161,28 @@ def _detections_path(phase1_run: Optional[dict],
         log(f"Override path missing: {override_pickle} "
             f"(falling back to Phase 1 source)")
     if phase1_run is not None:
-        return resolve_phase1_pickle_artifact(phase1_run, ws_path)
+        return resolve_artifact(phase1_run, "phase1", ws_path)
     return None
 
 
 def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
-               log: LogFn) -> tuple[Path, dict]:
+               prune: Optional[DetectionFilter],
+               log: LogFn) -> tuple[Path, dict, Optional[Path]]:
     """Run the initial calibration and compute its diagnostics."""
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet calibration modules are not importable.")
 
     target = target_from_params(params)
+
+    if prune is not None:
+        # Nothing re-detects here.  Detecting again would put back exactly the
+        # observations the prune was asked to leave out, so a pruned run reads
+        # the saved detections and nothing else -- which also means it needs
+        # no images, and no staging folder to point at them.
+        camset_path, diagnostics, pruned_path = _calibrate_pruned(
+            params, run_dir, detections_path, prune, target, log)
+        return camset_path, diagnostics, pruned_path
+
     f_loc = Path(params["f_loc"])
     selected = list(params.get("selected_cameras") or [])
 
@@ -187,7 +239,47 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
 
     diagnostics = diagnostics_of(detections, target, cams)
     log("Diagnostics computed (D2.1-D2.7).")
-    return camset_path, diagnostics
+    return camset_path, diagnostics, None
+
+
+def _calibrate_pruned(params: dict, run_dir: Path,
+                      detections_path: Optional[Path],
+                      prune: DetectionFilter, target,
+                      log: LogFn) -> tuple[Path, dict, Path]:
+    """Calibrate from saved detections with some observations left out."""
+    if detections_path is None or not path_exists(detections_path):
+        raise RuntimeError(
+            "Could not resolve Phase 1 detected_datapoints.pickle for the "
+            "source run.")
+
+    log(f"Loading Phase 1 detections: {detections_path}")
+    detections, cam_res = extract_detection_and_cam_res(
+        load_pickle(as_io_path(detections_path)))
+
+    filtered = prune.apply(detections, log)
+    pruned_path = save_detections(
+        run_dir / "filtered_detected_datapoints.pickle", filtered, cam_res)
+    log(f"Saved filtered detections: {pruned_path}")
+
+    log("Running Phase 2 initial calibration on filtered detections…")
+    cams, _, _ = run_initial_calibration(
+        detection=filtered,
+        calibration_target=target,
+        cam_res=cam_res,
+        save=False,
+        fixed_params=params.get("fixed_params"),
+        return_poses_and_costs=True,
+        min_detections_per_board=int(
+            params.get("min_detections_per_board", 12)),
+    )
+    log("Phase 2 calibration completed.")
+
+    camset_path = run_dir / "initial_cameras.camset"
+    cams.save(camset_path)
+
+    diagnostics = diagnostics_of(filtered, target, cams)
+    log("Diagnostics computed (D2.1-D2.7).")
+    return camset_path, diagnostics, pruned_path
 
 
 def _load_or_detect(params: dict, target, root: Path,

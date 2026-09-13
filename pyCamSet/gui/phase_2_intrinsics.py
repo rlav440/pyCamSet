@@ -60,8 +60,7 @@ from pyCamSet.gui.shared_functions import (
     show_tab,
 )
 from pyCamSet.workflow import phase2 as phase2_workflow
-from pyCamSet.workflow.detections import extract_detection_and_cam_res
-from pyCamSet.workflow.logs import captured_output
+from pyCamSet.workflow.detections import DetectionFilter
 from pyCamSet.workflow.params import (
     ParamError,
     as_json_object,
@@ -73,29 +72,21 @@ from pyCamSet.workflow.params import (
 )
 from pyCamSet.workflow.targets import (
     TARGET_CHOICES as _TARGET_CHOICES,
-    target_from_params,
     target_params_of_run,
 )
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
     as_io_path,
-    ensure_directory,
-    make_run_id,
     path_exists,
-    resolve_phase1_pickle_artifact,
-    resolve_phase2_camset_artifact,
+    resolve_artifact,
 )
 
-# The diagnostics tab builds a phase 2 run of its own from pruned detections,
-# and loads a run's camset to draw undistortion from, so it reaches for the
-# backend directly.  The flag is the phase runner's: they fail together.
+# The diagnostics tab loads a run's camset to draw undistortion from.  The
+# flag is the phase runner's: the tab and the phase fail together.
 try:
-    from pyCamSet.calibration.camera_calibrator import run_initial_calibration
-    from pyCamSet.utils.saving import load_CameraSet, load_pickle
+    from pyCamSet.utils.saving import load_CameraSet
 except ImportError:
-    run_initial_calibration = None
     load_CameraSet = None
-    load_pickle = None
 
 _PYCAMSET_OK = phase2_workflow.BACKEND_OK
 
@@ -667,7 +658,7 @@ class Phase2Tab(QWidget):
             self._phase1_lbl.setText("Detection source: auto (no Phase 1 run found)")
             return
 
-        det = resolve_phase1_pickle_artifact(run, ws)
+        det = resolve_artifact(run, "phase1", ws)
         rid = run.get("run_id", "unknown")
         src = str(det) if det is not None else "no pickle (fallback detect)"
         self._phase1_lbl.setText(f"Detection source: run {rid} -> {src}")
@@ -769,7 +760,7 @@ class Phase2Tab(QWidget):
         f_loc = (chosen.get("params") or {}).get("f_loc")
         run_id = chosen.get("run_id")
         ws = self._workspace_mgr.workspace_path
-        camset_resolved = resolve_phase2_camset_artifact(chosen, ws) if ws is not None else None
+        camset_resolved = resolve_artifact(chosen, "phase2", ws) if ws is not None else None
         camset_path = str(camset_resolved) if camset_resolved is not None else (chosen.get("artifacts") or {}).get("initial_camset")
 
         self._workspace_mgr.write_handoff(
@@ -1203,159 +1194,65 @@ class Phase2DiagnosticsTab(QWidget):
         cam_im_dict: dict[str, list[int]],
         on_done_cb,
     ) -> None:
-        """Run Phase 2 with camera-specific filtered detections in a background thread."""
-        ws = self._workspace_mgr.workspace_path
-        if ws is None:
+        """Repeat the selected run without its worst (camera, image) pairs."""
+        if self._workspace_mgr.workspace_path is None:
             QMessageBox.critical(self, "Workspace", "No active workspace.")
             on_done_cb()
             return
 
-        def work_fn(emit) -> dict:
-            try:
-                import dill as _pkl
-            except ImportError:
-                import pickle as _pkl
+        prune = DetectionFilter(
+            camera_images=cam_im_dict,
+            record={
+                "source_phase2_run_id": source_run.get("run_id"),
+                "phase1_run_id": (source_run.get("inputs") or {}).get("phase1_run_id"),
+                "threshold_px": threshold,
+                "diagnostic_key": "D2.6_per_view_reprojection",
+                "removed_pairs": {c: list(v) for c, v in cam_im_dict.items()},
+                "n_removed_observations": len(pairs),
+                "removal_mode": "camera-specific via cam_im_num",
+            },
+        )
+        workspace_mgr = self._workspace_mgr
 
-            run_id = make_run_id()
-            run_dir = ws / "phase2_runs" / run_id
-            ensure_directory(run_dir)
-            diagnostics: dict = {}
-            error_msg: Optional[str] = None
-
-            try:
-                # ── Resolve Phase 1 detection pickle ───────────────────
-                source_pickle_str = (source_run.get("artifacts") or {}).get("phase1_detection_pickle")
-                if source_pickle_str and path_exists(source_pickle_str):
-                    source_pickle = Path(source_pickle_str)
-                else:
-                    p1_runs = self._workspace_mgr.load_runs("phase1")
-                    p1_run_id = (source_run.get("inputs") or {}).get("phase1_run_id")
-                    p1_run = next((r for r in p1_runs if r.get("run_id") == p1_run_id), None)
-                    if p1_run is None and p1_runs:
-                        p1_run = p1_runs[-1]
-                    source_pickle = resolve_phase1_pickle_artifact(p1_run, ws) if p1_run else None
-
-                if source_pickle is None or not path_exists(source_pickle):
-                    raise RuntimeError(
-                        "Could not resolve Phase 1 detected_datapoints.pickle for the source run."
-                    )
-
-                emit(f"Loading Phase 1 detections: {source_pickle}")
-                payload = load_pickle(as_io_path(source_pickle))
-                detections, cam_res = extract_detection_and_cam_res(payload)
-
-                # ── Filter detections (per-camera) ──────────────────────
-                emit(f"Removing {len(pairs)} (camera, image) pair(s) via cam_im_num filter…")
-                filtered_det = detections.delete_row(cam_im_num=cam_im_dict)
-                emit("Filtering complete.")
-
-                # ── Save filtered detection pickle ──────────────────────
-                filt_pickle_path = run_dir / "filtered_detected_datapoints.pickle"
-                with open(as_io_path(filt_pickle_path), "wb") as fh:
-                    _pkl.dump((filtered_det, cam_res), fh)
-                emit(f"Saved filtered detections: {filt_pickle_path}")
-
-                # ── Rebuild target and run Phase 2 ──────────────────────
-                src_params = source_run.get("params") or {}
-                target = target_from_params(src_params)
-                emit("Running Phase 2 initial calibration on filtered detections…")
-                with captured_output(emit):
-                    cams, _, _ = run_initial_calibration(
-                        detection=filtered_det,
-                        calibration_target=target,
-                        cam_res=cam_res,
-                        save=False,
-                        fixed_params=src_params.get("fixed_params"),
-                        return_poses_and_costs=True,
-                        min_detections_per_board=int(
-                            src_params.get("min_detections_per_board", 12)),
-                    )
-                emit("Phase 2 calibration completed.")
-
-                camset_path = run_dir / "initial_cameras.camset"
-                cams.save(camset_path)
-
-                diagnostics = phase2_workflow.diagnostics_of(
-                    filtered_det, target, cams)
-
-                # ── Build and save metadata ─────────────────────────────
-                src_params2 = source_run.get("params") or {}
-                metadata = {
-                    "run_id": run_id,
-                    "phase": "phase2",
-                    "params": dict(src_params2),
-                    "diagnostics": diagnostics,
-                    "error": None,
-                    "inputs": {
-                        "phase1_run_id": (source_run.get("inputs") or {}).get("phase1_run_id"),
-                        "phase2_run_id": source_run.get("run_id"),
-                    },
-                    "artifacts": {
-                        "initial_camset": str(camset_path),
-                        "phase1_detection_pickle": str(source_pickle),
-                        "filtered_detection_pickle": str(filt_pickle_path),
-                        "detection_source_override": str(filt_pickle_path),
-                    },
-                    "threshold_pruning": {
-                        "source_phase2_run_id": source_run.get("run_id"),
-                        "phase1_run_id": (source_run.get("inputs") or {}).get("phase1_run_id"),
-                        "threshold_px": threshold,
-                        "diagnostic_key": "D2.6_per_view_reprojection",
-                        "removed_pairs": {c: list(v) for c, v in cam_im_dict.items()},
-                        "n_removed_observations": len(pairs),
-                        "removal_mode": "camera-specific via cam_im_num",
-                    },
-                }
-                self._workspace_mgr.save_run("phase2", run_id, metadata)
-                emit(f"New Phase 2 run saved: {run_id}")
-                return metadata
-
-            except Exception as exc:
-                error_msg = str(exc)
-                emit(f"ERROR: {error_msg}")
-                metadata = {
-                    "run_id": run_id,
-                    "phase": "phase2",
-                    "diagnostics": diagnostics,
-                    "error": error_msg,
-                    "inputs": {
-                        "phase2_run_id": source_run.get("run_id"),
-                        "phase1_run_id": (source_run.get("inputs") or {}).get("phase1_run_id"),
-                    },
-                }
-                self._workspace_mgr.save_run("phase2", run_id, metadata)
-                return metadata
+        def work_fn(log: Callable[[str], None]) -> dict:
+            return phase2_workflow.rerun(source_run, workspace_mgr, log, prune)
 
         self._threshold_worker = PhaseWorker(work_fn, parent=self)
-
-        # Connect line_ready to the Phase 2 settings tab terminal so output
-        # is visible when the user navigates back to that tab.
-        for _i in range(self._notebook.count()):
-            if self._notebook.tabText(_i) == TAB_PHASE2:
-                _settings_tab = self._notebook.widget(_i)
-                if hasattr(_settings_tab, "_terminal"):
-                    self._threshold_worker.line_ready.connect(_settings_tab._terminal.append_line)
-                break
+        self._send_output_to_settings_tab(self._threshold_worker)
 
         def _on_finished(metadata: dict) -> None:
             on_done_cb()
             if metadata.get("error"):
                 QMessageBox.critical(
                     self, "Phase 2 failed",
-                    f"New run encountered an error:\n{metadata['error']}"
-                )
+                    f"New run encountered an error:\n{metadata['error']}")
             else:
-                new_id = metadata.get("run_id", "?")
-                n_rem = (metadata.get("threshold_pruning") or {}).get("n_removed_observations", len(pairs))
+                removed = (metadata.get("threshold_pruning") or {}).get(
+                    "n_removed_observations", len(pairs))
                 QMessageBox.information(
                     self, "New Phase 2 run created",
-                    f"Run ID: {new_id}\n"
-                    f"Removed {n_rem} (camera, image) pair(s) with RPE > {threshold:.4f} px."
-                )
+                    f"Run ID: {metadata.get('run_id', '?')}\n"
+                    f"Removed {removed} (camera, image) pair(s) with "
+                    f"RPE > {threshold:.4f} px.")
             self.refresh()
 
         self._threshold_worker.finished.connect(_on_finished)
         self._threshold_worker.start()
+
+    def _send_output_to_settings_tab(self, worker: PhaseWorker) -> None:
+        """Write the worker's output to the settings tab's terminal.
+
+        The run is started from the diagnostics tab, which has no terminal of
+        its own, so its output would otherwise go nowhere someone can read it.
+        """
+        for index in range(self._notebook.count()):
+            if self._notebook.tabText(index) != TAB_PHASE2:
+                continue
+            settings_tab = self._notebook.widget(index)
+            terminal = getattr(settings_tab, "_terminal", None)
+            if terminal is not None:
+                worker.line_ready.connect(terminal.append_line)
+            return
 
     def _load_camset_cached(self, camset_path: Path) -> tuple[Optional[object], Optional[str], Optional[str]]:
         key = str(camset_path)
@@ -1405,7 +1302,7 @@ class Phase2DiagnosticsTab(QWidget):
 
         run = runs[-1]
         ws = self._workspace_mgr.workspace_path
-        camset_resolved = resolve_phase2_camset_artifact(run, ws) if ws is not None else None
+        camset_resolved = resolve_artifact(run, "phase2", ws) if ws is not None else None
         if not camset_resolved:
             self._distortion_layout.addWidget(QLabel("No camset artifact found for selected run."))
             return
@@ -1510,7 +1407,7 @@ class Phase2DiagnosticsTab(QWidget):
         f_loc = (chosen.get("params") or {}).get("f_loc")
         run_id = chosen.get("run_id")
         ws = self._workspace_mgr.workspace_path
-        camset_resolved = resolve_phase2_camset_artifact(chosen, ws) if ws is not None else None
+        camset_resolved = resolve_artifact(chosen, "phase2", ws) if ws is not None else None
         camset_path = str(camset_resolved) if camset_resolved is not None else (chosen.get("artifacts") or {}).get("initial_camset")
         self._workspace_mgr.write_handoff(
             {

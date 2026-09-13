@@ -61,7 +61,7 @@ from pyCamSet.workflow.params import (
 )
 from pyCamSet.workflow.workspace import (
     path_exists,
-    resolve_phase3_camset_artifact,
+    resolve_artifact,
 )
 from pyCamSet.gui.assess_calibration import (
     launch_visualise_calibration_for_run,
@@ -444,7 +444,7 @@ class Phase4Tab(QWidget):
 
         rid = run.get("run_id", "unknown")
         ws = self._workspace_mgr.workspace_path
-        resolved = resolve_phase3_camset_artifact(run, ws) if ws is not None else None
+        resolved = resolve_artifact(run, "phase3", ws) if ws is not None else None
         p = str(resolved) if resolved is not None else (run.get("artifacts") or {}).get("optimised_camset")
         self._source_lbl.setText(f"Source: run {rid} -> {p or 'missing camset artifact'}")
 
@@ -496,7 +496,7 @@ class Phase4Tab(QWidget):
         ws = self._workspace_mgr.workspace_path
         if ws is None:
             return None
-        return resolve_phase3_camset_artifact(phase3_run, ws)
+        return resolve_artifact(phase3_run, "phase3", ws)
 
     def _run_phase4(self) -> None:
         params = self._collect_params()

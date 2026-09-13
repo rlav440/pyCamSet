@@ -39,7 +39,6 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.workflow import phase3 as phase3_workflow
-from pyCamSet.workflow.diagnostics import observation_residual_xy
 from pyCamSet.workflow.params import (
     ParamError,
     as_int,
@@ -76,25 +75,15 @@ from pyCamSet.gui.shared_functions import (
     render_predecessor_chain_section,
     show_tab,
 )
-from pyCamSet.workflow.detections import (
-    extract_detection,
-)
-from pyCamSet.workflow.logs import (
-    captured_output,
-    non_interactive_plotting,
-)
+from pyCamSet.workflow.detections import DetectionFilter
 from pyCamSet.workflow.targets import (
     build_target,
     target_params_of_run,
 )
 from pyCamSet.workflow.workspace import (
     as_io_path,
-    ensure_directory,
-    make_run_id,
     path_exists,
-    resolve_phase1_pickle_artifact,
-    resolve_phase2_camset_artifact,
-    resolve_phase3_camset_artifact,
+    resolve_artifact,
 )
 from pyCamSet.gui.assess_calibration import (
     launch_visualise_calibration_for_run,
@@ -107,21 +96,13 @@ from pyCamSet.gui.phase_3_lockbox_editor import Phase3LockboxEditor
 
 _LOG = logging.getLogger(__name__)
 
-# The lockbox editor loads camsets of its own, and the diagnostics tab builds
-# a phase 3 run from pruned detections, so both reach for the backend here.
-# The names come from the phase runner rather than from a second guard: they
-# are the same symbols, and they should go missing together.
-from pyCamSet.workflow.phase3 import (  # noqa: E402
-    CameraLockboxConfig,
-    TemplateBundleHandler,
-    run_bundle_adjustment_with_stats,
-)
-
+# The lockbox controls load camsets to check their camera names against the
+# active one.  The flag is the phase runner's: the tab and the phase fail
+# together, and nothing here reaches for the optimisation backend any more.
 try:
-    from pyCamSet.utils.saving import load_CameraSet, load_pickle
+    from pyCamSet.utils.saving import load_CameraSet
 except ImportError:
     load_CameraSet = None
-    load_pickle = None
 
 _PYCAMSET_OK = phase3_workflow.BACKEND_OK
 
@@ -662,7 +643,7 @@ class Phase3Tab(QWidget):
         active_names: list[str] = []
         phase2_run = self._load_phase2_run()
         if phase2_run is not None:
-            camset_path = resolve_phase2_camset_artifact(phase2_run, self._workspace_mgr.workspace_path)
+            camset_path = resolve_artifact(phase2_run, "phase2", self._workspace_mgr.workspace_path)
             if camset_path is not None and path_exists(str(camset_path)):
                 try:
                     active_names = list(load_CameraSet(as_io_path(str(camset_path))).get_names())
@@ -959,7 +940,7 @@ class Phase3Tab(QWidget):
         rid = run.get("run_id", "unknown")
         phase1_id = (run.get("inputs") or {}).get("phase1_run_id", "?")
         ws = self._workspace_mgr.workspace_path
-        resolved = resolve_phase2_camset_artifact(run, ws) if ws is not None else None
+        resolved = resolve_artifact(run, "phase2", ws) if ws is not None else None
         p = str(resolved) if resolved is not None else (run.get("artifacts") or {}).get("initial_camset")
         mode = "selected" if self._preferred_phase2_run_id else "auto"
         self._src_lbl.setText(f"Inputs: {mode} Phase 2 {rid} + linked Phase 1 {phase1_id} -> {p or 'missing camset artifact'}")
@@ -1113,7 +1094,7 @@ class Phase3Tab(QWidget):
         f_loc = (chosen.get("params") or {}).get("f_loc")
         run_id = chosen.get("run_id")
         ws = self._workspace_mgr.workspace_path
-        camset_resolved = resolve_phase3_camset_artifact(chosen, ws) if ws is not None else None
+        camset_resolved = resolve_artifact(chosen, "phase3", ws) if ws is not None else None
         camset_path = str(camset_resolved) if camset_resolved is not None else (chosen.get("artifacts") or {}).get("optimised_camset")
 
         self._workspace_mgr.write_handoff(
@@ -1334,7 +1315,7 @@ class Phase3DiagnosticsTab(QWidget):
                 f_loc = (chosen.get("params") or {}).get("f_loc")
                 run_id = chosen.get("run_id")
                 ws = self._workspace_mgr.workspace_path
-                camset_resolved = resolve_phase3_camset_artifact(chosen, ws) if ws is not None else None
+                camset_resolved = resolve_artifact(chosen, "phase3", ws) if ws is not None else None
                 camset_path = str(camset_resolved) if camset_resolved is not None else (chosen.get("artifacts") or {}).get("optimised_camset")
                 if f_loc and hasattr(phase4_tab, "set_image_folder"):
                     phase4_tab.set_image_folder(str(f_loc))
@@ -1629,294 +1610,67 @@ class Phase3DiagnosticsTab(QWidget):
         image_indices: list[int],
         on_done_cb,
     ) -> None:
-        """Run Phase 3 with globally filtered detections (by image index) in a background thread."""
-        ws = self._workspace_mgr.workspace_path
-        if ws is None:
+        """Solve the selected run again without its worst images."""
+        if self._workspace_mgr.workspace_path is None:
             QMessageBox.critical(self, "Workspace", "No active workspace.")
             on_done_cb()
             return
 
-        def work_fn(emit) -> dict:
-            try:
-                import dill as _pkl
-            except ImportError:
-                import pickle as _pkl
+        inputs = source_run.get("inputs") or {}
+        prune = DetectionFilter(
+            images=image_indices,
+            record={
+                "source_phase3_run_id": source_run.get("run_id"),
+                "phase2_run_id": inputs.get("phase2_run_id"),
+                "phase1_run_id": inputs.get("phase1_run_id"),
+                "user_threshold_px": threshold,
+                "mad_threshold_px": mad_threshold,
+                "removed_global_image_indices": image_indices,
+                "n_removed": len(image_indices),
+                "removal_mode": "global via global_im_num",
+            },
+        )
+        workspace_mgr = self._workspace_mgr
 
-            run_id = make_run_id()
-            run_dir = ws / "phase3_runs" / run_id
-            ensure_directory(run_dir)
-            diagnostics: dict = {}
-
-            try:
-                src_artifacts = source_run.get("artifacts") or {}
-                src_inputs = source_run.get("inputs") or {}
-                src_params = source_run.get("params") or {}
-
-                # ── Resolve Phase 1 detection pickle ───────────────────
-                p1_pickle_str = src_artifacts.get("phase1_detection_pickle_used")
-                if p1_pickle_str and path_exists(p1_pickle_str):
-                    p1_pickle = Path(p1_pickle_str)
-                else:
-                    p1_runs = self._workspace_mgr.load_runs("phase1")
-                    p1_run_id = src_inputs.get("phase1_run_id")
-                    p1_run = next((r for r in p1_runs if r.get("run_id") == p1_run_id), None)
-                    if p1_run is None and p1_runs:
-                        p1_run = p1_runs[-1]
-                    p1_pickle = resolve_phase1_pickle_artifact(p1_run, ws) if p1_run else None
-
-                if p1_pickle is None or not path_exists(p1_pickle):
-                    raise RuntimeError("Could not resolve Phase 1 detected_datapoints.pickle.")
-
-                # ── Resolve Phase 2 initial camset ─────────────────────
-                camset_path_str = src_artifacts.get("phase2_initial_camset_used")
-                if not camset_path_str or not path_exists(camset_path_str):
-                    p2_run_id = src_inputs.get("phase2_run_id")
-                    p2_runs = self._workspace_mgr.load_runs("phase2")
-                    p2_run = next((r for r in p2_runs if r.get("run_id") == p2_run_id), None)
-                    if p2_run is None and p2_runs:
-                        p2_run = p2_runs[-1]
-                    if p2_run:
-                        resolved_camset = resolve_phase2_camset_artifact(p2_run, ws)
-                        camset_path_str = str(resolved_camset) if resolved_camset is not None else None
-
-                if not camset_path_str or not path_exists(camset_path_str):
-                    raise RuntimeError("Could not resolve Phase 2 initial camset.")
-
-                camset_path = Path(camset_path_str)
-
-                emit(f"Loading Phase 1 detections: {p1_pickle}")
-                payload = load_pickle(as_io_path(p1_pickle))
-                detections = extract_detection(payload)
-                if detections is None:
-                    raise RuntimeError("Could not extract TargetDetection from Phase 1 pickle.")
-
-                # ── Filter detections (global by image index) ───────────
-                emit(f"Removing {len(image_indices)} image(s) via global_im_num filter…")
-                filtered_det = detections.delete_row(global_im_num=image_indices)
-                emit("Filtering complete.")
-
-                # ── Save filtered detection pickle ──────────────────────
-                filt_pickle_path = run_dir / "filtered_detected_datapoints.pickle"
-                with open(as_io_path(filt_pickle_path), "wb") as fh:
-                    _pkl.dump(filtered_det, fh)
-                emit(f"Saved filtered detections: {filt_pickle_path}")
-
-                # ── Load camset and run Phase 3 ─────────────────────────
-                emit(f"Loading Phase 2 camset: {camset_path}")
-                cams = load_CameraSet(as_io_path(camset_path))
-                target = build_target(
-                    src_params.get("target_type", "Ccube"),
-                    src_params.get("n_points", 6),
-                    src_params.get("length", 30.0),
-                    border_fraction=src_params.get("border_fraction", 0.1),
-                    marker_fraction=src_params.get("marker_fraction", 0.8),
-                    marker_backend=src_params.get("marker_backend", "aruco1"),
-                    num_squares_x=src_params.get("num_squares_x", 105),
-                    num_squares_y=src_params.get("num_squares_y", 148),
-                    square_size=src_params.get("square_size", 2.0),
-                    start_x=src_params.get("start_x", 0),
-                    start_y=src_params.get("start_y", 0),
-                    paper_width=src_params.get("paper_width", 210.0),
-                    paper_height=src_params.get("paper_height", 297.0),
-                    min_width=src_params.get("min_width", 4),
-                    pbc_n_points=src_params.get("pbc_n_points", 20),
-                    pbc_length=src_params.get("pbc_length", 200.0),
-                )
-                problem_options = dict(src_params.get("problem_options") or {})
-                threads = src_params.get("threads", 1)
-                lockbox_params = dict(src_params.get("lockbox") or {})
-                lockbox_config = CameraLockboxConfig(
-                    enabled=bool(lockbox_params.get("enabled", False)),
-                    rotation_half_width=float(lockbox_params.get("rotation_half_width", 0.1)),
-                    translation_half_width=float(lockbox_params.get("translation_half_width", 0.1)),
-                    rotation_sigma=float(lockbox_params.get("rotation_sigma", 0.05)),
-                    translation_sigma=float(lockbox_params.get("translation_sigma", 0.01)),
-                    center_sigma=float(lockbox_params.get("center_sigma", 0.0)),
-                )
-                lockbox_source_camset = None
-                lockbox_source_path = lockbox_params.get("source_camset")
-                if lockbox_config.enabled:
-                    if not lockbox_source_path:
-                        raise RuntimeError("Lockbox is enabled but no effective lockbox source path was provided.")
-                    emit(f"Loading effective lockbox source camset: {lockbox_source_path}")
-                    if lockbox_params.get("original_source_camset") and lockbox_params.get("edited_source_camset"):
-                        emit(f"Original source camset: {lockbox_params.get('original_source_camset')}")
-                        emit(f"Edited lockbox copy: {lockbox_params.get('edited_source_camset')}")
-                    lockbox_source_camset = load_CameraSet(as_io_path(lockbox_source_path))
-                    if set(lockbox_source_camset.get_names()) != set(cams.get_names()):
-                        raise RuntimeError(
-                            "Effective lockbox source camera names do not match the active Phase 2 camset. "
-                            "This would break TemplateBundleHandler."
-                        )
-
-                handler = TemplateBundleHandler(
-                    camset=cams,
-                    target=target,
-                    detection=filtered_det,
-                    fixed_params=src_params.get("fixed_params"),
-                    options=problem_options,
-                    lockbox_config=lockbox_config,
-                    lockbox_source_camset=lockbox_source_camset,
-                    lockbox_warm_start=bool(lockbox_params.get("warm_start", True)),
-                )
-
-                with captured_output(emit), non_interactive_plotting():
-                    optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
-                        handler, threads=threads
-                    )
-
-                init_euclid = float(stats.get("initial_euclid", float("nan")))
-                final_euclid = float(stats.get("final_euclid", float("nan")))
-                emit(f"Initial Euclidean error: {init_euclid:.4f} px")
-                emit(f"Final Euclidean error: {final_euclid:.4f} px")
-                if not bool(stats.get("success", optimisation.success)):
-                    emit(f"Solver note: {stats.get('message', optimisation.message)}")
-
-                camset_out_path = run_dir / "optimised_cameras.camset"
-                out_cams.save(camset_out_path)
-
-                missing_before = np.array(
-                    getattr(handler, "missing_poses_before_outlier_rejection", []), dtype=bool
-                )
-                missing_after = np.array(
-                    getattr(
-                        handler,
-                        "missing_poses_after_outlier_rejection",
-                        handler.missing_poses if handler.missing_poses is not None else [],
-                    ),
-                    dtype=bool,
-                )
-                per_im_init = np.array(getattr(handler, "initial_per_im_error", []), dtype=float)
-
-                per_cam_err: dict = {}
-                try:
-                    dd = np.asarray(handler.get_detection_data(flatten=True))
-                    residual_xy = observation_residual_xy(optimisation.fun, handler)
-                    residual_norm = np.linalg.norm(residual_xy, axis=1)
-                    if dd.ndim == 2 and dd.shape[1] >= 1:
-                        cam_idx = dd[:, 0].astype(int)
-                        if cam_idx.size != residual_norm.size:
-                            raise ValueError(
-                                "D3.12 alignment mismatch: "
-                                f"cam_idx={cam_idx.size}, residuals={residual_norm.size}"
-                            )
-                        for idx, name in enumerate(handler.cam_names):
-                            mask = cam_idx == idx
-                            per_cam_err[name] = (
-                                float(np.mean(residual_norm[mask])) if np.any(mask) else float("nan")
-                            )
-                except Exception as _de:
-                    emit(f"Warning: D3.12 skipped: {_de}")
-
-                n_missing_before = int(np.sum(missing_before))
-                n_missing_after = int(np.sum(missing_after))
-                param_count = int(stats.get("param_count", 0))
-                obs_count = int(stats.get("observation_count", len(optimisation.fun) // 2))
-
-                diagnostics["D3.1_n_missing_poses"] = n_missing_before
-                diagnostics["D3.2_n_outlier_removed"] = int(max(0, n_missing_after - n_missing_before))
-                diagnostics["D3.3_per_image_initial_reprojection"] = per_im_init.tolist()
-                diagnostics["D3.4_initial_error_plot"] = "rendered in diagnostics tab"
-                diagnostics["D3.5_initial_euclid_px"] = init_euclid
-                diagnostics["D3.6_final_euclid_px"] = final_euclid
-                diagnostics["D3.7_error_reduction_ratio"] = (
-                    float(init_euclid / final_euclid) if final_euclid > 0 else float("inf")
-                )
-                diagnostics["D3.8_solver_status"] = {
-                    "status": int(stats.get("status", optimisation.status)),
-                    "message": str(stats.get("message", optimisation.message)),
-                    "success": bool(stats.get("success", optimisation.success)),
-                }
-                diagnostics["D3.9_nfev"] = int(stats.get("nfev", optimisation.nfev))
-                diagnostics["D3.10_parameter_observation_ratio"] = {
-                    "param_count": param_count,
-                    "observation_count": obs_count,
-                    "ratio": float(param_count / max(obs_count, 1)),
-                }
-                diagnostics["D3.11_residual_xy_scatter"] = residual_xy.tolist() if 'residual_xy' in locals() else []
-                diagnostics["D3.12_per_camera_mean_reprojection"] = per_cam_err
-                diagnostics["D3.13_extrinsic_pose_view"] = "rendered in diagnostics tab"
-
-                metadata = {
-                    "run_id": run_id,
-                    "phase": "phase3",
-                    "params": dict(src_params),
-                    "diagnostics": diagnostics,
-                    "error": None,
-                    "inputs": {
-                        "phase2_run_id": src_inputs.get("phase2_run_id"),
-                        "phase1_run_id": src_inputs.get("phase1_run_id"),
-                        "phase3_run_id": source_run.get("run_id"),
-                    },
-                    "artifacts": {
-                        "optimised_camset": str(camset_out_path),
-                        "phase2_initial_camset_used": str(camset_path),
-                        "phase1_detection_pickle_used": str(p1_pickle),
-                        "filtered_detection_pickle": str(filt_pickle_path),
-                    },
-                    "threshold_pruning": {
-                        "source_phase3_run_id": source_run.get("run_id"),
-                        "phase2_run_id": src_inputs.get("phase2_run_id"),
-                        "phase1_run_id": src_inputs.get("phase1_run_id"),
-                        "user_threshold_px": threshold,
-                        "mad_threshold_px": mad_threshold,
-                        "removed_global_image_indices": image_indices,
-                        "n_removed": len(image_indices),
-                        "removal_mode": "global via global_im_num",
-                    },
-                }
-                self._workspace_mgr.save_run("phase3", run_id, metadata)
-                emit(f"New Phase 3 run saved: {run_id}")
-                return metadata
-
-            except Exception as exc:
-                err = str(exc)
-                emit(f"ERROR: {err}")
-                metadata = {
-                    "run_id": run_id,
-                    "phase": "phase3",
-                    "params": dict(src_params),
-                    "diagnostics": diagnostics,
-                    "error": err,
-                    "inputs": {
-                        "phase2_run_id": (source_run.get("inputs") or {}).get("phase2_run_id"),
-                        "phase1_run_id": (source_run.get("inputs") or {}).get("phase1_run_id"),
-                        "phase3_run_id": source_run.get("run_id"),
-                    },
-                }
-                self._workspace_mgr.save_run("phase3", run_id, metadata)
-                return metadata
+        def work_fn(log: Callable[[str], None]) -> dict:
+            return phase3_workflow.rerun(source_run, workspace_mgr, log, prune)
 
         self._threshold_worker = PhaseWorker(work_fn, parent=self)
-
-        # Connect line_ready to the Phase 3 settings tab terminal so output
-        # is visible when the user navigates back to that tab.
-        for _i in range(self._notebook.count()):
-            if self._notebook.tabText(_i) == TAB_PHASE3:
-                _settings_tab = self._notebook.widget(_i)
-                if hasattr(_settings_tab, "_terminal"):
-                    self._threshold_worker.line_ready.connect(_settings_tab._terminal.append_line)
-                break
+        self._send_output_to_settings_tab(self._threshold_worker)
 
         def _on_finished(metadata: dict) -> None:
             on_done_cb()
             if metadata.get("error"):
                 QMessageBox.critical(
                     self, "Phase 3 failed",
-                    f"New run encountered an error:\n{metadata['error']}"
-                )
+                    f"New run encountered an error:\n{metadata['error']}")
             else:
-                new_id = metadata.get("run_id", "?")
-                n_rem = (metadata.get("threshold_pruning") or {}).get("n_removed", len(image_indices))
+                removed = (metadata.get("threshold_pruning") or {}).get(
+                    "n_removed", len(image_indices))
                 QMessageBox.information(
                     self, "New Phase 3 run created",
-                    f"Run ID: {new_id}\n"
-                    f"Removed {n_rem} image(s) with initial RPE > {threshold:.4f} px."
-                )
+                    f"Run ID: {metadata.get('run_id', '?')}\n"
+                    f"Removed {removed} image(s) with initial "
+                    f"RPE > {threshold:.4f} px.")
             self.refresh()
 
         self._threshold_worker.finished.connect(_on_finished)
         self._threshold_worker.start()
+
+    def _send_output_to_settings_tab(self, worker: PhaseWorker) -> None:
+        """Write the worker's output to the settings tab's terminal.
+
+        The run is started from the diagnostics tab, which has no terminal of
+        its own, so its output would otherwise go nowhere someone can read it.
+        """
+        for index in range(self._notebook.count()):
+            if self._notebook.tabText(index) != TAB_PHASE3:
+                continue
+            settings_tab = self._notebook.widget(index)
+            terminal = getattr(settings_tab, "_terminal", None)
+            if terminal is not None:
+                worker.line_ready.connect(terminal.append_line)
+            return
 
     def _render_residuals(self, runs: list[dict]) -> None:
         while self._residual_layout.count():

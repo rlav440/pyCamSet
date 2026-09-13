@@ -281,6 +281,25 @@ class WorkspaceManager:
         return next((run for run in self.load_runs(phase)
                      if run.get("run_id") == run_id), None)
 
+    def linked_run(self, phase: str, source_run: dict) -> Optional[dict]:
+        """
+        The run of *phase* that *source_run* was built from.
+
+        Falls back to the most recent run of that phase when the link is
+        absent or points at something no longer there, because a re-run of an
+        old run should still find inputs rather than refuse.
+
+        :param phase: the phase to look in
+        :param source_run: the run whose ``inputs`` name the one wanted
+        :return: the run, or None when that phase has none at all
+        """
+        runs = self.load_runs(phase)
+        if not runs:
+            return None
+        wanted = (source_run.get("inputs") or {}).get(f"{phase}_run_id")
+        return next((run for run in runs if run.get("run_id") == wanted),
+                    runs[-1])
+
     def build_predecessor_chain(self, run: dict) -> list[dict]:
         """
         Return copies of every run *run* descends from, oldest first.
@@ -354,56 +373,50 @@ class WorkspaceManager:
 
 # ---------------------------------------------------------------------------
 # Resolving one phase's artifacts for the next phase to read
-#
-# Each looks first at what the run recorded, then at where that phase writes
-# by convention -- so a run whose metadata predates the artifacts block, or
-# whose artifact paths moved with the folder, still resolves.
 # ---------------------------------------------------------------------------
 
+#: Per phase: the artifact keys a run may record its output under, and the
+#: filenames that phase writes by convention.  Both are tried, recorded keys
+#: first, so a run whose metadata predates the artifacts block -- or whose
+#: recorded paths moved with the folder -- still resolves.
+_ARTIFACTS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "phase1": (
+        ("detected_datapoints_pickle",),
+        ("detected_datapoints.pickle",),
+    ),
+    "phase2": (
+        ("initial_camset",),
+        ("initial_cameras_high_distortion.camset", "initial_cameras.camset"),
+    ),
+    "phase3": (
+        ("optimised_camset", "self_calibrated_camset"),
+        ("optimised_cameras.camset",),
+    ),
+    "phase4": (
+        ("self_calibrated_camset", "optimised_camset"),
+        ("self_calibrated_cameras.camset",),
+    ),
+}
 
-def _first_existing(*candidates: Path | str | None) -> Optional[Path]:
+
+def resolve_artifact(run: dict, phase: str, ws_path: Path) -> Optional[Path]:
+    """
+    Return the output a run of *phase* left behind, or None if it is gone.
+
+    :param run: the run's metadata
+    :param phase: which phase the run belongs to
+    :param ws_path: the workspace holding it
+    """
+    recorded_keys, filenames = _ARTIFACTS[phase]
+    artifacts = run.get("artifacts") or {}
+    candidates = [artifacts.get(key) for key in recorded_keys]
+
+    run_id = run.get("run_id")
+    if run_id:
+        run_dir = ws_path / f"{phase}_runs" / str(run_id)
+        candidates += [run_dir / name for name in filenames]
+
     for candidate in candidates:
-        if not candidate:
-            continue
-        path = Path(candidate)
-        if path_exists(path):
-            return path
+        if candidate and path_exists(candidate):
+            return Path(candidate)
     return None
-
-
-def resolve_phase1_pickle_artifact(
-        phase1_run: dict, ws_path: Path) -> Optional[Path]:
-    """Return the ``detected_datapoints.pickle`` of a phase 1 run."""
-    artifacts = phase1_run.get("artifacts") or {}
-    run_id = phase1_run.get("run_id")
-    return _first_existing(
-        artifacts.get("detected_datapoints_pickle"),
-        (ws_path / "phase1_runs" / str(run_id) / "detected_datapoints.pickle"
-         if run_id else None),
-    )
-
-
-def resolve_phase2_camset_artifact(
-        phase2_run: dict, ws_path: Path) -> Optional[Path]:
-    """Return the initial camset of a phase 2 run."""
-    artifacts = phase2_run.get("artifacts") or {}
-    run_id = phase2_run.get("run_id")
-    run_dir = ws_path / "phase2_runs" / str(run_id) if run_id else None
-    return _first_existing(
-        artifacts.get("initial_camset"),
-        run_dir / "initial_cameras_high_distortion.camset" if run_dir else None,
-        run_dir / "initial_cameras.camset" if run_dir else None,
-    )
-
-
-def resolve_phase3_camset_artifact(
-        phase3_run: dict, ws_path: Path) -> Optional[Path]:
-    """Return the optimised camset of a phase 3 run."""
-    artifacts = phase3_run.get("artifacts") or {}
-    run_id = phase3_run.get("run_id")
-    run_dir = ws_path / "phase3_runs" / str(run_id) if run_id else None
-    return _first_existing(
-        artifacts.get("optimised_camset"),
-        artifacts.get("self_calibrated_camset"),
-        run_dir / "optimised_cameras.camset" if run_dir else None,
-    )

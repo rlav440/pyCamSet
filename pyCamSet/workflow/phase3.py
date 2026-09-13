@@ -13,7 +13,11 @@ from typing import Optional
 
 import numpy as np
 
-from pyCamSet.workflow.detections import extract_detection
+from pyCamSet.workflow.detections import (
+    DetectionFilter,
+    extract_detection,
+    save_detections,
+)
 from pyCamSet.workflow.diagnostics import per_camera_mean_reprojection
 from pyCamSet.workflow.logs import (
     LogFn,
@@ -27,8 +31,7 @@ from pyCamSet.workflow.workspace import (
     as_io_path,
     make_run_id,
     path_exists,
-    resolve_phase1_pickle_artifact,
-    resolve_phase2_camset_artifact,
+    resolve_artifact,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -60,7 +63,9 @@ def run(params: dict,
         log: LogFn = discard,
         phase2_run: Optional[dict] = None,
         phase1_run: Optional[dict] = None,
-        camset_override: Optional[Path] = None) -> dict:
+        camset_override: Optional[Path] = None,
+        prune: Optional[DetectionFilter] = None,
+        source_run: Optional[dict] = None) -> dict:
     """
     Solve the whole camera set against the target together.
 
@@ -70,6 +75,8 @@ def run(params: dict,
     :param phase2_run: the run supplying the initial camset
     :param phase1_run: the run supplying the detections
     :param camset_override: an initial camset to use instead of the run's
+    :param prune: observations to leave out; see :func:`rerun`
+    :param source_run: the phase 3 run this one is a re-run of
     :return: the run's metadata record, saved to the workspace
     """
     ws_path = workspace.workspace_path
@@ -84,14 +91,15 @@ def run(params: dict,
     camset_in: Optional[Path] = None
     detections_path: Optional[Path] = None
     camset_out: Optional[Path] = None
+    pruned_path: Optional[Path] = None
 
     with captured_output(log), non_interactive_plotting():
         log("Phase 3 running in non-interactive plotting mode (thread-safe).")
         try:
             camset_in = _initial_camset(phase2_run, camset_override, ws_path)
             detections_path = _detections_path(phase1_run, ws_path)
-            camset_out, diagnostics = _solve(
-                params, run_dir, camset_in, detections_path, log)
+            camset_out, diagnostics, pruned_path = _solve(
+                params, run_dir, camset_in, detections_path, prune, log)
         except Exception as exc:
             error = str(exc)
             log(f"ERROR: {error}")
@@ -103,6 +111,8 @@ def run(params: dict,
     }
     if camset_out is not None:
         artifacts["optimised_camset"] = str(camset_out)
+    if pruned_path is not None:
+        artifacts["filtered_detection_pickle"] = str(pruned_path)
 
     metadata = {
         "run_id": run_id,
@@ -113,13 +123,45 @@ def run(params: dict,
         "inputs": {
             "phase2_run_id": phase2_run.get("run_id") if phase2_run else None,
             "phase1_run_id": phase1_run.get("run_id") if phase1_run else None,
+            "phase3_run_id": source_run.get("run_id") if source_run else None,
         },
         "artifacts": artifacts,
     }
+    if prune is not None and prune.record:
+        metadata["threshold_pruning"] = prune.record
+
     workspace.save_run("phase3", run_id, metadata)
     if error is None:
         log(f"Run saved: {run_id}")
     return metadata
+
+
+def rerun(source_run: dict,
+          workspace: WorkspaceManager,
+          log: LogFn = discard,
+          prune: Optional[DetectionFilter] = None) -> dict:
+    """
+    Solve *source_run* again, minus whatever *prune* leaves out.
+
+    The settings, the initial camset and the detections all come from the run
+    being repeated, so the new run differs from it only by what was dropped.
+    The source is not touched.
+
+    :param source_run: the phase 3 run to repeat
+    :param workspace: the workspace holding it
+    :param log: what to call with each line of output
+    :param prune: observations to leave out
+    :return: the new run's metadata record
+    """
+    return run(
+        dict(source_run.get("params") or {}),
+        workspace,
+        log,
+        phase2_run=workspace.linked_run("phase2", source_run),
+        phase1_run=workspace.linked_run("phase1", source_run),
+        prune=prune,
+        source_run=source_run,
+    )
 
 
 def _initial_camset(phase2_run: Optional[dict],
@@ -128,7 +170,7 @@ def _initial_camset(phase2_run: Optional[dict],
     """The camset the solve starts from."""
     if camset_override is not None and path_exists(camset_override):
         return Path(camset_override)
-    resolved = (resolve_phase2_camset_artifact(phase2_run, ws_path)
+    resolved = (resolve_artifact(phase2_run, "phase2", ws_path)
                 if phase2_run else None)
     if resolved is None:
         raise RuntimeError("Phase 2 run is missing initial_camset artifact.")
@@ -139,7 +181,7 @@ def _initial_camset(phase2_run: Optional[dict],
 
 def _detections_path(phase1_run: Optional[dict], ws_path: Path) -> Path:
     """The detections the solve reads."""
-    resolved = (resolve_phase1_pickle_artifact(phase1_run, ws_path)
+    resolved = (resolve_artifact(phase1_run, "phase1", ws_path)
                 if phase1_run else None)
     if resolved is None:
         raise RuntimeError(
@@ -195,12 +237,15 @@ def _lockbox(params: dict, cams, log: LogFn):
 
 
 def _solve(params: dict, run_dir: Path, camset_in: Path,
-           detections_path: Path, log: LogFn) -> tuple[Path, dict]:
+           detections_path: Path, prune: Optional[DetectionFilter],
+           log: LogFn) -> tuple[Path, dict, Optional[Path]]:
     """Run the bundle adjustment and compute its diagnostics."""
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet optimisation modules are not importable.")
 
+    log(f"Loading Phase 2 camset: {camset_in}")
     cams = load_CameraSet(as_io_path(camset_in))
+    log(f"Loading Phase 1 detections: {detections_path}")
     detections = extract_detection(load_pickle(as_io_path(detections_path)))
     if detections is None:
         raise RuntimeError(
@@ -208,6 +253,13 @@ def _solve(params: dict, run_dir: Path, camset_in: Path,
 
     _check_camera_subset(
         list(params.get("selected_cameras") or []), cams, detections)
+
+    pruned_path = None
+    if prune is not None:
+        detections = prune.apply(detections, log)
+        pruned_path = save_detections(
+            run_dir / "filtered_detected_datapoints.pickle", detections)
+        log(f"Saved filtered detections: {pruned_path}")
 
     target = target_from_params(params)
     lockbox_config, lockbox_source, lockbox_settings = _lockbox(params, cams, log)
@@ -239,7 +291,7 @@ def _solve(params: dict, run_dir: Path, camset_in: Path,
 
     diagnostics = _diagnostics(
         optimisation, handler, stats, initial_euclid, final_euclid, log)
-    return camset_out, diagnostics
+    return camset_out, diagnostics, pruned_path
 
 
 def _diagnostics(optimisation, handler, stats: dict,

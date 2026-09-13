@@ -6,7 +6,7 @@ detection options (built dynamically from the metadata table), and results /
 progress.
 
 Heavy lifting (detection, phase 3, phase 4, scoring, retention, metadata)
-lives in :mod:`pyCamSet.optimisation.optimisation_worker` and is invoked from
+lives in :mod:`pyCamSet.workflow.tuning.worker` and is invoked from
 a worker :class:`~PySide6.QtCore.QThread` so the GUI remains responsive.
 
 Optuna is an *optional* dependency: when it is not importable, the tab is
@@ -56,15 +56,15 @@ from pyCamSet.gui.shared_functions import (
     make_section_label,
     repopulate_dict_combo,
 )
-from pyCamSet.optimisation.charuco_detector_metadata import (
+from pyCamSet.workflow.tuning.detector_parameters import (
     CHARUCO_PARAMETER_METADATA,
 )
-from pyCamSet.optimisation.charuco_detection_profiles import (
+from pyCamSet.workflow.tuning.profiles import (
     CHARUCO_DETECTION_PROFILE_NAMES,
     get_charuco_detection_profile,
     make_profile_tooltip,
 )
-from pyCamSet.optimisation.optimisation_study import (
+from pyCamSet.workflow.tuning.study import (
     MAX_SUCCESSES_HARD_CAP,
     TRIAL_GATING_PROFILE_NAMES,
     TrialGatingSettings,
@@ -72,8 +72,8 @@ from pyCamSet.optimisation.optimisation_study import (
     clamp_retain_count,
     make_trial_gating_settings,
 )
-from pyCamSet.optimisation.optimisation_promotion import promote_retained_trial
-from pyCamSet.optimisation.optimisation_worker import (
+from pyCamSet.workflow.tuning.promotion import promote_retained_trial
+from pyCamSet.workflow.tuning.worker import (
     CalibrationControls,
     CancelToken,
     OptimisationStudy,
@@ -84,7 +84,7 @@ from pyCamSet.optimisation.optimisation_worker import (
 )
 
 try:
-    from pyCamSet.optimisation.optuna_adapter import (
+    from pyCamSet.workflow.tuning.optuna_adapter import (
         OPTUNA_AVAILABLE,
         run_optuna_study,
     )
@@ -131,7 +131,7 @@ class _StudyWorker(QObject):
                 self.progress.emit(p)
 
             if OPTUNA_AVAILABLE and run_optuna_study is not None:
-                from pyCamSet.optimisation.optimisation_worker import default_detection_fn
+                from pyCamSet.workflow.tuning.worker import default_detection_fn
                 retention = run_optuna_study(
                     config=self._config,
                     detection_fn=default_detection_fn,

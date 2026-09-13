@@ -9,11 +9,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
-from pyCamSet.optimisation.charuco_detector_metadata import (
+from pyCamSet.workflow.tuning.detector_parameters import (
     coerce_value,
     metadata_by_key,
 )
-from pyCamSet.optimisation.optimisation_worker import ParameterRowConfig
+from pyCamSet.workflow.tuning.worker import ParameterRowConfig
 
 _LOG = logging.getLogger(__name__)
 
@@ -127,10 +127,10 @@ def run_optuna_study(
 ) -> Any:
     """Run an Optimisation study driven by Optuna.
 
-    Returns the :class:`pyCamSet.optimisation.optimisation_worker.SuccessRetention`
+    Returns the :class:`pyCamSet.workflow.tuning.worker.SuccessRetention`
     populated by the run.
     """
-    from pyCamSet.optimisation.optimisation_worker import (
+    from pyCamSet.workflow.tuning.worker import (
         OptimisationStudy,
         run_trial,
         fixed_settings_only,
@@ -197,7 +197,7 @@ def run_optuna_study(
         completed += 1
         study.tell(trial, result.score)
         if progress_cb is not None:
-            from pyCamSet.optimisation.optimisation_worker import StudyProgress
+            from pyCamSet.workflow.tuning.worker import StudyProgress
             best = driver.retention.best()
             progress_cb(
                 StudyProgress(
@@ -224,7 +224,7 @@ def run_optuna_study(
     driver._finished_at = time.time()  # noqa: SLF001
     driver.retention.n_completed = completed  # type: ignore[attr-defined]
     if write_metadata:
-        from pyCamSet.optimisation.optimisation_study import write_study_summary
+        from pyCamSet.workflow.tuning.study import write_study_summary
         write_study_summary(
             output_dir,
             study_id=driver.study_id,

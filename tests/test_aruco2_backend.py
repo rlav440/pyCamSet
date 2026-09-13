@@ -434,7 +434,7 @@ def test_default_detection_fn_plumbing(tmp_path, monkeypatch):
     """
     import cv2
     from pyCamSet.calibration_targets.target_detections import TargetDetection
-    from pyCamSet.optimisation.optimisation_worker import (
+    from pyCamSet.workflow.tuning.worker import (
         TargetSettings, default_detection_fn)
 
     captured = {}
@@ -472,14 +472,14 @@ def test_default_detection_fn_plumbing(tmp_path, monkeypatch):
 
 
 def test_target_settings_carries_backend():
-    from pyCamSet.optimisation.optimisation_worker import TargetSettings
+    from pyCamSet.workflow.tuning.worker import TargetSettings
     s = TargetSettings(marker_backend="aruco2")
     assert s.as_dict()["marker_backend"] == "aruco2"
 
 
 def test_validate_run_settings_rejects_unknown_backend():
     # validate_run_settings collects errors in a list (existing contract).
-    from pyCamSet.optimisation.optimisation_study import validate_run_settings
+    from pyCamSet.workflow.tuning.study import validate_run_settings
     errors = validate_run_settings(
         f_loc="unused",
         n_trials=1,
@@ -496,7 +496,7 @@ def test_validate_run_settings_accepts_aruco2(tmp_path):
     """FIX 8(d): marker_backend="aruco2" must PASS validate_run_settings
     (no marker_backend error messages)."""
     import cv2
-    from pyCamSet.optimisation.optimisation_study import validate_run_settings
+    from pyCamSet.workflow.tuning.study import validate_run_settings
     root = tmp_path
     for name in ("cam0", "cam1"):
         d = root / name

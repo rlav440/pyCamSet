@@ -151,7 +151,7 @@ def test_the_study_driver_can_import_its_backend():
     Nothing sets a flag there, so a missing backend symbol surfaces only
     once a trial is already running.
     """
-    from pyCamSet.optimisation import optimisation_worker
+    from pyCamSet.workflow.tuning import worker as optimisation_worker
 
     assert callable(optimisation_worker.default_phase3_fn)
     assert callable(optimisation_worker.default_phase4_fn)

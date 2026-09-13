@@ -7,7 +7,7 @@ This module orchestrates one optimisation trial end-to-end:
 - runs phase 2 initial calibration from that trial's detections,
 - runs phase 3 bundle adjustment and optionally phase 4 self-calibration,
 - computes the objective score,
-- writes per-success metadata via :mod:`pyCamSet.optimisation.optimisation_study`.
+- writes per-success metadata via :mod:`pyCamSet.workflow.tuning.study`.
 
 The worker exposes a synchronous, callable Python API (``run_trial``) and an
 ``OptimisationStudy`` driver that iterates trials.  GUI integration sits in
@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from pyCamSet.optimisation.charuco_detector_metadata import (
+from pyCamSet.workflow.tuning.detector_parameters import (
     CHARUCO_PARAMETER_METADATA,
     assemble_detection_options,
     clamp_to_bounds,
@@ -39,7 +39,7 @@ from pyCamSet.optimisation.charuco_detector_metadata import (
     metadata_by_key,
     validate_all_rows,
 )
-from pyCamSet.optimisation.optimisation_study import (
+from pyCamSet.workflow.tuning.study import (
     FAILURE_SCORE,
     SuccessRetention,
     TrialGatingSettings,
@@ -830,7 +830,7 @@ class OptimisationStudy:
             phase3_camset = payload.get("phase3", {}).get("camset") if "phase3" in payload else None
             saved_camset = phase4_camset if result.success_stage == "phase4" else phase3_camset
             try:
-                from pyCamSet.optimisation.optimisation_study import trial_subdir_name
+                from pyCamSet.workflow.tuning.study import trial_subdir_name
                 from pyCamSet.utils.saving import save_pickle
                 trial_dir = output_dir / trial_subdir_name(result)
                 trial_dir.mkdir(parents=True, exist_ok=True)

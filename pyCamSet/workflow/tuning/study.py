@@ -6,9 +6,9 @@ coverage/quality metrics, validity rules, objective functions, retention
 policy, metadata saving, and success-ranking semantics for optimisation
 studies.
 
-The trial-runner worker (``pyCamSet.optimisation.optimisation_worker``) and
+The trial-runner worker (``pyCamSet.workflow.tuning.worker``) and
 the optional Optuna adapter
-(``pyCamSet.optimisation.optuna_adapter``) build on top of this module.
+(``pyCamSet.workflow.tuning.optuna_adapter``) build on top of this module.
 """
 from __future__ import annotations
 

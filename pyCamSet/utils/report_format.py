@@ -84,6 +84,26 @@ class Cell:
     colour: int | None = None
 
 
+#: What :func:`force_colour` was last told, and the default for every
+#: ``colour`` argument in this module. None leaves the detection alone.
+_FORCED: bool | None = None
+
+
+def force_colour(enabled: bool | None) -> None:
+    """
+    Settle for this process whether the blocks are coloured.
+
+    The detection below asks whether stderr is a terminal, which is the right
+    question for a script and the wrong one for a front end: a GUI reads a
+    phase's output through a pipe and paints it into a console of its own, so
+    the detection says no to a display that shows colour perfectly well.
+
+    :param enabled: True to always colour, False never, None to detect
+    """
+    global _FORCED
+    _FORCED = enabled
+
+
 def colour_enabled(override: bool | None = None) -> bool:
     """
     Whether to emit colour: only for a person at a terminal.
@@ -93,6 +113,8 @@ def colour_enabled(override: bool | None = None) -> bool:
 
     :param override: force colour on or off, bypassing the detection
     """
+    if override is None:
+        override = _FORCED
     if override is not None:
         return override
     if os.environ.get("NO_COLOR"):

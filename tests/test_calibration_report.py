@@ -527,6 +527,21 @@ class TestColourBands:
 
         assert fmt.colour_enabled() is False
 
+    def test_a_front_end_can_say_it_shows_colour(self, monkeypatch):
+        """The GUI paints these blocks into a console of its own, and reads
+        them off a pipe to do it -- which is exactly what the detection above
+        calls "nothing is watching"."""
+        monkeypatch.setattr(fmt, "_FORCED", None)
+        monkeypatch.setattr(sys, "stderr", io.StringIO())
+
+        fmt.force_colour(True)
+        assert fmt.colour_enabled() is True
+        assert "\x1b[" in fmt.table(
+            ["camera", "rate"], [["cam", fmt.quality_cell(0.5)]], [10, 8])[-1]
+
+        fmt.force_colour(None)
+        assert fmt.colour_enabled() is False
+
     def test_a_coloured_detection_summary_still_fits(self):
         """Colour must not be a back door around the width limit."""
         detection = TargetDetection(cam_names=["a" * 40, "b"])

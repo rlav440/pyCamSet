@@ -20,7 +20,7 @@ import re
 from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QThread, Signal, Qt
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -528,6 +528,77 @@ def apply_target_spec_to_widgets(tab: Any, spec: dict) -> None:
 
 _ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
+#: The colour escapes, which are painted rather than dropped.
+_SGR_RE = re.compile(r"\x1B\[([0-9;]*)m")
+
+# The xterm-256 palette the report blocks are written against.  0-15 are the
+# terminal's own colours, which have no fixed values and are taken here from
+# the xterm defaults; 16-231 are a 6x6x6 cube and 232-255 a grey ramp, both
+# of which are defined by their formula.
+_XTERM_BASIC = (
+    (0, 0, 0), (128, 0, 0), (0, 128, 0), (128, 128, 0),
+    (0, 0, 128), (128, 0, 128), (0, 128, 128), (192, 192, 192),
+    (128, 128, 128), (255, 0, 0), (0, 255, 0), (255, 255, 0),
+    (0, 0, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
+)
+_XTERM_CUBE = (0, 95, 135, 175, 215, 255)
+
+
+def xterm_colour(index: int) -> QColor:
+    """
+    The colour an xterm-256 palette index stands for.
+
+    :param index: the palette index, 0 to 255
+    """
+    if index < 16:
+        return QColor(*_XTERM_BASIC[index])
+    if index < 232:
+        index -= 16
+        return QColor(_XTERM_CUBE[index // 36],
+                      _XTERM_CUBE[(index // 6) % 6],
+                      _XTERM_CUBE[index % 6])
+    grey = 8 + 10 * (index - 232)
+    return QColor(grey, grey, grey)
+
+
+def _drop_movement(text: str) -> str:
+    """
+    Remove every escape that is not a colour.
+
+    :param text: the text as it was written
+    """
+    return _ANSI_RE.sub(
+        lambda escape: escape.group(0) if escape.group(0).endswith("m") else "",
+        text)
+
+
+def _sgr_format(params: str, current: QTextCharFormat) -> QTextCharFormat:
+    """
+    The character format an SGR escape asks for.
+
+    Only what the report blocks emit is acted on -- a reset, bold, and an
+    xterm-256 foreground -- and anything else leaves the format as it was.
+
+    :param params: the escape's parameters, between the '[' and the 'm'
+    :param current: the format in force before the escape
+    """
+    fmt = QTextCharFormat(current)
+    codes = [int(code) for code in params.split(";") if code] or [0]
+    index = 0
+    while index < len(codes):
+        code = codes[index]
+        if code == 0:
+            fmt = QTextCharFormat()
+        elif code == 1:
+            fmt.setFontWeight(QFont.Weight.Bold)
+        elif (code == 38 and codes[index + 1:index + 2] == [5]
+                and index + 2 < len(codes)):
+            fmt.setForeground(xterm_colour(codes[index + 2]))
+            index += 2
+        index += 1
+    return fmt
+
+
 class TerminalWidget(QTextEdit):
     """A dark, append-only terminal pane.
 
@@ -545,10 +616,27 @@ class TerminalWidget(QTextEdit):
         self._on_toggle()
 
     def append_line(self, text: str) -> None:
-        """Append *text* + newline and scroll to bottom."""
-        clean = _ANSI_RE.sub("", str(text)).replace("\r", "")
+        """
+        Append *text* + newline in the colours it asks for, and scroll down.
+
+        The report blocks grade their numbers with xterm-256 escapes -- see
+        :mod:`pyCamSet.utils.report_format` -- so those are painted here
+        rather than thrown away.  Escapes that are not colours, the cursor
+        moves a progress bar makes, are dropped: this pane only appends.
+
+        :param text: the line, with or without escapes in it
+        """
+        body = _drop_movement(str(text).replace("\r", ""))
         self.moveCursor(QTextCursor.MoveOperation.End)
-        self.insertPlainText(clean + "\n")
+        cursor = self.textCursor()
+        fmt = QTextCharFormat()
+        written = 0
+        for escape in _SGR_RE.finditer(body):
+            cursor.insertText(body[written:escape.start()], fmt)
+            fmt = _sgr_format(escape.group(1), fmt)
+            written = escape.end()
+        cursor.insertText(body[written:] + "\n", fmt)
+        self.setTextCursor(cursor)
         self.ensureCursorVisible()
 
     def clear_terminal(self) -> None:

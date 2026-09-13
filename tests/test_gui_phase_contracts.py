@@ -1731,3 +1731,66 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
         assert phase1_run["diagnostics"]["n_images"] == 4
     finally:
         window.deleteLater()
+
+
+@pytest.mark.gui
+def test_the_terminal_paints_the_colours_the_reports_ask_for():
+    """A report grades its numbers by colour -- blue for an exceptional
+    reprojection error, red for one worth worrying about -- and the pane
+    used to strip those escapes out, so every number read the same."""
+    from PySide6.QtGui import QTextFormat
+    from PySide6.QtWidgets import QApplication, QCheckBox
+
+    from pyCamSet.gui import shared_functions as shared
+    from pyCamSet.utils import report_format as fmt
+
+    QApplication.instance() or QApplication([])
+    show = QCheckBox()
+    show.setChecked(True)
+    terminal = shared.TerminalWidget(show)
+    try:
+        rows = [["cam0", fmt.error_cell(0.08)], ["cam1", fmt.error_cell(7.1)]]
+        for line in fmt.table(["camera", "mean"], rows, [10, 8], colour=True):
+            terminal.append_line(line)
+
+        # The escapes are gone from the text and present in the formatting.
+        assert "\x1b[" not in terminal.toPlainText()
+        painted = {}
+        for number in range(terminal.document().blockCount()):
+            block = terminal.document().findBlockByNumber(number)
+            fragment = block.begin()
+            while fragment != block.end():
+                run = fragment.fragment()
+                if run.charFormat().hasProperty(
+                        QTextFormat.Property.ForegroundBrush):
+                    painted[run.text().strip()] = \
+                        run.charFormat().foreground().color().name()
+                fragment += 1
+
+        # Only the graded numbers are pinned to a colour; everything else is
+        # left to the pane's own foreground, so it reads on any background.
+        assert painted == {
+            "0.08": shared.xterm_colour(fmt.SOLARIZED["blue"]).name(),
+            "7.10": shared.xterm_colour(fmt.SOLARIZED["red"]).name(),
+        }
+    finally:
+        terminal.deleteLater()
+
+
+@pytest.mark.gui
+def test_the_terminal_drops_the_escapes_that_move_a_cursor():
+    """A pane that only appends cannot act on a progress bar's cursor moves,
+    and must not show them either."""
+    from PySide6.QtWidgets import QApplication, QCheckBox
+
+    from pyCamSet.gui import shared_functions as shared
+
+    QApplication.instance() or QApplication([])
+    show = QCheckBox()
+    show.setChecked(True)
+    terminal = shared.TerminalWidget(show)
+    try:
+        terminal.append_line("detecting \x1b[2K\x1b[1G 50%\r")
+        assert terminal.toPlainText() == "detecting  50%\n"
+    finally:
+        terminal.deleteLater()

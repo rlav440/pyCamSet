@@ -621,6 +621,13 @@ def main_window() -> None:
     """Launch the pyCamSet GUI."""
     import sys
 
+    from pyCamSet.utils.report_format import force_colour
+
+    # The terminal pane paints the report blocks, which report_format cannot
+    # work out for itself: a phase's output reaches the pane through a pipe
+    # rather than a terminal, so the detection there says plain text.
+    force_colour(True)
+
     app = QApplication.instance() or QApplication(sys.argv)
     window = PyCamSetApp()
     window.show()

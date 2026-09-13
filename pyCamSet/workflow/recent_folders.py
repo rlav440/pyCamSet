@@ -12,44 +12,19 @@ This is that one thing.  It is deliberately not a session file: no window
 geometry, no half-filled forms, no open tab.  A folder is a place the work
 lives, and the rest is rebuilt from what the runs already wrote down.
 
-Stored as JSON under the platform's per-user configuration directory.
-``PYCAMSET_CONFIG_DIR`` overrides that, which is what the tests use.
+Stored through :mod:`pyCamSet.workflow.user_config`, alongside the other
+thing a person chooses before any of the work exists: see
+:mod:`pyCamSet.workflow.recent_targets`.
 """
 from __future__ import annotations
 
-import json
-import logging
-import os
-import sys
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
-#: How many folders to keep. Long enough to cover the projects someone is
-#: moving between, short enough to stay a list rather than a history.
-MAX_RECENT = 10
+from pyCamSet.workflow.user_config import (
+    MAX_RECENT, config_dir, read_list, write_list)
 
 _FILE_NAME = "recent_folders.json"
-
-
-def config_dir() -> Path:
-    """
-    Where this machine keeps pyCamSet's per-user settings.
-
-    :return: the directory, which may not exist yet
-    """
-    override = os.environ.get("PYCAMSET_CONFIG_DIR")
-    if override:
-        return Path(override)
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "pyCamSet"
-    if os.name == "nt":
-        base = os.environ.get("APPDATA")
-        root = Path(base) if base else Path.home() / "AppData" / "Roaming"
-        return root / "pyCamSet"
-    base = os.environ.get("XDG_CONFIG_HOME")
-    root = Path(base) if base else Path.home() / ".config"
-    return root / "pyCamSet"
+_KEY = "folders"
 
 
 def recent_folders_file() -> Path:
@@ -58,32 +33,8 @@ def recent_folders_file() -> Path:
 
 
 def _read() -> list[str]:
-    path = recent_folders_file()
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except FileNotFoundError:
-        return []
-    except (OSError, json.JSONDecodeError) as exc:
-        # A settings file is never worth failing a launch over.
-        logger.debug("Could not read %s: %s", path, exc)
-        return []
-    folders = data.get("folders") if isinstance(data, dict) else data
-    if not isinstance(folders, list):
-        return []
-    return [str(f) for f in folders if isinstance(f, (str, Path))]
-
-
-def _write(folders: list[str]) -> None:
-    path = recent_folders_file()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump({"folders": folders}, fh, indent=2)
-    except OSError as exc:
-        # Read-only home, full disk, a locked profile: the GUI still works,
-        # it just will not remember this next time.
-        logger.debug("Could not write %s: %s", path, exc)
+    return [str(f) for f in read_list(_FILE_NAME, _KEY)
+            if isinstance(f, (str, Path))]
 
 
 def load_recent_folders(existing_only: bool = True) -> list[Path]:
@@ -118,7 +69,7 @@ def remember_folder(folder: Path | str) -> None:
         return
 
     kept = [f for f in _read() if _differs(f, resolved)]
-    _write([str(resolved), *kept][:MAX_RECENT])
+    write_list(_FILE_NAME, _KEY, [str(resolved), *kept])
 
 
 def forget_folder(folder: Path | str) -> None:
@@ -131,7 +82,7 @@ def forget_folder(folder: Path | str) -> None:
         resolved = Path(folder).expanduser().resolve()
     except OSError:
         return
-    _write([f for f in _read() if _differs(f, resolved)])
+    write_list(_FILE_NAME, _KEY, [f for f in _read() if _differs(f, resolved)])
 
 
 def _differs(candidate: str, resolved: Path) -> bool:

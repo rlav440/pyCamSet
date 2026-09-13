@@ -61,6 +61,7 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE1_DIAG,
     TAB_PHASE2,
     TerminalWidget,
+    apply_target_spec_to_widgets,
     build_charuco_option_tooltip,
     gate_continue_button,
     make_blue_button,
@@ -88,10 +89,13 @@ from pyCamSet.calibration_targets.charuco_parameters import (
     label_for,
     typeable,
 )
+from pyCamSet.workflow.recent_targets import (
+    forget_target, load_recent_targets, remember_target)
 from pyCamSet.workflow.targets import (
     describe_target,
     CHARUCO_BASED_TARGETS as _CHARUCO_BASED_TARGETS,
     TARGET_CHOICES as _TARGET_CHOICES,
+    TARGET_KEY,
 )
 from pyCamSet.workflow.workspace import (
     IMAGE_EXTS as _IMAGE_EXTS,
@@ -250,6 +254,22 @@ class Phase1Tab(QWidget):
         form_root.addWidget(make_separator())
         target_sect = CollapsibleSection("Calibration Target", expanded=False)
         form_root.addWidget(target_sect)
+
+        recent_row = QHBoxLayout()
+        self._recent_target_combo = QComboBox()
+        self._recent_target_combo.setToolTip(
+            "Targets this machine has detected with before.  Picking one "
+            "fills in the settings below, which are the ones that have to "
+            "match the printed target exactly."
+        )
+        self._recent_target_combo.activated.connect(self._on_recent_target_selected)
+        forget_btn = QPushButton("Forget")
+        forget_btn.setFixedWidth(70)
+        forget_btn.setToolTip("Remove the selected target from this list.")
+        forget_btn.clicked.connect(self._forget_selected_target)
+        recent_row.addWidget(self._recent_target_combo)
+        recent_row.addWidget(forget_btn)
+        target_sect.addRow("Recent targets:", recent_row)
 
         self._target_combo = QComboBox()
         self._target_combo.addItems(_TARGET_CHOICES)
@@ -577,6 +597,7 @@ class Phase1Tab(QWidget):
         self._target_combo.currentTextChanged.connect(self._on_target_type_changed)
         self._marker_backend_combo.currentIndexChanged.connect(self._on_marker_backend_changed)
         self._on_target_type_changed(self._target_combo.currentText())
+        self.refresh_recent_targets()
 
     # ------------------------------------------------------------------
 
@@ -618,6 +639,37 @@ class Phase1Tab(QWidget):
             self._workspace_mgr.set_workspace_path(ws_path, ensure=create_if_missing)
             if self._diagnostics_tab is not None:
                 self._diagnostics_tab.refresh()
+
+    def refresh_recent_targets(self) -> None:
+        """Reload the remembered targets, keeping whatever is selected."""
+        current = self._recent_target_combo.currentIndex()
+        self._recent_target_combo.blockSignals(True)
+        self._recent_target_combo.clear()
+        targets = load_recent_targets()
+        if targets:
+            self._recent_target_combo.addItem("Select a recent target…", None)
+            for spec in targets:
+                self._recent_target_combo.addItem(
+                    describe_target({TARGET_KEY: spec}), spec)
+        else:
+            self._recent_target_combo.addItem("No targets remembered yet", None)
+        if 0 <= current < self._recent_target_combo.count():
+            self._recent_target_combo.setCurrentIndex(current)
+        self._recent_target_combo.blockSignals(False)
+
+    def _on_recent_target_selected(self, _index: int) -> None:
+        """Fill the target settings in from a remembered target."""
+        spec = self._recent_target_combo.currentData()
+        if not spec:
+            return
+        apply_target_spec_to_widgets(self, spec)
+
+    def _forget_selected_target(self) -> None:
+        spec = self._recent_target_combo.currentData()
+        if not spec:
+            return
+        forget_target(spec)
+        self.refresh_recent_targets()
 
     def _on_target_type_changed(self, target_type: str) -> None:
         is_charuco = target_type in _CHARUCO_BASED_TARGETS  # Only ChArUco-based targets need this section.
@@ -723,6 +775,9 @@ class Phase1Tab(QWidget):
                 self, "Import error",
                 "pyCamSet calibration modules are unavailable.")
             return
+
+        remember_target(params[TARGET_KEY])
+        self.refresh_recent_targets()
 
         workspace = workspace_path_for(params["f_loc"])
         if self._workspace_mgr.workspace_path != workspace:

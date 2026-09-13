@@ -18,6 +18,7 @@ import json
 import pytest
 
 from pyCamSet.workflow import recent_folders as rf
+from pyCamSet.workflow import user_config as uc
 
 
 @pytest.fixture(autouse=True)
@@ -40,20 +41,22 @@ def _folder(tmp_path, name):
 
 
 def test_the_override_decides_the_location(isolated_config):
-    assert rf.config_dir() == isolated_config
+    assert uc.config_dir() == isolated_config
     assert rf.recent_folders_file() == isolated_config / "recent_folders.json"
 
 
 def test_each_platform_has_a_home_for_it(monkeypatch):
+    """The location is shared with every other remembered list, so it is
+    asked of the settings module rather than of this one."""
     monkeypatch.delenv("PYCAMSET_CONFIG_DIR", raising=False)
 
-    monkeypatch.setattr(rf.sys, "platform", "darwin")
-    assert rf.config_dir().parts[-3:] == ("Library", "Application Support", "pyCamSet")
+    monkeypatch.setattr(uc.sys, "platform", "darwin")
+    assert uc.config_dir().parts[-3:] == ("Library", "Application Support", "pyCamSet")
 
-    monkeypatch.setattr(rf.sys, "platform", "linux")
-    monkeypatch.setattr(rf.os, "name", "posix")
+    monkeypatch.setattr(uc.sys, "platform", "linux")
+    monkeypatch.setattr(uc.os, "name", "posix")
     monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/xdg")
-    assert rf.config_dir().as_posix() == "/tmp/xdg/pyCamSet"
+    assert uc.config_dir().as_posix() == "/tmp/xdg/pyCamSet"
 
 
 # --------------------------------------------------------------------------

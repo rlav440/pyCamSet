@@ -11,7 +11,11 @@ import svgwrite  # Write compact vector rectangles, polygons, and circles.
 
 from pyCamSet.calibration_targets import AbstractTarget, FaceToShape, ImageDetection  # Reuse pyCamSet target contracts.
 from pyCamSet.calibration_targets.abstract_target import EXPORT_SUFFIXES
-from pyCamSet.calibration_targets.parameters import Parameter, Parameterisation
+from pyCamSet.calibration_targets.parameters import (
+    DetectorParameterisation,
+    Parameter,
+    Parameterisation,
+)
 from pyCamSet.calibration_targets.puzzleboard_detection import (
     PUZZLEBOARD_DETECTOR,
     detect_puzzleboard_image,
@@ -73,6 +77,171 @@ FACE_WINDOW_GAP = 0  # Tile adjacent windows directly; their half-open ranges do
 MAX_FACE_SQUARES = (  # Enforce the six-face horizontal packing limit from the 501-position code field.
     _CODE_SIZE - (FACE_GRID_COLUMNS - 1) * FACE_WINDOW_GAP
 ) // FACE_GRID_COLUMNS
+
+
+class PuzzleBoardCubeDetection(DetectorParameterisation):
+    """
+    What this cube does with what the detector hands back.
+
+    Not the PuzzleBoard detector's settings: these are the two optional
+    stages ``find_in_image`` runs over the decoded points, deciding which
+    face each one belongs to.  Both are off by default.
+
+    Their thresholds are in units of square pitch, and the numbers below
+    come from the round-2 synthetic validation rather than from taste.
+    """
+
+    name = "PuzzleBoardCube"
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        return (
+            Parameter(
+                key="plane_consistency_gate", label="Plane consistency gate",
+                default=False, dtype="bool", priority="A",
+                concept="Concept: a two-stage RANSAC homography check per "
+                        "face, dropping points not consistent with the "
+                        "face's majority plane. Detection: catches two "
+                        "physical regions of the cube decoded into one face "
+                        "window, which is geometrically impossible. "
+                        "Calibration: a merged face is a set of keys in the "
+                        "wrong place, which the solve cannot see as wrong.",
+                range_text="off / on",
+                range_source="Off by default until validated against the "
+                             "full component survey",
+                suggested="off"),
+            Parameter(
+                key="plane_gate_contam_squares", label="Contamination threshold",
+                default=2.0, dtype="float", tunable=True, settable=True,
+                minimum=0.5, maximum=10.0, step=0.1, decimals=3,
+                search_order=1, priority="A",
+                concept="Concept: stage-1 trigger. A face is contaminated "
+                        "only if enough of its points sit further than this "
+                        "from the all-points homography.",
+                range_text="Above the max residual of clean single planes "
+                           "(0.69-1.50 squares), below the median residual "
+                           "of contaminated merges (1.3-2.2)",
+                range_source="Round-2 synthetic validation",
+                suggested="2.0"),
+            Parameter(
+                key="plane_gate_min_contam_frac", label="Contaminated fraction",
+                default=0.25, dtype="float", tunable=True, settable=True,
+                minimum=0.0, maximum=1.0, step=0.05, decimals=3,
+                search_order=2, priority="A",
+                concept="Concept: how much of a face must be beyond the "
+                        "contamination threshold before stage 2 runs.",
+                range_text="Clean images have 0% above 2.0 squares; "
+                           "contaminated ones have 25-64%",
+                range_source="Round-2 synthetic validation",
+                suggested="0.25"),
+            Parameter(
+                key="plane_gate_inlier_squares", label="RANSAC inlier threshold",
+                default=0.5, dtype="float", tunable=True, settable=True,
+                minimum=0.05, maximum=3.0, step=0.05, decimals=3,
+                search_order=3, priority="A",
+                concept="Concept: stage-2 RANSAC inlier threshold. "
+                        "Detection: loose enough and foreign-plane points "
+                        "fit the wrong cluster, so max-count RANSAC picks a "
+                        "larger wrong model over the correct one.",
+                range_text="A true plane's inliers fit at 0.02-0.45 squares "
+                           "after RANSAC; at 1.0 a wrong 30-point model beat "
+                           "the correct 24-point one",
+                range_source="Round-2 synthetic validation",
+                suggested="0.5"),
+            Parameter(
+                key="plane_gate_min_points", label="Minimum face population",
+                default=8, dtype="int", tunable=True, settable=True,
+                minimum=4, maximum=200, step=1, search_order=4, priority="B",
+                concept="Concept: the fewest points a face needs before the "
+                        "gate will judge it. Below this a homography is not "
+                        "worth fitting.",
+                range_text="At least 4, which is what a homography needs",
+                range_source="Estimated by us",
+                suggested="8"),
+            Parameter(
+                key="plane_gate_ransac_iters", label="RANSAC iterations",
+                default=200, dtype="int", tunable=True, settable=True,
+                minimum=10, maximum=5000, step=10, search_order=5, priority="B",
+                concept="Concept: how many models stage 2 samples. More is "
+                        "slower and more likely to find the true plane.",
+                range_text="Positive; the cost is linear in this",
+                range_source="Estimated by us",
+                suggested="200"),
+            Parameter(
+                key="plane_gate_random_state", label="RANSAC seed",
+                default=0, dtype="int", settable=True,
+                minimum=0, maximum=2 ** 31 - 1, step=1, priority="C",
+                concept="Concept: the seed the sampling uses, so that a "
+                        "detection repeats exactly. Not something to search "
+                        "over: a study sweeping it would be optimising "
+                        "which noise it happened to like.",
+                range_text="Any non-negative integer",
+                range_source="Estimated by us",
+                suggested="0"),
+            Parameter(
+                key="face_reassignment", label="Face reassignment",
+                default=False, dtype="bool", priority="A",
+                concept="Concept: rather than dropping a contaminated "
+                        "face's minority cluster, work out which co-visible "
+                        "face it belongs to and relabel it. Needs the plane "
+                        "consistency gate, which is what finds the cluster.",
+                range_text="off / on",
+                range_source="Round-2 synthetic validation: raw 60-80% "
+                             "accuracy across 0-2px noise and grids 4-8",
+                suggested="off"),
+            Parameter(
+                key="face_reassignment_confidence", label="Reassignment confidence",
+                default=3.0, dtype="float", tunable=True, settable=True,
+                minimum=1.0, maximum=20.0, step=0.5, decimals=3,
+                search_order=6, priority="A",
+                concept="Concept: how much better the best face must fit "
+                        "than the second best -- a ratio of reprojection "
+                        "errors -- before the cluster is relabelled rather "
+                        "than dropped. Detection: a confident wrong "
+                        "relabelling is worse than a drop.",
+                range_text="Above 3.0 it was right on 93.3% of the ~48% of "
+                           "trials it fired on; above 8.0, 98.4% of ~43%",
+                range_source="Round-2 synthetic validation",
+                suggested="3.0"),
+            Parameter(
+                key="face_reassignment_intrinsics_fx", label="Assumed focal length (px)",
+                default="", dtype="float", settable=True, drop_if_none=True,
+                priority="C",
+                concept="Concept: the generic focal length the tie-breaker's "
+                        "PnP assumes. Left empty it is derived from the "
+                        "image width. NEVER take this from a calibration: "
+                        "a calibration's output must not be an input to the "
+                        "detection it was calibrated from.",
+                range_text="Empty, or pixels",
+                range_source="Default is image_width * 1.4, a moderate "
+                             "wide-ish lens",
+                suggested="empty"),
+            Parameter(
+                key="face_reassignment_intrinsics_cx", label="Assumed centre x (px)",
+                default="", dtype="float", settable=True, drop_if_none=True,
+                priority="C",
+                concept="Concept: the principal point the tie-breaker's PnP "
+                        "assumes. Left empty it is the image centre.",
+                range_text="Empty, or pixels",
+                range_source="Default is the image centre",
+                suggested="empty"),
+            Parameter(
+                key="face_reassignment_intrinsics_cy", label="Assumed centre y (px)",
+                default="", dtype="float", settable=True, drop_if_none=True,
+                priority="C",
+                concept="Concept: the principal point the tie-breaker's PnP "
+                        "assumes. Left empty it is the image centre.",
+                range_text="Empty, or pixels",
+                range_source="Default is the image centre",
+                suggested="empty"),
+        )
+
+    def validate(self, values: dict) -> list[str]:
+        """Reassignment needs the gate that finds the cluster to reassign."""
+        if values.get("face_reassignment") and not values.get("plane_consistency_gate"):
+            return ["face_reassignment needs plane_consistency_gate: the "
+                    "gate is what separates the cluster it relabels."]
+        return []
 
 
 class PuzzleBoardCubeGeometry(Parameterisation):
@@ -143,6 +312,10 @@ class PuzzleBoardCube(AbstractTarget):
         return PuzzleBoardCubeGeometry()
 
     @classmethod
+    def own_detector_parameters(cls) -> DetectorParameterisation:
+        return PuzzleBoardCubeDetection()
+
+    @classmethod
     def export_parameters(cls) -> Parameterisation:
         return PuzzleBoardCubeExport()
 
@@ -169,18 +342,6 @@ class PuzzleBoardCube(AbstractTarget):
         self,
         n_points: int = 20,
         length: float = 200.0,
-        plane_consistency_gate: bool = False,
-        plane_gate_inlier_squares: float = 0.5,
-        plane_gate_contam_squares: float = 2.0,
-        plane_gate_min_contam_frac: float = 0.25,
-        plane_gate_min_points: int = 8,
-        plane_gate_ransac_iters: int = 200,
-        plane_gate_random_state: int = 0,
-        face_reassignment: bool = False,
-        face_reassignment_confidence: float = 3.0,
-        face_reassignment_intrinsics_fx: float | None = None,
-        face_reassignment_intrinsics_cx: float | None = None,
-        face_reassignment_intrinsics_cy: float | None = None,
         detection_options: dict | None = None,
     ):
         """Initialise a cube whose six faces use disjoint windows of the periodic code.
@@ -247,23 +408,25 @@ class PuzzleBoardCube(AbstractTarget):
         self.length = float(length)  # Store the total physical cube edge length in millimetres.
         self._validate_dimensions()  # Reject invalid counts/lengths before deriving the pitch.
         self.square_size = self.length / self.n_points  # Retain the derived puzzle-piece pitch for rendering/detection.
-        self.plane_consistency_gate = bool(plane_consistency_gate)  # Opt-in geometric gate.
-        self.plane_gate_inlier_squares = float(plane_gate_inlier_squares)  # RANSAC inlier threshold (pitch units).
-        self.plane_gate_contam_squares = float(plane_gate_contam_squares)  # Stage-1 contamination trigger (pitch units).
-        self.plane_gate_min_contam_frac = float(plane_gate_min_contam_frac)  # Min fraction of high-residual points to trigger.
-        self.plane_gate_min_points = int(plane_gate_min_points)  # Minimum face population to run the gate.
-        self.plane_gate_ransac_iters = int(plane_gate_ransac_iters)  # RANSAC iterations.
-        self.plane_gate_random_state = int(plane_gate_random_state)  # Deterministic seed.
-        self.face_reassignment = bool(face_reassignment)  # Opt-in face reassignment (requires plane_consistency_gate).
-        self.face_reassignment_confidence = float(face_reassignment_confidence)  # PnP confidence threshold (second/best ratio).
-        # Generic/assumed intrinsics overrides (None -> derive from image size at detection time).
-        # Per the project standing constraint, these are NEVER loaded from calibration output.
-        self.face_reassignment_intrinsics_fx = (float(face_reassignment_intrinsics_fx)
-                                                if face_reassignment_intrinsics_fx is not None else None)
-        self.face_reassignment_intrinsics_cx = (float(face_reassignment_intrinsics_cx)
-                                                 if face_reassignment_intrinsics_cx is not None else None)
-        self.face_reassignment_intrinsics_cy = (float(face_reassignment_intrinsics_cy)
-                                                 if face_reassignment_intrinsics_cy is not None else None)
+        # What find_in_image does with the decoded points, as
+        # PuzzleBoardCubeDetection resolved it.  The assumed intrinsics
+        # stay None when unset: the standing constraint is that a
+        # calibration's own output is never an input to the detection it
+        # came from, so they are derived from the image at detection time.
+        options = self.detection_options
+        self.plane_consistency_gate = options["plane_consistency_gate"]
+        self.plane_gate_inlier_squares = options["plane_gate_inlier_squares"]
+        self.plane_gate_contam_squares = options["plane_gate_contam_squares"]
+        self.plane_gate_min_contam_frac = options["plane_gate_min_contam_frac"]
+        self.plane_gate_min_points = options["plane_gate_min_points"]
+        self.plane_gate_ransac_iters = options["plane_gate_ransac_iters"]
+        self.plane_gate_random_state = options["plane_gate_random_state"]
+        self.face_reassignment = options["face_reassignment"]
+        self.face_reassignment_confidence = options["face_reassignment_confidence"]
+        self.face_reassignment_intrinsics_fx = options["face_reassignment_intrinsics_fx"]
+        self.face_reassignment_intrinsics_cx = options["face_reassignment_intrinsics_cx"]
+        self.face_reassignment_intrinsics_cy = options["face_reassignment_intrinsics_cy"]
+        self.min_width = options["min_width"]
         self.layout_version = CODE_LAYOUT_VERSION  # Record the deterministic face-layout version on the target.
         self.face_origins = self.face_origins_for_size(self.n_points)  # Assign six disjoint code windows.
         self.face_length = self.length / 1000.0  # Convert the configured total cube edge to metres.
@@ -996,7 +1159,7 @@ class PuzzleBoardCube(AbstractTarget):
     ) -> ImageDetection:
         """Detect PuzzleBoard points and assign each point to its deterministic cube face."""
         del camera  # The current PuzzleBoard detector does not use camera intrinsics.
-        point_ids, point_coords = detect_puzzleboard_image(image, min_width=self.detection_options["min_width"])  # Decode global code positions.
+        point_ids, point_coords = detect_puzzleboard_image(image, min_width=self.min_width)  # Decode global code positions.
         if len(point_ids) == 0:  # Return the standard empty result when no face was found.
             return ImageDetection()
         positions = np.asarray(point_ids, dtype=np.int64)  # Detector positions are [row, column].

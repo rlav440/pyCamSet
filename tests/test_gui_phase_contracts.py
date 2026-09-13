@@ -1719,7 +1719,10 @@ def _phase1_tab():
         ("Ccube", "aruco1", "aruco1", None),
         ("ChArUco", "aruco2", "aruco2", ()),
         ("PuzzleBoard", None, "puzzle_board", ("min_width",)),
-        ("PuzzleBoardCube", None, "puzzle_board", ("min_width",)),
+        # A target with settings of its own reads as its own beside its
+        # backend's: the cube's two optional face-assignment stages are not
+        # the PuzzleBoard detector's business.
+        ("PuzzleBoardCube", None, "PuzzleBoardCube+puzzle_board", None),
     ],
 )
 def test_the_detection_form_shows_what_the_chosen_detector_takes(
@@ -1879,7 +1882,7 @@ def test_a_preset_still_sets_the_bounds_of_the_rows_it_covers():
      ("Ccube", "aruco2", "aruco2"),
      # One combo serves every target; a target with one detector ignores it.
      ("PuzzleBoard", "aruco1", "puzzle_board"),
-     ("PuzzleBoardCube", "", "puzzle_board")],
+     ("PuzzleBoardCube", "", "PuzzleBoardCube+puzzle_board")],
 )
 def test_a_form_resolves_its_target_selection_to_one_detector(
         target_type, backend, expected):

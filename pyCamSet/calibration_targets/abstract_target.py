@@ -131,6 +131,11 @@ class AbstractTarget(ABC):
         self.detection_parameters = self.detector_parameterisation(backend)
         self.detection_options = self.detection_parameters.resolve(
             inputs.get("detection_options"))
+        problems = self.detection_parameters.validate(self.detection_options)
+        if problems:
+            # A form reads these through parse, which checks them; a study
+            # and a saved spec reach the constructor directly.
+            raise ValueError(" ".join(problems))
         if "detection_options" in inputs:
             # Written back so that a spec taken from this target rebuilds it
             # exactly, whatever subset of the settings it was given.

@@ -559,6 +559,16 @@ class CompositeParameterisation(DetectorParameterisation):
     def parameters(self) -> tuple[Parameter, ...]:
         return tuple(p for part in self._parts for p in part.parameters)
 
+    def tunable(self) -> list[Parameter]:
+        """
+        Each part's sweepable parameters, in each part's own order.
+
+        Not one order over all of them: ``search_order`` is what a
+        parameterisation says about its own, and two of them saying "first"
+        is not a disagreement to resolve by interleaving.
+        """
+        return [parameter for part in self._parts for parameter in part.tunable()]
+
     def validate(self, values: dict[str, Any]) -> list[str]:
         return [problem for part in self._parts
                 for problem in part.validate(values)]

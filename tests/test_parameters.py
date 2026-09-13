@@ -521,3 +521,106 @@ def test_every_target_writes_itself_as_every_format(tmp_path):
 
         with pytest.raises(ValueError, match="cannot be written as"):
             target.save_printable(tmp_path / "x", "postcard", **options)
+
+
+@pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
+def test_everything_a_target_detects_with_is_a_detector_parameterisation(name, cls):
+    """A composite asks each of its parts whether its dependency is
+    installed and what presets it offers, so a part that is only a
+    Parameterisation takes the whole thing down at the first lookup."""
+    from pyCamSet.calibration_targets.parameters import DetectorParameterisation
+
+    assert isinstance(cls.own_detector_parameters(), DetectorParameterisation)
+    for backend, parameterisation in cls.DETECTOR_BACKENDS.items():
+        assert isinstance(parameterisation, DetectorParameterisation), backend
+
+    # Which is what makes these answerable for every target.
+    for backend in cls.DETECTOR_BACKENDS or [None]:
+        composed = cls.detector_parameterisation(backend)
+        assert composed.profiles() is not None
+        composed.unavailable_reason()
+
+
+# ---------------------------------------------------------------------------
+# A target's own detection, beside its detector's
+# ---------------------------------------------------------------------------
+#
+# PuzzleBoardCube takes twelve settings that alter what find_in_image does
+# with the points the detector hands back. They were constructor arguments,
+# so nothing could reach them: not the phase 1 form, not a study.
+
+
+def test_the_cube_declares_the_stages_it_runs_over_its_detections():
+    from pyCamSet.calibration_targets.target_puzzleboard_cube import PuzzleBoardCube
+
+    own = PuzzleBoardCube.own_detector_parameters()
+    assert {"plane_consistency_gate", "face_reassignment"} <= {
+        p.key for p in own.parameters}
+    # The PuzzleBoard detector's own setting is not among them: what the
+    # cube does with the points is not how the points were found.
+    assert "min_width" not in own
+
+
+def test_the_cube_sweeps_its_own_thresholds_and_its_detectors():
+    """The composition, through the tuner: one parameterisation, both halves."""
+    from pyCamSet.workflow.tuning.worker import (
+        ParameterRowConfig, RunConfig, build_effective_settings)
+
+    config = RunConfig(
+        f_loc=".",
+        target_spec={"type": "PuzzleBoardCube", "n_points": 6, "length": 100.0},
+        parameter_rows=[
+            ParameterRowConfig(key="plane_gate_inlier_squares", fixed=0.5,
+                               optimise=True, lower=0.2, upper=1.0),
+            ParameterRowConfig(key="min_width", fixed=4, optimise=True,
+                               lower=3, upper=8),
+        ])
+    detector = config.detector()
+
+    assert detector.validate_rows(config.parameter_rows) == []
+    swept = build_effective_settings(
+        config.parameter_rows, detector,
+        sampled={"plane_gate_inlier_squares": 0.31, "min_width": 6})
+    assert swept["plane_gate_inlier_squares"] == 0.31
+    assert swept["min_width"] == 6
+
+    # And a trial's settings build the target it will detect with.
+    from pyCamSet.calibration_targets.target_registry import build_target
+    target = build_target({**config.target_spec, "detection_options": swept})
+    assert target.plane_gate_inlier_squares == 0.31
+    assert target.min_width == 6
+
+
+def test_a_row_from_another_detector_is_still_refused():
+    """Composition widens what a target takes; it does not open it up."""
+    from pyCamSet.calibration_targets.target_puzzleboard_cube import PuzzleBoardCube
+
+    errors = PuzzleBoardCube.detector_parameterisation().validate_rows(
+        [{"key": "adaptiveThreshWinSizeMin", "fixed": 3, "optimise": False}])
+    assert errors and "Unknown parameter" in errors[0]
+
+
+def test_reassignment_needs_the_gate_that_finds_what_it_reassigns():
+    from pyCamSet.calibration_targets.target_puzzleboard_cube import PuzzleBoardCube
+
+    detector = PuzzleBoardCube.detector_parameterisation()
+    assert detector.validate({"face_reassignment": True,
+                              "plane_consistency_gate": True}) == []
+    assert detector.validate({"face_reassignment": True,
+                              "plane_consistency_gate": False})
+
+    with pytest.raises(ValueError, match="needs plane_consistency_gate"):
+        PuzzleBoardCube(n_points=6, length=100.0,
+                        detection_options={"face_reassignment": True})
+
+
+def test_each_part_of_a_composite_orders_its_own_sweep():
+    """``search_order`` is what a parameterisation says about its own
+    parameters; two of them saying "first" is not a disagreement."""
+    from pyCamSet.calibration_targets.target_puzzleboard_cube import PuzzleBoardCube
+
+    swept = [p.key for p in PuzzleBoardCube.detector_parameterisation().tunable()]
+    own = [p.key for p in PuzzleBoardCube.own_detector_parameters().tunable()]
+
+    assert swept[:len(own)] == own, "the target's own come first, in its order"
+    assert swept[len(own):] == ["min_width"]

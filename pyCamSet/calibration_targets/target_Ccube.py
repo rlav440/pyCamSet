@@ -19,6 +19,7 @@ from pyCamSet.calibration_targets.backend_registry import (
     dict_names_for_backend,
     dictionary_id,
 )
+from pyCamSet.calibration_targets.abstract_target import EXPORT_SUFFIXES
 from pyCamSet.calibration_targets.parameters import (
     Choice,
     Parameter,
@@ -153,6 +154,40 @@ def make_blank_square(draw_res, line_fraction, border_fraction):
     canvas[-int_line:, :] = 0
     return canvas, int(border_fraction * draw_res[0]/2)
 
+class CcubeExport(Parameterisation):
+    """How a Ccube net is drawn, which is not what it is."""
+
+    name = "Ccube"
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        return (
+            Parameter(
+                key="border_width", label="Net border (mm)", default=10.0,
+                dtype="float", minimum=0.0, maximum=200.0, step=1.0,
+                decimals=2,
+                concept="Concept: the margin drawn around the folded net.",
+                suggested="10"),
+            Parameter(
+                key="draw_cut_outline", label="Draw cut outline",
+                default=True, dtype="bool",
+                concept="Concept: an outline to cut the net out along.",
+                suggested="on"),
+            Parameter(
+                key="draw_board_ids", label="Draw face numbers",
+                default=True, dtype="bool",
+                concept="Concept: a number on each face, for folding it the "
+                        "right way up.",
+                suggested="on"),
+            Parameter(
+                key="individual_faces", label="One face per page",
+                default=False, dtype="bool",
+                concept="Concept: print each face separately rather than as "
+                        "one net. For a cube too large to fit a page.",
+                suggested="off"),
+        )
+
+
 class Ccube(AbstractTarget):
     """
     This class defines a calibration target that consists of a Cube of ChArUco boards.
@@ -166,6 +201,29 @@ class Ccube(AbstractTarget):
     @classmethod
     def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
         return CcubeGeometry(backend or ARUCO1_BACKEND)
+
+    @classmethod
+    def export_parameters(cls) -> Parameterisation:
+        return CcubeExport()
+
+    @classmethod
+    def printable_name(cls, values: dict, kind: str = "svg") -> str:
+        return (f"ccube_{int(values['n_points'])}points_"
+                f"{float(values['length']):g}mm{EXPORT_SUFFIXES[kind]}")
+
+    def save_printable(self, path, kind: str = "svg", border_width: float = 10.0,
+                       draw_cut_outline: bool = True, draw_board_ids: bool = True,
+                       individual_faces: bool = False) -> Path:
+        if kind == "svg":
+            return self.save_to_svg(
+                path, border_width=border_width,
+                draw_cut_outline=draw_cut_outline, draw_board_ids=draw_board_ids)
+        if kind in ("pdf_vector", "pdf_raster"):
+            return self.save_to_pdf(
+                path, border_width=border_width,
+                individual_faces=individual_faces,
+                data_format="vector" if kind == "pdf_vector" else "raster")
+        raise ValueError(f"A Ccube cannot be written as {kind!r}.")
 
     def __init__(self, length=20, n_points=5,
                  aruco_dict=_DEFAULT_DICT_NAME,

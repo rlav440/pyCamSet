@@ -459,3 +459,65 @@ def test_a_dictionary_is_named_rather_than_numbered():
 
     assert target._aruco_dict_int == cv2.aruco.DICT_5X5_250
     assert target.input_args["a_dict"] == "DICT_5X5_250", "the spec keeps the name"
+
+
+# ---------------------------------------------------------------------------
+# How a target is printed, which is not what it is
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
+def test_every_declared_export_option_is_one_saving_takes(name, cls):
+    """The Create Target dialog builds its options from these and hands
+    them to save_printable, so an option that has drifted is a TypeError."""
+    import inspect
+
+    accepted = set(inspect.signature(cls.save_printable).parameters)
+    declared = {p.key for p in cls.export_parameters().parameters}
+    assert declared <= accepted, sorted(declared - accepted)
+
+
+@pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
+def test_every_declared_export_default_is_savings_own(name, cls):
+    import inspect
+
+    signature = inspect.signature(cls.save_printable).parameters
+    for parameter in cls.export_parameters().parameters:
+        assert parameter.default == signature[parameter.key].default, parameter.key
+
+
+@pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
+def test_a_target_names_its_own_file_from_its_own_arguments(name, cls):
+    """Named from the values rather than a built target, because a form
+    shows the name as it is typed into."""
+    from pyCamSet.calibration_targets.abstract_target import EXPORT_KINDS
+
+    values = cls.construction_parameters().defaults()
+    for kind in EXPORT_KINDS:
+        filename = cls.printable_name(values, kind)
+        assert filename.endswith(".svg" if kind == "svg" else ".pdf"), kind
+        assert "/" not in filename and filename.strip() == filename
+
+
+def test_every_target_writes_itself_as_every_format(tmp_path):
+    """One export path, rather than the four copies of the same dispatch
+    the target generators each carried."""
+    from pyCamSet.calibration_targets.target_registry import build_target
+
+    # Small enough to draw quickly; the point is the path, not the page.
+    small = {
+        "ChArUco": {"num_squares_x": 4, "num_squares_y": 4, "square_size": 10.0},
+        "Ccube": {"n_points": 4, "length": 20.0},
+        "PuzzleBoard": {"num_squares_x": 8, "num_squares_y": 8, "square_size": 2.0},
+        "PuzzleBoardCube": {"n_points": 5, "length": 100.0},
+    }
+    for name, cls in _targets():
+        target = build_target({"type": name, **small[name]})
+        options = cls.export_parameters().defaults()
+        written = target.save_printable(
+            tmp_path / cls.printable_name(small[name], "svg"), "svg", **options)
+
+        assert written.exists() and written.stat().st_size > 0, name
+
+        with pytest.raises(ValueError, match="cannot be written as"):
+            target.save_printable(tmp_path / "x", "postcard", **options)

@@ -11,6 +11,7 @@ from PIL import Image  # Convert SVG PNG output to a raster PDF when requested.
 import svgwrite  # Write compact SVG primitives directly to disk.
 
 from pyCamSet.calibration_targets import AbstractTarget, ImageDetection  # Reuse pyCamSet target contracts.
+from pyCamSet.calibration_targets.abstract_target import EXPORT_SUFFIXES
 from pyCamSet.calibration_targets.parameters import Parameter, Parameterisation
 from pyCamSet.calibration_targets.puzzleboard_detection import (
     PUZZLEBOARD_DETECTOR,
@@ -120,6 +121,23 @@ class PuzzleBoardGeometry(Parameterisation):
         return problems
 
 
+class PuzzleBoardExport(Parameterisation):
+    """How a PuzzleBoard is drawn, which is not what it is."""
+
+    name = "PuzzleBoard"
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        return (
+            Parameter(
+                key="dpi", label="Raster DPI", default=300, dtype="int",
+                minimum=50, maximum=2400, step=50,
+                concept="Concept: the resolution a raster PDF is rendered "
+                        "at. Ignored by the vector formats.",
+                suggested="300-600"),
+        )
+
+
 class PuzzleBoard(AbstractTarget):
     """Define a PuzzleBoard target, detector adapter, and vector export methods."""
 
@@ -128,6 +146,25 @@ class PuzzleBoard(AbstractTarget):
     @classmethod
     def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
         return PuzzleBoardGeometry()
+
+    @classmethod
+    def export_parameters(cls) -> Parameterisation:
+        return PuzzleBoardExport()
+
+    @classmethod
+    def printable_name(cls, values: dict, kind: str = "svg") -> str:
+        return (f"puzzleboard_{int(values['num_squares_x'])}x"
+                f"{int(values['num_squares_y'])}_"
+                f"{float(values['square_size']):g}mm{EXPORT_SUFFIXES[kind]}")
+
+    def save_printable(self, path, kind: str = "svg", dpi: int = 300) -> Path:
+        if kind == "svg":
+            return self.save_to_svg(path)
+        if kind == "pdf_vector":
+            return self.save_to_pdf(path, data_format="vector")
+        if kind == "pdf_raster":
+            return self.save_to_pdf(path, data_format="raster", dpi=int(dpi))
+        raise ValueError(f"A PuzzleBoard cannot be written as {kind!r}.")
 
     def __init__(
         self,

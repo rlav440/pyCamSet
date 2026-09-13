@@ -17,14 +17,13 @@ def build_puzzleboard_cube(
     )
 
 
-def default_output_name(
-    n_points: int,
+def default_output_name(n_points: int,
     length: float,
     export_kind: str,
 ) -> str:
-    """Return a default output filename for the requested cube export kind."""
-    suffix = ".svg" if export_kind == "svg" else ".pdf"  # Both PDF modes use a PDF suffix.
-    return f"puzzleboard_cube_{int(n_points)}points_{float(length):g}mm{suffix}"
+    """The filename a target of this size is written to by default."""
+    return pbc.PuzzleBoardCube.printable_name(
+        {"n_points": n_points, "length": length}, export_kind)
 
 
 def generate_puzzleboard_cube_target(
@@ -47,32 +46,13 @@ def generate_puzzleboard_cube_target(
         length=length,
     )
     out_path = out_dir / file_name  # Combine the destination directory and requested filename.
-    if export_kind == "svg":  # Save an editable vector net.
-        cube.save_to_svg(
-            out_path,
-            border_width=border_width,
-            draw_cut_outline=draw_cut_outline,
-            draw_face_ids=draw_face_ids,
-        )
-    elif export_kind == "pdf_vector":  # Preserve SVG primitives in the PDF.
-        cube.save_to_pdf(
-            out_path,
-            data_format="vector",
-            border_width=border_width,
-            draw_cut_outline=draw_cut_outline,
-            draw_face_ids=draw_face_ids,
-        )
-    elif export_kind == "pdf_raster":  # Produce a compatibility raster PDF.
-        cube.save_to_pdf(
-            out_path,
-            data_format="raster",
-            border_width=border_width,
-            draw_cut_outline=draw_cut_outline,
-            draw_face_ids=draw_face_ids,
-        )
-    else:  # Reject unsupported export spellings explicitly.
-        raise ValueError("export_kind must be one of: pdf_raster, pdf_vector, svg")
-    return cube, out_path.with_suffix("." + ("svg" if export_kind == "svg" else "pdf")).resolve()  # Return the actual saved path.
+    return cube, cube.save_printable(
+        out_path,
+        export_kind,
+        border_width=border_width,
+        draw_cut_outline=draw_cut_outline,
+        draw_face_ids=draw_face_ids,
+    )
 
 
 def main() -> None:

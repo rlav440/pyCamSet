@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import cv2
 
 from pyCamSet.calibration_targets import target_Ccube as cc
 from pyCamSet.calibration_targets.backend_registry import dictionary_id
@@ -25,9 +24,8 @@ def build_ccube(
 
 
 def default_output_name(n_points: int, length: float, export_kind: str) -> str:
-    """Return a default output filename for the requested export kind."""
-    suffix = ".svg" if export_kind == "svg" else ".pdf"
-    return f"ccube_{int(n_points)}points_{float(length):g}mm{suffix}"
+    """The filename a target of this size is written to by default."""
+    return cc.Ccube.printable_name({"n_points": n_points, "length": length}, export_kind)
 
 
 def generate_ccube_target(
@@ -60,14 +58,7 @@ def generate_ccube_target(
     )
     out_path = out_dir / file_name
 
-    if export_kind == "pdf_raster":
-        saved_path = cube.save_to_pdf(out_path)
-    elif export_kind == "pdf_vector":
-        saved_path = cube.save_to_pdf(out_path, data_format="vector")
-    elif export_kind == "svg":
-        saved_path = cube.save_to_svg(out_path)
-    else:
-        raise ValueError("export_kind must be one of: pdf_raster, pdf_vector, svg")
+    saved_path = cube.save_printable(out_path, export_kind)
 
     return cube, saved_path
 

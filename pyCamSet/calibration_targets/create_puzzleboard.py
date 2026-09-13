@@ -63,18 +63,15 @@ def build_puzzleboard(
     )
 
 
-def default_output_name(
-    num_squares_x: int,
+def default_output_name(num_squares_x: int,
     num_squares_y: int,
     square_size: float,
     export_kind: str,
 ) -> str:
-    """Return a default output filename for the requested export kind."""
-    suffix = ".svg" if export_kind == "svg" else ".pdf"  # Both PDF modes use the PDF extension.
-    return (
-        f"puzzleboard_{int(num_squares_x)}x{int(num_squares_y)}_"
-        f"{float(square_size):g}mm{suffix}"
-    )
+    """The filename a target of this size is written to by default."""
+    return pb.PuzzleBoard.printable_name(
+        {"num_squares_x": num_squares_x, "num_squares_y": num_squares_y,
+         "square_size": square_size}, export_kind)
 
 
 def generate_puzzleboard_target(
@@ -113,15 +110,7 @@ def generate_puzzleboard_target(
         paper_height=page_h,
     )
     out_path = out_dir / file_name  # Combine the destination directory and requested filename.
-    if export_kind == "svg":  # Save a directly editable vector file.
-        board.save_to_svg(out_path)
-    elif export_kind == "pdf_vector":  # Save a PDF while preserving vector geometry.
-        board.save_to_pdf(out_path, data_format="vector")
-    elif export_kind == "pdf_raster":  # Save a compatibility raster PDF.
-        board.save_to_pdf(out_path, data_format="raster")
-    else:  # Reject unsupported export spellings explicitly.
-        raise ValueError("export_kind must be one of: pdf_raster, pdf_vector, svg")
-    return board, out_path.with_suffix("." + ("svg" if export_kind == "svg" else "pdf")).resolve()  # Return the actual saved path.
+    return board, board.save_printable(out_path, export_kind)
 
 
 def main() -> None:

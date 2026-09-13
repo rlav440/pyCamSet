@@ -1156,6 +1156,7 @@ def test_a_camset_with_no_calibration_says_so(charuco_problem, tmp_path, capsys)
 # diagnosing it from crash reports.
 
 from pyCamSet.gui import create_target as create_target_module  # noqa: E402
+from pyCamSet.calibration_targets.target_registry import TARGET_NAMES  # noqa: E402
 from pyCamSet.utils import gui_safety, visualise_target  # noqa: E402
 
 
@@ -1179,32 +1180,30 @@ def test_the_target_viewer_runs_as_a_module():
     assert result.returncode == 0
 
 
-@pytest.mark.parametrize("target_type", sorted(visualise_target.TARGET_ARGUMENTS))
-def test_every_target_type_can_be_built_from_its_payload(target_type):
-    """What the tab sends has to be enough to rebuild the target."""
-    payload = {
-        "target_type": target_type,
-        "n_points": 4, "length": 20.0,
-        "num_squares_x": 4, "num_squares_y": 5, "square_size": 10.0,
-        "marker_fraction": 0.8, "aruco_dict": "DICT_4X4_1000",
-        "marker_backend": "aruco1",
-        "start_x": 0, "start_y": 0,
-        "paper_width": 210.0, "paper_height": 297.0,
-    }
+@pytest.mark.parametrize("target_type", sorted(TARGET_NAMES))
+def test_every_target_type_can_be_built_from_what_the_dialog_sends(target_type):
+    """The dialog sends a spec, which is what every other phase sends too.
 
-    target = visualise_target.build_target(payload)
+    It used to send its own payload, read through a second table of which
+    arguments each target takes -- a table that had drifted from the
+    constructors it named.
+    """
+    from pyCamSet.calibration_targets.target_registry import target_class
 
-    assert target is not None
+    spec = {"type": target_type,
+            **target_class(target_type).construction_parameters().defaults()}
+
+    assert visualise_target.build_target(spec) is not None
 
 
-def test_a_payload_missing_a_field_says_which():
-    with pytest.raises(ValueError, match="needs n_points"):
-        visualise_target.build_target({"target_type": "Ccube", "length": 1.0})
+def test_a_spec_naming_no_target_says_so():
+    with pytest.raises(ValueError, match="which target it is"):
+        visualise_target.build_target({"length": 1.0})
 
 
 def test_an_unknown_target_type_is_refused():
     with pytest.raises(ValueError, match="Unknown target type"):
-        visualise_target.build_target({"target_type": "Trapezoid"})
+        visualise_target.build_target({"type": "Trapezoid"})
 
 
 def test_bad_json_is_reported_not_raised(capsys):

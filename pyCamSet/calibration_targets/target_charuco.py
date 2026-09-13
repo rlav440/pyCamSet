@@ -18,6 +18,7 @@ from pyCamSet.calibration_targets.backend_registry import (
     dict_names_for_backend,
     dictionary_id,
 )
+from pyCamSet.calibration_targets.abstract_target import EXPORT_SUFFIXES
 from pyCamSet.calibration_targets.parameters import (
     Choice,
     Parameter,
@@ -111,6 +112,31 @@ _MIN_CORNERS = 2
 _DEFAULT_DICT_NAME = "DICT_4X4_1000"
 
 
+class ChArUcoExport(Parameterisation):
+    """How a ChArUco board is drawn, which is not what it is."""
+
+    name = "ChArUco"
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        return (
+            Parameter(
+                key="border_width", label="Border (mm)", default=10.0,
+                dtype="float", minimum=0.0, maximum=200.0, step=1.0,
+                decimals=2,
+                concept="Concept: the white margin drawn around the board, "
+                        "in millimetres. Detection: markers at the very edge "
+                        "of a page are harder to find.",
+                suggested="10"),
+            Parameter(
+                key="dpi", label="Raster DPI", default=300, dtype="int",
+                minimum=50, maximum=2400, step=50,
+                concept="Concept: the resolution a raster PDF is rendered "
+                        "at. Ignored by the vector formats.",
+                suggested="300-600"),
+        )
+
+
 class ChArUco(AbstractTarget):
 
     DETECTOR_BACKENDS = {
@@ -121,6 +147,26 @@ class ChArUco(AbstractTarget):
     @classmethod
     def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
         return ChArUcoGeometry(backend or ARUCO1_BACKEND)
+
+    @classmethod
+    def export_parameters(cls) -> Parameterisation:
+        return ChArUcoExport()
+
+    @classmethod
+    def printable_name(cls, values: dict, kind: str = "svg") -> str:
+        return (f"charuco_{int(values['num_squares_x'])}x"
+                f"{int(values['num_squares_y'])}_"
+                f"{float(values['square_size']):g}mm{EXPORT_SUFFIXES[kind]}")
+
+    def save_printable(self, path, kind: str = "svg", border_width: float = 10.0,
+                       dpi: int = 300) -> Path:
+        if kind == "svg":
+            return self.save_to_svg(path, border_width=border_width)
+        if kind == "pdf_vector":
+            return self.save_to_pdf(path, data_format="vector")
+        if kind == "pdf_raster":
+            return self.save_to_pdf(path, data_format="raster", dpi=int(dpi))
+        raise ValueError(f"A ChArUco cannot be written as {kind!r}.")
 
     def __init__(
         self,

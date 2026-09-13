@@ -1,7 +1,6 @@
 import warnings
 from pathlib import Path
 
-import cv2
 
 from pyCamSet.calibration_targets import target_charuco as ch
 from pyCamSet.calibration_targets.backend_registry import dictionary_id
@@ -73,18 +72,15 @@ def build_charuco(
     )
 
 
-def default_output_name(
-    num_squares_x: int,
+def default_output_name(num_squares_x: int,
     num_squares_y: int,
     square_size: float,
     export_kind: str,
 ) -> str:
-    """Return a default output filename for the requested export kind."""
-    suffix = ".svg" if export_kind == "svg" else ".pdf"
-    return (
-        f"charuco_{int(num_squares_x)}x{int(num_squares_y)}_"
-        f"{float(square_size):g}mm{suffix}"
-    )
+    """The filename a target of this size is written to by default."""
+    return ch.ChArUco.printable_name(
+        {"num_squares_x": num_squares_x, "num_squares_y": num_squares_y,
+         "square_size": square_size}, export_kind)
 
 
 def generate_charuco_target(
@@ -126,16 +122,7 @@ def generate_charuco_target(
     )
     out_path = out_dir / file_name
 
-    if export_kind == "pdf_raster":
-        saved_path = board.save_to_pdf(out_path)
-    elif export_kind == "pdf_vector":
-        saved_path = board.save_to_pdf(out_path, data_format="vector")
-    elif export_kind == "svg":
-        saved_path = board.save_to_svg(out_path)
-    else:
-        raise ValueError("export_kind must be one of: pdf_raster, pdf_vector, svg")
-
-    return board, saved_path
+    return board, board.save_printable(out_path, export_kind)
 
 
 def main() -> None:

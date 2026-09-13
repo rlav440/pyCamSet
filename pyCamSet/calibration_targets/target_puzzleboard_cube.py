@@ -10,6 +10,7 @@ from PIL import Image  # Convert rasterised SVG data to PDF and texture arrays.
 import svgwrite  # Write compact vector rectangles, polygons, and circles.
 
 from pyCamSet.calibration_targets import AbstractTarget, FaceToShape, ImageDetection  # Reuse pyCamSet target contracts.
+from pyCamSet.calibration_targets.abstract_target import EXPORT_SUFFIXES
 from pyCamSet.calibration_targets.parameters import Parameter, Parameterisation
 from pyCamSet.calibration_targets.puzzleboard_detection import (
     PUZZLEBOARD_DETECTOR,
@@ -99,6 +100,39 @@ class PuzzleBoardCubeGeometry(Parameterisation):
         )
 
 
+class PuzzleBoardCubeExport(Parameterisation):
+    """How a PuzzleBoard cube net is drawn, which is not what it is."""
+
+    name = "PuzzleBoardCube"
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        return (
+            Parameter(
+                key="border_width", label="Net border (mm)", default=10.0,
+                dtype="float", minimum=0.0, maximum=200.0, step=1.0,
+                decimals=2,
+                concept="Concept: the margin drawn around the folded net.",
+                suggested="10"),
+            Parameter(
+                key="draw_cut_outline", label="Draw cut outline",
+                default=True, dtype="bool",
+                concept="Concept: an outline to cut the net out along.",
+                suggested="on"),
+            Parameter(
+                key="draw_face_ids", label="Draw face numbers",
+                default=True, dtype="bool",
+                concept="Concept: a number on each face, for folding it the "
+                        "right way up.",
+                suggested="on"),
+            Parameter(
+                key="dpi", label="Raster DPI", default=300, dtype="int",
+                minimum=50, maximum=2400, step=50,
+                concept="Concept: the resolution a raster PDF is rendered at.",
+                suggested="300-600"),
+        )
+
+
 class PuzzleBoardCube(AbstractTarget):
     """Define a deterministic six-face PuzzleBoard calibration target."""
 
@@ -107,6 +141,29 @@ class PuzzleBoardCube(AbstractTarget):
     @classmethod
     def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
         return PuzzleBoardCubeGeometry()
+
+    @classmethod
+    def export_parameters(cls) -> Parameterisation:
+        return PuzzleBoardCubeExport()
+
+    @classmethod
+    def printable_name(cls, values: dict, kind: str = "svg") -> str:
+        return (f"puzzleboard_cube_{int(values['n_points'])}points_"
+                f"{float(values['length']):g}mm{EXPORT_SUFFIXES[kind]}")
+
+    def save_printable(self, path, kind: str = "svg", border_width: float = 10.0,
+                       draw_cut_outline: bool = True, draw_face_ids: bool = True,
+                       dpi: int = 300) -> Path:
+        if kind == "svg":
+            return self.save_to_svg(
+                path, border_width=border_width,
+                draw_cut_outline=draw_cut_outline, draw_face_ids=draw_face_ids)
+        if kind in ("pdf_vector", "pdf_raster"):
+            return self.save_to_pdf(
+                path, data_format="vector" if kind == "pdf_vector" else "raster",
+                dpi=int(dpi), border_width=border_width,
+                draw_cut_outline=draw_cut_outline, draw_face_ids=draw_face_ids)
+        raise ValueError(f"A PuzzleBoardCube cannot be written as {kind!r}.")
 
     def __init__(
         self,

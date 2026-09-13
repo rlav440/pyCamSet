@@ -28,6 +28,14 @@ from pyCamSet.calibration_targets.parameters import (
 from pyCamSet.calibration_targets.target_detections import TargetDetection, ImageDetection
 
 
+#: The printable formats a target can be written as, by the name the
+#: interface and the generators know them by.
+EXPORT_KINDS = ("svg", "pdf_vector", "pdf_raster")
+
+#: The file a printable format is written to.
+EXPORT_SUFFIXES = {"svg": ".svg", "pdf_vector": ".pdf", "pdf_raster": ".pdf"}
+
+
 def get_keys(data):
     """
     Returns keys, of the data, padding with zeros if necessary to maintain a 2nd order descriptor.
@@ -144,6 +152,41 @@ class AbstractTarget(ABC):
             is named differently by each marker library
         """
         return NO_PARAMETERS
+
+    @classmethod
+    def export_parameters(cls) -> Parameterisation:
+        """
+        The options that change how this target is drawn, not what it is.
+
+        A cut outline on a net, the border around a board, the resolution a
+        raster page is rendered at: none of them change where a point is,
+        so they are not part of the target and do not belong in its spec.
+        """
+        return NO_PARAMETERS
+
+    @classmethod
+    def printable_name(cls, values: dict, kind: str = "svg") -> str:
+        """
+        A filename that says what a target is.
+
+        Taken from the values rather than from a built target, because a
+        form shows it as it is typed into and building is not free.
+
+        :param values: the construction parameters, as declared
+        :param kind: one of :data:`EXPORT_KINDS`
+        """
+        raise NotImplementedError
+
+    def save_printable(self, path: Path, kind: str = "svg", **options) -> Path:
+        """
+        Write this target as a file to print.
+
+        :param path: where to write it
+        :param kind: one of :data:`EXPORT_KINDS`
+        :param options: the values of :meth:`export_parameters`
+        :raises ValueError: for a format this target cannot be written as
+        """
+        raise NotImplementedError
 
     @classmethod
     def own_detector_parameters(cls) -> DetectorParameterisation:

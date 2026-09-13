@@ -81,6 +81,22 @@ READING_ONLY_FIELDS = frozenset({
 })
 
 
+def describe_target(params: dict) -> str:
+    """
+    A target in one line, for a log or a status label.
+
+    Names the target and the arguments that decide its point layout, which
+    are the ones someone reading a run wants to check.
+
+    :param params: a phase's parameters, or a saved run's ``params``
+    """
+    spec = target_spec_of(params)
+    settings = ", ".join(
+        f"{key}={value}" for key, value in sorted(spec.items())
+        if key != TARGET_KEY_TYPE and key not in READING_ONLY_FIELDS)
+    return f"{spec.get(TARGET_KEY_TYPE, 'unknown')}({settings})"
+
+
 def target_params_of_run(run: dict | None) -> dict:
     """
     The target settings a saved run was produced with.

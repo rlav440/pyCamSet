@@ -88,6 +88,7 @@ from pyCamSet.calibration_targets.charuco_parameters import (
     typeable,
 )
 from pyCamSet.workflow.targets import (
+    describe_target,
     CHARUCO_BASED_TARGETS as _CHARUCO_BASED_TARGETS,
     TARGET_CHOICES as _TARGET_CHOICES,
 )
@@ -107,8 +108,7 @@ def _run_header(params: dict) -> list[str]:
     lines = [
         "=== Phase 1: Target Detection ===",
         f"Image folder : {params['f_loc']}",
-        f"Target       : {params['target_type']} "
-        f"(n={params['n_points']}, length={params['length']} mm)",
+        f"Target       : {describe_target(params)}",
         f"caching      : {params['caching']}",
         f"high_distort : {params['high_distortion']}",
         f"threads      : {params['threads'] or 'auto'}",

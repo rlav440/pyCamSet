@@ -53,8 +53,12 @@ def test_each_platform_has_a_home_for_it(monkeypatch):
     monkeypatch.setattr(uc.sys, "platform", "darwin")
     assert uc.config_dir().parts[-3:] == ("Library", "Application Support", "pyCamSet")
 
+    # sys.platform only.  uc.os is the os module itself, so patching its
+    # name would set os.name for the whole process, and on a Windows host
+    # pathlib then builds PosixPath and raises -- including inside pytest's
+    # own failure reporting, which turns any later failure into an
+    # INTERNALERROR that takes the session down.
     monkeypatch.setattr(uc.sys, "platform", "linux")
-    monkeypatch.setattr(uc.os, "name", "posix")
     monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/xdg")
     assert uc.config_dir().as_posix() == "/tmp/xdg/pyCamSet"
 

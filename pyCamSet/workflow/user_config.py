@@ -37,7 +37,13 @@ def config_dir() -> Path:
         return Path(override)
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "pyCamSet"
-    if os.name == "nt":
+    # sys.platform rather than os.name, to match the line above and because
+    # os.name is what pathlib picks its flavour from: a test that wanted the
+    # branch below on a Windows host had to patch os.name globally, and every
+    # Path() built afterwards -- pytest's own included -- raised
+    # NotImplementedError.  The two agree on every CPython build: "win32" is
+    # os.name "nt", and Cygwin is neither.
+    if sys.platform == "win32":
         base = os.environ.get("APPDATA")
         root = Path(base) if base else Path.home() / "AppData" / "Roaming"
         return root / "pyCamSet"

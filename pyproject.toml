@@ -67,9 +67,9 @@ docs = [
     "mkdocs-material>=9.5",
     "mkdocstrings[python]>=0.25",
     "mkdocs-autorefs>=1.0",
-    # Runs the examples in the docs at build time.  Unlike the sphinx-autoapi
-    # build this replaces, mkdocstrings imports pyCamSet rather than parsing
-    # it, so the docs build needs the package and its runtime stack installed.
+    # Runs the examples in the docs at build time -- which is what makes the
+    # docs build need pyCamSet and its whole runtime stack installed, where the
+    # sphinx-autoapi build this replaces never imported the package at all.
     "markdown-exec>=1.8",
     # Exports what those examples draw as an interactive vtk.js scene.  The
     # trame plotter component lives outside pyvista and carries the trame

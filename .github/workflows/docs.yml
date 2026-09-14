@@ -48,21 +48,14 @@ jobs:
       # and VTK still needs a GL context to render into.
       - uses: pyvista/setup-headless-display-action@v3
 
-      # Unlike the sphinx-autoapi build this replaced, mkdocstrings imports
-      # pyCamSet, and the examples run a real calibration -- so the package and
-      # its native stack have to be installed, cairo included.
       - name: Install the native graphics libraries
         run: sudo apt-get update && sudo apt-get install -y libcairo2
 
+      # The examples on these pages run a real calibration as the site is built,
+      # so unlike the sphinx-autoapi build this replaced -- which never imported
+      # the package at all -- pyCamSet and its whole runtime stack have to be
+      # installed here.
       - run: pip install -e ".[docs]"
-
-      # The docs build compiles the same numba kernels the suite does, and
-      # benefits from the same cache.
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pyCamSet
-          key: numba-docs-${{ github.run_id }}
-          restore-keys: numba-docs-
 
       - run: python -m mkdocs build --strict
 
@@ -92,22 +85,21 @@ jobs:
       - name: Install the native graphics libraries
         run: sudo apt-get update && sudo apt-get install -y libcairo2
 
-      # master is still the sphinx tree, and its toolchain is listed in the
-      # file it has always been listed in.  This step goes away with that tree.
+      # master is still the sphinx tree, and its toolchain is listed in the file
+      # it has always been listed in -- except for sphinx-copybutton, which its
+      # conf.py loads but its requirements have never named.  Development's
+      # requirements did name it, and this job used to install both files, so
+      # master's build had been borrowing it; with development on mkdocs there
+      # is no second file to borrow from.  Named here rather than fixed on
+      # master, because this whole step goes away when master catches up.
       - name: Install master's sphinx toolchain
-        run: pip install -r master/docs/doq_reqs.txt
+        run: pip install -r master/docs/doq_reqs.txt sphinx-copybutton
 
       - name: Build master into the site root
         run: python -m sphinx -b html master/docs/source _site
 
       - name: Install development's mkdocs toolchain
         run: pip install -e "./development[docs]"
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pyCamSet
-          key: numba-docs-${{ github.run_id }}
-          restore-keys: numba-docs-
 
       # development is warning-free, so it is held to that with --strict.
       - name: Build development into /dev

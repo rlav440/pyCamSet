@@ -13,7 +13,7 @@
     "decimals": 3,
     "search_order": 4,
     "priority": "A",
-    "concept": "Concept: minimum candidate marker size, expressed relative to image size. Detection: rejects contours whose perimeter is too small before decoding. Calibration: if valid small markers are rejected, ChArUco corners never exist, so calibration fails from lack of correspondences.",
+    "concept": "minimum candidate marker size, expressed relative to image size. Detection: rejects contours whose perimeter is too small before decoding. Calibration: if valid small markers are rejected, ChArUco corners never exist, so calibration fails from lack of correspondences.",
     "range_text": "Not explicitly specified in source; practically should be > 0",
     "range_source": "Estimated by us",
     "suggested": "0.01–0.02"
@@ -32,7 +32,7 @@
     "odd": true,
     "search_order": 0,
     "priority": "A",
-    "concept": "Concept: smallest local window used for adaptive thresholding. Detection: controls the finest local binarisation scale tested before contour extraction. Calibration: affects whether marker edges survive thresholding; poor thresholding reduces usable observations.",
+    "concept": "smallest local window used for adaptive thresholding. Detection: controls the finest local binarisation scale tested before contour extraction. Calibration: affects whether marker edges survive thresholding; poor thresholding reduces usable observations.",
     "range_text": "Not explicitly specified in source; should be a positive integer",
     "range_source": "Estimated by us",
     "suggested": "3"
@@ -51,7 +51,7 @@
     "odd": true,
     "search_order": 1,
     "priority": "A",
-    "concept": "Concept: largest local window used for adaptive thresholding. Detection: controls the coarsest local binarisation scale tested. Calibration: if the thresholding scale is mismatched to marker scale or illumination structure, detections become sparse or unstable.",
+    "concept": "largest local window used for adaptive thresholding. Detection: controls the coarsest local binarisation scale tested. Calibration: if the thresholding scale is mismatched to marker scale or illumination structure, detections become sparse or unstable.",
     "range_text": "Not explicitly specified in source; should be >= min",
     "range_source": "Estimated by us",
     "suggested": "31 or 41"
@@ -69,7 +69,7 @@
     "step": 1,
     "search_order": 2,
     "priority": "A",
-    "concept": "Concept: spacing between tested adaptive-threshold window sizes. Detection: determines how densely OpenCV samples threshold scales. Calibration: coarse sampling can miss the useful threshold regime and reduce the number of stable points available for calibration.",
+    "concept": "spacing between tested adaptive-threshold window sizes. Detection: determines how densely OpenCV samples threshold scales. Calibration: coarse sampling can miss the useful threshold regime and reduce the number of stable points available for calibration.",
     "range_text": "Not explicitly specified in source; should be a positive integer",
     "range_source": "Estimated by us",
     "suggested": "4 or 6"
@@ -88,7 +88,7 @@
     "decimals": 2,
     "search_order": 3,
     "priority": "A",
-    "concept": "Concept: constant subtracted in adaptive thresholding. Detection: shifts the black/white decision boundary during binarisation. Calibration: indirectly controls whether markers decode consistently across views, which affects point count and repeatability.",
+    "concept": "constant subtracted in adaptive thresholding. Detection: shifts the black/white decision boundary during binarisation. Calibration: indirectly controls whether markers decode consistently across views, which affects point count and repeatability.",
     "range_text": "Not explicitly specified in source",
     "range_source": "Estimated by us",
     "suggested": "3–7"
@@ -106,7 +106,7 @@
     "step": 1,
     "search_order": 15,
     "priority": "A",
-    "concept": "Concept: required local marker support for accepting an interpolated ChArUco corner. Detection: filters out corners that do not have enough adjacent detected markers. Calibration: lower values increase point count but may lower point reliability; this is a count-versus-quality trade-off.",
+    "concept": "required local marker support for accepting an interpolated ChArUco corner. Detection: filters out corners that do not have enough adjacent detected markers. Calibration: lower values increase point count but may lower point reliability; this is a count-versus-quality trade-off.",
     "range_text": "0–2 (reported in earlier investigation; not independently verified here)",
     "range_source": "Estimated by us",
     "suggested": "1"
@@ -142,7 +142,7 @@
       }
     ],
     "priority": "B",
-    "concept": "Concept: method for refining detected ArUco marker corners. Detection: improves marker-corner localisation before ChArUco interpolation. Calibration: better marker corners generally improve interpolated chessboard corners and reduce reprojection residuals.",
+    "concept": "method for refining detected ArUco marker corners. Detection: improves marker-corner localisation before ChArUco interpolation. Calibration: better marker corners generally improve interpolated chessboard corners and reduce reprojection residuals.",
     "range_text": "Enum: CORNER_REFINE_NONE, CORNER_REFINE_SUBPIX, CORNER_REFINE_CONTOUR, CORNER_REFINE_APRILTAG",
     "range_source": "OpenCV-provided",
     "suggested": "CORNER_REFINE_SUBPIX"
@@ -160,7 +160,7 @@
     "step": 1,
     "search_order": 11,
     "priority": "B",
-    "concept": "Concept: local search window for marker-corner refinement. Detection: sets the neighbourhood over which corner refinement operates. Calibration: too small may under-refine; too large may drift on blurred or aliased edges, affecting geometric precision.",
+    "concept": "local search window for marker-corner refinement. Detection: sets the neighbourhood over which corner refinement operates. Calibration: too small may under-refine; too large may drift on blurred or aliased edges, affecting geometric precision.",
     "range_text": "Not explicitly specified in source",
     "range_source": "Estimated by us",
     "suggested": "3–5"
@@ -178,7 +178,7 @@
     "step": 1,
     "search_order": 12,
     "priority": "B",
-    "concept": "Concept: maximum iteration count for marker-corner refinement. Detection: limits the refinement solver effort. Calibration: mainly affects convergence robustness of localised corners rather than whether markers are found at all.",
+    "concept": "maximum iteration count for marker-corner refinement. Detection: limits the refinement solver effort. Calibration: mainly affects convergence robustness of localised corners rather than whether markers are found at all.",
     "range_text": "Not explicitly specified in source",
     "range_source": "Estimated by us",
     "suggested": "30"
@@ -197,7 +197,7 @@
     "decimals": 4,
     "search_order": 13,
     "priority": "B",
-    "concept": "Concept: stopping tolerance for marker-corner refinement. Detection: determines when refinement is considered converged. Calibration: tighter values may improve localisation slightly, but usually with diminishing returns if the image data are weak.",
+    "concept": "stopping tolerance for marker-corner refinement. Detection: determines when refinement is considered converged. Calibration: tighter values may improve localisation slightly, but usually with diminishing returns if the image data are weak.",
     "range_text": "Not explicitly specified in source",
     "range_source": "Estimated by us",
     "suggested": "0.05–0.1"
@@ -211,7 +211,7 @@
     "tunable": false,
     "settable": true,
     "priority": "B",
-    "concept": "Concept: minimum local intensity variation required before Otsu thresholding is used in decoding. Detection: affects how marker bits are binarised during decoding in low-contrast patches. Calibration: relevant only if markers are found but fail decoding due to weak contrast.",
+    "concept": "minimum local intensity variation required before Otsu thresholding is used in decoding. Detection: affects how marker bits are binarised during decoding in low-contrast patches. Calibration: relevant only if markers are found but fail decoding due to weak contrast.",
     "range_text": "Not explicitly specified in source",
     "range_source": "Estimated by us",
     "suggested": "2–4"
@@ -226,7 +226,7 @@
     "settable": true,
     "minimum": 0.0,
     "priority": "B",
-    "concept": "Concept: tolerance for recovering rejected markers using board-guided refinement. Detection: larger values allow more rejected candidates to be recovered as valid markers. Calibration: can increase point count when detections are sparse, but may admit worse correspondences if too loose.",
+    "concept": "tolerance for recovering rejected markers using board-guided refinement. Detection: larger values allow more rejected candidates to be recovered as valid markers. Calibration: can increase point count when detections are sparse, but may admit worse correspondences if too loose.",
     "range_text": "Not explicitly specified in source; should be non-negative in practice",
     "range_source": "Estimated by us",
     "suggested": "10–20"
@@ -245,7 +245,7 @@
     "decimals": 3,
     "search_order": 14,
     "priority": "C",
-    "concept": "Concept: tolerance for correcting bit errors during marker identification. Detection: increases permissiveness during dictionary matching. Calibration: may recover weak markers, but if too permissive may increase false IDs, which is geometrically harmful.",
+    "concept": "tolerance for correcting bit errors during marker identification. Detection: increases permissiveness during dictionary matching. Calibration: may recover weak markers, but if too permissive may increase false IDs, which is geometrically harmful.",
     "range_text": "Not explicitly specified in header comment",
     "range_source": "Estimated by us",
     "suggested": "0.6–0.8"
@@ -259,7 +259,7 @@
     "tunable": false,
     "settable": true,
     "priority": "C",
-    "concept": "Concept: ignored fraction at cell borders during marker bit sampling. Detection: reduces contamination from cell-border transitions when decoding. Calibration: matters only indirectly through decode stability; usually secondary unless markers are very small in pixels.",
+    "concept": "ignored fraction at cell borders during marker bit sampling. Detection: reduces contamination from cell-border transitions when decoding. Calibration: matters only indirectly through decode stability; usually secondary unless markers are very small in pixels.",
     "range_text": "Not explicitly specified in source",
     "range_source": "Estimated by us",
     "suggested": "0.08–0.13"
@@ -278,7 +278,7 @@
     "decimals": 3,
     "search_order": 6,
     "priority": "C",
-    "concept": "Concept: contour simplification tolerance when deciding whether a candidate looks square. Detection: affects quad fitting from thresholded contours. Calibration: only matters if contour extraction is the limiting stage; otherwise it is secondary to thresholding and size rejection.",
+    "concept": "contour simplification tolerance when deciding whether a candidate looks square. Detection: affects quad fitting from thresholded contours. Calibration: only matters if contour extraction is the limiting stage; otherwise it is secondary to thresholding and size rejection.",
     "range_text": "Not explicitly specified in source",
     "range_source": "Estimated by us",
     "suggested": "0.03–0.05"
@@ -292,7 +292,7 @@
     "tunable": false,
     "settable": true,
     "priority": "C",
-    "concept": "Concept: optional camera model for camera-aware ChArUco interpolation. Detection: switches interpolation from local homography to a pose/projection-based route when provided. Calibration: can improve interpolation in some regimes, but is not the first lever when the main failure is missing markers.",
+    "concept": "optional camera model for camera-aware ChArUco interpolation. Detection: switches interpolation from local homography to a pose/projection-based route when provided. Calibration: can improve interpolation in some regimes, but is not the first lever when the main failure is missing markers.",
     "range_text": "Matrix presence/absence, not a scalar range",
     "range_source": "OpenCV-provided",
     "suggested": "leave empty initially",
@@ -307,7 +307,7 @@
     "tunable": false,
     "settable": true,
     "priority": "C",
-    "concept": "Concept: optional distortion model paired with cameraMatrix. Detection: used only in the camera-aware interpolation path. Calibration: relevant if distortion is non-negligible and interpolation quality, rather than raw marker count, is the limiting issue.",
+    "concept": "optional distortion model paired with cameraMatrix. Detection: used only in the camera-aware interpolation path. Calibration: relevant if distortion is non-negligible and interpolation quality, rather than raw marker count, is the limiting issue.",
     "range_text": "Vector presence/absence, not a scalar range",
     "range_source": "OpenCV-provided",
     "suggested": "leave empty initially",

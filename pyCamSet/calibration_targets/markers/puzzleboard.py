@@ -63,7 +63,7 @@ class PuzzleBoardDetector(DetectorParameterisation):
                 search_order=1,
                 priority="A",
                 concept=(
-                    "Concept: the smallest decoded grid the detector will "
+                    "the smallest decoded grid the detector will "
                     "accept. Detection: a recovered patch narrower than this "
                     "is discarded before its position is decoded. "
                     "Calibration: raising it drops small or oblique views of "

@@ -13,6 +13,14 @@ is called, what it defaults to, the bounds it holds between, and the prose
 a person reads while typing it in.  :class:`Parameterisation` is a set of
 them, with the rules that span more than one.
 
+An argument of a target describes itself once more than that: the
+constructor that takes it already says what it is called, what it defaults
+to, what it holds and what it means.  So :func:`parameters_from_docstring`
+reads those back out of the signature and the ``:param:`` entry, and a
+target names its arguments rather than describing them twice.  What sizes
+one may be is not written there at all: a target is an object someone made,
+and asking a target it cannot be is what a target refuses.
+
 :class:`DetectorParameterisation` adds the two things that are a detector's
 alone: whether its optional dependency is installed, and the named bound
 presets a study may start from.  A target composes these -- its own
@@ -22,11 +30,14 @@ selected backend's, joined by :func:`combine`.
 """
 from __future__ import annotations
 
+import inspect
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+
+from docstring_parser import parse as parse_docstring
 
 
 @dataclass(frozen=True)
@@ -315,6 +326,114 @@ def parameters_from_json(path: Path) -> tuple[Parameter, ...]:
     return tuple(Parameter.from_row(row) for row in rows)
 
 
+#: What separates the name a form gives an argument from what it says about
+#: it: ``Squares across -- chessboard squares along the board's x axis.``
+_LABEL_SEPARATOR = " -- "
+
+#: What introduces the values worth trying, where an argument names any.
+_SUGGESTED = "Suggested:"
+
+#: The dtype an annotation stands for.  A target module postpones its
+#: annotations, so they arrive as their own names.
+_DTYPE_OF = {int: "int", float: "float", bool: "bool", str: "str"}
+
+
+def _dtype_of(argument: Any, key: str) -> str:
+    """What the argument *key* is annotated, or failing that defaulted, as."""
+    annotation = argument.annotation
+    if annotation is inspect.Parameter.empty:
+        dtype = _DTYPE_OF.get(type(argument.default))
+    elif isinstance(annotation, str):
+        dtype = annotation if annotation in DTYPES else None
+    else:
+        dtype = _DTYPE_OF.get(annotation)
+    if dtype is None:
+        raise ValueError(
+            f"{key}: a form types one of {DTYPES} into a box, so an argument "
+            f"it offers must be annotated as one of them.")
+    return dtype
+
+
+def _prose_of(description: str, key: str) -> tuple[str, str, str]:
+    """
+    The three things one ``:param:`` entry says, told apart.
+
+    The name a form puts beside the box, what it says about it, and the
+    values worth trying, written as one sentence and a half::
+
+        Square size (mm) -- the printed edge length of one chessboard
+        square, in millimetres. Suggested: 4-40.
+    """
+    text = " ".join(description.split())
+    label, separator, rest = text.partition(_LABEL_SEPARATOR)
+    if not separator:
+        raise ValueError(
+            f"{key}: a form needs a name to put beside the box, so the "
+            f"documented argument must give one, as "
+            f"'Squares across{_LABEL_SEPARATOR}chessboard squares along ...'.")
+    concept, _, suggested = rest.partition(_SUGGESTED)
+    return label.strip(), concept.strip(), suggested.strip().rstrip(".")
+
+
+def parameters_from_docstring(source, *offered, choices=None) -> tuple[Parameter, ...]:
+    """
+    The arguments of *source*, as it already describes them.
+
+    An argument says everything a form needs to offer it: the signature
+    says what it is called and what it defaults to, the annotation what it
+    holds, and the docstring what it means::
+
+        :param square_size: Square size (mm) -- the printed edge length of
+            one chessboard square, in millimetres. Suggested: 4-40.
+
+    So that is where it is read from, rather than written a second time
+    beside it and left to drift apart.  What a value may be is not written
+    here at all: a target is an object someone made, and a size it cannot
+    be is one its own constructor refuses -- not a range a spin box was
+    given.
+
+    :param source: the callable whose arguments these are
+    :param offered: the arguments a form asks for, in the order it shows
+        them; an argument of *source* that no form asks about -- a drawing
+        resolution, the detector's own settings -- is simply left out
+    :param choices: the fixed values an argument may take, by argument,
+        for the one thing a docstring cannot say: a marker alphabet is
+        named by whichever library reads it
+    :raises ValueError: for an argument *source* does not take, does not
+        default, or does not document
+    """
+    signature = inspect.signature(source).parameters
+    documented = {parameter.arg_name: parameter.description or ""
+                  for parameter in parse_docstring(inspect.getdoc(source) or "").params}
+    named = dict(choices or {})
+    if unasked := sorted(set(named) - set(offered)):
+        raise ValueError(
+            f"{source.__qualname__} names the values of {', '.join(unasked)}, "
+            f"which it does not offer.")
+    parameters = []
+    for key in offered:
+        if key not in signature:
+            raise ValueError(
+                f"{source.__qualname__} takes no argument {key!r}, so a form "
+                f"offering one would build a target nobody asked for.")
+        if (argument := signature[key]).default is inspect.Parameter.empty:
+            raise ValueError(
+                f"{key}: a form starts at the default and a study samples "
+                f"around it, so an argument offered by one must have one.")
+        if key not in documented:
+            raise ValueError(
+                f"{key}: what a form says about an argument is what "
+                f"{source.__qualname__} says about it, so it must say "
+                f"something.")
+        label, concept, suggested = _prose_of(documented[key], key)
+        parameters.append(Parameter(
+            key=key, label=label, default=argument.default,
+            dtype=_dtype_of(argument, key), concept=concept,
+            suggested=suggested,
+            choices=tuple(Choice(str(name), name) for name in named.get(key, ()))))
+    return tuple(parameters)
+
+
 @dataclass(frozen=True)
 class Profile:
     """
@@ -497,6 +616,25 @@ class Parameterisation(ABC):
         :return: every problem found, empty when the settings are usable
         """
         return []
+
+
+class DocumentedParameters(Parameterisation):
+    """
+    The arguments of one callable, as its own docstring describes them.
+
+    What a target is, and how it is drawn, are its constructor's arguments
+    and its ``save_printable``'s; this is those read straight from the
+    thing that takes them.
+    """
+
+    def __init__(self, source, *offered, choices=None):
+        self.name = source.__qualname__.split(".")[0]
+        self._parameters = parameters_from_docstring(
+            source, *offered, choices=choices)
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        return self._parameters
 
 
 class DetectorParameterisation(Parameterisation):

@@ -22,6 +22,7 @@ from pyCamSet.calibration_targets.core.parameters import (
     DetectorParameterisation,
     Profile,
     combine,
+    parameters_from_docstring,
 )
 
 GROUPS = {"CharucoParameters", "DetectorParameters", "RefineParameters"}
@@ -354,6 +355,128 @@ def test_the_smallest_usable_boards_are_still_built():
 
 
 # ---------------------------------------------------------------------------
+# A parameter is its argument, and what the argument's own docstring says
+# ---------------------------------------------------------------------------
+#
+# Every one of these was written twice: once as the argument a constructor
+# takes and documents, and again as a table beside it saying the same name,
+# the same default and the same prose in different words.  The two drifted,
+# and the form showed whichever half it read.
+
+
+def documented_example(
+    needed,
+    width: int = 4,
+    ratio: float = 0.5,
+    quiet: bool = False,
+    mode="fast",
+    unnamed: int = 1,
+    unmentioned: int = 2,
+):
+    """
+    A made-up thing, with arguments a form could offer.
+
+    :param needed: Needed -- an argument with nothing to start from.
+    :param width: Width -- how wide the thing is, in whole
+        somethings. Suggested: 4-8.
+    :param ratio: Ratio -- how much of the thing is the other thing.
+    :param quiet: Quiet -- whether it says anything at all.
+    :param mode: Mode -- which way round it goes.
+    :param unnamed: an argument that never names itself.
+    """
+
+
+def test_an_argument_says_its_own_name_prose_default_and_dtype():
+    """The four things that were written twice, read once from the one
+    place a person maintaining the argument is already looking."""
+    width, = parameters_from_docstring(documented_example, "width")
+
+    assert width.key == "width"
+    assert width.label == "Width"
+    assert width.concept == "how wide the thing is, in whole somethings."
+    assert width.suggested == "4-8"
+    assert width.default == 4
+    assert width.dtype == "int"
+
+
+def test_the_prose_reads_the_same_however_the_docstring_was_wrapped():
+    """A description is written to the margin, and read back as a sentence."""
+    width, = parameters_from_docstring(documented_example, "width")
+
+    assert "\n" not in width.concept and "  " not in width.concept
+
+
+def test_what_an_argument_holds_is_its_annotation_or_failing_that_its_default():
+    """A target module postpones its annotations, so they arrive as names
+    rather than as types, and an unannotated argument still has a value."""
+    ratio, quiet, mode = parameters_from_docstring(
+        documented_example, "ratio", "quiet", "mode")
+
+    assert (ratio.dtype, quiet.dtype, mode.dtype) == ("float", "bool", "str")
+
+
+def test_only_the_arguments_a_form_asks_for_are_offered():
+    """A constructor takes drawing resolutions and detector settings that
+    are nobody's business here; naming an argument is what offers it."""
+    offered = parameters_from_docstring(documented_example, "mode", "width")
+
+    assert [p.key for p in offered] == ["mode", "width"], "in the order given"
+
+
+def test_the_values_an_argument_may_take_are_the_one_thing_named_for_it():
+    """Which library reads the markers decides what the alphabets are
+    called, and no docstring can say that for both of them."""
+    mode, = parameters_from_docstring(
+        documented_example, "mode", choices={"mode": ("fast", "careful")})
+
+    assert mode.choice_labels() == ["fast", "careful"]
+    assert mode.parse("careful") == "careful"
+
+
+def test_values_named_for_an_argument_nobody_is_asked_about_are_refused():
+    with pytest.raises(ValueError, match="does not offer"):
+        parameters_from_docstring(
+            documented_example, "width", choices={"mode": ("fast",)})
+
+
+def test_an_argument_the_callable_does_not_take_is_refused():
+    """Which is a control that builds something nobody asked for."""
+    with pytest.raises(ValueError, match="takes no argument 'height'"):
+        parameters_from_docstring(documented_example, "height")
+
+
+def test_an_argument_with_nothing_to_start_from_is_refused():
+    """A form opens at the default, so there has to be one."""
+    with pytest.raises(ValueError, match="must have one"):
+        parameters_from_docstring(documented_example, "needed")
+
+
+def test_an_argument_the_docstring_says_nothing_about_is_refused():
+    """The docstring is the only place the prose lives now, so a silent
+    argument is a form control with no label and no hover text."""
+    with pytest.raises(ValueError, match="must say something"):
+        parameters_from_docstring(documented_example, "unmentioned")
+
+
+def test_an_argument_that_does_not_name_itself_is_refused():
+    """A form needs something short to put beside the box, which is the
+    half of the description before the dash."""
+    with pytest.raises(ValueError, match="Squares across"):
+        parameters_from_docstring(documented_example, "unnamed")
+
+
+def test_a_heading_the_tooltip_adds_is_not_written_into_the_prose():
+    """Seventeen of OpenCV's twenty-one concepts began 'Concept:' and four
+    did not, because the heading belongs to the tooltip, not the text."""
+    from pyCamSet.calibration_targets.markers.puzzleboard import (
+        PUZZLEBOARD_DETECTOR)
+
+    for detector in (ARUCO_OPENCV_DETECTOR, PUZZLEBOARD_DETECTOR):
+        for parameter in detector.parameters:
+            assert not parameter.concept.startswith("Concept:"), parameter.key
+
+
+# ---------------------------------------------------------------------------
 # What a target says it is
 # ---------------------------------------------------------------------------
 #
@@ -389,9 +512,39 @@ def test_every_declared_default_is_the_constructors_own(name, cls):
     signature = inspect.signature(cls.__init__).parameters
     for parameter in cls.construction_parameters().parameters:
         expected = signature[parameter.key].default
-        if expected is inspect.Parameter.empty:
-            continue
+        assert expected is not inspect.Parameter.empty, parameter.key
         assert parameter.default == expected, parameter.key
+        assert type(parameter.default) is type(expected), parameter.key
+
+
+@pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
+def test_a_target_is_described_by_its_own_docstrings(name, cls):
+    """A new target gets a form by documenting its constructor, and cannot
+    get one by writing the same things out a second time beside it."""
+    from pyCamSet.calibration_targets.core.parameters import DocumentedParameters
+
+    assert isinstance(cls.construction_parameters(), DocumentedParameters)
+    assert isinstance(cls.export_parameters(), DocumentedParameters)
+
+
+@pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
+def test_what_a_form_says_about_an_argument_is_what_the_target_says(name, cls):
+    """Verbatim, so that the sentence a person reads while typing a value
+    in is the sentence maintained beside the code that uses it."""
+    import inspect
+
+    for source, parameterisation in (
+            (cls.__init__, cls.construction_parameters()),
+            (cls.save_printable, cls.export_parameters())):
+        documented = " ".join((inspect.getdoc(source) or "").split())
+        for parameter in parameterisation.parameters:
+            assert parameter.label, parameter.key
+            assert parameter.concept, parameter.key
+            assert f"{parameter.label} -- {parameter.concept}" in documented, \
+                parameter.key
+            if parameter.suggested:
+                assert f"Suggested: {parameter.suggested}" in documented, \
+                    parameter.key
 
 
 @pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
@@ -408,26 +561,86 @@ def test_a_target_builds_from_the_arguments_it_declares(name, cls):
 
 
 @pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
-def test_a_declared_numeric_argument_says_what_it_holds_between(name, cls):
-    """A form clamps to these, so a default outside them is a trap."""
-    for parameter in cls.construction_parameters().parameters:
-        if parameter.dtype not in ("int", "float"):
-            continue
-        assert parameter.minimum is not None, parameter.key
-        assert parameter.maximum is not None, parameter.key
-        low, high = parameter.cast(parameter.minimum), parameter.cast(parameter.maximum)
-        assert low <= parameter.cast(parameter.default) <= high, parameter.key
+def test_how_big_a_target_may_be_is_the_targets_own_business(name, cls):
+    """A target is an object someone made, and the interface has no say in
+    how large.  Each of these once carried a range invented for the spin
+    box that showed it: a board of at most 100 squares, a cube of at most
+    200mm.  A form built from them clamped a real target to a made-up
+    ceiling, silently, and the ceilings did not even hold -- a Ccube was
+    capped at 40 squares a side, which no dictionary has the markers
+    for."""
+    for parameterisation in (cls.construction_parameters(),
+                             cls.export_parameters()):
+        for parameter in parameterisation.parameters:
+            assert parameter.minimum is None, parameter.key
+            assert parameter.maximum is None, parameter.key
+            assert parameter.step is None, parameter.key
+            assert parameter.decimals is None, parameter.key
 
 
-def test_the_rules_a_target_states_are_applied_before_it_is_built():
-    """Which is how a board too small for OpenCV never reaches OpenCV."""
+def test_a_target_larger_than_the_form_used_to_allow_is_built():
+    """The ceiling was 100 squares a side, and the board above it is fine.
+
+    How large a target is is the printer's business: what an interface
+    offered was never a limit, only the range invented for the spin box
+    that showed it."""
+    from pyCamSet.calibration_targets.charuco.target import ChArUco
+    from pyCamSet.calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
+
+    assert ChArUco(num_squares_x=150, num_squares_y=150,
+                   square_size=4.0).point_data.shape == (1, 149 * 149, 3)
+    assert PuzzleBoardCube(length=5000.0).point_data.shape[0] == 6
+
+
+@pytest.mark.parametrize("values,refused", [
+    ({"square_size": 0.0}, "has a size"),
+    ({"square_size": -4.0}, "has a size"),
+    ({"marker_fraction": 0.0}, "fills some of its square"),
+    ({"marker_fraction": 1.5}, "no more than all of it"),
+])
+def test_a_board_that_is_not_a_board_is_refused_by_the_board(values, refused):
+    """Not a range a spin box was given: each of these is a board OpenCV
+    raises out of with an exception still set, which aborts the next call
+    to build one.  The target is what knows that, so the target says so."""
+    from pyCamSet.calibration_targets.charuco.target import ChArUco
+
+    with pytest.raises(ValueError, match=refused):
+        ChArUco(**values)
+
+
+@pytest.mark.parametrize("values,refused", [
+    ({"length": 0.0}, "has an edge length"),
+    ({"border_fraction": 0.0}, "neither all of it nor none"),
+    ({"border_fraction": 1.0}, "neither all of it nor none"),
+])
+def test_a_cube_that_is_not_a_cube_is_refused_by_the_cube(values, refused):
+    from pyCamSet.calibration_targets.ccube.target import Ccube
+
+    with pytest.raises(ValueError, match=refused):
+        Ccube(**values)
+
+
+def test_the_only_ceiling_a_cube_has_is_the_one_its_alphabet_gives_it():
+    """Six faces are cut from one marker dictionary, and it ends.  The
+    invented cap said 40 squares a side, which no dictionary has the
+    markers for; the real limit under the default alphabet is 18, and a
+    larger alphabet raises it."""
+    from pyCamSet.calibration_targets.ccube.target import Ccube
+
+    assert Ccube(n_points=18).point_data.shape == (6, 17 * 17, 3)
+    with pytest.raises(ValueError, match="needs 1200 markers, six faces of 200"):
+        Ccube(n_points=20)
+
+
+def test_what_a_target_may_be_is_the_targets_own_to_refuse():
+    """A form collects arguments and a target decides whether they make
+    one.  The alternative was a second statement of each rule, beside the
+    controls that offered it, checked before the target ever saw them."""
     from pyCamSet.calibration_targets.charuco.target import ChArUco
     from pyCamSet.calibration_targets.puzzleboard.target import PuzzleBoard
 
     assert ChArUco.construction_parameters().validate(
-        {"num_squares_x": 2, "num_squares_y": 2}) == [
-        "A ChArUco board needs at least 2 chessboard corners; "
-        "a 2x2 board has 1."]
+        {"num_squares_x": 2, "num_squares_y": 2}) == [], "nothing to restate"
 
     with pytest.raises(ValueError, match="chessboard corners"):
         ChArUco(num_squares_x=2, num_squares_y=2, square_size=30.0)

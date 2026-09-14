@@ -21,8 +21,7 @@ from pyCamSet.calibration_targets.markers.backend_registry import (
 )
 from pyCamSet.calibration_targets.core.abstract_target import EXPORT_SUFFIXES
 from pyCamSet.calibration_targets.core.parameters import (
-    Choice,
-    Parameter,
+    DocumentedParameters,
     Parameterisation,
 )
 from pyCamSet.calibration_targets.markers.aruco2 import (
@@ -45,63 +44,6 @@ _MIN_POINTS = 3
 #: split six ways, so it needs markers to spare.
 _DEFAULT_DICT_NAME = "DICT_4X4_1000"
 
-
-class CcubeGeometry(Parameterisation):
-    """What decides where a Ccube's corners are, and how it prints."""
-
-    name = "Ccube"
-
-    def __init__(self, backend: str = ARUCO1_BACKEND):
-        self._backend = backend or ARUCO1_BACKEND
-
-    @property
-    def parameters(self) -> tuple[Parameter, ...]:
-        return (
-            Parameter(
-                key="n_points", label="Squares per face", default=5,
-                dtype="int", minimum=_MIN_POINTS, maximum=40, step=1,
-                concept="Concept: chessboard squares along one edge of one "
-                        "of the cube's six faces.",
-                suggested="4-8"),
-            Parameter(
-                key="length", label="Cube edge (mm)", default=20.0,
-                dtype="float", minimum=0.001, maximum=1000.0, step=1.0,
-                decimals=3,
-                concept="Concept: the printed edge length of the cube, in "
-                        "millimetres, border included.",
-                suggested="20-200"),
-            Parameter(
-                key="border_fraction", label="Border fraction", default=0.1,
-                dtype="float", minimum=0.001, maximum=0.9, step=0.01,
-                decimals=3,
-                concept="Concept: how much of each face is blank margin "
-                        "rather than board. Detection: too little and "
-                        "markers near an edge are cut by the fold.",
-                suggested="0.05-0.15"),
-            Parameter(
-                key="aruco_dict", label="ArUco dictionary",
-                default=_DEFAULT_DICT_NAME, dtype="str",
-                choices=tuple(Choice(name, name)
-                              for name in dict_names_for_backend(self._backend)),
-                concept="Concept: the marker alphabet, split six ways so "
-                        "that each face carries markers of its own.",
-                suggested=_DEFAULT_DICT_NAME),
-            Parameter(
-                key="legacy", label="Legacy pattern", default=False,
-                dtype="bool",
-                concept="Concept: which of OpenCV's two marker layouts the "
-                        "faces were printed to. Detection: the wrong one "
-                        "finds every marker and no corners.",
-                suggested="off, unless the cube predates OpenCV 4.6"),
-        )
-
-    def validate(self, values: dict) -> list[str]:
-        """A face is a ChArUco board, with the same two ways to be too small."""
-        n = values.get("n_points", 0)
-        if n < _MIN_POINTS:
-            return [f"A Ccube face must be at least {_MIN_POINTS}x"
-                    f"{_MIN_POINTS} squares; got n_points={n}."]
-        return []
 
 # TFORMS = [
 # 	([-1.209,-1.209, 1.209],[ 0.5,-0.5, 0.5]),
@@ -154,40 +96,6 @@ def make_blank_square(draw_res, line_fraction, border_fraction):
     canvas[-int_line:, :] = 0
     return canvas, int(border_fraction * draw_res[0]/2)
 
-class CcubeExport(Parameterisation):
-    """How a Ccube net is drawn, which is not what it is."""
-
-    name = "Ccube"
-
-    @property
-    def parameters(self) -> tuple[Parameter, ...]:
-        return (
-            Parameter(
-                key="border_width", label="Net border (mm)", default=10.0,
-                dtype="float", minimum=0.0, maximum=200.0, step=1.0,
-                decimals=2,
-                concept="Concept: the margin drawn around the folded net.",
-                suggested="10"),
-            Parameter(
-                key="draw_cut_outline", label="Draw cut outline",
-                default=True, dtype="bool",
-                concept="Concept: an outline to cut the net out along.",
-                suggested="on"),
-            Parameter(
-                key="draw_board_ids", label="Draw face numbers",
-                default=True, dtype="bool",
-                concept="Concept: a number on each face, for folding it the "
-                        "right way up.",
-                suggested="on"),
-            Parameter(
-                key="individual_faces", label="One face per page",
-                default=False, dtype="bool",
-                concept="Concept: print each face separately rather than as "
-                        "one net. For a cube too large to fit a page.",
-                suggested="off"),
-        )
-
-
 class Ccube(AbstractTarget):
     """
     This class defines a calibration target that consists of a Cube of ChArUco boards.
@@ -200,11 +108,19 @@ class Ccube(AbstractTarget):
 
     @classmethod
     def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
-        return CcubeGeometry(backend or ARUCO1_BACKEND)
+        """What decides where a cube's corners are, and how it prints."""
+        return DocumentedParameters(
+            cls.__init__,
+            "n_points", "length", "border_fraction", "aruco_dict", "legacy",
+            choices={"aruco_dict": dict_names_for_backend(backend or ARUCO1_BACKEND)},
+        )
 
     @classmethod
     def export_parameters(cls) -> Parameterisation:
-        return CcubeExport()
+        """How a Ccube net is drawn, which is not what it is."""
+        return DocumentedParameters(
+            cls.save_printable, "border_width", "draw_cut_outline",
+            "draw_board_ids", "individual_faces")
 
     @classmethod
     def printable_name(cls, values: dict, kind: str = "svg") -> str:
@@ -214,6 +130,22 @@ class Ccube(AbstractTarget):
     def save_printable(self, path, kind: str = "svg", border_width: float = 10.0,
                        draw_cut_outline: bool = True, draw_board_ids: bool = True,
                        individual_faces: bool = False) -> Path:
+        """
+        Write this cube as a net to print.
+
+        :param path: where to write it
+        :param kind: one of :data:`EXPORT_KINDS`
+        :param border_width: Net border (mm) -- the margin drawn around the
+            folded net. Suggested: 10.
+        :param draw_cut_outline: Draw cut outline -- an outline to cut the
+            net out along. Suggested: on.
+        :param draw_board_ids: Draw face numbers -- a number on each face,
+            for folding it the right way up. Suggested: on.
+        :param individual_faces: One face per page -- print each face
+            separately rather than as one net. For a cube too large to fit
+            a page. Suggested: off.
+        :raises ValueError: for a format a cube cannot be written as
+        """
         if kind == "svg":
             return self.save_to_svg(
                 path, border_width=border_width,
@@ -225,16 +157,59 @@ class Ccube(AbstractTarget):
                 data_format="vector" if kind == "pdf_vector" else "raster")
         raise ValueError(f"A Ccube cannot be written as {kind!r}.")
 
-    def __init__(self, length=20, n_points=5,
+    def __init__(self, length: float = 20.0, n_points: int = 5,
                  aruco_dict=_DEFAULT_DICT_NAME,
                  draw_res=(1000, 1000),
-                 border_fraction=0.1,
-                 line_fraction=0.003,
-                 legacy=False,
+                 border_fraction: float = 0.1,
+                 line_fraction: float = 0.003,
+                 legacy: bool = False,
                  marker_backend: str = "aruco1",
                  detection_options: dict | None = None,
                  ):
+        """
+        Initialises a cube whose six faces are each a ChArUco board.
+
+        :param length: Cube edge (mm) -- the printed edge length of the
+            cube, in millimetres, border included. Suggested: 20-200.
+        :param n_points: Squares per face -- chessboard squares along one
+            edge of one of the cube's six faces. Suggested: 4-8.
+        :param aruco_dict: ArUco dictionary -- the marker alphabet, split
+            six ways so that each face carries markers of its own.
+        :param draw_res: the resolution each face texture is drawn at.
+        :param border_fraction: Border fraction -- how much of each face is
+            blank margin rather than board. Detection: too little and
+            markers near an edge are cut by the fold. Suggested: 0.05-0.15.
+        :param line_fraction: the thickness of a face's edge line, as a
+            fraction of the face width.
+        :param legacy: Legacy pattern -- which of OpenCV's two marker
+            layouts the faces were printed to. Detection: the wrong one
+            finds every marker and no corners. Suggested: off, unless the
+            cube predates OpenCV 4.6.
+        :param marker_backend: the marker backend to use, "aruco1" (OpenCV)
+            or "aruco2" (aruco2 package). Defaults to "aruco1".
+        :param detection_options: what the detector is told, by the keys
+            :meth:`detector_parameterisation` describes.
+        """
         super().__init__(inputs=locals(), backend=marker_backend)
+
+        # A face is a ChArUco board, and OpenCV does not refuse one that
+        # cannot exist -- it raises with an exception still set, aborting
+        # the next call to build one.  How large the cube is is nobody's
+        # business here; that it is a cube at all is.
+        if n_points < _MIN_POINTS:
+            raise ValueError(
+                f"A Ccube face must be at least {_MIN_POINTS}x{_MIN_POINTS} "
+                f"squares; got n_points={n_points}.")
+        if length <= 0:
+            raise ValueError(
+                f"A cube is printed, so it has an edge length; got "
+                f"length={length}.")
+        if not 0 < border_fraction < 1:
+            raise ValueError(
+                f"A face is part margin and part board, so its border is "
+                f"neither all of it nor none; got "
+                f"border_fraction={border_fraction}.")
+
         self.input_border_fraction = border_fraction
         self.actual_border_fraction = None
         self.line_fraction = line_fraction
@@ -258,10 +233,14 @@ class Ccube(AbstractTarget):
         # D6: in aruco2 mode split the RESOLVED cv2 Dictionary (built from
         # aruco2 bytes), never the raw int.
         resolved_dict = resolve_dictionary(aruco_dict, marker_backend)
+        if 6 * split > (held := int(resolved_dict.bytesList.shape[0])):
+            # The only ceiling a cube has: six faces are cut from one marker
+            # alphabet, and it ends.  Splitting past the end is a numpy error
+            # about inhomogeneous shapes, several frames from here.
+            raise ValueError(
+                f"A {n_points}x{n_points} cube needs {6 * split} markers, six "
+                f"faces of {split}, and this dictionary holds {held}.")
         self.a_dicts = split_aruco_dictionary(split, resolved_dict)
-        if len(self.a_dicts) < 6:
-            raise ValueError("Input dictionary of marker didn't contain enough "
-                             "markers for this cube")
 
         self.boards = [
             aruco.CharucoBoard(

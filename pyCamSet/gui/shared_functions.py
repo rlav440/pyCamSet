@@ -434,7 +434,7 @@ def detector_parameterisation_for(target_type: str, backend: str | None):
 
 def build_parameter_tooltip(meta) -> str:
     """What one parameter says about itself, as hover text."""
-    lines = [meta.concept, ""] if meta.concept else []
+    lines = [f"Concept: {meta.concept}", ""] if meta.concept else []
     lines.append(f"Default: {meta.label_for(meta.default)}")
     if meta.range_text:
         lines.append(f"Range: {meta.range_text}")
@@ -648,11 +648,6 @@ class TargetSettingsForm(QWidget):
         Phases 2 and 3 build their own target and pair it with detections
         made by an earlier run, so the default that is right almost always
         is the one the detections were made with.
-
-        A control clamps to its own range, so a value the interface cannot
-        represent is silently narrowed here;
-        :func:`~pyCamSet.workflow.targets.describe_target_mismatch` is what
-        catches that before it reaches the solver.
         """
         from pyCamSet.calibration_targets.core.target_registry import TYPE_KEY
 

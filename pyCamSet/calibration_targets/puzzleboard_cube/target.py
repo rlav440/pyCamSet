@@ -13,6 +13,7 @@ from pyCamSet.calibration_targets.core import AbstractTarget, FaceToShape, Image
 from pyCamSet.calibration_targets.core.abstract_target import EXPORT_SUFFIXES
 from pyCamSet.calibration_targets.core.parameters import (
     DetectorParameterisation,
+    DocumentedParameters,
     Parameter,
     Parameterisation,
 )
@@ -99,7 +100,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
             Parameter(
                 key="plane_consistency_gate", label="Plane consistency gate",
                 default=False, dtype="bool", priority="A",
-                concept="Concept: a two-stage RANSAC homography check per "
+                concept="a two-stage RANSAC homography check per "
                         "face, dropping points not consistent with the "
                         "face's majority plane. Detection: catches two "
                         "physical regions of the cube decoded into one face "
@@ -115,7 +116,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
                 default=2.0, dtype="float", tunable=True, settable=True,
                 minimum=0.5, maximum=10.0, step=0.1, decimals=3,
                 search_order=1, priority="A",
-                concept="Concept: stage-1 trigger. A face is contaminated "
+                concept="stage-1 trigger. A face is contaminated "
                         "only if enough of its points sit further than this "
                         "from the all-points homography.",
                 range_text="Above the max residual of clean single planes "
@@ -128,7 +129,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
                 default=0.25, dtype="float", tunable=True, settable=True,
                 minimum=0.0, maximum=1.0, step=0.05, decimals=3,
                 search_order=2, priority="A",
-                concept="Concept: how much of a face must be beyond the "
+                concept="how much of a face must be beyond the "
                         "contamination threshold before stage 2 runs.",
                 range_text="Clean images have 0% above 2.0 squares; "
                            "contaminated ones have 25-64%",
@@ -139,7 +140,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
                 default=0.5, dtype="float", tunable=True, settable=True,
                 minimum=0.05, maximum=3.0, step=0.05, decimals=3,
                 search_order=3, priority="A",
-                concept="Concept: stage-2 RANSAC inlier threshold. "
+                concept="stage-2 RANSAC inlier threshold. "
                         "Detection: loose enough and foreign-plane points "
                         "fit the wrong cluster, so max-count RANSAC picks a "
                         "larger wrong model over the correct one.",
@@ -152,7 +153,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
                 key="plane_gate_min_points", label="Minimum face population",
                 default=8, dtype="int", tunable=True, settable=True,
                 minimum=4, maximum=200, step=1, search_order=4, priority="B",
-                concept="Concept: the fewest points a face needs before the "
+                concept="the fewest points a face needs before the "
                         "gate will judge it. Below this a homography is not "
                         "worth fitting.",
                 range_text="At least 4, which is what a homography needs",
@@ -162,7 +163,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
                 key="plane_gate_ransac_iters", label="RANSAC iterations",
                 default=200, dtype="int", tunable=True, settable=True,
                 minimum=10, maximum=5000, step=10, search_order=5, priority="B",
-                concept="Concept: how many models stage 2 samples. More is "
+                concept="how many models stage 2 samples. More is "
                         "slower and more likely to find the true plane.",
                 range_text="Positive; the cost is linear in this",
                 range_source="Estimated by us",
@@ -171,7 +172,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
                 key="plane_gate_random_state", label="RANSAC seed",
                 default=0, dtype="int", settable=True,
                 minimum=0, maximum=2 ** 31 - 1, step=1, priority="C",
-                concept="Concept: the seed the sampling uses, so that a "
+                concept="the seed the sampling uses, so that a "
                         "detection repeats exactly. Not something to search "
                         "over: a study sweeping it would be optimising "
                         "which noise it happened to like.",
@@ -181,7 +182,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
             Parameter(
                 key="face_reassignment", label="Face reassignment",
                 default=False, dtype="bool", priority="A",
-                concept="Concept: rather than dropping a contaminated "
+                concept="rather than dropping a contaminated "
                         "face's minority cluster, work out which co-visible "
                         "face it belongs to and relabel it. Needs the plane "
                         "consistency gate, which is what finds the cluster.",
@@ -194,7 +195,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
                 default=3.0, dtype="float", tunable=True, settable=True,
                 minimum=1.0, maximum=20.0, step=0.5, decimals=3,
                 search_order=6, priority="A",
-                concept="Concept: how much better the best face must fit "
+                concept="how much better the best face must fit "
                         "than the second best -- a ratio of reprojection "
                         "errors -- before the cluster is relabelled rather "
                         "than dropped. Detection: a confident wrong "
@@ -207,7 +208,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
                 key="face_reassignment_intrinsics_fx", label="Assumed focal length (px)",
                 default="", dtype="float", settable=True, drop_if_none=True,
                 priority="C",
-                concept="Concept: the generic focal length the tie-breaker's "
+                concept="the generic focal length the tie-breaker's "
                         "PnP assumes. Left empty it is derived from the "
                         "image width. NEVER take this from a calibration: "
                         "a calibration's output must not be an input to the "
@@ -220,7 +221,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
                 key="face_reassignment_intrinsics_cx", label="Assumed centre x (px)",
                 default="", dtype="float", settable=True, drop_if_none=True,
                 priority="C",
-                concept="Concept: the principal point the tie-breaker's PnP "
+                concept="the principal point the tie-breaker's PnP "
                         "assumes. Left empty it is the image centre.",
                 range_text="Empty, or pixels",
                 range_source="Default is the image centre",
@@ -229,7 +230,7 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
                 key="face_reassignment_intrinsics_cy", label="Assumed centre y (px)",
                 default="", dtype="float", settable=True, drop_if_none=True,
                 priority="C",
-                concept="Concept: the principal point the tie-breaker's PnP "
+                concept="the principal point the tie-breaker's PnP "
                         "assumes. Left empty it is the image centre.",
                 range_text="Empty, or pixels",
                 range_source="Default is the image centre",
@@ -244,64 +245,6 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
         return []
 
 
-class PuzzleBoardCubeGeometry(Parameterisation):
-    """What decides where a PuzzleBoard cube's corners are."""
-
-    name = "PuzzleBoardCube"
-
-    @property
-    def parameters(self) -> tuple[Parameter, ...]:
-        return (
-            Parameter(
-                key="n_points", label="Corners per face", default=20,
-                dtype="int", minimum=2, maximum=160, step=1,
-                concept="Concept: corners along one edge of one of the "
-                        "cube's six faces. Each face is a separate window "
-                        "of the periodic code.",
-                suggested="10-30"),
-            Parameter(
-                key="length", label="Cube edge (mm)", default=200.0,
-                dtype="float", minimum=0.001, maximum=10000.0, step=1.0,
-                decimals=3,
-                concept="Concept: the printed edge length of the cube, in "
-                        "millimetres.",
-                suggested="100-300"),
-        )
-
-
-class PuzzleBoardCubeExport(Parameterisation):
-    """How a PuzzleBoard cube net is drawn, which is not what it is."""
-
-    name = "PuzzleBoardCube"
-
-    @property
-    def parameters(self) -> tuple[Parameter, ...]:
-        return (
-            Parameter(
-                key="border_width", label="Net border (mm)", default=10.0,
-                dtype="float", minimum=0.0, maximum=200.0, step=1.0,
-                decimals=2,
-                concept="Concept: the margin drawn around the folded net.",
-                suggested="10"),
-            Parameter(
-                key="draw_cut_outline", label="Draw cut outline",
-                default=True, dtype="bool",
-                concept="Concept: an outline to cut the net out along.",
-                suggested="on"),
-            Parameter(
-                key="draw_face_ids", label="Draw face numbers",
-                default=True, dtype="bool",
-                concept="Concept: a number on each face, for folding it the "
-                        "right way up.",
-                suggested="on"),
-            Parameter(
-                key="dpi", label="Raster DPI", default=300, dtype="int",
-                minimum=50, maximum=2400, step=50,
-                concept="Concept: the resolution a raster PDF is rendered at.",
-                suggested="300-600"),
-        )
-
-
 class PuzzleBoardCube(AbstractTarget):
     """Define a deterministic six-face PuzzleBoard calibration target."""
 
@@ -309,7 +252,8 @@ class PuzzleBoardCube(AbstractTarget):
 
     @classmethod
     def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
-        return PuzzleBoardCubeGeometry()
+        """What decides where a cube's corners are."""
+        return DocumentedParameters(cls.__init__, "n_points", "length")
 
     @classmethod
     def own_detector_parameters(cls) -> DetectorParameterisation:
@@ -317,7 +261,10 @@ class PuzzleBoardCube(AbstractTarget):
 
     @classmethod
     def export_parameters(cls) -> Parameterisation:
-        return PuzzleBoardCubeExport()
+        """How a PuzzleBoard cube net is drawn, which is not what it is."""
+        return DocumentedParameters(
+            cls.save_printable, "border_width", "draw_cut_outline",
+            "draw_face_ids", "dpi")
 
     @classmethod
     def printable_name(cls, values: dict, kind: str = "svg") -> str:
@@ -327,6 +274,21 @@ class PuzzleBoardCube(AbstractTarget):
     def save_printable(self, path, kind: str = "svg", border_width: float = 10.0,
                        draw_cut_outline: bool = True, draw_face_ids: bool = True,
                        dpi: int = 300) -> Path:
+        """
+        Write this cube as a net to print.
+
+        :param path: where to write it
+        :param kind: one of :data:`EXPORT_KINDS`
+        :param border_width: Net border (mm) -- the margin drawn around the
+            folded net. Suggested: 10.
+        :param draw_cut_outline: Draw cut outline -- an outline to cut the
+            net out along. Suggested: on.
+        :param draw_face_ids: Draw face numbers -- a number on each face,
+            for folding it the right way up. Suggested: on.
+        :param dpi: Raster DPI -- the resolution a raster PDF is rendered
+            at. Suggested: 300-600.
+        :raises ValueError: for a format a cube cannot be written as
+        """
         if kind == "svg":
             return self.save_to_svg(
                 path, border_width=border_width,
@@ -345,6 +307,14 @@ class PuzzleBoardCube(AbstractTarget):
         detection_options: dict | None = None,
     ):
         """Initialise a cube whose six faces use disjoint windows of the periodic code.
+
+        :param n_points: Corners per face -- corners along one edge of one
+            of the cube's six faces. Each face is a separate window of the
+            periodic code. Suggested: 10-30.
+        :param length: Cube edge (mm) -- the printed edge length of the
+            cube, in millimetres. Suggested: 100-300.
+        :param detection_options: what the detector is told, by the keys
+            :meth:`detector_parameterisation` describes.
 
         plane_consistency_gate (default False, opt-in): when True, ``find_in_image``
         runs a two-stage RANSAC homography consistency check per face and drops

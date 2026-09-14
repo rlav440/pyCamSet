@@ -20,8 +20,7 @@ from pyCamSet.calibration_targets.markers.backend_registry import (
 )
 from pyCamSet.calibration_targets.core.abstract_target import EXPORT_SUFFIXES
 from pyCamSet.calibration_targets.core.parameters import (
-    Choice,
-    Parameter,
+    DocumentedParameters,
     Parameterisation,
 )
 from pyCamSet.calibration_targets.markers.aruco2 import (
@@ -33,72 +32,6 @@ from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETEC
 from pyCamSet.calibration_targets.core.target_detections import ImageDetection
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import downsample_valid
-
-class ChArUcoGeometry(Parameterisation):
-    """What decides where a ChArUco board's corners are, and how it prints."""
-
-    name = "ChArUco"
-
-    def __init__(self, backend: str = ARUCO1_BACKEND):
-        self._backend = backend or ARUCO1_BACKEND
-
-    @property
-    def parameters(self) -> tuple[Parameter, ...]:
-        return (
-            Parameter(
-                key="num_squares_x", label="Squares across", default=5,
-                dtype="int", minimum=_MIN_SQUARES, maximum=100, step=1,
-                concept="Concept: chessboard squares along the board's x axis.",
-                suggested="5-20"),
-            Parameter(
-                key="num_squares_y", label="Squares down", default=5,
-                dtype="int", minimum=_MIN_SQUARES, maximum=100, step=1,
-                concept="Concept: chessboard squares along the board's y axis.",
-                suggested="5-20"),
-            Parameter(
-                key="square_size", label="Square size (mm)", default=10.0,
-                dtype="float", minimum=0.001, maximum=1000.0, step=0.5,
-                decimals=3,
-                concept="Concept: the printed edge length of one chessboard "
-                        "square, in millimetres.",
-                suggested="4-40"),
-            Parameter(
-                key="marker_fraction", label="Marker fraction", default=0.8,
-                dtype="float", minimum=0.1, maximum=1.0, step=0.05,
-                decimals=3,
-                concept="Concept: how much of a square its ArUco marker "
-                        "fills. Detection: a larger marker decodes further "
-                        "away; a smaller one leaves more white border.",
-                suggested="0.7-0.8"),
-            Parameter(
-                key="a_dict", label="ArUco dictionary",
-                default=_DEFAULT_DICT_NAME, dtype="str",
-                choices=tuple(Choice(name, name)
-                              for name in dict_names_for_backend(self._backend)),
-                concept="Concept: the marker alphabet printed on the board. "
-                        "It must have at least one marker per white square.",
-                suggested=_DEFAULT_DICT_NAME),
-            Parameter(
-                key="legacy", label="Legacy pattern", default=False,
-                dtype="bool",
-                concept="Concept: which of OpenCV's two marker layouts the "
-                        "board was printed to. Detection: the wrong one "
-                        "finds every marker and no corners.",
-                suggested="off, unless the board predates OpenCV 4.6"),
-        )
-
-    def validate(self, values: dict) -> list[str]:
-        """The two ways a board can be too small to exist."""
-        x = values.get("num_squares_x", 0)
-        y = values.get("num_squares_y", 0)
-        if x < _MIN_SQUARES or y < _MIN_SQUARES:
-            return [f"A ChArUco board must be at least "
-                    f"{_MIN_SQUARES}x{_MIN_SQUARES} squares; got {x}x{y}."]
-        if (corners := (x - 1) * (y - 1)) < _MIN_CORNERS:
-            return [f"A ChArUco board needs at least {_MIN_CORNERS} "
-                    f"chessboard corners; a {x}x{y} board has {corners}."]
-        return []
-
 
 #: The smallest board OpenCV will build.  Below this it does not raise a
 #: catchable error; it corrupts its own module state.
@@ -112,31 +45,6 @@ _MIN_CORNERS = 2
 _DEFAULT_DICT_NAME = "DICT_4X4_1000"
 
 
-class ChArUcoExport(Parameterisation):
-    """How a ChArUco board is drawn, which is not what it is."""
-
-    name = "ChArUco"
-
-    @property
-    def parameters(self) -> tuple[Parameter, ...]:
-        return (
-            Parameter(
-                key="border_width", label="Border (mm)", default=10.0,
-                dtype="float", minimum=0.0, maximum=200.0, step=1.0,
-                decimals=2,
-                concept="Concept: the white margin drawn around the board, "
-                        "in millimetres. Detection: markers at the very edge "
-                        "of a page are harder to find.",
-                suggested="10"),
-            Parameter(
-                key="dpi", label="Raster DPI", default=300, dtype="int",
-                minimum=50, maximum=2400, step=50,
-                concept="Concept: the resolution a raster PDF is rendered "
-                        "at. Ignored by the vector formats.",
-                suggested="300-600"),
-        )
-
-
 class ChArUco(AbstractTarget):
 
     DETECTOR_BACKENDS = {
@@ -146,11 +54,18 @@ class ChArUco(AbstractTarget):
 
     @classmethod
     def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
-        return ChArUcoGeometry(backend or ARUCO1_BACKEND)
+        """What decides where a board's corners are, and how it prints."""
+        return DocumentedParameters(
+            cls.__init__,
+            "num_squares_x", "num_squares_y", "square_size", "marker_fraction",
+            "a_dict", "legacy",
+            choices={"a_dict": dict_names_for_backend(backend or ARUCO1_BACKEND)},
+        )
 
     @classmethod
     def export_parameters(cls) -> Parameterisation:
-        return ChArUcoExport()
+        """How a ChArUco board is drawn, which is not what it is."""
+        return DocumentedParameters(cls.save_printable, "border_width", "dpi")
 
     @classmethod
     def printable_name(cls, values: dict, kind: str = "svg") -> str:
@@ -160,6 +75,18 @@ class ChArUco(AbstractTarget):
 
     def save_printable(self, path, kind: str = "svg", border_width: float = 10.0,
                        dpi: int = 300) -> Path:
+        """
+        Write this board as a file to print.
+
+        :param path: where to write it
+        :param kind: one of :data:`EXPORT_KINDS`
+        :param border_width: Border (mm) -- the white margin drawn around
+            the board, in millimetres. Detection: markers at the very edge
+            of a page are harder to find. Suggested: 10.
+        :param dpi: Raster DPI -- the resolution a raster PDF is rendered
+            at. Ignored by the vector formats. Suggested: 300-600.
+        :raises ValueError: for a format a board cannot be written as
+        """
         if kind == "svg":
             return self.save_to_svg(path, border_width=border_width)
         if kind == "pdf_vector":
@@ -170,27 +97,62 @@ class ChArUco(AbstractTarget):
 
     def __init__(
         self,
-        num_squares_x,
-        num_squares_y,
-        square_size,
-        marker_fraction=0.8,
+        num_squares_x: int = 5,
+        num_squares_y: int = 5,
+        square_size: float = 10.0,
+        marker_fraction: float = 0.8,
         a_dict=_DEFAULT_DICT_NAME,
-        legacy=False,
+        legacy: bool = False,
         marker_backend: str = "aruco1",
         detection_options: dict | None = None,
     ):
         """
         Initialises a ChArUco board in mm.
 
-        :param num_squares_x: number of squares in the x direction
-        :param num_squares_y: number of squares in the y direction
-        :param square_size: the size of a square in mm! mm!
-        :param marker_fraction: the percentage of a chessboard square occupied by a marker
-        :param a_dict: the aruco dictionary to use.
-        :param marker_backend: the marker backend to use, "aruco1" (OpenCV) or
-            "aruco2" (aruco2 package). Defaults to "aruco1".
+        :param num_squares_x: Squares across -- chessboard squares along the
+            board's x axis. Suggested: 5-20.
+        :param num_squares_y: Squares down -- chessboard squares along the
+            board's y axis. Suggested: 5-20.
+        :param square_size: Square size (mm) -- the printed edge length of
+            one chessboard square, in millimetres. Suggested: 4-40.
+        :param marker_fraction: Marker fraction -- how much of a square its
+            ArUco marker fills. Detection: a larger marker decodes further
+            away; a smaller one leaves more white border. Suggested:
+            0.7-0.8.
+        :param a_dict: ArUco dictionary -- the marker alphabet printed on
+            the board. It must have at least one marker per white square.
+        :param legacy: Legacy pattern -- which of OpenCV's two marker
+            layouts the board was printed to. Detection: the wrong one
+            finds every marker and no corners. Suggested: off, unless the
+            board predates OpenCV 4.6.
+        :param marker_backend: the marker backend to use, "aruco1" (OpenCV)
+            or "aruco2" (aruco2 package). Defaults to "aruco1".
+        :param detection_options: what the detector is told, by the keys
+            :meth:`detector_parameterisation` describes.
         """
         super().__init__(inputs=locals(), backend=marker_backend)
+
+        # How large a board may be is the printer's business.  How small is
+        # OpenCV's, and OpenCV does not refuse one that cannot exist: it
+        # raises out of its own constructor with an exception still set,
+        # which aborts the next call to build one.  So it never sees these.
+        if num_squares_x < _MIN_SQUARES or num_squares_y < _MIN_SQUARES:
+            raise ValueError(
+                f"A ChArUco board must be at least {_MIN_SQUARES}x"
+                f"{_MIN_SQUARES} squares; got {num_squares_x}x{num_squares_y}.")
+        if (corners := (num_squares_x - 1) * (num_squares_y - 1)) < _MIN_CORNERS:
+            raise ValueError(
+                f"A ChArUco board needs at least {_MIN_CORNERS} chessboard "
+                f"corners; a {num_squares_x}x{num_squares_y} board has "
+                f"{corners}.")
+        if square_size <= 0:
+            raise ValueError(
+                f"A chessboard square is printed, so it has a size; got "
+                f"square_size={square_size}.")
+        if not 0 < marker_fraction <= 1:
+            raise ValueError(
+                f"A marker fills some of its square and no more than all of "
+                f"it; got marker_fraction={marker_fraction}.")
 
         # define checker and marker size
 

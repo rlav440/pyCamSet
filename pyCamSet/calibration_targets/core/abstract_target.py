@@ -101,7 +101,10 @@ class AbstractTarget(ABC):
     points are, each with the bounds and the prose a form needs to offer
     it. An interface builds its target controls from that rather than from
     a list of which widget each target reads, so a target it has never
-    heard of gets a form.
+    heard of gets a form. The prose is the constructor's own docstring,
+    read back from the ``:param:`` entry that documents each argument, so
+    a target is described in the one place a person maintaining it is
+    already looking.
     """
 
     #: The detectors this target can read itself with, by the name its
@@ -122,13 +125,19 @@ class AbstractTarget(ABC):
         self.original_points = None # = self.point_data.copy()
         self.valid_map = True
 
+        # The backend is settled first because the arguments are described in
+        # terms of it -- a ChArUco's dictionary names are whichever library
+        # reads it -- so asking what this target is, with a detector it cannot
+        # be read with, would refuse in the vocabulary of that library rather
+        # than in the target's own.
+        self.detection_parameters = self.detector_parameterisation(backend)
+
         problems = self.construction_parameters(backend).validate(inputs)
         if problems:
             # Before anything is built from them.  OpenCV, for one, does not
             # refuse a board too small to exist; it corrupts its own state.
             raise ValueError(" ".join(problems))
 
-        self.detection_parameters = self.detector_parameterisation(backend)
         self.detection_options = self.detection_parameters.resolve(
             inputs.get("detection_options"))
         problems = self.detection_parameters.validate(self.detection_options)
@@ -151,6 +160,11 @@ class AbstractTarget(ABC):
         besides which detector to read it with.  Declared rather than
         written into each interface, so that a new target gets a form
         without one being written for it.
+
+        Declared by the constructor that takes them, through
+        :class:`~pyCamSet.calibration_targets.core.parameters.DocumentedParameters`:
+        what each argument is called, defaults to and means is read from
+        the signature and the docstring rather than written out again.
 
         :param backend: which detector the target will be read with, for
             the arguments whose choices depend on it -- a marker dictionary

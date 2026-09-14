@@ -36,6 +36,10 @@ dependencies = [
     "cairosvg",
     "svgwrite",
     "pillow",
+    # A target's arguments are described once, in the docstring of the
+    # constructor that takes them; this is what reads the ``:param:``
+    # entries back out for the forms built from them.
+    "docstring_parser",
     # Plotting is part of the default surface, not an add-on: camera_set,
     # visualisation, template_handler and reconstruction_utils all draw with
     # it.  pyvista renders through VTK and pulls in no Qt binding, so this

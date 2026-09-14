@@ -705,19 +705,25 @@ def test_adopting_ignores_a_field_this_target_does_not_have():
 
 
 @pytest.mark.gui
-def test_a_value_the_interface_cannot_hold_is_still_caught():
-    """Controls clamp silently; the mismatch check is the backstop."""
+def test_the_form_holds_what_it_was_given_rather_than_a_size_it_prefers():
+    """The controls used to be spin boxes with ranges invented for them,
+    and a target outside one was silently narrowed to fit.  A target is an
+    object someone made: the form carries the value, and the target is what
+    refuses it."""
     from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.calibration_targets.core.target_registry import build_target
 
     QApplication.instance() or QApplication([])
     form = _target_form("Ccube")
     try:
         form.apply_spec(_with(CCUBE_12, n_points=999)["target"])
-        held = form.spec()["n_points"]
 
-        assert held < 999, "clamped to what the control can hold"
+        assert form.spec()["n_points"] == 999, "carried, not narrowed"
         assert describe_target_mismatch(
-            _with(CCUBE_12, n_points=999), {"target": form.spec()}) != []
+            _with(CCUBE_12, n_points=999), {"target": form.spec()}) == []
+        with pytest.raises(ValueError, match="markers"):
+            build_target(form.spec())
     finally:
         form.deleteLater()
 

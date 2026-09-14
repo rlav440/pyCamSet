@@ -22,4 +22,5 @@ dill
 cairosvg
 svgwrite
 pillow
+docstring_parser
 pyvista

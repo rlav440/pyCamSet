@@ -12,7 +12,10 @@ import svgwrite  # Write compact SVG primitives directly to disk.
 
 from pyCamSet.calibration_targets.core import AbstractTarget, ImageDetection  # Reuse pyCamSet target contracts.
 from pyCamSet.calibration_targets.core.abstract_target import EXPORT_SUFFIXES
-from pyCamSet.calibration_targets.core.parameters import Parameter, Parameterisation
+from pyCamSet.calibration_targets.core.parameters import (
+    DocumentedParameters,
+    Parameterisation,
+)
 from pyCamSet.calibration_targets.markers.puzzleboard import (
     PUZZLEBOARD_DETECTOR,
     detect_puzzleboard_image,
@@ -56,88 +59,6 @@ def _generate_code() -> np.ndarray:
 _CODE_FIELD = _generate_code()  # Build the immutable field once when this module is imported.
 
 
-class PuzzleBoardGeometry(Parameterisation):
-    """What decides where a PuzzleBoard's corners are, and how it prints."""
-
-    name = "PuzzleBoard"
-
-    @property
-    def parameters(self) -> tuple[Parameter, ...]:
-        return (
-            Parameter(
-                key="num_squares_x", label="Corners across", default=105,
-                dtype="int", minimum=2, maximum=_CODE_SIZE, step=1,
-                concept="Concept: corners along the printed board's x axis.",
-                suggested="fills the page at the chosen square size"),
-            Parameter(
-                key="num_squares_y", label="Corners down", default=148,
-                dtype="int", minimum=2, maximum=_CODE_SIZE, step=1,
-                concept="Concept: corners along the printed board's y axis.",
-                suggested="fills the page at the chosen square size"),
-            Parameter(
-                key="square_size", label="Square size (mm)", default=2.0,
-                dtype="float", minimum=0.001, maximum=1000.0, step=0.5,
-                decimals=3,
-                concept="Concept: the printed edge length of one square, in "
-                        "millimetres.",
-                suggested="2"),
-            Parameter(
-                key="start_x", label="Code origin x", default=0,
-                dtype="int", minimum=0, maximum=_CODE_SIZE, step=1,
-                concept="Concept: where in the periodic code this printed "
-                        "window begins. Two boards cut from different "
-                        "windows decode to different keys.",
-                suggested="0"),
-            Parameter(
-                key="start_y", label="Code origin y", default=0,
-                dtype="int", minimum=0, maximum=_CODE_SIZE, step=1,
-                concept="Concept: where in the periodic code this printed "
-                        "window begins, down the page.",
-                suggested="0"),
-            Parameter(
-                key="paper_width", label="Page width (mm)", default=210.0,
-                dtype="float", minimum=1.0, maximum=10000.0, step=10.0,
-                decimals=3,
-                concept="Concept: the page the board is centred on.",
-                suggested="210 (A4)"),
-            Parameter(
-                key="paper_height", label="Page height (mm)", default=297.0,
-                dtype="float", minimum=1.0, maximum=10000.0, step=10.0,
-                decimals=3,
-                concept="Concept: the page the board is centred on.",
-                suggested="297 (A4)"),
-        )
-
-    def validate(self, values: dict) -> list[str]:
-        """The window has to fit inside the finite periodic code."""
-        problems = []
-        for across, origin, axis in (("num_squares_x", "start_x", "x"),
-                                     ("num_squares_y", "start_y", "y")):
-            total = values.get(origin, 0) + values.get(across, 0)
-            if total > _CODE_SIZE:
-                problems.append(
-                    f"{origin} + {across} must not exceed {_CODE_SIZE}; "
-                    f"the {axis} window ends at {total}.")
-        return problems
-
-
-class PuzzleBoardExport(Parameterisation):
-    """How a PuzzleBoard is drawn, which is not what it is."""
-
-    name = "PuzzleBoard"
-
-    @property
-    def parameters(self) -> tuple[Parameter, ...]:
-        return (
-            Parameter(
-                key="dpi", label="Raster DPI", default=300, dtype="int",
-                minimum=50, maximum=2400, step=50,
-                concept="Concept: the resolution a raster PDF is rendered "
-                        "at. Ignored by the vector formats.",
-                suggested="300-600"),
-        )
-
-
 class PuzzleBoard(AbstractTarget):
     """Define a PuzzleBoard target, detector adapter, and vector export methods."""
 
@@ -145,11 +66,16 @@ class PuzzleBoard(AbstractTarget):
 
     @classmethod
     def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
-        return PuzzleBoardGeometry()
+        """What decides where a board's corners are, and how it prints."""
+        return DocumentedParameters(
+            cls.__init__,
+            "num_squares_x", "num_squares_y", "square_size",
+            "start_x", "start_y", "paper_width", "paper_height")
 
     @classmethod
     def export_parameters(cls) -> Parameterisation:
-        return PuzzleBoardExport()
+        """How a PuzzleBoard is drawn, which is not what it is."""
+        return DocumentedParameters(cls.save_printable, "dpi")
 
     @classmethod
     def printable_name(cls, values: dict, kind: str = "svg") -> str:
@@ -158,6 +84,15 @@ class PuzzleBoard(AbstractTarget):
                 f"{float(values['square_size']):g}mm{EXPORT_SUFFIXES[kind]}")
 
     def save_printable(self, path, kind: str = "svg", dpi: int = 300) -> Path:
+        """
+        Write this board as a file to print.
+
+        :param path: where to write it
+        :param kind: one of :data:`EXPORT_KINDS`
+        :param dpi: Raster DPI -- the resolution a raster PDF is rendered
+            at. Ignored by the vector formats. Suggested: 300-600.
+        :raises ValueError: for a format a board cannot be written as
+        """
         if kind == "svg":
             return self.save_to_svg(path)
         if kind == "pdf_vector":
@@ -177,7 +112,29 @@ class PuzzleBoard(AbstractTarget):
         paper_height: float = 297.0,
         detection_options: dict | None = None,
     ):
-        """Initialise a PuzzleBoard target with dimensions expressed in millimetres."""
+        """
+        Initialise a PuzzleBoard target with dimensions in millimetres.
+
+        :param num_squares_x: Corners across -- corners along the printed
+            board's x axis. Suggested: fills the page at the chosen square
+            size.
+        :param num_squares_y: Corners down -- corners along the printed
+            board's y axis. Suggested: fills the page at the chosen square
+            size.
+        :param square_size: Square size (mm) -- the printed edge length of
+            one square, in millimetres. Suggested: 2.
+        :param start_x: Code origin x -- where in the periodic code this
+            printed window begins. Two boards cut from different windows
+            decode to different keys. Suggested: 0.
+        :param start_y: Code origin y -- where in the periodic code this
+            printed window begins, down the page. Suggested: 0.
+        :param paper_width: Page width (mm) -- the page the board is
+            centred on. Suggested: 210 (A4).
+        :param paper_height: Page height (mm) -- the page the board is
+            centred on. Suggested: 297 (A4).
+        :param detection_options: what the detector is told, by the keys
+            :meth:`detector_parameterisation` describes.
+        """
         super().__init__(inputs=locals())  # Save constructor inputs for pyCamSet multiprocessing and serialisation.
         self.num_squares_x = int(num_squares_x)  # Store the horizontal corner count as an integer.
         self.num_squares_y = int(num_squares_y)  # Store the vertical corner count as an integer.

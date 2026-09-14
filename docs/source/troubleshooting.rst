@@ -56,9 +56,14 @@ When that is not enough, install the native library for your platform:
    The Debian package name is a best guess and has not been verified by the
    pyCamSet team; it may differ on other distributions.
 
-Afterwards ``pip install cairosvg`` (or
-``conda install -c conda-forge cairosvg``) should complete without errors, and
-``import pyCamSet.calibration_targets.charuco.target`` should succeed.
+In a conda environment the whole graphics stack can go in at once:
+
+.. code-block:: bash
+
+   conda install -c conda-forge cairo cairosvg svgwrite
+
+Afterwards ``import pyCamSet.calibration_targets.charuco.target`` should
+succeed.
 
 ``pycamset`` will not start
 ===========================
@@ -97,7 +102,9 @@ that use this target.
 PuzzleBoardCube rejects ``n_points``
 ====================================
 
-``PuzzleBoardCube`` assigns six disjoint, deterministic windows of one periodic
+``PuzzleBoardCube`` is a modified implementation of the original PuzzleBoard
+target, which is a single planar board; the cube version is intended to work
+like the Ccube. It assigns six disjoint, deterministic windows of one periodic
 PuzzleBoard code to the cube faces, in the fixed order front, right, back,
 left, top, bottom. Its ``puzzle-cube-v1`` layout is not random: identical
 ``n_points`` and ``length`` produce identical face patterns and cube geometry.

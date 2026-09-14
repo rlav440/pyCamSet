@@ -128,6 +128,10 @@ def test_finished_viewers_are_not_left_behind(monkeypatch, tmp_path):
 
 
 @pytest.mark.data
+# The one test in this file that draws rather than checking that something
+# else does not: it runs the viewer's main in process, on purpose, and the
+# figures have to come out.  So it needs a real OpenGL context.
+@pytest.mark.needs_opengl
 def test_the_viewer_draws_a_real_calibration(charuco_problem, tmp_path):
     """End to end, with no window: the figures have to actually come out."""
     from copy import deepcopy

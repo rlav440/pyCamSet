@@ -113,6 +113,9 @@ def opengl_is_available() -> bool:
 
     :return: whether a plotter can be built and rendered
     """
+    # Three tests in the suite carry the marker.  The list was not grepped
+    # for: pyvista.Plotter.render, .show and .screenshot were patched to
+    # raise, and the suite was asked which tests noticed.
     probe = (
         "import pyvista as pv\n"
         "plotter = pv.Plotter(off_screen=True)\n"

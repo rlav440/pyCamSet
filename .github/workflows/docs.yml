@@ -1,0 +1,104 @@
+name: docs
+
+# The published site is assembled from two branches on every run:
+#
+#   master      -> /        the release docs
+#   development -> /dev     the in-progress docs
+#
+# Both are built from their own checkout, so each uses its own conf.py, its own
+# theme, and its own literalinclude paths.  Because the build job checks the two
+# branches out explicitly rather than relying on the triggering ref, a push to
+# either branch republishes the whole site and neither half can go stale.
+#
+# Note that a push to master only triggers this workflow once this file exists
+# on master -- Actions reads workflows from the branch that was pushed.
+
+on:
+  push:
+    branches: [master, development]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Pages allows one deployment at a time.  Queue them rather than cancelling, so
+# a master push and a development push cannot race and drop half the site.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # On a pull request, build that PR's own docs as a check and publish nothing.
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install the documentation toolchain
+        run: pip install -r docs/doq_reqs.txt
+
+      - name: Build
+        run: python -m sphinx -b html docs/source _site
+
+  build:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          path: master
+
+      - name: Check out development
+        uses: actions/checkout@v4
+        with:
+          ref: development
+          path: development
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      # The union of what both branches ask for: master still builds against
+      # sphinx-rtd-theme, development against furo.  Reading the two files
+      # rather than pinning a list here means this step keeps working by itself
+      # once master catches up with development.
+      - name: Install the documentation toolchain
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r master/docs/doq_reqs.txt -r development/docs/doq_reqs.txt
+
+      # sphinx-autoapi parses the package statically, so pyCamSet itself (and
+      # its numba/OpenCV/PySide6 stack) does not need to be installed here.
+      - name: Build master into the site root
+        run: python -m sphinx -b html master/docs/source _site
+
+      - name: Build development into /dev
+        run: python -m sphinx -b html development/docs/source _site/dev
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

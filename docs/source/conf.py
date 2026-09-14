@@ -11,15 +11,40 @@
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
 import os
+import re
 import sys
+
 sys.path.insert(0, os.path.abspath('../..'))
 
+_REPO_ROOT = os.path.abspath('../..')
+
+
+def _project_version() -> str:
+    """The version from pyproject.toml, the one place it is defined.
+
+    tomllib is 3.11+, but nothing else in this build needs a modern
+    interpreter -- sphinx-autoapi reads the package statically, so the docs
+    build on whatever Python is to hand.  Keep it that way.
+    """
+    path = os.path.join(_REPO_ROOT, 'pyproject.toml')
+    try:
+        import tomllib
+    except ImportError:
+        with open(path, encoding='utf-8') as f:
+            return re.search(r'^version\s*=\s*["\'](.+?)["\']', f.read(), re.M).group(1)
+    with open(path, 'rb') as f:
+        return tomllib.load(f)['project']['version']
 
 # -- Project information -----------------------------------------------------
 
 project = 'pyCamSet'
-copyright = '2023, Robin Laven'
+copyright = '2023-2026, Robin Laven'
 author = 'Robin Laven'
+
+# Pinned to the package version so the docs footer cannot drift away from the
+# package the docs describe.
+release = _project_version()
+version = release
 
 
 # -- General configuration ---------------------------------------------------
@@ -50,33 +75,41 @@ templates_path = ['_templates']
 # This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = []
 
+# Only reStructuredText.  A '.md': 'markdown' entry used to be declared here,
+# but myst_parser was never in `extensions`, so the first Markdown page added
+# to the tree would have failed the build.  Add myst-parser to docs/doq_reqs.txt
+# and to `extensions` before reinstating it.
+source_suffix = {
+    '.rst': 'restructuredtext',
+}
+
+numfig = True
+
 
 # -- Options for HTML output -------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'sphinx_rtd_theme'
+html_theme = 'furo'
+
+html_theme_options = {
+    # Puts an "Edit this page" link on every page, pointing at the branch the
+    # docs were built from.
+    'source_repository': 'https://github.com/rlav440/pyCamSet/',
+    'source_branch': 'development',
+    'source_directory': 'docs/source/',
+}
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
 
+html_css_files = ['custom.css']
+
 html_logo = '_static/uoa_abi_logo.png'
 
 # Set the root rst to load. This is required to be named contents to allow
 # readthedocs to host the docs using its default configuration.
 master_doc = 'index'
-
-# Configures Sphinx to read all files with the extensions .md and .rst.
-source_suffix = {
-    '.rst': 'restructuredtext',
-    '.md': 'markdown',
-}
-
-numfig = True
-
-# Update navigation background colour.
-def setup (app):
-    app.add_css_file('custom.css')

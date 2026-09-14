@@ -28,20 +28,23 @@ Getting Started
 
 This library can either be installed via pypi:
 
-.. ::
+.. code-block:: bash
+
    pip install pyCamSet
 
 which includes the graphical calibration workflow, launched with ``pycamset``.
 The GUI toolkit is the largest dependency by a wide margin, so for a server or
 a CI run there is a lean install that leaves it out:
 
-.. ::
+.. code-block:: bash
+
    pip install pyCamSet --no-deps
-   pip install -r requirements-core.txt
+   pip install -r requirements_core.txt
 
 Or it can be cloned from github and then installed with:
 
-.. ::
+.. code-block:: bash
+
    git clone https://github.com/rlav440/pyCamSet
    pip install -e .
 

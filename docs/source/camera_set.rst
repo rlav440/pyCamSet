@@ -57,12 +57,12 @@ Loading a saved CameraSet
 Calibrating a camera set will, by default, write a saved version of the calibration to the input directory.
 This saved version can be read by other scripts, and used to perform tasks with the reconstructed cameras.
 
-::
-   
+.. code-block:: python
+
    from pathlib import Path
    from pyCamSet import load_CameraSet
 
-   cam_loc = Path('my/calibration/path/optimised_cameras.camset)
+   cam_loc = Path('my/calibration/path/optimised_cameras.camset')
    my_cams = load_CameraSet(cam_loc)
 
 
@@ -73,7 +73,7 @@ The calibration of a CameraSet is an important mark of quality.
 Calibration results are compressed and saved with each CameraSet.
 For any CameraSet that was the result of a calibration, that calibration result can be evaluated with the following code.
 
-::
+.. code-block:: python
 
    my_cams.visualise_calibration()
 

@@ -18,28 +18,31 @@ Examples
 Calibrating with a Ccube is functionally the same as calibrating with any other target.
 The length of a Ccube is defined in millimeters.
 
-::
+.. code-block:: python
 
    from pathlib import Path
-   from pyCamSet import CameraCalibrator, Ccube
+   from pyCamSet import calibrate_cameras, Ccube
 
    calibration_data = Path('my/calibration/path')
-   calibration_target = Ccube(length=40, n_points=10):
+   calibration_target = Ccube(length=40, n_points=10)
 
-   calibrator = CameraCalibrator()
-   cams = calibrator(f_loc=calibration_data, calibration_target=calibration_target, draw=True)
+   cams = calibrate_cameras(
+       f_loc=calibration_data,
+       calibration_target=calibration_target,
+       draw=True,
+   )
 
 
 However, there are a couple of functions to help you get to the calibration.
 The first is plotting the cube, and its associated textures.
 
-::
-   
+.. code-block:: python
+
    calibration_target.plot()
 
 This is useful for checking that everything lines up virtually and in reality!
 
-::
+.. code-block:: python
 
    calibration_target.save_to_pdf()
 

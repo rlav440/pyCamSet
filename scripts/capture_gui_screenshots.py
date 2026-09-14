@@ -16,17 +16,15 @@ same script produces light screenshots on one machine and dark ones on the
 next.  Each tab is therefore captured twice, once per theme, and the guide
 shows whichever matches the reader's:
 
-.. code-block:: rst
+::
 
-   .. image:: /_static/gui/phase-1--detection-light.png
-      :class: only-light
-   .. image:: /_static/gui/phase-1--detection-dark.png
-      :class: only-dark
+   ![The Phase 1 tab.](../assets/gui/phase-1-detection-light.png#only-light)
+   ![The Phase 1 tab.](../assets/gui/phase-1-detection-dark.png#only-dark)
 
 Setting ``QT_QPA_PLATFORM`` yourself overrides the offscreen default, and
 the rendering will differ; leave it unset to reproduce the committed images.
 
-Images land in ``docs/source/_static/gui/``.
+Images land in ``docs/assets/gui/``.
 """
 from __future__ import annotations
 
@@ -38,7 +36,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OUT_DIR = REPO_ROOT / "docs" / "source" / "_static" / "gui"
+OUT_DIR = REPO_ROOT / "docs" / "assets" / "gui"
 
 # The window is grabbed at this size so the screenshots are a consistent shape.
 WINDOW_SIZE = (1280, 860)

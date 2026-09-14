@@ -102,7 +102,7 @@ Native Cairo setup, the optional PuzzleBoard dependency, the
 PuzzleBoardCube face-size limit and the `'NoneType' object is not callable`
 error you get when a target's graphics dependencies are missing are all
 covered in the
-[troubleshooting guide](https://rlav440.github.io/pyCamSet/dev/troubleshooting.html).
+[troubleshooting guide](https://rlav440.github.io/pyCamSet/dev/troubleshooting/).
 
 ## Reporting issues
 To report an issue or suggest a new feature, please use the [issues page](https://github.com/rlav440/pyCamSet/issues).

@@ -588,7 +588,7 @@ class AbstractTarget(ABC):
         :param refine: Whether to use LM refinement of the estimate.
         :param mode: whether to throw an error or return nan arrays.
 
-        :return a 4x4 transformation of the target giving the transformation from target to camera coordinates
+        :return: a 4x4 transformation of the target giving the transformation from target to camera coordinates
         """
         
         if not detection.has_data():

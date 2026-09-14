@@ -1,0 +1,102 @@
+site_name: pyCamSet
+site_description: Object oriented cameras for computer vision
+site_url: https://rlav440.github.io/pyCamSet/
+repo_url: https://github.com/rlav440/pyCamSet
+
+theme:
+  name: material
+  logo: assets/logo.png
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - toc.integrate
+    - search.suggest
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            # The docstrings are reST and stay reST -- 800-odd ``:param:``
+            # entries that docstring_parser also reads to build the target
+            # forms.  The roles inside them are handled by the extension below.
+            docstring_style: sphinx
+            extensions:
+              - scripts/griffe_rest_roles.py
+            show_root_heading: true
+            show_source: false
+            merge_init_into_class: true
+            members_order: source
+
+# Executes the documentation examples and captures what they draw.
+hooks:
+  - scripts/doc_scenes.py
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - How-To Guides:
+      - Calibrating a camera set: how-to/calibrate.md
+      - Self-calibration: how-to/self-calibration.md
+      - Working with cameras: how-to/cameras.md
+      - Working with camera sets: how-to/camera-sets.md
+      - The graphical workflow: how-to/gui.md
+  - Calibration Targets:
+      - Choosing a target: targets/index.md
+      - ChArUco: targets/charuco.md
+      - Ccube: targets/ccube.md
+      - PuzzleBoard: targets/puzzleboard.md
+      - PuzzleBoardCube: targets/puzzleboard-cube.md
+  - Extending pyCamSet:
+      - What is extensible: extending/index.md
+      - Calibration targets: extending/targets.md
+      - Parameter handlers: extending/parameters.md
+      - Bundle adjustment: extending/bundle-adjustment.md
+  - Troubleshooting: troubleshooting.md
+  - Internals:
+      - The workflow package: internals/workflow.md
+  - API Reference:
+      - cameras: api/cameras.md
+      - calibration: api/calibration.md
+      - calibration_targets: api/targets.md
+      - optimisation: api/optimisation.md
+      - reconstruction: api/reconstruction.md
+      - utils: api/utils.md
+      - workflow: api/workflow.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  # Rooted at the repository, so a page can include an example verbatim from
+  # `examples/` rather than carrying a copy of it that drifts.
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true

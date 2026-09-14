@@ -5,13 +5,15 @@ name: docs
 #   master      -> /        the release docs
 #   development -> /dev     the in-progress docs
 #
-# Both are built from their own checkout, so each uses its own conf.py, its own
-# theme, and its own literalinclude paths.  Because the build job checks the two
-# branches out explicitly rather than relying on the triggering ref, a push to
-# either branch republishes the whole site and neither half can go stale.
+# Both are built from their own checkout, so each uses its own configuration and
+# its own toolchain.  Because the build job checks the two branches out
+# explicitly rather than relying on the triggering ref, a push to either branch
+# republishes the whole site and neither half can go stale.
 #
 # Note that a push to master only triggers this workflow once this file exists
-# on master -- Actions reads workflows from the branch that was pushed.
+# on master -- Actions reads workflows from the branch that was pushed.  While
+# master is still on the sphinx docs, the master half is built by the sphinx
+# steps below; both halves become mkdocs once development is merged down.
 
 on:
   push:
@@ -40,14 +42,29 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
+          cache-dependency-path: pyproject.toml
 
-      - name: Install the documentation toolchain
-        run: pip install -r docs/doq_reqs.txt
+      # The examples in the docs are executed and drawn as the site is built,
+      # and VTK still needs a GL context to render into.
+      - uses: pyvista/setup-headless-display-action@v3
 
-      # -W: the development tree builds clean, so any new warning is a
-      # regression and should fail the PR rather than scroll past.
-      - name: Build
-        run: python -m sphinx -b html -W --keep-going docs/source _site
+      # Unlike the sphinx-autoapi build this replaced, mkdocstrings imports
+      # pyCamSet, and the examples run a real calibration -- so the package and
+      # its native stack have to be installed, cairo included.
+      - name: Install the native graphics libraries
+        run: sudo apt-get update && sudo apt-get install -y libcairo2
+
+      - run: pip install -e ".[docs]"
+
+      # The docs build compiles the same numba kernels the suite does, and
+      # benefits from the same cache.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pyCamSet
+          key: numba-docs-${{ github.run_id }}
+          restore-keys: numba-docs-
+
+      - run: python -m mkdocs build --strict
 
   build:
     if: github.event_name != 'pull_request'
@@ -70,25 +87,32 @@ jobs:
           python-version: '3.11'
           cache: pip
 
-      # The union of what both branches ask for: master still builds against
-      # sphinx-rtd-theme, development against furo.  Reading the two files
-      # rather than pinning a list here means this step keeps working by itself
-      # once master catches up with development.
-      - name: Install the documentation toolchain
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r master/docs/doq_reqs.txt -r development/docs/doq_reqs.txt
+      - uses: pyvista/setup-headless-display-action@v3
 
-      # sphinx-autoapi parses the package statically, so pyCamSet itself (and
-      # its numba/OpenCV/PySide6 stack) does not need to be installed here.
+      - name: Install the native graphics libraries
+        run: sudo apt-get update && sudo apt-get install -y libcairo2
+
+      # master is still the sphinx tree, and its toolchain is listed in the
+      # file it has always been listed in.  This step goes away with that tree.
+      - name: Install master's sphinx toolchain
+        run: pip install -r master/docs/doq_reqs.txt
+
       - name: Build master into the site root
         run: python -m sphinx -b html master/docs/source _site
 
-      # development is warning-free, so it is held to that with -W.  master is
-      # not: it still carries the 22 warnings it had before this work, so it
-      # builds without -W until development is merged into it.
+      - name: Install development's mkdocs toolchain
+        run: pip install -e "./development[docs]"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pyCamSet
+          key: numba-docs-${{ github.run_id }}
+          restore-keys: numba-docs-
+
+      # development is warning-free, so it is held to that with --strict.
       - name: Build development into /dev
-        run: python -m sphinx -b html -W --keep-going development/docs/source _site/dev
+        working-directory: development
+        run: python -m mkdocs build --strict --site-dir ../_site/dev
 
       - uses: actions/upload-pages-artifact@v3
         with:

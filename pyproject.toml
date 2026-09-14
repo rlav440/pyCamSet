@@ -58,6 +58,25 @@ dev = [
     "pytest-cov",
 ]
 optimisation = ["optuna"]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.25",
+    "mkdocs-autorefs>=1.0",
+    # Runs the examples in the docs at build time.  Unlike the sphinx-autoapi
+    # build this replaces, mkdocstrings imports pyCamSet rather than parsing
+    # it, so the docs build needs the package and its runtime stack installed.
+    "markdown-exec>=1.8",
+    # Exports what those examples draw as an interactive vtk.js scene.  The
+    # trame plotter component lives outside pyvista and carries the trame
+    # versions it has to be matched with; without it pyvista exports nothing
+    # and says nothing.  nest_asyncio2 is what lets the export start trame's
+    # server outside a notebook.
+    "trame-pyvista",
+    "nest_asyncio2",
+    # Turns an exported scene into a page carrying its own viewer.
+    "trame-vtk",
+]
 # Empty: PySide6 is a base dependency now, so the GUI needs nothing extra.
 # The name is kept so ``pip install pyCamSet[gui]`` stays valid for anyone
 # who already writes it.

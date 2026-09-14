@@ -279,7 +279,6 @@ def compress(arr, clevel=3, cname='lz4', shuffle=1):
     from https://stackoverflow.com/questions/56708673/python-decompression-relative-performance
     compresses the input array for writing to file
 
-    :param file:  path to file
     :param arr:      numpy nd-array
     :param clevel:   0..9
     :param cname:    blosclz,lz4,lz4hc,snappy,zlib

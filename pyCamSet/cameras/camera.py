@@ -480,7 +480,7 @@ class Camera:
         """
         Wraps the opencv undistort function with the camera parameters for convenience
         :param image: An input image
-        :return An undistorted image
+        :return: An undistorted image
 
         """
         return cv2.undistort(image, self.intrinsic, np.array(self.distortion_coefs))

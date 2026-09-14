@@ -1,9 +1,0 @@
-# Requirements for building the documentation.
-#
-# sphinx-autoapi reads the package statically (it does not import it), so none
-# of pyCamSet's own runtime dependencies are needed to build these docs.
-sphinx
-furo
-sphinx-autoapi
-# Declared in conf.py's `extensions`; a build without it fails immediately.
-sphinx-copybutton

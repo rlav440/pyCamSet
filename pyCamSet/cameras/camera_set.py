@@ -372,7 +372,7 @@ class CameraSet:
         A lsq minimised triangulation of camera point locations to reconstruct.
          Automatically identifies points with shared visibility
 
-        :param points: dictioniry of cam name key and camera coordinate values
+        :param to_reconstruct: dictionary of cam name key and camera coordinate values
                     or a list of dictionairies
                     Alternatively, the returned data from a TargetDetection.get_data method
         :return: world projected point or array of points

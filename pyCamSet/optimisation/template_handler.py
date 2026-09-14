@@ -28,7 +28,7 @@ from pyCamSet.optimisation.camera_lockbox import (
     append_lockbox_residuals,
     append_lockbox_jacobian,
 )
-from pyCamSet import CameraSet, Camera
+from pyCamSet.cameras import CameraSet, Camera
 
 from pyCamSet.calibration_targets import TargetDetection
 from pyCamSet.utils.setup_reports import RigConsistencyReport
@@ -62,7 +62,7 @@ class TemplateBundlePrimitive:
     A class that contains a set of base arrays.
     These arrays contain the pose, extrinsic, intrinsic and distortion params
     that will be used to create the bundle adjustment problem.
-    If a param is fixed, it can be marked as fixed in the *_fixed data structure.
+    If a param is fixed, it can be marked as fixed in the ``*_fixed`` data structure.
     A fixed value will not be dependent on the standard parameters.
     """
 

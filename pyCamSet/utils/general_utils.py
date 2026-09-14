@@ -541,7 +541,7 @@ def sensor_map(type, intrinsics, res=(1600, 1200), dist_coefs=None):
     :param intrinsics: The camera intrinsics
     :param res: the nominal resolution of the input camera THIS USES OPENCV (y,x) PIXEL ORDER.
     :param dist_coefs: The distortion coefficients of the camera.
-    :returns : A sensor map of the appropriate resolution,
+    :returns: A sensor map of the appropriate resolution,
     """
     if (type != 'normalised') and (type != 'linear'):
         raise ValueError("Invalid sensor map type")
@@ -572,8 +572,8 @@ def adaptive_decimated_charuco_detection_stereo(frame_L, charuco_board, aruco_di
     :param aruco_dict: retained for backwards compatibility. The board already
         carries its own dictionary, which is what the detector uses.
     :param rescale_corners_to_original: if True will corners will multiply with optimal decimation factor (default = True)
-    :return charuco_corners_L - charuco corners detected from downsampled image
-    :return optimal_decimation - optimal downsampled factor
+    :return: charuco_corners_L - charuco corners detected from downsampled image,
+        and optimal_decimation - the optimal downsampled factor
     '''
 
     # This used cv2.aruco.detectMarkers + interpolateCornersCharuco, which

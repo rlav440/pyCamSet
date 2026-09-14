@@ -1,9 +1,9 @@
 '''
-Purpose: Provide a portable, one-time Cairo native-library loader so that
-         `cairosvg` / `cairocffi` can find `cairo.dll` (or the platform
-         equivalent) without every caller hardcoding a conda-env path.
-Status: Active. Added to fix the headless-Cairo DLL quirk centrally.
-Future: If pyCamSet ever drops the cairosvg dependency, this module can go.
+:Purpose: Provide a portable, one-time Cairo native-library loader so that
+    ``cairosvg`` / ``cairocffi`` can find ``cairo.dll`` (or the platform
+    equivalent) without every caller hardcoding a conda-env path.
+:Status: Active. Added to fix the headless-Cairo DLL quirk centrally.
+:Future: If pyCamSet ever drops the cairosvg dependency, this module can go.
 '''
 
 from __future__ import annotations

@@ -44,8 +44,10 @@ jobs:
       - name: Install the documentation toolchain
         run: pip install -r docs/doq_reqs.txt
 
+      # -W: the development tree builds clean, so any new warning is a
+      # regression and should fail the PR rather than scroll past.
       - name: Build
-        run: python -m sphinx -b html docs/source _site
+        run: python -m sphinx -b html -W --keep-going docs/source _site
 
   build:
     if: github.event_name != 'pull_request'
@@ -82,8 +84,11 @@ jobs:
       - name: Build master into the site root
         run: python -m sphinx -b html master/docs/source _site
 
+      # development is warning-free, so it is held to that with -W.  master is
+      # not: it still carries the 22 warnings it had before this work, so it
+      # builds without -W until development is merged into it.
       - name: Build development into /dev
-        run: python -m sphinx -b html development/docs/source _site/dev
+        run: python -m sphinx -b html -W --keep-going development/docs/source _site/dev
 
       - uses: actions/upload-pages-artifact@v3
         with:

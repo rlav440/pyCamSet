@@ -109,7 +109,7 @@ def require_detector_available(params: dict) -> None:
     missing package is named before the run rather than during it.
 
     :param params: a phase's collected parameters
-    :raises ParamError: when the selected detector cannot run
+    :raises pyCamSet.workflow.ParamError: when the selected detector cannot run
     """
     from pyCamSet.workflow.targets import detector_parameterisation_of
 
@@ -126,7 +126,7 @@ def require_target_match(run: Optional[dict], params: dict) -> None:
 
     :param run: the run supplying the detections, or None to skip the check
     :param params: the target settings the phase is about to use
-    :raises ParamError: when the two describe different point layouts
+    :raises pyCamSet.workflow.ParamError: when the two describe different point layouts
     """
     if run is None:
         return

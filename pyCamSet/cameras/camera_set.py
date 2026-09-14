@@ -152,7 +152,7 @@ class CameraSet:
 
         :param inp: the slice or list to run over
         :param cam_key: a key for the camera names, optional. If used, the dictionary and camera lists are reduced only to the names containing this key.
-        Returns: A sliced camset
+        :return: A sliced camset
 
         """
         new_camset = CameraSet()

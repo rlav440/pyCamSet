@@ -466,7 +466,7 @@ class Phase2Tab(QWidget):
     def _read_params(self) -> dict:
         """The form as a phase 2 parameter dict.
 
-        :raises ParamError: for a field that cannot be used as it stands
+        :raises pyCamSet.workflow.ParamError: for a field that cannot be used as it stands
         """
         return {
             "f_loc": require_image_folder(self._floc_edit.text()),

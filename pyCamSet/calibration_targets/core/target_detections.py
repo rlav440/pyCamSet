@@ -352,7 +352,7 @@ class TargetDetection:
         """
         :param keys_to_sort: a single key, or multiple keys to sort by, with sorting order defined by list order.
         :param inplace: If true, replaces the internal data with the sorted array rather than returning new obj
-        :return Either a sorted TargetDetection, or nothing if sorting in place
+        :return: Either a sorted TargetDetection, or nothing if sorting in place
         """
 
         if not isinstance(keys_to_sort, list):

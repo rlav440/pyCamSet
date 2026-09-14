@@ -522,7 +522,7 @@ class Phase1Tab(QWidget):
     def _read_params(self) -> dict:
         """The form as a phase 1 parameter dict.
 
-        :raises ParamError: for a field that cannot be used as it stands
+        :raises pyCamSet.workflow.ParamError: for a field that cannot be used as it stands
         """
         selected_cameras = self.get_selected_cameras()
         if not selected_cameras:

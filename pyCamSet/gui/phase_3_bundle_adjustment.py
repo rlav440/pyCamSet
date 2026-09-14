@@ -641,7 +641,7 @@ class Phase3Tab(QWidget):
     def _read_params(self) -> dict:
         """The form as a phase 3 parameter dict.
 
-        :raises ParamError: for a field that cannot be used as it stands
+        :raises pyCamSet.workflow.ParamError: for a field that cannot be used as it stands
         """
         return {
             "f_loc": require_image_folder(self._floc_edit.text()),
@@ -669,7 +669,7 @@ class Phase3Tab(QWidget):
         camset it was derived from, and both are recorded: the run should say
         what it actually solved against and where that came from.
 
-        :raises ParamError: when the lockbox is on but its source is not there
+        :raises pyCamSet.workflow.ParamError: when the lockbox is on but its source is not there
         """
         enabled = self._lockbox_enabled_cb.isChecked()
         original = self._lockbox_source_edit.text().strip()

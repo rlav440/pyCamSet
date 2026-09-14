@@ -243,8 +243,9 @@ def numba_rodrigues_jac(r, out):
     https://github.com/opencv/opencv/blob/be1373f01a6bcdc40e4a397cfb266338050cc195/modules/calib3d/src/calibration.cpp#L251
 
     The 27 outputs are written out explicitly rather than assembled from the
-    eye/rrt/r_x/drrt/d_r_x_ tables. Building those five Python lists on every
-    call cost ~18x the arithmetic they described, and this runs twice per
+    ``eye``/``rrt``/``r_x``/``drrt``/``d_r_x_`` tables. Building those five
+    Python lists on every call cost ~18x the arithmetic they described, and
+    this runs twice per
     detection inside the jacobian kernel. The algebra is unchanged: terms whose
     table entry is zero are simply not emitted.
     """
@@ -489,9 +490,9 @@ def nb_distort_prealloc(pts: np.ndarray, intrinsics: np.ndarray, k: np.ndarray):
     """
     This function distorts points based on the input values, going from the mathematical ideal to detections.
 
-    :params pts: points to distort, which are overwritten
-    :params intrinsics. The intrinsics of the imaging camera
-    :params k: Brown Conway model of the distorting camera
+    :param pts: points to distort, which are overwritten
+    :param intrinsics: The intrinsics of the imaging camera
+    :param k: Brown Conway model of the distorting camera
     """
     # relative coordinates and distances.
     centre_0, centre_1 = intrinsics[0, -1], intrinsics[1, -1]
@@ -516,9 +517,9 @@ def nb_distort(pts: np.ndarray, intrinsics: np.ndarray, dist_coef: np.ndarray) -
     This function distorts points based on the input values, going from the mathematical ideal to detections.
     It has some inherent allocations, so is slower than the preallocated version.
 
-    :params pts: points to distort, which are overwritten
-    :params intrinsics. The intrinsics of the imaging camera
-    :params k: Brown Conway model of the distorting camera
+    :param pts: points to distort, which are overwritten
+    :param intrinsics: The intrinsics of the imaging camera
+    :param k: Brown Conway model of the distorting camera
     :returns locs: double numpy array of distorted coordinates
     """
     # relative coordinates and distances.
@@ -699,8 +700,8 @@ def nb_triangulate_nviews(P, ip, M):
 
     :param P: a 3d array of  camera projection matrices.
     :param ip: a 2d array - shape nx3 - [ [x, y, 1], [x, y, 1] ] in homegenous image points
-    :M A preallocated array of shape (3*n, 4+n) for math reasons
-    len of ip must be the same as len of P
+    :param M: A preallocated array of shape (3*n, 4+n) for math reasons.
+        len of ip must be the same as len of P
     :return X: the 3d point in space
     """
     M[:] = 0

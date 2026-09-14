@@ -47,9 +47,9 @@ def nb_distort_prealloc(pts: np.ndarray, intrinsics: np.ndarray, k: np.ndarray):
     """
     This function distorts points based on the input values, going from the mathematical ideal to detections.
 
-    :params pts: points to distort, which are overwritten
-    :params intrinsics. The intrinsics of the imaging camera
-    :params k: Brown Conway model of the distorting camera
+    :param pts: points to distort, which are overwritten
+    :param intrinsics: The intrinsics of the imaging camera
+    :param k: Brown Conway model of the distorting camera
     """
     # relative coordinates and distances.
     centre_0, centre_1 = intrinsics[0, -1], intrinsics[1, -1]
@@ -314,7 +314,7 @@ class Camera:
         Uses projection to work out if a camera images a point
 
         :param pt: a point in world space coordinates
-        :return True if the camera images that world coordinate
+        :return: True if the camera images that world coordinate
 
         """
         uv = self.project_points(pt[None, ...])
@@ -494,7 +494,7 @@ class Camera:
         :param cord: points to project
         :param depth_im: the depht image, if not none
         :param distort: whether the coordinate needs to be distorted before projection.
-        :return dist
+        :return: dist
         """
         if isinstance(cord, list):
             cord = np.array(cord)

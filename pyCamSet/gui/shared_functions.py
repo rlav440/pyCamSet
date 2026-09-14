@@ -622,7 +622,7 @@ class TargetSettingsForm(QWidget):
 
         :param detection_options: the detector tuning, when the form
             collecting this also collects that
-        :raises ParamError: for a value the target cannot take
+        :raises pyCamSet.workflow.ParamError: for a value the target cannot take
         """
         from pyCamSet.calibration_targets.core.target_registry import TYPE_KEY
 

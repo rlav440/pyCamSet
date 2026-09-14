@@ -1,9 +1,9 @@
 '''
-Purpose: Headless registry of supported ArUco marker backends and dictionaries.
-Status: Active. Shared by target construction and future GUI consumers without
-        importing presentation-layer modules.
-Future: Add a backend adapter record only when a third marker implementation is
-        supported by the target APIs and covered by focused tests.
+:Purpose: Headless registry of supported ArUco marker backends and dictionaries.
+:Status: Active. Shared by target construction and future GUI consumers without
+    importing presentation-layer modules.
+:Future: Add a backend adapter record only when a third marker implementation is
+    supported by the target APIs and covered by focused tests.
 '''
 
 from __future__ import annotations

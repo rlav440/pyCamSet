@@ -55,7 +55,7 @@ class FreePointPrimitive:
     A class that contains a set of base arrays.
     These arrays contain the pose, extrinsic, intrinsic and distortion params
     that will be used to create the bundle adjustment problem.
-    If a param is fixed, it can be marked as fixed in the *_fixed data structure.
+    If a param is fixed, it can be marked as fixed in the ``*_fixed`` data structure.
     A fixed value will not be dependent on the standard parameters.
     """
 

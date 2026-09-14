@@ -1,8 +1,9 @@
 '''
-Purpose: Phase 3 lockbox prior editor for non-destructive camera-centre repair.
-Status:  Experimental v1 GUI: translation-only edits, trust flags, plane groups,
-         reset/undo/redo, preview, and derived camset/metadata save.
-Future:  Replace the static 3D preview with an interactive viewport and drag handles.
+:Purpose: Phase 3 lockbox prior editor for non-destructive camera-centre repair.
+:Status: Experimental v1 GUI: translation-only edits, trust flags, plane groups,
+    reset/undo/redo, preview, and derived camset/metadata save.
+:Future: Replace the static 3D preview with an interactive viewport and drag
+    handles.
 '''
 from __future__ import annotations
 

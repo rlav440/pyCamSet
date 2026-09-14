@@ -1,12 +1,12 @@
 '''
-Purpose: ArUco2 (aruco2 package) marker backend for pyCamSet ChArUco/Ccube
-         targets. Implements plan v4 decisions D3 (dictionary resolution) and
-         D4/D5 (marker detection + ChArUco corner interpolation) for the
-         aruco2 backend; the aruco1 (OpenCV) path is untouched.
-Status: Active. Batch B1 of the aruco1/aruco2 backend work (plan v4).
-Future: If aruco2 gains native ChArUco support, this module may shrink to a
-        thin adapter; the cross-marker disagreement metric stays as the
-        legacy-pattern discriminator.
+:Purpose: ArUco2 (aruco2 package) marker backend for pyCamSet ChArUco/Ccube
+    targets. Implements plan v4 decisions D3 (dictionary resolution) and
+    D4/D5 (marker detection + ChArUco corner interpolation) for the
+    aruco2 backend; the aruco1 (OpenCV) path is untouched.
+:Status: Active. Batch B1 of the aruco1/aruco2 backend work (plan v4).
+:Future: If aruco2 gains native ChArUco support, this module may shrink to a
+    thin adapter; the cross-marker disagreement metric stays as the
+    legacy-pattern discriminator.
 '''
 
 from __future__ import annotations
@@ -32,12 +32,14 @@ from pyCamSet.calibration_targets.core.parameters import (
 # Module-level lazy aruco2 import guard (D3): the module must import cleanly
 # even when aruco2 is not installed. ARUCO2_AVAILABLE is the single source of
 # truth for availability checks in the target classes.
-ARUCO2_AVAILABLE: bool = False
 try:
     import aruco2  # noqa: F401  (used lazily through the module reference)
-    ARUCO2_AVAILABLE = True
+    _aruco2_importable = True
 except (ImportError, OSError):  # pragma: no cover - exercised by the mocked gate check
     aruco2 = None  # type: ignore[assignment]
+    _aruco2_importable = False
+
+ARUCO2_AVAILABLE: bool = _aruco2_importable
 
 
 def _require_aruco2() -> None:

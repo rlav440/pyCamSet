@@ -79,6 +79,30 @@ def _dark_palette():
     return p
 
 
+def _capture_create_target(app, suffix: str) -> str:
+    """Grab the Create Target dialog, which the corner button opens."""
+    from PySide6.QtWidgets import QCheckBox
+
+    from pyCamSet.gui.create_target import CreateTargetDialog
+
+    terminal_cb = QCheckBox("Show Terminal Output")
+    terminal_cb.setChecked(True)
+
+    dialog = CreateTargetDialog(terminal_cb=terminal_cb, parent=None)
+    # The field defaults to the working directory, which would put whoever ran
+    # this script's home directory in the documentation.
+    dialog._out_dir_edit.setText("/path/to/targets")
+    dialog.show()
+    app.processEvents()
+
+    name = f"create-target-{suffix}.png"
+    if not dialog.grab().save(str(OUT_DIR / name)):
+        raise SystemExit(f"failed to write {name}")
+    dialog.close()
+    app.processEvents()
+    return name
+
+
 def _capture(app, suffix: str) -> list[str]:
     """Build a fresh window and grab every visible tab."""
     from PySide6.QtWidgets import QTabWidget
@@ -128,8 +152,9 @@ def main() -> int:
     for suffix, palette in [("light", QPalette()), ("dark", _dark_palette())]:
         app.setPalette(palette)
         names = _capture(app, suffix)
+        names.append(_capture_create_target(app, suffix))
         total += len(names)
-        print(f"  {suffix}: {len(names)} tabs")
+        print(f"  {suffix}: {len(names)} images")
 
     print(f"{total} screenshots in {OUT_DIR.relative_to(REPO_ROOT)}")
     return 0

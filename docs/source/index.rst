@@ -64,6 +64,7 @@ These are extendable, and examples demonstrate how to extend these components to
    camera_set
    calibration
    calibration_targets/index
+   gui
    workflow
    extension/index
    troubleshooting

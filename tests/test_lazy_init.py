@@ -269,11 +269,29 @@ finally:
         os.add_dll_directory = real_add
 
 expected = os.path.join(sys.prefix, "Library", "bin")
-assert ok, "the helper gave up where it should have recovered"
-assert state["attempts"] >= 2, "the import was never retried after registering"
-if os.name == "nt" and os.path.isdir(expected):
+
+# The retry is the contract, and it holds everywhere.
+assert state["attempts"] >= 2, "the import was never retried"
+
+# Registration only has something to register under a conda layout.  A
+# stock Windows CPython, which is what CI runs, has no Library/bin and
+# nothing to add, so asserting it registered would be asserting the
+# machine rather than the code.
+if os.path.isdir(expected):
     assert state["registered"] == [expected], state["registered"]
     assert os.environ.get("PATH", "").startswith(expected), "PATH was not prepended"
+else:
+    assert state["registered"] == [], state["registered"]
+
+# Whether the retry then succeeded is the machine's business: a host with
+# no native Cairo at all cannot be rescued by pointing at a directory that
+# does not exist.  What must hold is that the helper reports it honestly.
+try:
+    import cairosvg  # noqa: F401
+    cairo_usable = True
+except Exception:
+    cairo_usable = False
+assert ok == cairo_usable, f"helper said {ok}, cairosvg is {cairo_usable}"
 print("CAIRO_REGISTRATION_BRANCH_OK")
 '''
 

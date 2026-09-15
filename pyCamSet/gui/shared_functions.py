@@ -508,6 +508,29 @@ def set_parameter_widget(widget, value) -> None:
         widget.setText("" if value is None else str(value))
 
 
+def connect_value_changed(widget, slot: Callable[[], None]) -> None:
+    """Wire *slot* to whichever signal means "the typed value moved".
+
+    One dispatch for every control :func:`build_parameter_widget` can
+    produce, so a caller that wants to hear about edits -- not just
+    structural rebuilds -- does not have to know the widget classes itself.
+
+    Every one of these Qt signals carries the new value as an argument
+    (``str``, ``int``, ``bool``...); *slot* takes none, so it is wrapped
+    rather than connected directly -- a direct connection does not raise
+    here, it just never calls *slot* at all, and fails silently.
+    """
+    handler = lambda *_args: slot()
+    if isinstance(widget, QComboBox):
+        widget.currentIndexChanged.connect(handler)
+    elif isinstance(widget, QCheckBox):
+        widget.toggled.connect(handler)
+    elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+        widget.valueChanged.connect(handler)
+    else:
+        widget.textChanged.connect(handler)
+
+
 class TargetSettingsForm(QWidget):
     """
     The controls a calibration target is described with.
@@ -526,12 +549,45 @@ class TargetSettingsForm(QWidget):
 
     changed = Signal()
 
+    #: A row's typed value moved -- a keystroke or a spin, not a rebuild.
+    #: Kept separate from :attr:`changed` because that signal already means
+    #: something to other tabs (rebuild the detection-options section,
+    #: rebuild the sweep rows), and firing it on every keystroke would make
+    #: them redo that work continuously rather than once per structural
+    #: change.
+    values_changed = Signal()
+
     def __init__(self, parent: Optional[QWidget] = None,
                  targets: Optional[list[str]] = None) -> None:
         super().__init__(parent)
         from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES
 
         self._widgets: dict[str, QWidget] = {}
+        #: Raw widget values captured at the top of :meth:`_rebuild`, keyed
+        #: by parameter name -- but only for a key in :attr:`_edited`. Lets
+        #: a value someone actually typed survive a round trip through a
+        #: target that does not have it -- flip away and back and it is
+        #: still there -- without leaking into a saved spec
+        #: :meth:`apply_spec` loads, which clears this outright. A value
+        #: never touched is a default, and carrying a default across a
+        #: flip is how one target's defaults used to overwrite another's
+        #: same-named field (Ccube and PuzzleBoardCube both have
+        #: ``n_points``/``length``; browsing between them silently swapped
+        #: in Ccube's numbers as PuzzleBoardCube's own).
+        self._retained: dict[str, Any] = {}
+        #: Keys a person (or a caller writing straight into a widget) has
+        #: actually moved, as opposed to a value only ever shown because
+        #: it was built as a default. Populated by
+        #: :meth:`_on_widget_value_changed`; never touched by
+        #: :meth:`apply_spec`'s own writes, which happen while
+        #: :attr:`_applying_spec` is set.
+        self._edited: set[str] = set()
+        #: True for the duration of :meth:`apply_spec`, so the writes it
+        #: makes into widgets are never mistaken for a person's edit, and
+        #: so :meth:`_rebuild` -- which it can trigger synchronously via
+        #: ``setCurrentText``/``setCurrentIndex`` -- captures nothing into
+        #: :attr:`_retained` from whatever was on the form a moment ago.
+        self._applying_spec = False
         form = QFormLayout(self)
         form.setContentsMargins(0, 0, 0, 0)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
@@ -594,6 +650,19 @@ class TargetSettingsForm(QWidget):
 
     def _rebuild(self, *_args) -> None:
         """Offer the arguments the selected target says it takes."""
+        # Remember what was typed before the rows that hold it are torn
+        # down -- but only for a key that was actually edited. Merged
+        # rather than replaced, so a key from a target flipped away from
+        # two rebuilds ago is still here.
+        for key in self._edited:
+            widget = self._widgets.get(key)
+            if widget is None:
+                continue
+            try:
+                self._retained[key] = read_parameter_widget(widget)
+            except Exception:
+                pass
+
         offered = self._backend_offered()
         self._backend_label.setVisible(offered)
         self._backend_combo.setVisible(offered)
@@ -610,9 +679,36 @@ class TargetSettingsForm(QWidget):
             self._rows_form.removeRow(0)
         for parameter in self.construction_parameters().settable():
             widget = build_parameter_widget(parameter)
+            if parameter.key in self._edited and parameter.key in self._retained:
+                # A retained value can be wrong for this target -- out of a
+                # spin box's range, a dictionary this backend does not
+                # offer -- and restoring it must never be the reason a
+                # value is lost outright. Fall back to the freshly built
+                # default for this key alone.
+                try:
+                    set_parameter_widget(widget, self._retained[parameter.key])
+                except Exception:
+                    pass
+            # Connected after any restore above, so putting a retained
+            # value back does not itself count as a further edit.
+            connect_value_changed(
+                widget, lambda key=parameter.key: self._on_widget_value_changed(key))
             self._rows_form.addRow(f"{parameter.label}:", widget)
             self._widgets[parameter.key] = widget
         self.changed.emit()
+
+    def _on_widget_value_changed(self, key: str) -> None:
+        """A row's typed value moved.
+
+        Recorded into :attr:`_edited` unless it happened while
+        :meth:`apply_spec` is writing a loaded spec into place -- that is
+        the call overwriting the form on purpose, not a person editing it,
+        and must never be treated as one, or the very next flip would
+        carry a value :meth:`apply_spec` just tried to erase.
+        """
+        if not self._applying_spec:
+            self._edited.add(key)
+        self.values_changed.emit()
 
     # -- reading and writing a spec --------------------------------------
 
@@ -648,20 +744,50 @@ class TargetSettingsForm(QWidget):
         Phases 2 and 3 build their own target and pair it with detections
         made by an earlier run, so the default that is right almost always
         is the one the detections were made with.
+
+        A loaded spec wins outright: the form ends up as the spec, with
+        every key it does not mention at the new target's own default --
+        never a value left over from whatever was on the form a moment
+        ago, and never a value this call's own writes are mistaken for
+        someone editing.
         """
         from pyCamSet.calibration_targets.core.target_registry import TYPE_KEY
 
         if not spec or TYPE_KEY not in spec:
             return
-        # Both of these rebuild the rows, so they come before the values.
-        self._target_combo.setCurrentText(str(spec[TYPE_KEY]))
-        if backend := spec.get("marker_backend"):
-            if (index := self._backend_combo.findData(str(backend))) >= 0:
-                self._backend_combo.setCurrentIndex(index)
+        self._applying_spec = True
+        try:
+            # Nothing carried over from before this call may leak into a
+            # key the spec does not mention.
+            self._retained = {}
+            self._edited = set()
+            target_type = str(spec[TYPE_KEY])
+            if self._target_combo.currentText() == target_type:
+                # setCurrentText is a no-op when the type is already
+                # selected -- Qt emits nothing and _rebuild never runs on
+                # its own -- so force it, or a value already sitting in a
+                # widget for a key the spec does not mention would survive
+                # untouched instead of falling back to this target's
+                # default.
+                self._rebuild()
+            else:
+                # This rebuilds the rows -- with _edited already emptied
+                # above, so it captures nothing from the outgoing target --
+                # so it comes before the values below.
+                self._target_combo.setCurrentText(target_type)
+            if backend := spec.get("marker_backend"):
+                if (index := self._backend_combo.findData(str(backend))) >= 0:
+                    self._backend_combo.setCurrentIndex(index)
 
-        for key, widget in self._widgets.items():
-            if spec.get(key) is not None:
-                set_parameter_widget(widget, spec[key])
+            for key, widget in self._widgets.items():
+                if spec.get(key) is not None:
+                    set_parameter_widget(widget, spec[key])
+        finally:
+            self._applying_spec = False
+            # These writes must not outlive the call as if someone had
+            # typed them: the very next flip should not carry a spec's
+            # value into a target the spec never named.
+            self._edited = set()
 
 
 # ---------------------------------------------------------------------------
@@ -833,10 +959,13 @@ def show_tab(notebook, widget) -> None:
 class RunSelectorWidget(QWidget):
     """A ``QListWidget``-based multi-select of saved runs.
 
-    The most recent ``min(3, n)`` runs are pre-selected on every
+    The most recent ``min(preselect, n)`` runs are pre-selected on every
     :meth:`refresh`.
 
     :param on_select: Optional callback invoked with ``list[dict]`` on change.
+    :param preselect: how many of the most recent runs to pre-select;
+        clamped to ``[0, n]`` -- a value at or below zero pre-selects
+        nothing, one past the run count selects all of them.
     """
 
     selection_changed = Signal(object)  # emits list[dict]
@@ -845,8 +974,10 @@ class RunSelectorWidget(QWidget):
         self,
         runs: list[dict],
         parent: Optional[QWidget] = None,
+        preselect: int = 3,
     ) -> None:
         super().__init__(parent)
+        self._preselect = preselect
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -877,7 +1008,7 @@ class RunSelectorWidget(QWidget):
         return selected
 
     def refresh(self, runs: list[dict]) -> None:
-        """Repopulate with *runs* and pre-select the most recent 1-3."""
+        """Repopulate with *runs* and pre-select the most recent *preselect*."""
         self._runs = runs
         self._list.clear()
         if not runs:
@@ -890,7 +1021,8 @@ class RunSelectorWidget(QWidget):
             label = run.get("display_name") or run.get("run_id", str(run))
             self._list.addItem(QListWidgetItem(str(label)))
         n = len(runs)
-        for i in range(max(0, n - 3), n):
+        count = max(0, min(self._preselect, n))
+        for i in range(n - count, n):
             self._list.item(i).setSelected(True)
 
     def enforce_max_selection(self, max_selected: int) -> None:

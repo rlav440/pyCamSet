@@ -5,7 +5,6 @@ docs/build/
 build/
 pyCamSet.egg-info/
 .codegraph/
-pyCamSet/optimisation/template_functions/*
 tests/test_data/**/*.camset
 tests/test_data/*.camset
 tests/test_data/**/detected_datapoints*.pickle

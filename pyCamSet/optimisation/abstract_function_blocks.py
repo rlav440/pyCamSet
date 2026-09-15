@@ -370,6 +370,10 @@ class optimisation_function:
             else:
                 st = f"from {s.module[0]} import {s.name[0]}" + (f" as {s.alias}" if s.alias is not None else "")
             needed_import.append(st)
+        # sorted, because the source is a set: its iteration order changes with
+        # PYTHONHASHSEED, so the emitted import block differed between processes
+        # and the generated file was only reproducible within a single one.
+        needed_import = sorted(needed_import)
         needed_import.append("\n")
 
         #INITIALISE THE FUNCTION
@@ -565,6 +569,8 @@ class optimisation_function:
                 else:
                     st = f"from {s.module[0]} import {s.name[0]}" + (f" as {s.alias}" if s.alias is not None else "")
                 needed_import.append(st)
+            # sorted, for the reason given in make_full_loss_template
+            needed_import = sorted(needed_import)
             needed_import.append("\n")
 
             out_sizes = [0]

@@ -41,14 +41,9 @@ depth `z` drops out entirely and the projection is purely affine.
 $\varepsilon$ is always fitted rather than switched off, so a good lens simply
 returns a value near zero with a finite uncertainty.
 
-## Start from what the geometry cannot see
+## Modelling problem specifics
 
-This is the part that is easy to skip and expensive to skip. Before writing a
-block, work out which parameters the model makes unidentifiable — because the
-optimiser will not tolerate a parameter that cannot reach the residual, and it
-is right not to.
-
-A telecentric camera has **no identifiable position at all**:
+A telecentric camera has no identifiable position.
 
 - **Along its own axis.** Sliding the camera by $d$ turns
   $m x / (1 + \varepsilon(z + d))$ into
@@ -70,10 +65,7 @@ for block in (fb.extrinsic3D, fb.telecentric_extrinsic):
     print(f"{block.__name__:<24} {block.params.n_params} parameters per camera")
 ```
 
-Had it kept the usual six, three jacobian columns would be identically zero. The
-code generator checks for exactly that (`check_all_params_reach_the_output`),
-the runtime degeneracy check rechecks it, and the Schur elimination would
-otherwise divide by a singular block. Three independent guards, all correct.
+Had it kept the usual six, three jacobian columns would be identically zero. 
 
 !!! note "This is why a telecentric rig needs more than one camera"
     A single telecentric camera cannot recover target depth at all, and a
@@ -94,8 +86,6 @@ print("```python")
 print(textwrap.dedent(inspect.getsource(fb.telecentric_intrinsic.compute_fun)))
 print("```")
 ```
-
-Two details in there are worth stealing for any new model.
 
 **The `1e-6` is load-bearing.** Distortion is applied to the pixel offset from
 the principal point, scaled so that `k` is in units of (1000 px)⁻². Applied to

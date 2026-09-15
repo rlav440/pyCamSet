@@ -1,9 +1,9 @@
 # What is extensible
 
 This library was written to enable exploration of calibration targets and
-calibration methodologies. A calibration rests on the interaction of three
-things — the target, the parameter handler, and the bundle adjustment loss —
-and each is meant to be replaced.
+calibration methodologies. A calibration rests on the interaction of four
+things — the target, the parameter handler, the bundle adjustment loss, and the
+camera model — and each is meant to be replaced.
 
 Derivatives of these classes substitute into the framework directly, which is
 what allows the calibration target, the calibration method, and the type of
@@ -17,6 +17,7 @@ describes how they fit together; these pages are how to replace one.
 | [Calibration targets](targets.md) | Where the features are, and how to find them in an image |
 | [Parameter handlers](parameters.md) | What the optimisation is free to move, and what it means |
 | [Bundle adjustment](bundle-adjustment.md) | What the loss actually measures |
+| [Camera models](camera-models.md) | How a camera turns a point in space into a pixel |
 
 ---
 

@@ -407,13 +407,24 @@ class CameraSet:
 
         #build the projection matricies
         proj = np.array([cam.proj for cam in self])
-        dists = np.array([cam.distortion_coefs for cam in self])
 
-        if not distort:
-            dists = np.zeros_like(dists)
+        # Undistortion happens here rather than inside the kernel because it is
+        # the one step that depends on the lens model, and each camera already
+        # knows how to invert its own.  What is left -- the DLT in
+        # nb_triangulate_nviews -- is projective, so it needs no special case
+        # for the affine projection matrix of a telecentric camera.
+        if distort:
+            reconstructable_data = reconstructable_data.copy()
+            cam_column = reconstructable_data[:, 0].astype(int)
+            for idc, cam in enumerate(self):
+                seen = cam_column == idc
+                if np.any(seen):
+                    reconstructable_data[seen, -2:] = cam.undistort_points(
+                        reconstructable_data[seen, -2:])
 
         intr = np.array([cam.intrinsic for cam in self])
-        
+        dists = np.zeros((self.n_cams, 5))
+
         reconstructed = nb_triangulate_full(reconstructable_data, proj, start_ind, intr, dists)
     
         if return_used:

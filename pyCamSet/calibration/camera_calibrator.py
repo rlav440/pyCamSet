@@ -45,6 +45,7 @@ def calibrate_cameras(
     initial_cams: CameraSet | None= None,
     min_detections_per_board: int = 12,
     optimise_target: bool = False,
+    model: str = "pinhole",
     ) -> CameraSet:
     """
     This function coordinates the calibration process, from detection to outputing a final camset.
@@ -57,6 +58,9 @@ def calibrate_cameras(
     :param n_lim: the maximum number of images to use for detection
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
     :param high_distortion: Implements an iterative scheme for high distortion cameras.
+    :param model: the lens model to calibrate, "pinhole" or "telecentric". Every
+        camera in a run shares one model, because one kernel is compiled per
+        calibration.
     :param min_detections_per_board: Minimum number of detected corners required
         for a board observation to contribute to the initial per-camera calibration.
     :param optimise_target: solve the target's own geometry as well, in a second
@@ -98,6 +102,7 @@ def calibrate_cameras(
             save_loc=save_loc / ('initial_cameras' + string_tail),
             fixed_params=fixed_params,
             min_detections_per_board=min_detections_per_board,
+            model=model,
         )
 
 
@@ -118,6 +123,7 @@ def calibrate_cameras(
                 save=save,
                 save_loc=save_loc / ('initial_cameras_high_distortion' + string_tail),
                 min_detections_per_board=min_detections_per_board,
+                model=model,
                 )
 
             # as outlier_rejection already does: only open a window when
@@ -202,7 +208,8 @@ def run_initial_calibration(detection: TargetDetection,
                             ref_cam: int|str = 0,
                             fixed_params: dict|None = None,
                             return_poses_and_costs=False,
-                            min_detections_per_board: int = 12) -> CameraSet | tuple[CameraSet, np.ndarray, np.ndarray]:
+                            min_detections_per_board: int = 12,
+                            model: str = "pinhole") -> CameraSet | tuple[CameraSet, np.ndarray, np.ndarray]:
     """
     For all of the cameras, runs the calibration method provided by an abstract target.
     The default is an opencv calibration but may be overwritten.
@@ -212,6 +219,7 @@ def run_initial_calibration(detection: TargetDetection,
     :param save: should the result be saved
     :param save_loc: where should the result be saved
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
+    :param model: the lens model to fit, "pinhole" or "telecentric"
     :param min_detections_per_board: Minimum number of detected corners required
         for a board observation to contribute to the initial per-camera calibration.
     :return: the camera set with the initial calibration
@@ -250,6 +258,7 @@ def run_initial_calibration(detection: TargetDetection,
             pose_im=pose_im,
             fixed_params=fixed_params,
             return_poses=True,
+            model=model,
         )
     cam_names = detection.cam_names
     cam_detections = detection.get_cam_list()
@@ -263,6 +272,7 @@ def run_initial_calibration(detection: TargetDetection,
                 fixed_params=fixed_params,
                 return_poses=True,
                 min_detections_per_board=min_detections_per_board,
+                model=model,
             )
         results = [work_fn(datum) for datum in work_data]
         raw_calibration = [res[0] for res in results]
@@ -277,6 +287,7 @@ def run_initial_calibration(detection: TargetDetection,
                 fixed_params=fixed_params,
                 return_poses=False,
                 min_detections_per_board=min_detections_per_board,
+                model=model,
             )
         raw_calibration = [work_fn(datum) for datum in work_data]
         poses = []

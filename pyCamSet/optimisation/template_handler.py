@@ -17,6 +17,7 @@ from scipy.sparse import csr_array
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.function_block_implementations as fb
+from pyCamSet.optimisation.camera_models import blocks_for_camset
 import pyCamSet.optimisation.abstract_function_blocks as afb
 from pyCamSet.optimisation.numba_schur import ParamGroup
 from pyCamSet.optimisation.camera_lockbox import (
@@ -75,6 +76,8 @@ class TemplateBundlePrimitive:
         self.extr_unfixed = extr_unfixed if extr_unfixed is not None else np.ones(extr.shape[0], dtype=bool)
         self.intr = intr
         self.intr_unfixed = intr_unfixed if intr_unfixed is not None else np.ones(intr.shape[0], dtype=bool)
+        self.n_intr = intr.shape[1]
+        self.n_extr = extr.shape[1]
         self.calc_free_poses()
 
     def calc_free_poses(self):
@@ -83,8 +86,14 @@ class TemplateBundlePrimitive:
         self.free_extr = np.sum(self.extr_unfixed)
         self.free_intr = np.sum(self.intr_unfixed)
 
-        self.intr_end = 9 * self.free_intr
-        self.extr_end = 6 * self.free_extr + self.intr_end
+        # Widths come from the arrays, which the handler sizes from its own
+        # function blocks.  They used to be the literals 9 and 6 here and in
+        # the two sibling primitives, independent of param_type.n_params on the
+        # blocks, so a model with a different parameter count could disagree
+        # with its own kernel -- and the only symptom is can_use_schur finding
+        # a length mismatch and silently dropping to trf.
+        self.intr_end = self.n_intr * self.free_intr
+        self.extr_end = self.n_extr * self.free_extr + self.intr_end
         self.pose_end = 6 * self.free_poses + self.extr_end
 
 
@@ -96,8 +105,8 @@ class TemplateBundlePrimitive:
         """
 
 
-        intr_data = params[:self.intr_end].reshape((self.free_intr, 9))
-        extr_data = params[self.intr_end:self.extr_end].reshape((self.free_extr, 6))
+        intr_data = params[:self.intr_end].reshape((self.free_intr, self.n_intr))
+        extr_data = params[self.intr_end:self.extr_end].reshape((self.free_extr, self.n_extr))
         pose_data = params[self.extr_end:self.pose_end].reshape((self.free_poses, 6))
 
         ch.fill_flat(pose_data, self.poses, self.poses_unfixed)
@@ -166,8 +175,12 @@ class TemplateBundleHandler:
         n_poses = detection.max_ims
         n_cams = camset.get_n_cams()
 
-        intr = np.zeros((n_cams, 9))
-        extr = np.zeros((n_cams, 6))
+        # The lens model decides how wide a camera's parameters are, and the
+        # primitives read the width off these arrays, so the blocks are chosen
+        # before anything is sized from them.
+        self._intr_block, self._extr_block = blocks_for_camset(camset)
+        intr = np.zeros((n_cams, self._intr_block.params.n_params))
+        extr = np.zeros((n_cams, self._extr_block.params.n_params))
         poses = np.zeros((n_poses, 6))
 
         extr_unfixed = np.array(['ext' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
@@ -190,7 +203,7 @@ class TemplateBundleHandler:
         self.missing_poses: list | None = missing_poses
 
         # we define an abstract function block to handle the calibration
-        self.op_fun: afb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.template_points()
+        self.op_fun: afb.optimisation_function = self._intr_block() + self._extr_block() + fb.template_points()
         self.problem_maximums = {"max_cams": self.camset.get_n_cams() , "max_imgs": self.detection.max_ims, "max_keys": None}
 
 
@@ -601,19 +614,15 @@ class TemplateBundleHandler:
         
         for idc, intr_unfixed in enumerate(self.bundlePrimitive.intr_unfixed):
             if intr_unfixed:
-                param_array.append(
-                    np.concatenate(
-                        (cams[idc].intrinsic[[0, 0, 1, 1], [0, 2, 1, 2]].squeeze(), 
-                         cams[idc].distortion_coefs.squeeze()),
-                        axis=0,
-                    )
-                )
+                param_array.append(cams[idc].to_param_vector())
 
         for idc, ext_unfixed in enumerate(self.bundlePrimitive.extr_unfixed):
             if ext_unfixed:
                 ext = gu.ext_4x4_to_rod(cam_poses[idc])
-                param_array.append(ext[0])
-                param_array.append(ext[1])
+                # rodrigues first, then translation, so a model that does not
+                # estimate its translation simply stops after the rotation
+                param_array.append(
+                    np.concatenate([ext[0], ext[1]])[:self.bundlePrimitive.n_extr])
 
 
         for idp, pose_unfixed in enumerate(self.bundlePrimitive.poses_unfixed):
@@ -644,17 +653,9 @@ class TemplateBundleHandler:
         proj, extr, poses = self.bundlePrimitive.return_bundle_primitives(x)
 
         for idc, cam_name in enumerate(self.cam_names):
-            blank_intr = np.eye(3)
-
-            blank_intr[0, 0] = proj[idc][0]
-            blank_intr[0, 2] = proj[idc][1]
-            blank_intr[1, 1] = proj[idc][2]
-            blank_intr[1, 2] = proj[idc][3]
             temp_cam: Camera = new_cams[cam_name]
-            temp_cam.extrinsic = gu.make_4x4h_tform(extr[idc][:3], extr[idc][3:])
-            # print('hi')
-            temp_cam.intrinsic = blank_intr
-            temp_cam.distortion_coefs = proj[idc][4:]
+            temp_cam.extrinsic = _extrinsic_from_params(extr[idc], temp_cam.extrinsic)
+            temp_cam.from_param_vector(proj[idc])
             temp_cam._update_state()
         if not return_pose:
             return new_cams
@@ -709,6 +710,57 @@ class TemplateBundleHandler:
         """
         return None
         
+
+
+def seed_reprojection_error(cams, detection_data: np.ndarray,
+                            im_points: np.ndarray, extrinsics: np.ndarray) -> np.ndarray:
+    """
+    Reprojection residuals for a graph pose estimate, through each camera's own lens model.
+
+    This used to call the compiled pinhole cost directly, which put a
+    perspective divide and a five term Brown-Conrady model into a step that has
+    no reason to care which lens it is looking through.  Asking each camera to
+    project its own points costs one numpy pass per camera, once per
+    calibration, and works for any model.
+
+    :param cams: the cameras, in detection column order
+    :param detection_data: flattened detections, ``| cam | im | key | u | v |``
+    :param im_points: an (image, key, 3) array of world points
+    :param extrinsics: the 4x4 pose estimated for each camera
+    :return: the residuals, as a flat (2 * n_detections,) array
+    """
+    residuals = np.zeros((len(detection_data), 2))
+    cam_column = detection_data[:, 0].astype(int)
+    im_column = detection_data[:, 1].astype(int)
+    key_column = detection_data[:, 2].astype(int)
+
+    for idc, cam in enumerate(cams):
+        seen = cam_column == idc
+        if not np.any(seen):
+            continue
+        posed = copy(cam)
+        posed.extrinsic = extrinsics[idc]
+        posed._update_state()
+        residuals[seen] = (
+            posed.project_points(im_points[im_column[seen], key_column[seen]])
+            - detection_data[seen, -2:])
+    return residuals.reshape(-1)
+
+
+def _extrinsic_from_params(params: np.ndarray, current: np.ndarray) -> np.ndarray:
+    """
+    Rebuilds a 4x4 extrinsic from the pose parameters a lens model estimates.
+
+    A telecentric camera's translation is not identifiable and so is not
+    estimated; what it had from the seed is kept rather than invented, because
+    nothing in the solve had an opinion about it.
+
+    :param params: the estimated pose parameters, rodrigues first
+    :param current: the camera's existing extrinsic, read only if needed
+    :return: the 4x4 extrinsic
+    """
+    translation = params[3:] if len(params) > 3 else current[:3, 3]
+    return gu.make_4x4h_tform(params[:3], translation)
 
 
 def check_for_target_misalignment(tforms: np.ndarray, ref_cam: int = 0,
@@ -914,23 +966,12 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
     Mat_rt = np.linalg.inv(accumulated_tforms[len(cams):])
     
     #################################################################### a quick code snippet to run a bundle adjustment cost function to check for outliers.
-    # build the projection matrix as an input to the target.
-    dists = np.array([cam.distortion_coefs for cam in cams]).squeeze()
-    ints = np.array([cam.intrinsic for cam in cams])
-    proj = ints @ Mrt_ac[:, :3, :]
-    
     # run a bundle adjustment over the possible target positions.
     ps = calibration_target.point_data.reshape((-1, 3)) #could the flattening be failing for things that aren't flat
     target_shape = calibration_target.point_data.shape
     dd = detection.return_flattened_keys(target_shape[:-1]).get_data() #maybe this isn't in order.
     imlocs = np.array([gu.h_tform(ps,Mt_rt) for Mt_rt in Mat_rt]) 
-    costs = ch.numpy_bundle_adjustment_costfn(
-        dd,
-        imlocs,
-        proj,
-        ints,
-        dists,           
-    )
+    costs = seed_reprojection_error(cams, dd, imlocs, Mrt_ac)
 
     if cams.get_n_cams() < 3:
         costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))

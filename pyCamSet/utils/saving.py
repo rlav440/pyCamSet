@@ -427,6 +427,17 @@ def export_cameras_txt(cams, output_folder: Path):
     :param cams: pyCamSet CameraSet object
     :param output_folder: directory to write cameras.txt into
     """
+    # COLMAP has no telecentric model, and FULL_OPENCV would silently reinterpret
+    # a magnification as a focal length and a division coefficient as k1.
+    telecentric = [cam.name for cam in cams
+                   if type(cam).__name__ == "TelecentricCamera"]
+    if telecentric:
+        raise ValueError(
+            "COLMAP has no telecentric camera model, so "
+            f"{', '.join(map(str, telecentric))} cannot be exported to it. "
+            "Every COLMAP model is perspective."
+        )
+
     output_folder = Path(output_folder)               # normalise to Path
     output_folder.mkdir(parents=True, exist_ok=True)  # ensure dir exists
 

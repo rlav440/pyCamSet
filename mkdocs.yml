@@ -70,6 +70,7 @@ nav:
       - Calibration targets: extending/targets.md
       - Parameter handlers: extending/parameters.md
       - Bundle adjustment: extending/bundle-adjustment.md
+      - Camera models: extending/camera-models.md
   - Troubleshooting: troubleshooting.md
   - Internals:
       - The workflow package: internals/workflow.md

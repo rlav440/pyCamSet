@@ -12,8 +12,10 @@ and most of what it offers falls out of which of the three you are using:
   carries the detections, the residuals and the report that produced it, and
   keeps them across a save and a reload.
 
-It is usually the output of a calibration, and so represents the pinhole model
-of the system that was calibrated. It saves to a JSON formatted file, by
+It is usually the output of a calibration, and so represents the model of the
+system that was calibrated — pinhole by default, or
+[telecentric](../extending/camera-models.md) if that is what was calibrated.
+Every camera in a set shares one model. It saves to a JSON formatted file, by
 convention with a `.camset` extension.
 
 ---

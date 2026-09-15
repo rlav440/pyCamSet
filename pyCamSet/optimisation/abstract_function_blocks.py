@@ -819,7 +819,7 @@ class abstract_function_block(ABC):
     def test_self(self):
         params = np.ones(self.params.n_params)
 
-        outsize = (self.params.n_params + self.num_inp) * selfNon.num_out
+        outsize = (self.params.n_params + self.num_inp) * self.num_out
         jac_output = np.empty(outsize)
 
         def fn(params):

@@ -26,6 +26,7 @@ from pyCamSet.optimisation.template_handler import TemplateBundleHandler, DEFAUL
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.function_block_implementations as fb
+from pyCamSet.optimisation.template_handler import _extrinsic_from_params
 from pyCamSet.optimisation.numba_schur import ParamGroup
 
 from pyCamSet.calibration_targets import TargetDetection
@@ -76,6 +77,8 @@ class StandardBundlePrimitive:
         self.correct_gauge = True
         self.poses = poses
         self.poses_unfixed = poses_unfixed if poses_unfixed is not None else np.ones(poses.shape[0], dtype=bool)
+        self.n_intr = intr.shape[1]
+        self.n_extr = extr.shape[1]
         self.calc_type_inds()
 
     def calc_type_inds(self):
@@ -88,8 +91,8 @@ class StandardBundlePrimitive:
         self.free_pose = np.sum(self.poses_unfixed)
         self.free_bdpt = np.sum(self.bdpt_unfixed)
 
-        self.intr_end = 9 * self.free_intr
-        self.extr_end = 6 * self.free_extr + self.intr_end
+        self.intr_end = self.n_intr * self.free_intr
+        self.extr_end = self.n_extr * self.free_extr + self.intr_end
         self.pose_end = 6 * self.free_pose + self.extr_end
         self.bdpt_end = 1 * self.free_bdpt + self.pose_end
 
@@ -101,8 +104,8 @@ class StandardBundlePrimitive:
         """
 
 
-        intr_data = params[:self.intr_end].reshape((self.free_intr, 9))
-        extr_data = params[self.intr_end:self.extr_end].reshape((self.free_extr, 6))
+        intr_data = params[:self.intr_end].reshape((self.free_intr, self.n_intr))
+        extr_data = params[self.intr_end:self.extr_end].reshape((self.free_extr, self.n_extr))
         pose_data = params[self.extr_end:self.pose_end].reshape((self.free_pose, 6))
         bdpt_data = params[self.pose_end:self.bdpt_end]
 
@@ -191,7 +194,7 @@ class SelfBundleHandler(TemplateBundleHandler):
         self.param_len = None
         self.jac_mask = None
         self.missing_poses: list | None = missing_poses
-        self.op_fun: fb.optimisation_function = fb.projection() + fb.extrinsic3D() + fb.rigidTform3d() +  fb.free_point()
+        self.op_fun: fb.optimisation_function = self._intr_block() + self._extr_block() + fb.rigidTform3d() +  fb.free_point()
 
     def _kernel_extra_args(self) -> tuple:
         # the target geometry is a parameter here, not a fixed template
@@ -339,15 +342,9 @@ class SelfBundleHandler(TemplateBundleHandler):
         proj, extr, poses, ps = self.apply_gauge_transform(*standard_model)
 
         for idc, cam_name in enumerate(self.cam_names):
-            blank_intr = np.eye(3)
-            blank_intr[0, 0] = proj[idc][0]
-            blank_intr[0, 2] = proj[idc][1]
-            blank_intr[1, 1] = proj[idc][2]
-            blank_intr[1, 2] = proj[idc][3]
             temp_cam: Camera = new_cams[cam_name]
-            temp_cam.extrinsic = gu.make_4x4h_tform(extr[idc][:3], extr[idc][3:])
-            temp_cam.intrinsic = blank_intr
-            temp_cam.distortion_coefs = proj[idc][4:]
+            temp_cam.extrinsic = _extrinsic_from_params(extr[idc], temp_cam.extrinsic)
+            temp_cam.from_param_vector(proj[idc])
             temp_cam._update_state()
         if not return_pose:
             return new_cams

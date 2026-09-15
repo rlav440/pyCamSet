@@ -64,7 +64,7 @@ jobs:
           pip install "opencv-python${{ matrix.opencv }}"
 
       - name: Native graphics libraries
-        # Two things want these, so every Linux job gets them, lean included:
+        # Three things want these, so every Linux job gets them, lean included:
         #
         #   * VTK, which pyvista renders through.  Off screen is not no
         #     screen -- it still makes an OpenGL context -- and without
@@ -72,15 +72,72 @@ jobs:
         #     import error, inside plotter.show().
         #   * libQt6Gui, which links libEGL, libGL, libxkbcommon and libdbus
         #     even under the offscreen platform plugin.
+        #   * cairosvg, which is a base dependency -- every target draws its
+        #     printable form through it -- and which binds to libcairo at
+        #     runtime rather than shipping it.  The image already carries it,
+        #     but the tests that need it skip rather than fail when it is
+        #     absent, so leaving it unnamed means they could stop running on
+        #     an image change and the job would stay green.
         #
-        # Only these four: they keep the same package names across 22.04 and
+        # Only these five: they keep the same package names across 22.04 and
         # 24.04, where glib and fontconfig do not, so those are left to the
         # image and the Qt check below says plainly if that is wrong.
         if: ${{ runner.os == 'Linux' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libegl1 libgl1 libxkbcommon0 libdbus-1-3
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3 libcairo2
+
+      - name: Native cairo (macOS)
+        # Same base dependency, no system copy of the library, and Homebrew's
+        # is not usable from the toolcache Python here -- so take cairo from
+        # conda-forge, which is what pyCamSet's own ImportError tells users to
+        # do.  Only the library is wanted, not the interpreter: the tests keep
+        # running under setup-python, and find the dylib through
+        # DYLD_FALLBACK_LIBRARY_PATH, which ctypes.macholib.dyld honours and
+        # which survives into the test process because the toolcache Python is
+        # not SIP-protected.
+        #
+        # Best effort: without it the cairo tests skip, which is what they did
+        # before this step existed, so a conda-forge hiccup must not redden a
+        # matrix that is otherwise telling the truth.
+        if: ${{ runner.os == 'macOS' }}
+        continue-on-error: true
+        run: |
+          arch=osx-64
+          [ "$(uname -m)" = "arm64" ] && arch=osx-arm64
+          curl -Ls "https://micro.mamba.pm/api/micromamba/${arch}/latest" | tar -xj bin/micromamba
+          ./bin/micromamba create -y -q -p "$HOME/cairo" -c conda-forge cairo
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$HOME/cairo/lib:/usr/local/lib:/usr/lib" >> "$GITHUB_ENV"
+
+      - name: Native cairo (Windows)
+        # As above; cairocffi resolves the DLL off PATH on Windows.  Note this
+        # is not the path pyCamSet/utils/cairo_dll_helper.py exists for: that
+        # one handles a conda *interpreter*, whose DLLs live under
+        # sys.prefix/Library/bin.  Here the interpreter is setup-python's and
+        # only the library comes from conda, so the helper's fast path -- a
+        # bare `import cairosvg` -- succeeds and the rest of it never runs.
+        if: ${{ runner.os == 'Windows' }}
+        continue-on-error: true
+        run: |
+          curl.exe -Ls -o micromamba.tar.bz2 https://micro.mamba.pm/api/micromamba/win-64/latest
+          tar.exe -xf micromamba.tar.bz2 Library/bin/micromamba.exe
+          .\Library\bin\micromamba.exe create -y -q -p "$env:USERPROFILE\cairo" -c conda-forge cairo
+          "$env:USERPROFILE\cairo\Library\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Headless OpenGL (Windows)
+        # Mesa3D's off-screen renderer, which is what lets VTK make a context
+        # on a runner with no GPU.  Without it the needs_opengl tests skip on
+        # every Windows job -- the conftest probe asks in a subprocess because
+        # a machine that cannot make a context faults rather than raising, and
+        # that probe stays as the backstop, so if Mesa does not take they skip
+        # exactly as they do now.
+        #
+        # Linux keeps the explicit apt step above instead: it needs named
+        # packages, not a renderer.  docs.yml builds the site through this
+        # same action.
+        if: ${{ runner.os == 'Windows' }}
+        uses: pyvista/setup-headless-display-action@v3
 
       - name: Install the GUI toolkit
         # PySide6 is a base dependency: `pip install pyCamSet` gets it, so
@@ -99,15 +156,34 @@ jobs:
         run: |
           python -c "import PySide6; from PySide6.QtWidgets import QApplication; QApplication([]); print('PySide6', PySide6.__version__, 'ok')"
 
+      - name: Install the PuzzleBoard detector
+        # PuzzleBoard and PuzzleBoardCube are targets pyCamSet ships, so their
+        # detection path is not optional coverage -- but the detector is not on
+        # PyPI, so it comes from the upstream repository.  Three tests skipped
+        # on every job in the matrix until this step existed.
+        #
+        # --no-deps is load-bearing: upstream's requirements name a bare
+        # `opencv-python`, which pip would happily resolve over the major
+        # version this job exists to pin.  Everything it actually needs
+        # (opencv, numpy, scikit-learn, scikit-image) is already installed
+        # above as a pyCamSet dependency.
+        #
+        # Not on the lean job: that one installs requirements_core.txt and
+        # nothing else, which is the whole point of it.
+        if: ${{ ! matrix.lean }}
+        run: pip install --no-deps "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
+
       - name: Record the resolved native dependencies
         # The OpenCV major version is pinned per job, but the exact build still
         # differs per platform and per Python version; log what we actually got
         # so a platform-only failure can be traced to it.
         run: |
           python -c "import sys, numpy, cv2, numba; print('python', sys.version); print('numpy', numpy.__version__); print('cv2', cv2.__version__); print('numba', numba.__version__)"
+          python -c "import cairosvg; print('cairosvg ok')" || echo 'cairosvg UNAVAILABLE: the cairo tests will skip'
+          python -c "import puzzle_board; print('puzzle_board ok')" || echo 'puzzle_board UNAVAILABLE: the PuzzleBoard tests will skip'
 
       - name: Fast tests
-        # No image corpus, no display, no optional dependencies.
+        # No image corpus, no display.
         #
         # JIT stays on so this tier exercises the code that actually ships.
         # It previously ran under NUMBA_DISABLE_JIT to make the @njit kernels

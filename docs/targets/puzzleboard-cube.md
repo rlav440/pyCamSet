@@ -22,11 +22,16 @@ resolves correctly rather than folding one face's keys onto another's.
 
 ## Making one
 
-```python
+```python exec="true" source="above" session="puzzlecube"
 from pyCamSet import PuzzleBoardCube
 
-target = PuzzleBoardCube(n_points=20, length=200.0)
+target = PuzzleBoardCube(n_points=10, length=200.0)
+target.plot()
 ```
+
+Plotting it is how you check that the virtual target and the real one line up
+before spending a session photographing the wrong thing — here that the six
+faces carry the windows the printed net carries, in the same order.
 
 | Argument | Default | |
 |---|---|---|

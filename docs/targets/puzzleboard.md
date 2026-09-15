@@ -29,17 +29,27 @@ fine pitch to be worth it.
 
 ## Making one
 
-The defaults fill an A4 page at a 2 mm pitch:
+The defaults fill an A4 page at a 2 mm pitch. A much smaller board is drawn
+here, because at the printed density the pattern reads as grey on a screen:
 
-```python
+```python exec="true" source="above" session="puzzleboard"
+import matplotlib.pyplot as plt
+
 from pyCamSet import PuzzleBoard
 
+plt.figure(figsize=(5, 7))
 target = PuzzleBoard(
-    num_squares_x=105,
-    num_squares_y=148,
+    num_squares_x=10,
+    num_squares_y=14,
     square_size=2.0,
 )
+target.plot()
 ```
+
+Plotting it draws the board that will be printed, zoomed to fill the frame.
+Every corner in that pattern is a feature the detector decodes a position from,
+which is what the density is for; it is also why a board is worth checking on
+screen before it is printed at a pitch this fine.
 
 | Argument | Default | |
 |---|---|---|

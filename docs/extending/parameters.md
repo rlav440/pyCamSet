@@ -76,7 +76,7 @@ wanders along them.
 [`SelfBundleHandler`][pyCamSet.optimisation.standard_bundle_handler.SelfBundleHandler],
 which additionally frees the target's own points, has seven more to remove and
 does it by holding seven parameters of three non-colinear target points — see
-[Self-calibration](../how-to/self-calibration.md#fixing-the-gauge).
+[freeing the target's geometry](../how-to/calibrate.md#stage-5-freeing-the-targets-geometry).
 
 If your extension adds parameters that introduce a new freedom, it has to
 remove it too.

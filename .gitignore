@@ -16,3 +16,4 @@ dump/
 .coverage.*
 htmlcov/
 coverage.xml
+site/

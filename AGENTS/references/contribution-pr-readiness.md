@@ -27,7 +27,9 @@ that edits both is two themes wearing one hat (§2.2).
 4. A green test run is not a readiness verdict. pyCamSet has several ways for a run to
    be green and wrong — skipped tiers, a missing image corpus, a missing OpenGL
    context, a JIT setting that silences the tests that matter (§9.2). Name what ran and
-   what did not.
+   what did not. A run can also be green because of the machine it ran on rather than
+   the code it ran against, which no ladder executed on that machine can detect
+   (§9.3).
 5. Use these evidence labels:
    - `VERIFIED-BY-EXECUTION` — command actually ran; retain exit code/output.
    - `VERIFIED-BY-READING` — directly checked in a named file or primary source.
@@ -167,7 +169,7 @@ gh run view <run-id> --repo rlav440/pyCamSet --json jobs \
 
 Bind every result to the **full** base SHA, not to the branch name — a branch moves
 between the fetch and the read. A red upstream job is evidence that a local failure may
-pre-exist the candidate (§9.3); it is never a licence to skip a local check.
+pre-exist the candidate (§9.4); it is never a licence to skip a local check.
 
 ## 2. Themed PR planning: turning commits into pull requests
 
@@ -708,7 +710,57 @@ Each of these is documented in the repository and has already cost a real failur
 - **The RNG is seeded** (`deterministic_rng`, seed `20260909`). A test that passes only
   under one seed is not passing.
 
-### 9.3 Failure triage
+### 9.3 The trap the ladder cannot catch: a test that encodes your machine
+
+Every trap in §9.2 is a run that is green and wrong. This is the other direction: a
+test that passes locally for a reason that is not the code, and fails on CI for a
+reason that is not the change.
+
+A real instance, and the shape to recognise. A helper registers the conda
+`Library/bin` directory so `cairosvg` can find the native Cairo library, and its
+interesting half — the registration — never runs on a machine that already finds
+Cairo. To exercise it, the test forced the first `import cairosvg` to fail, then
+asserted the helper recovered:
+
+```python
+assert ok, "the helper gave up where it should have recovered"
+```
+
+That is true on the conda layout it was written on, and false on CI. GitHub's Windows
+runners are a stock CPython with no `Library/bin` to register and no native Cairo to
+find, so the helper correctly reported failure and the test called that a bug. Three
+Windows jobs red, for a machine difference the author's machine cannot produce.
+
+Note what did *not* prevent it. The full suite passed. The fast tier passed. The
+docs build passed. The candidate was `READY` by every check in §9.1, honestly run.
+A ladder cannot catch this, because the ladder runs on the machine that holds the
+assumption.
+
+So it has to be caught while writing the assertion. Before asserting an outcome, ask
+what about the machine makes it true:
+
+- **Assert the mechanism, not the machine's capability.** That the retry happened,
+  that the directory was registered when there was one to register, that the return
+  value matches what the environment can actually deliver — all hold everywhere. That
+  the recovery *succeeded* holds only where the missing piece exists.
+- **Make the expectation conditional on the thing it depends on**, and say so:
+  `if os.path.isdir(expected): ... else: assert registered == []`. A conditional
+  assertion that names its condition is documentation; a skip is a hole.
+- **Anything derived from `sys.prefix`, `PATH`, a native library, a GPU, a drive
+  letter, or an installed optional package is a machine fact**, not a code fact.
+  Native-library and DLL-search behaviour is the most common source, because it is
+  the part of the environment a developer never configured deliberately.
+- **A test written specifically because a branch is hard to reach locally deserves
+  the most suspicion**, not the least. It exists because the local machine is not
+  representative; that is the premise, so do not then assert the local machine's
+  answer.
+
+When the honest answer really is environment-dependent, say which environment in the
+PR body under *What did not run* rather than asserting past it. `OPEN-GAP` on a
+platform you do not have costs a maintainer nothing; a red CI job costs them a
+review cycle.
+
+### 9.4 Failure triage
 
 A local failure is a **regression** unless proven otherwise. To claim it pre-exists the
 candidate, show it at the base:
@@ -729,7 +781,7 @@ If a check cannot run at all — no display, no corpus, no platform — name the
 mark it `OPEN-GAP`/`NOT-READY`. A missing tool is an environment error, never an
 approvable gap.
 
-### 9.4 Minimum evidence record
+### 9.5 Minimum evidence record
 
 ```text
 candidate: <repository, branch, base, head>
@@ -801,7 +853,7 @@ for pyCamSet, and none should be cited as if it did:
 - a machine-readable result manifest, attestation, or ratification artifact;
 - a file-set reservation or locking mechanism across concurrent PRs — §4.2 is a manual
   check, and it is only as good as the moment it was run;
-- a known-failures registry — §9.3 replaces it with a per-failure base replay;
+- a known-failures registry — §9.4 replaces it with a per-failure base replay;
 - a publication wrapper; publication is a human action taken after approval;
 - a post-submission monitoring loop — watch a PR's checks with
   `gh pr checks <n> --repo rlav440/pyCamSet` and escalate by hand.

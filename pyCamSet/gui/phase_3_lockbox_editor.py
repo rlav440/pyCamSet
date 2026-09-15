@@ -71,16 +71,43 @@ except Exception:  # pragma: no cover - GUI fallback for lean environments.
     Figure = None
     _MATPLOTLIB_OK = False
 
-try:
-    import open3d as _o3d
-    import open3d.visualization.gui as _o3d_gui
-    import open3d.visualization.rendering as _o3d_rendering
-    _OPEN3D_OK = True
-except Exception:  # pragma: no cover
-    _o3d = None
-    _o3d_gui = None
-    _o3d_rendering = None
-    _OPEN3D_OK = False
+# Open3D's import is heavy (~1.4s, mostly open3d.visualization.draw_plotly
+# pulling in dash). phase_3_bundle_adjustment imports this module at GUI
+# startup time (MainWindow._build_ui, called from __init__), well before the
+# lockbox editor is ever opened, so an eager `import open3d` here used to tax
+# every GUI launch regardless of whether this editor was used. _ensure_open3d()
+# resolves and caches it on the first actual Phase3LockboxEditor construction.
+_o3d = None
+_o3d_gui = None
+_o3d_rendering = None
+_OPEN3D_OK: bool | None = None  # None = not yet resolved
+
+
+def _ensure_open3d() -> bool:
+    """Import Open3D and its gui/rendering submodules on first call; cache and return availability.
+
+    Caught as ``Exception`` rather than just ``ImportError``: a broken or
+    partial Open3D install (mismatched native libs, missing CUDA, etc.) can
+    fail on import with other exception types too, and this path must stay
+    tolerant so the editor falls back to its Qt-only view instead of crashing
+    outright.
+    """
+    global _o3d, _o3d_gui, _o3d_rendering, _OPEN3D_OK
+    if _OPEN3D_OK is None:
+        try:
+            import open3d as _o3d_module
+            import open3d.visualization.gui as _o3d_gui_module
+            import open3d.visualization.rendering as _o3d_rendering_module
+            _o3d = _o3d_module
+            _o3d_gui = _o3d_gui_module
+            _o3d_rendering = _o3d_rendering_module
+            _OPEN3D_OK = True
+        except Exception:  # pragma: no cover
+            _o3d = None
+            _o3d_gui = None
+            _o3d_rendering = None
+            _OPEN3D_OK = False
+    return _OPEN3D_OK
 
 
 class _DelayedTooltipFilter(QObject):
@@ -152,6 +179,9 @@ class Phase3LockboxEditor(QDialog):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
+        # Resolve Open3D now, the first time this editor is actually opened,
+        # rather than paying its import cost merely by importing this module.
+        _ensure_open3d()
         self.setWindowTitle("Phase 3 Lockbox Prior Editor")
         self.resize(1180, 720)
 

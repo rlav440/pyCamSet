@@ -563,7 +563,7 @@ class Phase4DiagnosticsTab(QWidget):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 4, 0)
 
-        self._run_selector = RunSelectorWidget(runs=[])
+        self._run_selector = RunSelectorWidget(runs=[], preselect=1)
         self._run_selector.selection_changed.connect(self._on_selection_changed)
         left_layout.addWidget(self._run_selector)
 

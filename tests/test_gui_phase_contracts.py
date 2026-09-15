@@ -784,3 +784,376 @@ def test_a_phase_adopts_the_target_of_the_run_it_continues(phase):
         assert tab._target_form.spec()["n_points"] == 12
     finally:
         tab.deleteLater()
+
+
+# --------------------------------------------------------------------------
+# A target flip must not throw typed values away
+# --------------------------------------------------------------------------
+#
+# _rebuild used to tear every row down and rebuild from the new target's
+# defaults on every target-type or detector-backend change, so a value
+# someone had already typed -- including one the new target takes just the
+# same, like a shared square size -- was lost under them.
+
+
+@pytest.mark.gui
+def test_flipping_target_type_keeps_a_shared_value_and_restores_it_on_return():
+    """``square_size`` is taken by both ChArUco and PuzzleBoard; a value
+    typed into it survives the flip between them, and a value that only
+    ChArUco has (``marker_fraction``) is still there when flipping back."""
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import read_parameter_widget, set_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("ChArUco")
+    try:
+        set_parameter_widget(form._widgets["square_size"], 42.0)
+        set_parameter_widget(form._widgets["marker_fraction"], 0.5)
+
+        form._target_combo.setCurrentText("PuzzleBoard")
+        assert read_parameter_widget(form._widgets["square_size"]) == "42.0"
+        assert "marker_fraction" not in form._widgets  # PuzzleBoard has no such field
+
+        form._target_combo.setCurrentText("ChArUco")
+        assert read_parameter_widget(form._widgets["square_size"]) == "42.0"
+        assert read_parameter_widget(form._widgets["marker_fraction"]) == "0.5"
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_flipping_the_detector_backend_keeps_a_typed_value():
+    """The detector combo rebuilds the same rows :meth:`_rebuild` does, so
+    a value survives that flip exactly as it does a target-type flip."""
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import read_parameter_widget, set_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("ChArUco")
+    try:
+        set_parameter_widget(form._widgets["square_size"], 17.0)
+
+        form._backend_combo.setCurrentIndex(form._backend_combo.findData("aruco2"))
+        assert read_parameter_widget(form._widgets["square_size"]) == "17.0"
+
+        form._backend_combo.setCurrentIndex(form._backend_combo.findData("aruco1"))
+        assert read_parameter_widget(form._widgets["square_size"]) == "17.0"
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_adopting_a_run_does_not_leak_a_stale_retained_value():
+    """A key retained several flips ago, from a target no longer on
+    screen, must not resurface just because :meth:`apply_spec` loads a
+    spec that happens to omit it: ``apply_spec`` wins outright, and the
+    field it says nothing about should fall back to that target's own
+    default, not to whatever was typed long before the run was adopted."""
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import set_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("ChArUco")
+    try:
+        set_parameter_widget(form._widgets["num_squares_x"], 999)
+        form._target_combo.setCurrentText("PuzzleBoard")  # retains num_squares_x=999
+        form._target_combo.setCurrentText("Ccube")  # Ccube has no such field either
+
+        # A spec that says nothing about num_squares_x at all.
+        form.apply_spec({"type": "ChArUco", "square_size": 5.0})
+
+        assert form.target_type() == "ChArUco"
+        assert form.spec()["num_squares_x"] == 5, "the target's own default, not 999"
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_browsing_target_types_with_no_edits_shows_each_ones_own_defaults():
+    """Selecting every target in turn, never typing a thing, must show each
+    one's OWN constructor defaults -- not a value left over from whichever
+    target was on screen before.
+
+    Ccube and PuzzleBoardCube both declare ``n_points``/``length``; before
+    the fix, merely browsing from one to the other overwrote the newly
+    selected target's real defaults (``n_points=20, length=200.0`` for
+    PuzzleBoardCube) with the previous target's numbers
+    (``n_points=5, length=20.0``), and both resulting specs passed
+    validation, so nothing surfaced it.
+
+    Expected defaults are read from each target's own ``__init__`` via
+    ``inspect.signature`` rather than hardcoded, so this tracks the code
+    instead of drifting from it.
+    """
+    import inspect
+
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES, target_class
+
+    QApplication.instance() or QApplication([])
+    form = _target_form()
+    try:
+        for target_type in TARGET_NAMES:
+            form._target_combo.setCurrentText(target_type)
+            spec = form.spec()
+            sig = inspect.signature(target_class(target_type).__init__)
+            for name, param in sig.parameters.items():
+                if name == "self" or param.default is inspect.Parameter.empty:
+                    continue
+                if name not in spec:
+                    continue
+                assert spec[name] == param.default, (
+                    f"{target_type}.{name}: form shows {spec[name]!r} after "
+                    f"selecting it with no edits at all; its own "
+                    f"constructor default is {param.default!r}")
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_an_edited_shared_value_survives_a_flip_while_an_untouched_one_takes_the_new_default():
+    """The original feature -- a value someone actually typed survives a
+    target or detector flip -- has to keep working now that retention is
+    edited-only, or the fix for P0 #1 would have thrown it out entirely.
+
+    Ccube and PuzzleBoardCube share both ``n_points`` and ``length``; only
+    ``length`` is edited here, so it must survive the flip, while
+    ``n_points`` -- never touched -- must show PuzzleBoardCube's own
+    default rather than whatever Ccube happened to be showing.
+    """
+    import inspect
+
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.calibration_targets.core.target_registry import target_class
+    from pyCamSet.gui.shared_functions import set_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("Ccube")
+    try:
+        set_parameter_widget(form._widgets["length"], 55.0)
+
+        form._target_combo.setCurrentText("PuzzleBoardCube")
+
+        spec = form.spec()
+        assert spec["length"] == 55.0, "the edited value survives the target flip"
+        default_n_points = inspect.signature(
+            target_class("PuzzleBoardCube").__init__
+        ).parameters["n_points"].default
+        assert spec["n_points"] == default_n_points, (
+            "an untouched key takes the NEW target's own default, not "
+            "whatever the old target happened to be showing")
+
+        # The detector-flip path: ChArUco's square_size, edited, must
+        # survive a backend change the same way.
+        form._target_combo.setCurrentText("ChArUco")
+        set_parameter_widget(form._widgets["square_size"], 42.0)
+
+        form._backend_combo.setCurrentIndex(form._backend_combo.findData("aruco2"))
+        assert form.spec()["square_size"] == 42.0, \
+            "the edited value survives the detector flip too"
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_apply_spec_resets_an_unmentioned_key_even_when_the_type_is_unchanged():
+    """``setCurrentText`` is a no-op when the target type does not change,
+    so Qt emits nothing and ``_rebuild`` never runs on its own --
+    ``apply_spec`` has to force it, or a value already sitting in a widget
+    for a key the spec does not mention just stays there."""
+    import inspect
+
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.calibration_targets.core.target_registry import target_class
+    from pyCamSet.gui.shared_functions import set_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("ChArUco")
+    try:
+        set_parameter_widget(form._widgets["num_squares_x"], 999)
+
+        form.apply_spec({"type": "ChArUco", "square_size": 5.0})
+
+        default_num_squares_x = inspect.signature(
+            target_class("ChArUco").__init__
+        ).parameters["num_squares_x"].default
+        assert form.spec()["num_squares_x"] == default_num_squares_x, \
+            "not the 999 left over from before apply_spec"
+        assert form.spec()["square_size"] == 5.0
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_apply_spec_does_not_leak_a_value_staged_through_a_target_that_shares_the_key():
+    """The type-change path: PuzzleBoard and ChArUco both declare
+    ``num_squares_x`` -- unlike Ccube, which shares nothing with ChArUco
+    and so would pass this by luck alone. Loading a ChArUco spec after
+    typing into PuzzleBoard's ``num_squares_x`` must not leak that 999 into
+    ChArUco's same-named field, and must not leave PuzzleBoard's own
+    default sitting in a field the spec did mention either.
+    """
+    import inspect
+
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.calibration_targets.core.target_registry import target_class
+    from pyCamSet.gui.shared_functions import set_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("PuzzleBoard")
+    try:
+        set_parameter_widget(form._widgets["num_squares_x"], 999)
+
+        form.apply_spec({"type": "ChArUco", "square_size": 5.0})
+
+        assert form.target_type() == "ChArUco"
+        default_num_squares_x = inspect.signature(
+            target_class("ChArUco").__init__
+        ).parameters["num_squares_x"].default
+        assert form.spec()["num_squares_x"] == default_num_squares_x, \
+            "not the 999 staged through PuzzleBoard"
+        assert form.spec()["square_size"] == 5.0, \
+            "the spec's own value, not PuzzleBoard's default for it"
+    finally:
+        form.deleteLater()
+
+
+# --------------------------------------------------------------------------
+# RunSelectorWidget's pre-selection count
+# --------------------------------------------------------------------------
+
+
+def _runs(n):
+    return [{"run_id": f"r{i}"} for i in range(n)]
+
+
+@pytest.mark.gui
+def test_run_selector_default_preselect_is_still_three():
+    """Every existing caller relies on the default -- changing it would be
+    a silent behaviour change for phases that never asked for one."""
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import RunSelectorWidget
+
+    QApplication.instance() or QApplication([])
+    widget = RunSelectorWidget(_runs(5))
+    try:
+        assert len(widget.get_selected()) == 3
+    finally:
+        widget.deleteLater()
+
+
+@pytest.mark.gui
+def test_run_selector_preselect_is_configurable():
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import RunSelectorWidget
+
+    QApplication.instance() or QApplication([])
+    widget = RunSelectorWidget(_runs(5), preselect=1)
+    try:
+        assert len(widget.get_selected()) == 1
+        assert widget.get_selected()[0]["run_id"] == "r4"  # the most recent
+    finally:
+        widget.deleteLater()
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize(("n", "preselect", "expected"), [
+    (5, 0, 0),      # zero or below selects nothing
+    (5, -2, 0),
+    (5, 100, 5),    # past the run count selects all of them
+    (0, 3, 0),      # nothing to select regardless
+])
+def test_run_selector_preselect_is_clamped(n, preselect, expected):
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import RunSelectorWidget
+
+    QApplication.instance() or QApplication([])
+    widget = RunSelectorWidget(_runs(n), preselect=preselect)
+    try:
+        assert len(widget.get_selected()) == expected
+    finally:
+        widget.deleteLater()
+
+
+# --------------------------------------------------------------------------
+# The suggested file name tracks a value, not just a rebuild
+# --------------------------------------------------------------------------
+
+
+def _create_target_dialog():
+    from PySide6.QtWidgets import QCheckBox
+
+    from pyCamSet.gui.create_target import CreateTargetDialog
+
+    return CreateTargetDialog(QCheckBox())
+
+
+@pytest.mark.gui
+def test_the_suggested_name_tracks_a_value_edit():
+    """n_points is not a structural change -- no ``changed`` signal fires
+    for it -- so before this the suggested name silently disagreed with
+    what would actually be written."""
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import set_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    dialog = _create_target_dialog()
+    try:
+        dialog._target_form._target_combo.setCurrentText("Ccube")
+        # A QLineEdit's setText() emits textChanged, which is exactly the
+        # signal a row's value is wired to -- no simulated keystroke needed.
+        set_parameter_widget(dialog._target_form._widgets["n_points"], 30)
+
+        assert "30points" in dialog._name_edit.text()
+    finally:
+        dialog.deleteLater()
+
+
+@pytest.mark.gui
+def test_the_suggested_name_stops_once_typed_into_and_resumes_when_cleared():
+    """Clearing the field must resume auto-naming by itself.
+
+    The previous version of this test edited ``n_points`` right after
+    clearing the field, which fires ``values_changed`` ->
+    ``_sync_default_name`` and would have resumed the name anyway -- so it
+    passed even when clearing alone left the field blank. Nothing else is
+    touched here, so a regression has nowhere left to hide.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import read_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    dialog = _create_target_dialog()
+    try:
+        dialog._target_form._target_combo.setCurrentText("Ccube")
+
+        dialog._name_edit.setText("my_own_name.svg")
+        dialog._name_edit.textEdited.emit("my_own_name.svg")
+        assert dialog._name_edit.text() == "my_own_name.svg", "left alone"
+
+        expected = dialog._target_class().printable_name(
+            dialog._target_form.spec(), dialog._export_kind())
+        before_n_points = read_parameter_widget(
+            dialog._target_form._widgets["n_points"])
+
+        dialog._name_edit.setText("")
+        dialog._name_edit.textEdited.emit("")
+
+        assert dialog._name_edit.text() == expected, "auto-naming resumed"
+        assert read_parameter_widget(
+            dialog._target_form._widgets["n_points"]) == before_n_points, (
+            "the resume must not touch any other widget")
+    finally:
+        dialog.deleteLater()

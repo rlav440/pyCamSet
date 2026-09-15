@@ -81,7 +81,9 @@ class CreateTargetDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Create Target")
         self.resize(620, 720)
-        self._repopulating = False
+        #: Set once the person has typed their own name into the field;
+        #: :meth:`_sync_default_name` leaves it alone from then on.
+        self._name_is_user_set = False
         self._build_ui(terminal_cb)
 
     def _build_ui(self, terminal_cb: QCheckBox) -> None:
@@ -91,6 +93,12 @@ class CreateTargetDialog(QDialog):
         root.addWidget(make_section_label("Target"))
         self._target_form = TargetSettingsForm()
         self._target_form.changed.connect(self._on_target_changed)
+        # A structural change (target type, detector) goes through
+        # _on_target_changed, which also rebuilds the export-options rows;
+        # a value edit (n_points, square size, ...) only needs the name
+        # re-synced, so it is wired straight to that instead of through
+        # the more expensive handler.
+        self._target_form.values_changed.connect(self._sync_default_name)
         root.addWidget(self._target_form)
 
         root.addWidget(make_separator())
@@ -122,6 +130,7 @@ class CreateTargetDialog(QDialog):
         form.addRow("Output directory:", out_row)
 
         self._name_edit = QLineEdit()
+        self._name_edit.textEdited.connect(self._on_name_edited)
         form.addRow("Output file name:", self._name_edit)
 
         self._on_target_changed()
@@ -167,8 +176,31 @@ class CreateTargetDialog(QDialog):
     def _export_kind(self) -> str:
         return _EXPORT_CHOICES[self._format_combo.currentText()]
 
+    def _on_name_edited(self, text: str) -> None:
+        """Stop auto-naming once typed into, resume it if cleared back out.
+
+        ``textEdited`` fires only on user keystrokes, never on the
+        programmatic ``setText`` :meth:`_sync_default_name` itself does, so
+        there is no risk of the two fighting each other. Dropping back to
+        auto-naming here has to re-suggest a name immediately -- nothing
+        else is going to fire on an empty field left alone, so without
+        this it would just stay blank.
+        """
+        self._name_is_user_set = bool(text)
+        if not self._name_is_user_set:
+            self._sync_default_name()
+
     def _sync_default_name(self) -> None:
-        """Name the file after the target, until someone names it themselves."""
+        """Name the file after the target, until someone names it themselves.
+
+        Called on every structural rebuild and, now, on every value edit
+        too -- so a half-typed number is the common case, not the
+        exception. :class:`ParamError` from a spec that will not parse yet
+        is swallowed the same way it always was: stay quiet, leave the
+        previous suggestion showing.
+        """
+        if self._name_is_user_set:
+            return
         try:
             spec = self._target_form.spec()
         except ParamError:
@@ -256,6 +288,15 @@ class CreateTargetDialog(QDialog):
         collected = self._collect()
         if collected is None:
             return
+
+        # spawn_viewer's own Popen call returns in milliseconds; what is
+        # slow is the child importing pyCamSet before its window appears
+        # (~4.7s), which this process cannot shorten or wait on. A status
+        # line said before the click's work starts, forced onto the
+        # screen with repaint() rather than left for the next event-loop
+        # spin, is what stops the button looking dead in the meantime.
+        self._status.setText("Opening the target viewer…")
+        self._status.repaint()
 
         ok, detail = spawn_viewer(
             "pyCamSet.utils.visualise_target",

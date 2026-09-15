@@ -15,7 +15,7 @@ resolves correctly rather than folding one face's keys onto another's.
     Like `PuzzleBoard`, it is read by the upstream PuzzleBoard detector:
 
     ```bash
-    pip install "pyCamSet[puzzle]"
+    pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
     ```
 
 ---

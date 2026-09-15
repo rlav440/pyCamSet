@@ -19,7 +19,7 @@ fine pitch to be worth it.
     is not published on PyPI, so pyCamSet does not pull it in by default:
 
     ```bash
-    pip install "pyCamSet[puzzle]"
+    pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
     ```
 
     Constructing the target without it raises an `ImportError` naming that fix.

@@ -89,10 +89,17 @@ gui = []
 # Kept separate from the base install because it is a large download and
 # everything it draws has a pyvista equivalent.
 viz = ["open3d"]
-puzzle = ["puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"]
+# No ``puzzle`` extra: PuzzleBoard is not on PyPI, and a direct URL in
+# Requires-Dist is rejected at upload -- which release.yml refuses to build
+# rather than discovering at the last step of a release.  The detector is
+# installed by URL instead, as the install docs and .github/workflows/test.yml
+# both spell out:
+#
+#   pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
+#
 # Defined in terms of the others so it cannot drift out of step with them --
 # the setup.cfg version had already lost pytest-cov this way.
-all = ["pyCamSet[dev,optimisation,gui,viz,puzzle]"]
+all = ["pyCamSet[dev,optimisation,gui,viz]"]
 
 [project.scripts]
 pycamset = "pyCamSet.gui.__main__:main"
@@ -113,8 +120,12 @@ exclude = ["tests*", "examples*"]
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
-# Keep both naming conventions used by the maintained test inventory.
-python_files = ["test_*.py", "*_test.py"]
+# One convention only.  The suffixed form was kept for a single file, which
+# has been renamed; leaving it in meant any scratch file a developer dropped in
+# tests/ named ``*_test.py`` was collected, and anything such a file does at
+# import time happens during collection -- before the autouse fixture that
+# confines writes to a temporary directory can apply.
+python_files = ["test_*.py"]
 addopts = "-ra --strict-markers --strict-config"
 
 [tool.coverage.run]

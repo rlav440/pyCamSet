@@ -38,9 +38,9 @@ class _MissingPuzzleBoard:
     def __init__(self, *args, **kwargs):
         raise ImportError(
             "PuzzleBoard requires the optional 'puzzle_board' dependency, which is "
-            "not installed. Install it with: pip install 'pyCamSet[puzzle]' "
-            "(or pip install 'puzzle_board @ "
-            "git+https://github.com/PStelldinger/PuzzleBoard.git')."
+            "not installed. It is not on PyPI, so install it from source: "
+            "pip install 'puzzle_board @ "
+            "git+https://github.com/PStelldinger/PuzzleBoard.git'."
         )
 
 
@@ -61,9 +61,9 @@ class _MissingPuzzleBoardCube:
     def __init__(self, *args, **kwargs):
         raise ImportError(
             "PuzzleBoardCube requires the optional 'puzzle_board' dependency, which is "
-            "not installed. Install it with: pip install 'pyCamSet[puzzle]' "
-            "(or pip install 'puzzle_board @ "
-            "git+https://github.com/PStelldinger/PuzzleBoard.git')."
+            "not installed. It is not on PyPI, so install it from source: "
+            "pip install 'puzzle_board @ "
+            "git+https://github.com/PStelldinger/PuzzleBoard.git'."
         )
 
 

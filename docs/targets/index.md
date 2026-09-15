@@ -13,8 +13,8 @@ pyCamSet ships four:
 |---|---|---|---|
 | [`ChArUco`](charuco.md) | planar board | — | The simplest, and the most robust |
 | [`Ccube`](ccube.md) | cube, six ChArUco faces | — | For inward-facing rigs |
-| [`PuzzleBoard`](puzzleboard.md) | planar board | `pyCamSet[puzzle]` | Dense corners, decoded from a periodic code |
-| [`PuzzleBoardCube`](puzzleboard-cube.md) | cube, six PuzzleBoard faces | `pyCamSet[puzzle]` | PuzzleBoard density on Ccube geometry |
+| [`PuzzleBoard`](puzzleboard.md) | planar board | `puzzle_board` | Dense corners, decoded from a periodic code |
+| [`PuzzleBoardCube`](puzzleboard-cube.md) | cube, six PuzzleBoard faces | `puzzle_board` | PuzzleBoard density on Ccube geometry |
 
 Each of them draws itself, which is the quickest way to tell them apart. The
 cubes below turn.

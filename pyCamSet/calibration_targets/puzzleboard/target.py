@@ -276,6 +276,11 @@ class PuzzleBoard(AbstractTarget):
         f_out.parent.mkdir(parents=True, exist_ok=True)  # Create the output directory when needed.
         svg_text = self._svg_document().tostring()  # Use one vector source for both PDF formats.
         try:
+            # Register the native Cairo DLL location before cairosvg needs it.
+            # This used to run eagerly in pyCamSet/__init__.py, forcing every
+            # pyCamSet import to pay for it even when cairo was never touched;
+            # it now runs only on this lazily-reached export path.
+            import pyCamSet.utils.cairo_dll_helper  # noqa: F401
             import cairosvg
         except OSError as _cairo_err:
             raise OSError(
@@ -343,6 +348,11 @@ class PuzzleBoard(AbstractTarget):
     def plot(self, imres: tuple[int, int] = (1000, 1000)) -> None:
         """Display a rasterised preview of the vector target."""
         try:
+            # Register the native Cairo DLL location before cairosvg needs it.
+            # This used to run eagerly in pyCamSet/__init__.py, forcing every
+            # pyCamSet import to pay for it even when cairo was never touched;
+            # it now runs only on this lazily-reached preview path.
+            import pyCamSet.utils.cairo_dll_helper  # noqa: F401
             import cairosvg
         except OSError as _cairo_err:
             raise OSError(

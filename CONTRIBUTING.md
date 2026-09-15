@@ -71,6 +71,32 @@ so match the surrounding code rather than introducing a house style. UK English 
 comments and docs. Docstrings use reST fields (`:param x:`) and are rendered into the
 API pages, so a malformed one breaks the docs build.
 
+## Don't let a test assert your machine
+
+The skip table above is about a run being green when it should not be. This is the
+opposite, and it is the one that gets caught by CI rather than by you: a test that
+passes locally for a reason that is not the code.
+
+If an assertion depends on a native library, `sys.prefix`, `PATH`, a GPU, a drive
+letter, or an optional package you happen to have installed, it is asserting your
+machine. It will pass every time you run it and fail on a runner that is set up
+differently. Assert the mechanism instead — that the thing was attempted, that it did
+the right thing *given what was available* — and make an expectation conditional on
+whatever it depends on:
+
+```python
+if os.path.isdir(expected):
+    assert registered == [expected]
+else:
+    assert registered == []        # nothing there to register
+```
+
+Be most suspicious of a test you wrote precisely because a code path is hard to reach
+locally. It exists because your machine is not representative — so don't then assert
+your machine's answer. If the honest answer really is environment-dependent, say which
+environment you couldn't test in the PR body. Nobody minds that; a red CI job costs a
+review cycle.
+
 ## What CI will run
 
 Every pull request runs three workflows. You can run all of them locally:

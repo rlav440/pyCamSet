@@ -652,6 +652,11 @@ class PuzzleBoardCube(AbstractTarget):
         drawing, canvas_w_mm, canvas_h_mm = self._svg_document(border_width, draw_cut_outline, draw_face_ids)  # Build one SVG source.
         svg_bytes = drawing.tostring().encode("utf-8")  # Convert the svgwrite document to Cairo input.
         try:
+            # Register the native Cairo DLL location before cairosvg needs it.
+            # This used to run eagerly in pyCamSet/__init__.py, forcing every
+            # pyCamSet import to pay for it even when cairo was never touched;
+            # it now runs only on this lazily-reached export path.
+            import pyCamSet.utils.cairo_dll_helper  # noqa: F401
             import cairosvg
         except OSError as _cairo_err:
             raise OSError(
@@ -683,6 +688,11 @@ class PuzzleBoardCube(AbstractTarget):
     def plot(self, return_scene: bool = False, draw_res: tuple[int, int] = (800, 800)):
         """Visualise the six textured faces in a 3-D pyVista scene."""
         try:
+            # Register the native Cairo DLL location before cairosvg needs it.
+            # This used to run eagerly in pyCamSet/__init__.py, forcing every
+            # pyCamSet import to pay for it even when cairo was never touched;
+            # it now runs only on this lazily-reached preview path.
+            import pyCamSet.utils.cairo_dll_helper  # noqa: F401
             import cairosvg
         except OSError as _cairo_err:
             raise OSError(

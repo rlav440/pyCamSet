@@ -23,13 +23,38 @@ from pyCamSet.utils.gui_safety import refuse_window_inside_qt
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc, n_inv_pose
 
 logger = logging.getLogger(__name__)
-# Optional Open3D import — deferred to avoid import-time failures when unavailable.
-try:
-    import open3d as _o3d
-    _OPEN3D_OK = True
-except ImportError:  # pragma: no cover
-    _o3d = None
-    _OPEN3D_OK = False
+
+# Open3D is optional (the "viz" extra) but its import is heavy -- ~1.4s,
+# mostly open3d.visualization.draw_plotly pulling in dash. This module is
+# imported by cameras.camera_set, which every target build imports, so an
+# eager `import open3d` here used to tax every caller with Open3D installed
+# regardless of whether they ever touched the Open3D renderer. _open3d()
+# resolves and caches the module on first actual use instead; every use
+# below goes through it rather than the module being imported at parse time.
+_o3d = None
+_OPEN3D_OK: bool | None = None  # None = not yet resolved
+
+
+def _open3d():
+    """Import Open3D on first call and cache it; return the module, or None if unavailable.
+
+    Caught as ``Exception`` rather than just ``ImportError``: a broken or
+    partial Open3D install (mismatched native libs, missing CUDA, etc.) can
+    raise other exception types during import, and this path must stay
+    tolerant so callers fall through to the "not installed" message instead
+    of an unrelated traceback.
+    """
+    global _o3d, _OPEN3D_OK
+    if _OPEN3D_OK is None:
+        try:
+            import open3d as _module
+            _o3d = _module
+            _OPEN3D_OK = True
+        except Exception:  # pragma: no cover
+            _o3d = None
+            _OPEN3D_OK = False
+    return _o3d
+
 
 def _target_mean_distance(target) -> float:
     """Compute the mean Euclidean distance of target points from the origin.
@@ -521,6 +546,7 @@ def visualise_calibration(
 
 def _pv_polydata_to_o3d_lineset(pv_mesh):
     """Convert a PyVista triangle mesh into an Open3D wireframe LineSet."""
+    o3d = _open3d()
     verts = np.asarray(pv_mesh.points, dtype=np.float64)
     faces_arr = np.asarray(pv_mesh.faces)
     if faces_arr.ndim == 1:
@@ -535,14 +561,15 @@ def _pv_polydata_to_o3d_lineset(pv_mesh):
             edge = tuple(sorted((int(tri[i]), int(tri[(i + 1) % 3]))))
             edges.add(edge)
 
-    line_set = _o3d.geometry.LineSet()
-    line_set.points = _o3d.utility.Vector3dVector(verts)
-    line_set.lines = _o3d.utility.Vector2iVector(np.array(list(edges), dtype=np.int32))
+    line_set = o3d.geometry.LineSet()
+    line_set.points = o3d.utility.Vector3dVector(verts)
+    line_set.lines = o3d.utility.Vector2iVector(np.array(list(edges), dtype=np.int32))
     return line_set
 
 
 def _build_o3d_axes_lines(scale: float):
     """Return a coloured Open3D LineSet for the world axes."""
+    o3d = _open3d()
     points = np.array(
         [
             [0.0, 0.0, 0.0],
@@ -561,10 +588,10 @@ def _build_o3d_axes_lines(scale: float):
         ],
         dtype=np.float64,
     )
-    axes = _o3d.geometry.LineSet()
-    axes.points = _o3d.utility.Vector3dVector(points)
-    axes.lines = _o3d.utility.Vector2iVector(lines)
-    axes.colors = _o3d.utility.Vector3dVector(colours)
+    axes = o3d.geometry.LineSet()
+    axes.points = o3d.utility.Vector3dVector(points)
+    axes.lines = o3d.utility.Vector2iVector(lines)
+    axes.colors = o3d.utility.Vector3dVector(colours)
     return axes
 
 
@@ -584,25 +611,26 @@ def _render_open3d_geometries_offscreen(
     point_size: float,
 ):
     """Render Open3D geometries and return image plus camera projection data."""
+    o3d = _open3d()
     try:
-        renderer = _o3d.visualization.rendering.OffscreenRenderer(width, height)
+        renderer = o3d.visualization.rendering.OffscreenRenderer(width, height)
         renderer.scene.set_background([0.08, 0.10, 0.16, 1.0])
 
-        point_mat = _o3d.visualization.rendering.MaterialRecord()
+        point_mat = o3d.visualization.rendering.MaterialRecord()
         point_mat.shader = "defaultUnlit"
         point_mat.point_size = point_size
 
-        line_mat = _o3d.visualization.rendering.MaterialRecord()
+        line_mat = o3d.visualization.rendering.MaterialRecord()
         line_mat.shader = "unlitLine"
         line_mat.line_width = 2.0
 
-        mesh_mat = _o3d.visualization.rendering.MaterialRecord()
+        mesh_mat = o3d.visualization.rendering.MaterialRecord()
         mesh_mat.shader = "defaultLit"
 
         for idx, geom in enumerate(geoms):
-            if isinstance(geom, _o3d.geometry.PointCloud):
+            if isinstance(geom, o3d.geometry.PointCloud):
                 material = point_mat
-            elif isinstance(geom, _o3d.geometry.LineSet):
+            elif isinstance(geom, o3d.geometry.LineSet):
                 material = line_mat
             else:
                 material = mesh_mat
@@ -624,7 +652,7 @@ def _render_open3d_geometries_offscreen(
         logger.warning('Open3D OffscreenRenderer unavailable; using hidden Visualizer fallback: %s', offscreen_exc)
 
     try:
-        vis = _o3d.visualization.Visualizer()
+        vis = o3d.visualization.Visualizer()
         created = vis.create_window(window_name='Open3DHiddenRender', width=width, height=height, visible=False)
         if not created:
             raise RuntimeError('Open3D hidden Visualizer window could not be created')
@@ -782,12 +810,13 @@ def _build_open3d_scene_view(
     e_lim: float,
 ) -> tuple[list[object], np.ndarray, list[str]]:
     """Build the world-space geometry set with cameras for Open3D diagnostics."""
+    o3d = _open3d()
     geoms: list[object] = []
     if reconstructed_points.size:
-        point_cloud = _o3d.geometry.PointCloud()
-        point_cloud.points = _o3d.utility.Vector3dVector(reconstructed_points.astype(np.float64))
+        point_cloud = o3d.geometry.PointCloud()
+        point_cloud.points = o3d.utility.Vector3dVector(reconstructed_points.astype(np.float64))
         norm = plt.Normalize(vmin=0, vmax=max(e_lim, 1e-9))
-        point_cloud.colors = _o3d.utility.Vector3dVector(
+        point_cloud.colors = o3d.utility.Vector3dVector(
             plt.cm.viridis(norm(np.clip(error_subset, 0, e_lim)))[:, :3]
         )
         geoms.append(point_cloud)
@@ -811,17 +840,18 @@ def _build_open3d_target_view(
     mean_dist: float,
 ) -> list[object]:
     """Build the target/object-space geometry set for Open3D diagnostics."""
+    o3d = _open3d()
     geoms: list[object] = []
     if raw_obj_points:
-        point_cloud = _o3d.geometry.PointCloud()
-        point_cloud.points = _o3d.utility.Vector3dVector(np.asarray(raw_obj_points, dtype=np.float64))
+        point_cloud = o3d.geometry.PointCloud()
+        point_cloud.points = o3d.utility.Vector3dVector(np.asarray(raw_obj_points, dtype=np.float64))
         norm = plt.Normalize(vmin=0, vmax=max(e_lim, 1e-9))
-        point_cloud.colors = _o3d.utility.Vector3dVector(
+        point_cloud.colors = o3d.utility.Vector3dVector(
             plt.cm.viridis(norm(np.clip(errors, 0, e_lim)))[:, :3]
         )
         geoms.append(point_cloud)
 
-    coord_frame = _o3d.geometry.TriangleMesh.create_coordinate_frame(
+    coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
         size=max(mean_dist * 0.5, 0.03), origin=[0.0, 0.0, 0.0]
     )
     geoms.append(coord_frame)
@@ -839,7 +869,8 @@ def visualise_calibration_open3d(
     camera meshes and readable camera-name tags, plus target-space reconstructed
     points for object-shape assessment.
     """
-    if not _OPEN3D_OK or _o3d is None:
+    o3d = _open3d()
+    if not _OPEN3D_OK or o3d is None:
         return False, (
             "Open3D is not installed. Install it with:\n"
             "    pip install open3d\n"
@@ -948,7 +979,7 @@ def visualise_calibration_open3d(
                     "Embedded camera tags are only available in the offscreen render path."
                 )
                 try:
-                    _o3d.visualization.draw_geometries(
+                    o3d.visualization.draw_geometries(
                         scene_geoms,
                         window_name="Calibration Assessment — Scene Coordinates (Open3D)",
                         width=1100,
@@ -963,7 +994,7 @@ def visualise_calibration_open3d(
                     # caller passes output_widget=None, but fixed here to remove the
                     # inconsistency for any future caller that does pass a widget).
                     if target_geoms:
-                        _o3d.visualization.draw_geometries(
+                        o3d.visualization.draw_geometries(
                             target_geoms,
                             window_name="Calibration Assessment — Target Coordinates (Open3D)",
                             width=800,
@@ -989,7 +1020,7 @@ def visualise_calibration_open3d(
         all_geoms = list(scene_geoms)
         for pos, name in zip(camera_positions, camera_names):
             try:
-                text_mesh = _o3d.geometry.TriangleMesh.create_text(name, depth=label_scale, extra=None)
+                text_mesh = o3d.geometry.TriangleMesh.create_text(name, depth=label_scale, extra=None)
                 # create_text returns text centred at origin; translate to camera position
                 # and offset slightly above so it does not overlap the wireframe.
                 text_mesh.translate(pos + np.array([0, label_scale * 2, 0], dtype=np.float64))
@@ -1001,7 +1032,7 @@ def visualise_calibration_open3d(
                 pass
 
         # Launch the interactive Open3D window with scene + camera labels.
-        _o3d.visualization.draw_geometries(
+        o3d.visualization.draw_geometries(
             all_geoms,
             window_name="Calibration Assessment — Scene Coordinates (Open3D)",
             width=1100,
@@ -1010,7 +1041,7 @@ def visualise_calibration_open3d(
 
         # Also show the target-coordinates view in a second window.
         if target_geoms:
-            _o3d.visualization.draw_geometries(
+            o3d.visualization.draw_geometries(
                 target_geoms,
                 window_name="Calibration Assessment — Target Coordinates (Open3D)",
                 width=800,

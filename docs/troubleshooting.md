@@ -24,14 +24,16 @@ That raises the underlying `ImportError` — most often a missing `svgwrite` or
 
 `cairosvg` depends on `cairocffi`, which needs the native `cairo` library
 installed separately; `pip` alone cannot provide this reliably on Windows.
-Without it, importing any target module fails with an `OSError` about a missing
-`cairo-2` library.
+Without it, writing a target to PDF fails with an `OSError` about a missing
+`cairo-2` library. Only the PDF formats are affected: `cairosvg` is imported
+where it is used, so importing a target module, or writing one to SVG, works
+without it.
 
-pyCamSet already tries to fix the common case for you: importing `pyCamSet`
-calls
-[`ensure_cairo_dll_available`][pyCamSet.utils.cairo_dll_helper.ensure_cairo_dll_available],
-which locates the conda environment's library directory and registers it before
-anything imports `cairosvg`. It is a no-op where Cairo already loads.
+pyCamSet already tries to fix the common case for you: every place that
+imports `cairosvg` first imports
+[`ensure_cairo_dll_available`][pyCamSet.utils.cairo_dll_helper.ensure_cairo_dll_available]'s
+module, which locates the conda environment's library directory and registers
+it. It is a no-op where Cairo already loads.
 
 When that is not enough, install the native library for your platform:
 

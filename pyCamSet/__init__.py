@@ -1,4 +1,6 @@
+import importlib
 import logging
+from typing import Any
 
 # A library must not decide where its records go. Every pyCamSet module logs
 # to a child of this logger; calibrate_cameras installs a coloured handler on
@@ -6,31 +8,36 @@ import logging
 # anyone who wants to choose. See pyCamSet.utils.logs.
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-from .cameras import CameraSet, Camera
-from .utils.saving import load_CameraSet
-from .utils.logs import setup_logging
-from .utils.calibration_report import CalibrationReport
-from .calibration import calibrate_cameras
+# The names this package promises, resolved lazily (PEP 562) below rather
+# than imported here. `pyCamSet.cameras`, `pyCamSet.calibration` and the
+# target modules pull in numba/scipy/etc. on their own, and most callers of
+# `import pyCamSet` never touch most of these names -- eagerly importing all
+# of them cost every caller a multi-second import even when, say, all they
+# wanted was to build one target out of process. See viewer_process.py.
+__all__ = [
+    "CameraSet",
+    "Camera",
+    "load_CameraSet",
+    "setup_logging",
+    "CalibrationReport",
+    "calibrate_cameras",
+    "ChArUco",
+    "Ccube",
+    "PuzzleBoard",
+    "PuzzleBoardCube",
+]
 
-# Make the native Cairo library discoverable before any target module imports
-# `cairosvg`.  This runs once per process and is a no-op when cairo already
-# loads (e.g. GUI mode, or a non-conda environment where it is on the PATH).
-from .utils.cairo_dll_helper import ensure_cairo_dll_available  # noqa: E402
+# Plain re-exports: name -> (module to import, attribute on it). Each is a
+# straight `from <module> import <attr>`, just deferred to first access.
+_LAZY_ATTRS: dict[str, tuple[str, str]] = {
+    "CameraSet": (".cameras", "CameraSet"),
+    "Camera": (".cameras", "Camera"),
+    "load_CameraSet": (".utils.saving", "load_CameraSet"),
+    "setup_logging": (".utils.logs", "setup_logging"),
+    "CalibrationReport": (".utils.calibration_report", "CalibrationReport"),
+    "calibrate_cameras": (".calibration", "calibrate_cameras"),
+}
 
-ensure_cairo_dll_available()
-
-try:
-    from .calibration_targets.charuco.target import ChArUco
-except Exception:
-    # cairosvg requires the Cairo native library, which may not be present
-    # in all environments. ChArUco generation is optional for reconstruction.
-    ChArUco = None  # type: ignore[assignment,misc]
-
-try:
-    from .calibration_targets.ccube.target import Ccube
-except Exception:
-    # Ccube generation has the same optional Cairo/native-graphics dependency.
-    Ccube = None  # type: ignore[assignment,misc]
 
 class _MissingPuzzleBoard:
     """Placeholder raised when the optional PuzzleBoard dependency is absent."""
@@ -44,17 +51,6 @@ class _MissingPuzzleBoard:
         )
 
 
-try:
-    from .calibration_targets.puzzleboard.target import PuzzleBoard
-except ModuleNotFoundError as _e:
-    if (_e.name or "").split(".")[0] == "puzzle_board":
-        PuzzleBoard = _MissingPuzzleBoard  # type: ignore[assignment]
-    else:
-        PuzzleBoard = None  # type: ignore[assignment,misc]
-except Exception:
-    # PuzzleBoard generation shares the same optional Cairo/native-graphics dependency.
-    PuzzleBoard = None  # type: ignore[assignment,misc]
-
 class _MissingPuzzleBoardCube:
     """Placeholder raised when the optional PuzzleBoard dependency is absent."""
 
@@ -67,13 +63,74 @@ class _MissingPuzzleBoardCube:
         )
 
 
-try:
-    from .calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
-except ModuleNotFoundError as _e:
-    if (_e.name or "").split(".")[0] == "puzzle_board":
-        PuzzleBoardCube = _MissingPuzzleBoardCube  # type: ignore[assignment]
+def _resolve_charuco() -> Any:
+    try:
+        from .calibration_targets.charuco.target import ChArUco
+    except Exception:
+        # cairosvg requires the Cairo native library, which may not be present
+        # in all environments. ChArUco generation is optional for reconstruction.
+        return None
+    return ChArUco
+
+
+def _resolve_ccube() -> Any:
+    try:
+        from .calibration_targets.ccube.target import Ccube
+    except Exception:
+        # Ccube generation has the same optional Cairo/native-graphics dependency.
+        return None
+    return Ccube
+
+
+def _resolve_puzzleboard() -> Any:
+    try:
+        from .calibration_targets.puzzleboard.target import PuzzleBoard
+    except ModuleNotFoundError as _e:
+        if (_e.name or "").split(".")[0] == "puzzle_board":
+            return _MissingPuzzleBoard
+        return None
+    except Exception:
+        # PuzzleBoard generation shares the same optional Cairo/native-graphics dependency.
+        return None
+    return PuzzleBoard
+
+
+def _resolve_puzzleboard_cube() -> Any:
+    try:
+        from .calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
+    except ModuleNotFoundError as _e:
+        if (_e.name or "").split(".")[0] == "puzzle_board":
+            return _MissingPuzzleBoardCube
+        return None
+    except Exception:
+        # PuzzleBoardCube generation shares the same optional Cairo/native-graphics dependency.
+        return None
+    return PuzzleBoardCube
+
+
+# Each optional target has its own three-way import outcome (class,
+# `_Missing...` placeholder, or `None`); see the resolvers above.
+_LAZY_RESOLVERS: dict[str, Any] = {
+    "ChArUco": _resolve_charuco,
+    "Ccube": _resolve_ccube,
+    "PuzzleBoard": _resolve_puzzleboard,
+    "PuzzleBoardCube": _resolve_puzzleboard_cube,
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve a public name on first access and cache it in the module globals."""
+    if name in _LAZY_ATTRS:
+        module_name, attr_name = _LAZY_ATTRS[name]
+        module = importlib.import_module(module_name, __name__)
+        value = getattr(module, attr_name)
+    elif name in _LAZY_RESOLVERS:
+        value = _LAZY_RESOLVERS[name]()
     else:
-        PuzzleBoardCube = None  # type: ignore[assignment,misc]
-except Exception:
-    # PuzzleBoardCube generation shares the same optional Cairo/native-graphics dependency.
-    PuzzleBoardCube = None  # type: ignore[assignment,misc]
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    globals()[name] = value  # Cache: later access is a plain attribute lookup.
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

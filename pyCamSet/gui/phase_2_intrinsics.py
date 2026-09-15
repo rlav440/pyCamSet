@@ -254,57 +254,6 @@ class Phase2Tab(QWidget):
         self._target_form = TargetSettingsForm()
         target_sect.addRow(self._target_form)
 
-        # ── PuzzleBoard-specific fields ───────────────────────────────
-        self._pb_x_spin = QSpinBox()
-        self._pb_x_spin.setRange(2, 501)
-        self._pb_x_spin.setValue(105)
-        self._pb_x_spin.setFixedWidth(90)
-        target_sect.addRow("PB num_squares_x:", self._pb_x_spin)
-
-        self._pb_y_spin = QSpinBox()
-        self._pb_y_spin.setRange(2, 501)
-        self._pb_y_spin.setValue(148)
-        self._pb_y_spin.setFixedWidth(90)
-        target_sect.addRow("PB num_squares_y:", self._pb_y_spin)
-
-        self._pb_square_edit = QLineEdit("2.0")
-        self._pb_square_edit.setFixedWidth(110)
-        target_sect.addRow("PB square_size (mm):", self._pb_square_edit)
-
-        self._pb_start_x_spin = QSpinBox()
-        self._pb_start_x_spin.setRange(0, 500)
-        self._pb_start_x_spin.setValue(0)
-        self._pb_start_x_spin.setFixedWidth(90)
-        target_sect.addRow("PB start_x:", self._pb_start_x_spin)
-
-        self._pb_start_y_spin = QSpinBox()
-        self._pb_start_y_spin.setRange(0, 500)
-        self._pb_start_y_spin.setValue(0)
-        self._pb_start_y_spin.setFixedWidth(90)
-        target_sect.addRow("PB start_y:", self._pb_start_y_spin)
-
-        self._pb_paper_w_edit = QLineEdit("210.0")
-        self._pb_paper_w_edit.setFixedWidth(110)
-        target_sect.addRow("PB paper_width (mm):", self._pb_paper_w_edit)
-
-        self._pb_paper_h_edit = QLineEdit("297.0")
-        self._pb_paper_h_edit.setFixedWidth(110)
-        target_sect.addRow("PB paper_height (mm):", self._pb_paper_h_edit)
-
-
-        # ── PuzzleBoardCube-specific fields ───────────────────────────
-        self._pbc_size_spin = QSpinBox()
-        self._pbc_size_spin.setRange(2, 160)
-        self._pbc_size_spin.setValue(20)
-        self._pbc_size_spin.setFixedWidth(90)
-        target_sect.addRow("PBC n_points / pieces per face:", self._pbc_size_spin)
-
-        self._pbc_square_edit = QLineEdit("200.0")
-        self._pbc_square_edit.setFixedWidth(110)
-        target_sect.addRow("PBC length (mm):", self._pbc_square_edit)
-
-
-
         # ── Initial Calibration Options ────────────────────────────────
         form_root.addWidget(make_separator())
         form_root.addWidget(make_section_label("Initial Calibration Options"))

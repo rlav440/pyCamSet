@@ -341,6 +341,11 @@ class Ccube(AbstractTarget):
 
         if data_format == "vector":
             try:
+                # Register the native Cairo DLL location before cairosvg needs it.
+                # This used to run eagerly in pyCamSet/__init__.py, forcing every
+                # pyCamSet import to pay for it even when cairo was never touched;
+                # it now runs only on this lazily-reached export path.
+                import pyCamSet.utils.cairo_dll_helper  # noqa: F401
                 import cairosvg
             except OSError as _cairo_err:
                 raise OSError(

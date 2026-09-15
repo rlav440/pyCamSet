@@ -450,8 +450,13 @@ class PuzzleBoardCube(AbstractTarget):
             for row in range(size):  # Iterate local code rows.
                 for column in range(size):  # Iterate local code columns.
                     point_id = row * size + column  # Flatten the local row/column key for pyCamSet.
-                    points[face, point_id, 0] = column * side_m / size  # Place points at PuzzleBoard grid corners.
-                    points[face, point_id, 1] = row * side_m / size  # Keep the physical face extent at side_m.
+                    # The detected feature for code (row, column) is the corner
+                    # where four squares meet.  Squares are centred on integer
+                    # code positions and span half a square each way, so that
+                    # corner is half a square in from the integer position --
+                    # which also centres the lattice on the face.
+                    points[face, point_id, 0] = (column + 0.5) * side_m / size
+                    points[face, point_id, 1] = (row + 0.5) * side_m / size  # Keep the physical face extent at side_m.
         return points  # Return local coordinates in metres.
 
     @staticmethod

@@ -258,7 +258,9 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
     )
     cams.save(camset_path)
 
-    diagnostics, report = diagnostics_of(detections, target, cams)
+    diagnostics, report = diagnostics_of(
+        detections, target, cams,
+        params.get("min_detections_per_board", 12))
     return camset_path, diagnostics, None, report
 
 
@@ -290,7 +292,9 @@ def _calibrate_pruned(params: dict, run_dir: Path,
     camset_path = run_dir / "initial_cameras.camset"
     cams.save(camset_path)
 
-    diagnostics, report = diagnostics_of(filtered, target, cams)
+    diagnostics, report = diagnostics_of(
+        filtered, target, cams,
+        params.get("min_detections_per_board", 12))
     return camset_path, diagnostics, pruned_path, report
 
 
@@ -322,7 +326,8 @@ def _load_or_detect(params: dict, target, root: Path,
     return detections, cam_res
 
 
-def diagnostics_of(detections, target, cams) -> tuple[dict, dict]:
+def diagnostics_of(detections, target, cams,
+                   min_detections_per_board: int = 12) -> tuple[dict, dict]:
     """The D2 series: what each camera's own calibration came out as.
 
     The numbers are the initial intrinsics report's own, so the block printed
@@ -333,7 +338,8 @@ def diagnostics_of(detections, target, cams) -> tuple[dict, dict]:
 
     :return: the diagnostics, and the report they were read off
     """
-    report = report_initial_calibration(cams, detections, target)
+    report = report_initial_calibration(
+        cams, detections, target, min_detections_per_board)
 
     intrinsics: dict[str, dict] = {}
     distortion: dict[str, dict] = {}

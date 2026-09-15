@@ -215,7 +215,9 @@ def test_a_whole_diagnostic_set_can_be_saved(charuco_problem, tmp_path,
     assert [path.name for path in written] == [
         "error_distribution.png",
         "per_camera_coverage.png",
+        "accuracy_precision.png",
         "reconstruction.png",
+        "target_coordinates.png",
     ]
     for path in written:
         assert path.stat().st_size > 1000, f"{path.name} looks blank"
@@ -244,3 +246,72 @@ def test_special_plots_are_skipped_when_nobody_is_watching(
     final.visualise_calibration(show=False, save_dir=tmp_path)
 
     assert calls == []
+
+
+# The docs draw every target by running `target.plot()` while the site is
+# built, so a target that cannot draw itself headlessly breaks the docs build
+# rather than anything a user would see.  These say so here instead.
+PLANAR_TARGETS = ["ChArUco", "PuzzleBoard"]
+CUBE_TARGETS = ["Ccube", "PuzzleBoardCube"]
+
+
+def _skip_without_cairo():
+    """Skip when the native cairo library is missing, as it is on test CI.
+
+    cairosvg raises OSError, not ImportError, when the library it binds to is
+    absent, so importorskip does not catch it.
+    """
+    try:
+        import cairosvg  # noqa: F401
+    except (ImportError, OSError) as err:
+        pytest.skip(f"native cairo is unavailable: {err}")
+
+
+def test_the_two_groups_cover_every_target():
+    """A fifth target has to decide which of these it is."""
+    from pyCamSet.calibration_targets import TARGET_NAMES
+
+    assert sorted(PLANAR_TARGETS + CUBE_TARGETS) == sorted(TARGET_NAMES)
+
+
+@pytest.mark.parametrize("name", PLANAR_TARGETS)
+def test_a_flat_target_draws_itself_into_a_figure(name, no_new_figures):
+    """What the docs capture from a flat board: the printed page drawn into the
+    current figure and left open for the build to write out as an SVG.
+
+    The *current* figure, because that is what lets a docs block set the size
+    before it draws.  So this opens one and checks plot() used it, rather than
+    checking plot() created one -- which it does not when a figure is open,
+    including one another test in the suite left behind.
+    """
+    _skip_without_cairo()
+    from pyCamSet.calibration_targets import target_class
+
+    figure = plt.figure()
+    try:
+        target_class(name)().plot()
+
+        assert plt.gcf() is figure, f"{name}.plot() drew into its own figure"
+        assert figure.axes and figure.axes[0].images, f"{name}.plot() drew nothing"
+    finally:
+        plt.close(figure)
+
+
+@pytest.mark.needs_opengl
+@pytest.mark.parametrize("name", CUBE_TARGETS)
+def test_a_cube_target_renders_a_scene(name, no_new_figures):
+    """What the docs capture from a cube: a plotter that renders, which is
+    what pyvista serialises into the page's turnable frame."""
+    _skip_without_cairo()
+    from pyCamSet.calibration_targets import target_class
+
+    scene = target_class(name)().plot(return_scene=True)
+    scene.off_screen = True
+    try:
+        image = np.asarray(scene.screenshot(return_img=True))
+    finally:
+        scene.close()
+
+    assert image.ndim == 3 and image.size, f"{name} rendered no image"
+    assert len(np.unique(image.reshape(-1, image.shape[-1]), axis=0)) > 1, (
+        f"{name} rendered a blank image")

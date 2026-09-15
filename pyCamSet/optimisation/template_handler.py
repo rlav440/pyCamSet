@@ -5,7 +5,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 from copy import copy, deepcopy
-from uniplot import plot as uplot, uniplot
+from uniplot import plot_to_string
 
 import matplotlib.pyplot as plt
 
@@ -947,7 +947,9 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
         init_per_im_reproj_err_1 = np.array(im_costs_1)
 
         logger.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
-        uplot([init_per_im_reproj_err_0, init_per_im_reproj_err_1], height=10, title="Per image initial reproj error", color=['blue', 'red'])
+        logger.info("\n" + plot_to_string(
+            [init_per_im_reproj_err_0, init_per_im_reproj_err_1], height=10,
+            title="Per image initial reproj error", color=['blue', 'red']))
 
     else:
         lookups =  [(dd[:,1] == i) for i in range(detection.max_ims)]
@@ -957,7 +959,9 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
         init_per_im_reproj_err = np.array(im_costs)
 
         logger.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
-        uplot(init_per_im_reproj_err, height=10, title="Per image initial reproj error", color=['blue', 'red'])
+        logger.info("\n" + plot_to_string(
+            init_per_im_reproj_err, height=10,
+            title="Per image initial reproj error", color=['blue', 'red']))
     lookups = [(dd[:,1] == i) for i in range(detection.max_ims)]
     im_costs = [np.sum(costs[l]) if v else np.nan for l,v in zip(lookups, viable_nodes[len(cams):])]
     init_per_im_reproj_err = np.array(im_costs)

@@ -168,8 +168,11 @@ class PuzzleBoard(AbstractTarget):
         for row in range(_CODE_SIZE):  # Fill all possible detector row coordinates in the periodic field.
             for col in range(_CODE_SIZE):  # Fill all possible detector column coordinates in the periodic field.
                 point_id = row * _CODE_SIZE + col  # Flatten the detector's (row, column) key for pyCamSet.
-                points[0, point_id, 0] = (col - self.start_x) * self.square_size  # Use x across the printed board.
-                points[0, point_id, 1] = (row - self.start_y) * self.square_size  # Use y down the printed board.
+                # Half a square, because the feature the detector reports for
+                # code (row, col) is the corner where four squares meet, and the
+                # squares are centred on the integer code positions.
+                points[0, point_id, 0] = (col - self.start_x + 0.5) * self.square_size  # Use x across the printed board.
+                points[0, point_id, 1] = (row - self.start_y + 0.5) * self.square_size  # Use y down the printed board.
         return points  # Return a single face containing all globally addressable points.
 
     def _board_offsets(self) -> tuple[float, float]:
@@ -352,13 +355,29 @@ class PuzzleBoard(AbstractTarget):
                 "  - macOS (Homebrew):              brew install cairo\n"
                 "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
             ) from _cairo_err
+        # Preview the board, not the page it is centred on.  A board smaller
+        # than its paper is a speck in the middle of a blank sheet otherwise,
+        # and the aspect has to be kept: a preview whose squares are not square
+        # is the one thing this preview is looked at for.
+        margin = self.square_size  # Show one square of the surrounding page, so the board reads as a board.
+        view_width = self.num_squares_x * self.square_size + 2 * margin  # Millimetres of page worth showing.
+        view_height = self.num_squares_y * self.square_size + 2 * margin
+        fit = min(imres[0] / view_width, imres[1] / view_height)  # Pixels per millimetre, so the board fills imres.
         png = cairosvg.svg2png(  # Rasterise only for interactive display; the saved target remains vector.
             bytestring=self._svg_document().tostring().encode("utf-8"),
-            output_width=int(imres[0]),
-            output_height=int(imres[1]),
+            output_width=int(self.paper_width * fit),
+            output_height=int(self.paper_height * fit),
         )
+        off_x, off_y = self._board_offsets()  # Where the board sits on the page, in millimetres.
         with Image.open(BytesIO(png)) as image:  # Decode the in-memory preview.
-            plt.imshow(np.asarray(image), cmap="gray")  # Display the target with matplotlib.
+            left = max(0, int((off_x - margin) * fit))  # Clamp, so a board filling its page is not padded with black.
+            top = max(0, int((off_y - margin) * fit))
+            view = image.crop((
+                left, top,
+                min(image.width, left + int(view_width * fit)),
+                min(image.height, top + int(view_height * fit)),
+            ))
+            plt.imshow(np.asarray(view), cmap="gray")  # Display the target with matplotlib.
         plt.axis("off")  # Remove plot axes from the target preview.
         plt.show()  # Match the existing ChArUco plot method's interactive behaviour.
 

@@ -22,7 +22,8 @@ from matplotlib import pyplot as plt
 
 from pyCamSet.cameras.camera import Camera
 from pyCamSet.utils.visualisation import (
-    visualise_calibration, finalise_figure, _target_mean_distance)
+    CalibrationDiagnostics, visualise_calibration, finalise_figure,
+    _target_mean_distance)
 from pyCamSet.utils.gui_safety import refuse_window_inside_qt
 from pyCamSet.utils.general_utils import get_subfolder_names
 from pyCamSet.utils.general_utils import get_close_square_tuple, glob_ims_local
@@ -779,6 +780,27 @@ class CameraSet:
         self.calibration_jac = optimisation_results['jac']
         self.calibration_handler = param_handler
         self.calibration_report = report
+
+    def calibration_diagnostics(self) -> CalibrationDiagnostics:
+        """
+        The triangulated detections every calibration diagnostic is drawn from.
+
+        ``visualise_calibration`` draws all of them at once; this is the same
+        work done once, so that
+        :func:`~pyCamSet.utils.visualisation.per_camera_coverage`,
+        :func:`~pyCamSet.utils.visualisation.reconstruction_scene`,
+        :func:`~pyCamSet.utils.visualisation.target_space_scene` and
+        :func:`~pyCamSet.utils.visualisation.accuracy_precision_plot` can be
+        drawn individually, or two calibrations compared against each other.
+
+        :return: what this set's calibration left behind
+        """
+        if self.calibration_params is None:
+            raise ValueError('The camera set has no calibration data saved')
+        return CalibrationDiagnostics.from_results(
+            {'x': self.calibration_params, 'err': self.calibration_result},
+            self.calibration_handler,
+        )
 
     def visualise_calibration(self, show: bool = True,
                               save_dir: Path | str | None = None):

@@ -95,6 +95,38 @@ def numpy_dict_to_list(d):
     return d
 
 
+def check_names_match_keys(cams: CameraSet) -> None:
+    """
+    Refuses a camera set whose cameras are not named as the set stores them.
+
+    The file is keyed on ``Camera.name``, while a ``CameraSet`` indexes on the
+    key it holds a camera under, and nothing forces the two to agree.  A set
+    built as ``CameraSet(camera_dict={"cam_0": Camera(extrinsic=e)})`` has
+    cameras named ``None``, so every one of them wrote to the same key and the
+    file held one camera called ``null`` -- five cameras in, one out, with no
+    error raised.  A name that merely disagrees with its key is the same fault
+    quietly renaming a camera instead of dropping it.
+
+    :param cams: the camera set about to be written
+    :raises ValueError: if any camera's name is not the key it is stored under
+    """
+    mismatched = [
+        (key, cam.name) for key, cam in cams.get_cam_dict().items()
+        if cam.name != key
+    ]
+    if mismatched:
+        listing = "\n".join(f"  stored as {key!r}, named {name!r}"
+                            for key, name in mismatched)
+        raise ValueError(
+            "A saved camera is keyed on its own name, so every camera's name "
+            "has to be the name its set stores it under. These are not:\n"
+            f"{listing}\n"
+            "Pass name= when constructing each Camera, or build the set from "
+            "parameter lists with CameraSet(camera_names=..., ...), which "
+            "names them for you."
+        )
+
+
 def save_camset(
         cams: CameraSet, f_name: Path = Path('cams.camset')
 ):
@@ -105,8 +137,12 @@ def save_camset(
 
     :param cams: The camera set to save
     :param f_name: The file to write too.
+    :raises ValueError: if a camera is not named as the set stores it, which
+        would silently drop or rename cameras in the file.
     :return:
     """
+    check_names_match_keys(cams)
+
     save_dict = {}
     cam_dict = save_dict.setdefault('cams', {})
     cam_config = save_dict.setdefault('cam_config', {})

@@ -519,6 +519,14 @@ class AbstractTarget(ABC):
                 return init_cam
 
 
+        # A board too sparsely seen to calibrate from is an ordinary outcome --
+        # every session has boards caught edge on -- and one line per board
+        # buried the reports that matter under dozens of them.  The individual
+        # boards stay on the debug record; what is logged is how many.
+        n_boards = 0
+        dropped: list[int] = []
+        sparse: list[int] = []
+
         for im_detect in detections_in_image:
 
             data = im_detect.get_data()
@@ -530,20 +538,37 @@ class AbstractTarget(ABC):
 
             for board in boards[mask]:
                 key_mask = np.squeeze(keys[:, :-1] == board)
-                num_detections = np.sum(key_mask)
+                num_detections = int(np.sum(key_mask))
+                n_boards += 1
                 if num_detections >= min_detections_per_board:
                     if num_detections < 12:
-                        logger.warning(
-                            f"Trying to calibrate with {num_detections} detections on a board. <12 may be an issue."
+                        sparse.append(num_detections)
+                        logger.debug(
+                            f"{cam_name}: calibrating from a board with "
+                            f"{num_detections} detections. <12 may be an issue."
                         )
                     board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')
                     board_im = data[key_mask, -2:][None, ...].astype('float32')
                     object_points.append(board_obj)
                     image_points.append(board_im)
                 else:
-                    logger.warning(
-                        f"Trying to calibrate with <{min_detections_per_board} detections ({num_detections}) on a board. Dropping."
+                    dropped.append(num_detections)
+                    logger.debug(
+                        f"{cam_name}: dropping a board with {num_detections} "
+                        f"detections, under the {min_detections_per_board} minimum."
                     )
+
+        if dropped:
+            logger.info(
+                f"{cam_name}: dropped {len(dropped)} of {n_boards} board "
+                f"observations under the {min_detections_per_board} detection "
+                f"minimum ({min(dropped)}-{max(dropped)} detections each)"
+            )
+        if sparse:
+            logger.warning(
+                f"{cam_name}: {len(sparse)} of {n_boards} board observations "
+                f"calibrated from fewer than 12 detections, which may be an issue"
+            )
 
         start = time.time()
         if len(object_points) == 0:

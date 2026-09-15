@@ -476,6 +476,7 @@ class ChArUco(AbstractTarget):
         Draws the target as a matplotlib plot.
         """
         plt.imshow(self.board.generateImage(imres), cmap='gray')
+        plt.axis("off")  # the raster's pixel indices say nothing about the board
         plt.show()
 
 

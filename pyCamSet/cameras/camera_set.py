@@ -258,16 +258,55 @@ class CameraSet:
             return False
         return True
 
-    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet', crop=None, use_closest_cams=True, only_crop_cams=False):
+    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet', crop=None, use_closest_cams=True, only_crop_cams=False, pair_scores: np.ndarray|None = None, max_pair_candidates: int|None = None):
         """
         Writes an entire camera set to some form of defined camera structure.
         Currently only MVSnet is defined.
 
         :param loc: the file location to write to
         :param r: the reconstruction parameters to follow
+        :param pair_scores: an optional (N, N) matrix of per-pair scores, in
+            this set's ``get_names()``/iteration order. When given, pair.txt
+            lists every other view for each view -- not windowed by
+            ``r.minangle``/``r.maxangle`` or capped at ``r.max_n_view`` --
+            ranked by that score descending, e.g.
+            :func:`pyCamSet.reconstruction.acmmp_utils.calc_apde_pair_scores`.
+            "Every other view" is itself subject to ``max_pair_candidates``
+            below, which a caller such as
+            :func:`pyCamSet.utils.saving.camset_to_apde` sets by default.
+            When omitted (the default), pairs come from
+            :func:`~pyCamSet.reconstruction.acmmp_utils.calc_pairs` as before.
+        :param max_pair_candidates: only used together with ``pair_scores``.
+            Keeps only the top-scoring ``max_pair_candidates`` neighbours per
+            view instead of every other view -- e.g.
+            :func:`pyCamSet.utils.saving.camset_to_apde` sets this to stay
+            under a downstream reader's own hard limit on source views per
+            reference view. ``None`` (the default) keeps every other view.
+            This is deliberately independent of ``r.max_n_view``, which only
+            governs the ``pair_scores is None`` path below: that field picks
+            how many candidates are *useful* for reconstruction quality
+            within an angle-windowed search, while ``max_pair_candidates``
+            is a hard ceiling a specific downstream reader cannot exceed
+            without crashing -- unrelated concerns that happen to both be
+            counts, so conflating them would silently change one meaning
+            whenever the other was tuned.
+        :raises ValueError: if ``max_pair_candidates`` is given but is not a
+            non-negative integer -- a negative value would not raise on its
+            own (Python slicing silently reinterprets it as "drop the last
+            few", the opposite of a cap), and this parameter exists
+            specifically to prevent the unbounded/crash-triggering output a
+            silent misuse would reintroduce.
         """
         if not mode == 'MVSnet':
             raise NotImplementedError
+
+        if max_pair_candidates is not None and (
+            not isinstance(max_pair_candidates, int) or isinstance(max_pair_candidates, bool)
+            or max_pair_candidates < 0
+        ):
+            raise ValueError(
+                f"max_pair_candidates must be a non-negative int or None, got {max_pair_candidates!r}"
+            )
 
         if crop is None:
             crop = {}
@@ -290,12 +329,24 @@ class CameraSet:
                     ]
                 cv2.imwrite(str(im_loc/f"{idx:08}.jpg"), im_temp,  [cv2.IMWRITE_JPEG_QUALITY, 100])
 
-        cvwc = np.array(
-            [cam.view for cam in self]
-        )
-        pairs = calc_pairs(cvwc, r, pick_closest=use_closest_cams)
-        with open((loc.parent) / "pair.txt", 'w', encoding="utf-8", newline="\n") as f:
-            write_pair_file(f, pairs)
+        if pair_scores is None:
+            cvwc = np.array(
+                [cam.view for cam in self]
+            )
+            pairs = calc_pairs(cvwc, r, pick_closest=use_closest_cams)
+            with open((loc.parent) / "pair.txt", 'w', encoding="utf-8", newline="\n") as f:
+                write_pair_file(f, pairs)
+        else:
+            n_cams = len(self)
+            ranked = [
+                sorted((j for j in range(n_cams) if j != i),
+                       key=lambda j: pair_scores[i, j], reverse=True)
+                for i in range(n_cams)
+            ]
+            if max_pair_candidates is not None:
+                ranked = [row[:max_pair_candidates] for row in ranked]
+            with open((loc.parent) / "pair.txt", 'w', encoding="utf-8", newline="\n") as f:
+                write_pair_file(f, ranked, scores=pair_scores, score_fmt="{:.6e}")
 
 
     def return_view_overlaps(self):

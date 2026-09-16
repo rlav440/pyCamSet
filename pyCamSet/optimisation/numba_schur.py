@@ -37,6 +37,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 import numpy as np
+import scipy.linalg
 from numba import njit, prange
 from scipy.optimize import OptimizeResult
 
@@ -342,7 +343,21 @@ class SchurSolver:
         with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
             return self._step_from_parts(B, E, C, v, w, lam)
 
-    def _step_from_parts(self, B, E, C, v, w, lam: float) -> np.ndarray:
+    def reduced_system(self, B, E, C, v, w, lam: float
+                       ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        The damped, pinned reduced system this solver hands to the linear solve.
+
+        ``_step_from_parts`` solves exactly this pair, so it is the thing the
+        symmetry and positive definiteness that :func:`_solve_reduced` relies on
+        are properties of.  Kept separate so a caller can assert them against
+        the same assembly the solver uses rather than a reimplementation of it,
+        which is what ``tests/test_schur_solver.py`` does.
+
+        :return: ``(S, g, Cinv)`` -- the reduced matrix and right hand side,
+            both after damping and pinning, and the damped inverse of the
+            eliminated block that back substitution needs
+        """
         s = self.spec
         nkf, ne, nb = s.n_keep_full, s.elim_size, s.n_elim_blocks
 
@@ -366,11 +381,22 @@ class SchurSolver:
 
         S = np.where(self._pin_keep, self._eye_keep, S)
         g = np.where(s.keep_fixed, 0.0, g)
+        return S, g, Cinv
 
-        dc = np.linalg.solve(S, g)
+    def _step_from_parts(self, B, E, C, v, w, lam: float) -> np.ndarray:
+        s = self.spec
+        nb, ne = s.n_elim_blocks, s.elim_size
+
+        S, g, Cinv = self.reduced_system(B, E, C, v, w, lam)
+
+        dc = _solve_reduced(S, g)
+        # the eliminated half, back substituted through C^-1
+        Ef = E.reshape((s.n_keep_full, nb * ne))
         rhs = w + (Ef.T @ dc).reshape((nb, ne))
         dp = -np.matmul(Cinv, rhs[:, :, None])[:, :, 0]
         return np.concatenate([dc[s.keep_free], dp.reshape(-1)[s.elim_free]])
+
+
 
     def step(self, blocks, residuals, lam: float) -> np.ndarray:
         """Assemble and solve in one call."""
@@ -500,6 +526,42 @@ def _cost(r) -> float:
     with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
         c = 0.5 * float(r @ r)
     return c if np.isfinite(c) else np.inf
+
+
+def _solve_reduced(S: np.ndarray, g: np.ndarray) -> np.ndarray:
+    """
+    Solve the reduced camera system, exploiting that it is symmetric.
+
+    ``S = B - E C^-1 E^T`` is symmetric to machine precision -- ``B`` is, and
+    the reduction preserves it -- and the Marquardt damping that ``_step_from_parts``
+    adds to its diagonal makes it positive definite, so a Cholesky factorisation
+    is available where ``np.linalg.solve`` would take the general LU path.
+
+    The distinction matters on any machine whose BLAS parallelises a general
+    square solve.  On the 16 logical cores of a Ryzen 7 9700X, OpenBLAS chooses
+    16 threads for this and degrades superlinearly: the 660x660 system a self
+    calibration produces takes 1.2 s per iteration through LU against 1.5 ms
+    through Cholesky, which is the whole of a 1261 s solve against a 20 s one.
+    Cholesky is not affected, and neither is the batched matmul beside it, so
+    this is the general solve in that build rather than BLAS threading as such.
+    Pinning the thread count is the workaround; solving the symmetric system as
+    one is the fix, and it needs no environment variable to take effect.
+
+    A system that is not factorisable falls back to the general solve.  With
+    damping in place that does not happen -- it fired on 0 of 402 iterations of
+    a real self calibration -- but ``lam`` is a solver input and a caller is
+    free to pass one that leaves the system indefinite.
+
+    :param S: the reduced matrix, symmetric and positive definite
+    :param g: the reduced right hand side
+    :return: the reduced step
+    """
+    try:
+        factor = scipy.linalg.cho_factor(
+            S, lower=True, check_finite=False)
+        return scipy.linalg.cho_solve(factor, g, check_finite=False)
+    except np.linalg.LinAlgError:
+        return np.linalg.solve(S, g)
 
 
 DAMPING_FLOOR = 1e-8

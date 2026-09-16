@@ -23,6 +23,7 @@ os.environ.setdefault("PYVISTA_OFF_SCREEN", "true")
 os.environ.setdefault("PYVISTA_BUILDING_GALLERY", "true")
 
 import logging
+import re
 from io import BytesIO, StringIO
 from pathlib import Path
 
@@ -51,10 +52,13 @@ if not pv.BUILDING_GALLERY:
 # levels up on every page; on_page_content substitutes the right one.
 ROOT = "%%SCENE_ROOT%%"
 
+# How a scene or a figure is framed lives in the stylesheet, under `.scene` and
+# `.figure`, so that a page can size one -- half a column, or one of a pair read
+# side by side -- without having to out-shout a style attribute.  Only the shape
+# of the scene stays here, because it is the shape that plotter asked for.
 FRAME = (
     '<iframe class="scene" data-src="{root}{name}"'
-    ' style="width:100%;aspect-ratio:{aspect};border:1px solid'
-    ' var(--md-default-fg-color--lightest);border-radius:.2rem"></iframe>'
+    ' style="aspect-ratio:{aspect}"></iframe>'
 )
 
 # Each frame is a separate vtk.js viewer -- a megabyte of javascript and a WebGL
@@ -85,21 +89,9 @@ FRAME_LOADER = """
 # the shape these pages read best at.
 DEFAULT_ASPECT = "16/10"
 
-IMAGE = (
-    '<img class="scene" loading="lazy" src="{root}{name}"'
-    ' style="width:100%;border:1px solid'
-    ' var(--md-default-fg-color--lightest);border-radius:.2rem">'
-)
+IMAGE = '<img class="scene" loading="lazy" src="{root}{name}">'
 
-# A plot is drawn at a size, and an SVG carries it; stretching every one to the
-# column would redraw a single-panel figure at twice the scale of a four-panel
-# one, and its text with it.  So a figure is shown at the size it was drawn,
-# centred, and only shrinks when the column is narrower than that.
-FIGURE = (
-    '<img class="figure" loading="lazy" src="{root}{name}"'
-    ' style="max-width:100%;display:block;margin:0 auto;border:1px solid'
-    ' var(--md-default-fg-color--lightest);border-radius:.2rem">'
-)
+FIGURE = '<img class="figure" loading="lazy" src="{root}{name}">'
 
 scenes: dict[str, bytes] = {}
 
@@ -217,6 +209,71 @@ def show(self, *args, **kwargs):
 pv.Plotter.show = show
 
 
+# An SGR sequence, which is how the report blocks carry their colour grading.
+SGR = re.compile(r"\x1b\[([0-9;]*)m")
+
+# The xterm-256 palette, which is what the reports are written in: sixteen
+# system colours, a 6x6x6 cube, and a grey ramp.
+XTERM_SYSTEM = (
+    "#000000", "#800000", "#008000", "#808000", "#000080", "#800080",
+    "#008080", "#c0c0c0", "#808080", "#ff0000", "#00ff00", "#ffff00",
+    "#0000ff", "#ff00ff", "#00ffff", "#ffffff",
+)
+CUBE_LEVELS = (0, 95, 135, 175, 215, 255)
+
+
+def xterm_colour(index):
+    """One xterm-256 index as a CSS colour."""
+    if index < 16:
+        return XTERM_SYSTEM[index]
+    if index < 232:
+        index -= 16
+        r, g, b = (CUBE_LEVELS[(index // 36) % 6], CUBE_LEVELS[(index // 6) % 6],
+                   CUBE_LEVELS[index % 6])
+        return f"#{r:02x}{g:02x}{b:02x}"
+    grey = 8 + 10 * (index - 232)
+    return f"#{grey:02x}{grey:02x}{grey:02x}"
+
+
+def css(codes):
+    """The style an SGR sequence asks for, as CSS."""
+    style, i = [], 0
+    while i < len(codes):
+        if codes[i] == "1":
+            style.append("font-weight:bold")
+        elif codes[i] == "38" and codes[i + 1:i + 2] == ["5"]:
+            style.append(f"color:{xterm_colour(int(codes[i + 2]))}")
+            i += 2
+        i += 1
+    return ";".join(style)
+
+
+def ansi_html(html):
+    """The page with its escape sequences drawn as the colours they are.
+
+    A report grades its numbers by colour -- a camera under 1 px green, one
+    over 5 px red -- and says so in the prose beside it, so a page showing the
+    blocks stripped of colour is a page contradicting itself.  Both routes a
+    report takes into a page, the logged block below and markdown-exec's own
+    rendering of printed output, leave the sequences in the html as the plain
+    characters they are, so both are converted here, once, at the end.
+    """
+    out, depth, pos = [], 0, 0
+    for match in SGR.finditer(html):
+        out.append(html[pos:match.start()])
+        pos = match.end()
+        codes = [c for c in match.group(1).split(";") if c] or ["0"]
+        if "0" in codes:
+            out.append("</span>" * depth)
+            depth = 0
+        style = css(codes)
+        if style:
+            out.append(f'<span style="{style}">')
+            depth += 1
+    out.append(html[pos:] + "</span>" * depth)
+    return "".join(out)
+
+
 # What the block that is currently running has logged.
 logged = StringIO()
 
@@ -287,12 +344,18 @@ def figures(page):
     Vector, because these are line plots read at whatever width the page is,
     and they carry their own white ground so a transparent SVG cannot pick up
     the theme's.
+
+    Written at the figure's own size rather than cropped to its content:
+    cropping takes a different amount off each one -- a long axis label or a
+    wide tick makes for a narrower crop -- so two plots drawn at the same size
+    to be read side by side would arrive at different shapes, and the columns
+    they sit in would stop lining up.
     """
     frames = []
     for number in plt.get_fignums():
         figure = plt.figure(number)
         buffer = BytesIO()
-        figure.savefig(buffer, format="svg", bbox_inches="tight")
+        figure.savefig(buffer, format="svg")
         name = f"{page}-{len(scenes):02d}.svg"
         scenes[name] = buffer.getvalue()
         frames.append(FIGURE.format(root=ROOT, name=name))
@@ -306,10 +369,23 @@ def formatter(source, language, css_class, options, md, **kwargs):
     # markdown, `result="text"` as a block of terminal text.  A block that
     # writes anything a reader is meant to read as output -- printed, or logged,
     # which is how a calibration reports itself -- asks for it in the fence.
+    #
+    # `log="no"` is ours, and is for a block that runs a calibration for the
+    # scene it draws rather than for the report it prints: the records are still
+    # collected, so they cannot leak into the next block, and are then dropped.
+    # An unknown fence input arrives under "extra", and is taken back out of it:
+    # markdown-exec renders whatever is left there onto the source block it
+    # writes, where an option of ours would come out as literal text.
+    quiet = options.get("extra", {}).pop("log", None) == "no"
     html = markdown_exec.formatter(source, language, css_class, options, md, **kwargs)
+    # Drained either way: a record left in the buffer would surface under the
+    # next block.
+    log = terminal()
+    if quiet:
+        log = ""
     # Markup escapes whatever is concatenated onto it, and the frames are html.
     page = options.get("session") or "scene"
-    return Markup(str(html) + terminal() + capture(page) + figures(page))
+    return Markup(str(html) + log + capture(page) + figures(page))
 
 
 def on_config(config):
@@ -329,6 +405,12 @@ def on_config(config):
             }
         )
 
+    # A build has no terminal, so the reports would decide against colour and
+    # arrive as the flat text the pages describe as graded.  on_page_content
+    # draws the sequences this turns on.
+    from pyCamSet.utils.report_format import force_colour
+    force_colour(True)
+
     logger = logging.getLogger("pyCamSet")
     if not any(isinstance(h, TerminalLog) for h in logger.handlers):
         handler = TerminalLog()
@@ -345,7 +427,7 @@ def on_pre_build(**kwargs):
 
 
 def on_page_content(html, page, **kwargs):
-    html = html.replace(ROOT, get_relative_url("scenes/", page.file.url))
+    html = ansi_html(html.replace(ROOT, get_relative_url("scenes/", page.file.url)))
     return html + FRAME_LOADER if 'class="scene" data-src' in html else html
 
 

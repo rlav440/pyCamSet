@@ -227,3 +227,164 @@ class free_point(abstract_function_block):
         output[0] = 1
         output[4] = 1
         output[8] = 1
+
+
+class telecentric_intrinsic(abstract_function_block):
+    """
+    Projects a camera frame point to pixels through a telecentric lens.
+
+    A telecentric lens puts its aperture stop at the focal point, so the chief
+    rays are parallel in object space and magnification barely depends on
+    depth.  ``eps`` is the residual telecentricity error: it is ``0`` for a
+    perfect lens, and the projection is then purely affine.  It is always
+    fitted rather than switched off, so a good lens simply returns ``eps`` near
+    zero, and its jacobian column stays structurally non-zero.
+
+    ``r2`` is scaled by 1e-6, which puts ``k`` in units of (1000 px)**-2.
+    Without that scaling ``r2`` carries the target's length unit and ``k``
+    lands anywhere between 1e-6 and 10 depending on whether the target was
+    measured in millimetres or metres.  This is the same conditioning HALCON
+    gets by distorting in metric sensor coordinates.
+    """
+
+    num_inp = 3
+    num_out = 2
+    params = param_type(key_type.PER_CAM, 6)
+    array_memory = 1
+
+    @staticmethod
+    @njit(ftemplate, cache=True)
+    def compute_fun(params, inp, output, memory):
+        m_x, c_x, m_y, c_y = params[0], params[1], params[2], params[3]
+        k, eps = params[4], params[5]
+
+        w = 1.0/(1.0 + eps*inp[2])
+        xs = m_x*inp[0]*w
+        ys = m_y*inp[1]*w
+
+        r2 = (xs*xs + ys*ys)*1e-6
+        den = 1.0/(1.0 + k*r2)
+
+        output[0] = xs*den + c_x
+        output[1] = ys*den + c_y
+        return
+
+    @staticmethod
+    @njit(ftemplate, cache=True)
+    def compute_jac(params, inp, output, memory):
+        """
+        The analytic jacobian of the telecentric projection, subexpressions shared.
+
+        Both rows are built from the same five groupings: ``den``, the division
+        model; ``d2``, its derivative with respect to the squared radius;
+        ``A``, which every depth-like derivative carries; and ``Bx``/``By``,
+        which carry the two in-plane ones.  ``eps`` and ``z`` differ only by a
+        factor, since both enter solely through ``w``.
+        """
+        m_x, c_x, m_y, c_y = params[0], params[1], params[2], params[3]
+        k, eps = params[4], params[5]
+        x, y, z = inp[0], inp[1], inp[2]
+
+        w = 1.0/(1.0 + eps*z)
+        xs = m_x*x*w
+        ys = m_y*y*w
+
+        q = xs*xs + ys*ys
+        r2 = q*1e-6
+        den = 1.0/(1.0 + k*r2)
+
+        d2 = -k*1e-6*den*den
+        A = den + 2.0*d2*q
+        Bx = den + 2.0*d2*xs*xs
+        By = den + 2.0*d2*ys*ys
+        cr = 2.0*d2*xs*ys
+        dk = -r2*den*den
+
+        output[0] = x*w*Bx
+        output[1] = 1.0
+        output[2] = cr*y*w
+        output[3] = 0.0
+        output[4] = xs*dk
+        output[5] = -z*w*xs*A
+        output[6] = m_x*w*Bx
+        output[7] = cr*m_y*w
+        output[8] = -eps*w*xs*A
+
+        output[9] = cr*x*w
+        output[10] = 0.0
+        output[11] = y*w*By
+        output[12] = 1.0
+        output[13] = ys*dk
+        output[14] = -z*w*ys*A
+        output[15] = cr*m_x*w
+        output[16] = m_y*w*By
+        output[17] = -eps*w*ys*A
+        return
+
+
+class telecentric_extrinsic(rigidTform3d):
+    """
+    The pose of a telecentric camera: rotation only, with no translation.
+
+    None of the three translation components is identifiable.  Sliding the
+    camera along its own axis by ``d`` turns ``m*x/(1 + eps*(z + d))`` into
+    ``[m/(1 + eps*d)] * x / (1 + [eps/(1 + eps*d)]*z)`` -- the same function of
+    ``(x, z)`` with a rescaled magnification and telecentricity, so ``t_z`` is
+    an exact gauge freedom whatever ``eps`` is.  Moving it in plane shifts
+    every pixel by a constant, which the principal point absorbs; the two
+    separate only at order ``eps * depth``, which is not recoverable in
+    practice.
+
+    So the in-plane position lives in ``c_x``/``c_y`` on the intrinsic block,
+    and the axial position is genuinely unknowable.  Keeping the usual six
+    parameters here would leave three columns of the jacobian empty, which the
+    codegen, the degeneracy check and the Schur elimination all reject --
+    correctly.
+    """
+
+    num_inp = 3
+    num_out = 3
+    params = param_type(key_type.PER_CAM, 3)
+    array_memory = 27
+
+    @staticmethod
+    @njit(ftemplate, cache=True)
+    def compute_fun(params, inp, output, memory):
+        memory[12] = params[0]
+        memory[13] = params[1]
+        memory[14] = params[2]
+        memory[15] = 0.0
+        memory[16] = 0.0
+        memory[17] = 0.0
+        n_e4x4_flat_INPLACE(memory[12:18], memory[:12])
+        n_htform_prealloc(inp, memory[:12], out=output[:3])
+        return
+
+    @staticmethod
+    @njit(ftemplate, cache=True)
+    def compute_jac(params, inp, output, memory):
+        numba_rodrigues_jac(params[:3], memory)  # uses all 27
+        output[:18] = 0
+
+        for op in range(3):
+            for ang_comp in range(3):
+                k = op * 6 + ang_comp
+                output[k] = (
+                    memory[9 * ang_comp + op * 3 + 0] * inp[0] +
+                    memory[9 * ang_comp + op * 3 + 1] * inp[1] +
+                    memory[9 * ang_comp + op * 3 + 2] * inp[2]
+                )
+
+        # every rodrigues value has been read, so the scratch is free again
+        memory[12] = params[0]
+        memory[13] = params[1]
+        memory[14] = params[2]
+        memory[15] = 0.0
+        memory[16] = 0.0
+        memory[17] = 0.0
+        n_e4x4_flat_INPLACE(memory[12:18], memory[:12])
+        for op in range(3):
+            for inval in range(3):
+                k = op * 6 + 3 + inval
+                output[k] = memory[inval + 3 * op]
+        return

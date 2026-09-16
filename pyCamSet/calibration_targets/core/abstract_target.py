@@ -19,6 +19,9 @@ import signal
 
 from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
+from pyCamSet.cameras.telecentric_calibration import calibrate_telecentric
+from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+from pyCamSet.cameras.telecentric_calibration import pose_from_affine
 from pyCamSet.calibration_targets.core.parameters import (
     NO_PARAMETERS,
     DetectorParameterisation,
@@ -481,11 +484,26 @@ class AbstractTarget(ABC):
         )
         return np.reshape(local_coords, init_shape)
 
+    @staticmethod
+    def _apply_fixed_params_to(init_cam, fixed_params, fixed_param):
+        """Overwrites a freshly seeded camera with whatever the caller pinned."""
+        if fixed_params is None:
+            return init_cam, False
+        if "int" in fixed_param:
+            init_cam.intrinsic = fixed_param['int']
+        if 'dst' in fixed_param:
+            init_cam.distortion_coefs = fixed_param['dst']
+        if "ext" in fixed_param:
+            init_cam.set_extrinsic(fixed_param['ext'])
+            return init_cam, True
+        return init_cam, False
+
     def initial_calibration(self, cam_name, detection: TargetDetection,
                             res: list, pose_im: int=0,
                             fixed_params: dict|None =None,
                             return_poses=False,
-                            min_detections_per_board: int = 12) -> Camera | tuple[Camera, np.ndarray, np.ndarray]:
+                            min_detections_per_board: int = 12,
+                            model: str = "pinhole") -> Camera | tuple[Camera, np.ndarray, np.ndarray]:
         """
         Takes a single camera's detections, and performs an initial
         calibration on them.
@@ -501,8 +519,13 @@ class AbstractTarget(ABC):
             accepted options are "ext", "int", and "dst" respectively.
         :param min_detections_per_board: Minimum number of detected corners required
             for a board observation to contribute to the initial OpenCV calibration.
+        :param model: the lens model to fit, "pinhole" or "telecentric"
         :return: A camera object.
         """
+        if model not in ("pinhole", "telecentric"):
+            raise ValueError(
+                f"Unknown lens model {model!r}; expected 'pinhole' or 'telecentric'")
+        telecentric = model == "telecentric"
 
         detections_in_image = detection.get(cam=cam_name).get_image_list()
         object_points = []
@@ -514,10 +537,19 @@ class AbstractTarget(ABC):
         if fixed_params is not None:
             fixed_param = fixed_params.get(cam_name, {})
             if "int" in fixed_param and "dst" in fixed_param:
-                init_cam = Camera(intrinsic=fixed_param['int'], distortion_coefs=fixed_param['dst'], res=res, name=cam_name)
+                cam_class = TelecentricCamera if telecentric else Camera
+                init_cam = cam_class(intrinsic=fixed_param['int'], distortion_coefs=fixed_param['dst'], res=res, name=cam_name)
                 logger.info(f'Camera {cam_name} was pre determined. Skipping opencv calibration')
                 return init_cam
 
+
+        # A board too sparsely seen to calibrate from is an ordinary outcome --
+        # every session has boards caught edge on -- and one line per board
+        # buried the reports that matter under dozens of them.  The individual
+        # boards stay on the debug record; what is logged is how many.
+        n_boards = 0
+        dropped: list[int] = []
+        sparse: list[int] = []
 
         for im_detect in detections_in_image:
 
@@ -530,20 +562,37 @@ class AbstractTarget(ABC):
 
             for board in boards[mask]:
                 key_mask = np.squeeze(keys[:, :-1] == board)
-                num_detections = np.sum(key_mask)
+                num_detections = int(np.sum(key_mask))
+                n_boards += 1
                 if num_detections >= min_detections_per_board:
                     if num_detections < 12:
-                        logger.warning(
-                            f"Trying to calibrate with {num_detections} detections on a board. <12 may be an issue."
+                        sparse.append(num_detections)
+                        logger.debug(
+                            f"{cam_name}: calibrating from a board with "
+                            f"{num_detections} detections. <12 may be an issue."
                         )
                     board_obj = self.point_local[tuple(keys[key_mask].astype(int).T)][None, ...].astype('float32')
                     board_im = data[key_mask, -2:][None, ...].astype('float32')
                     object_points.append(board_obj)
                     image_points.append(board_im)
                 else:
-                    logger.warning(
-                        f"Trying to calibrate with <{min_detections_per_board} detections ({num_detections}) on a board. Dropping."
+                    dropped.append(num_detections)
+                    logger.debug(
+                        f"{cam_name}: dropping a board with {num_detections} "
+                        f"detections, under the {min_detections_per_board} minimum."
                     )
+
+        if dropped:
+            logger.info(
+                f"{cam_name}: dropped {len(dropped)} of {n_boards} board "
+                f"observations under the {min_detections_per_board} detection "
+                f"minimum ({min(dropped)}-{max(dropped)} detections each)"
+            )
+        if sparse:
+            logger.warning(
+                f"{cam_name}: {len(sparse)} of {n_boards} board observations "
+                f"calibrated from fewer than 12 detections, which may be an issue"
+            )
 
         start = time.time()
         if len(object_points) == 0:
@@ -553,6 +602,31 @@ class AbstractTarget(ABC):
                 f"minimum) — cannot run initial calibration. Check Phase 1 "
                 f"detection results for this camera."
             )
+        if telecentric:
+            # OpenCV has no telecentric model, and the affine seed needs none:
+            # with the distortion and the telecentricity error set aside the
+            # projection is linear, and the bundle adjustment refines both.
+            magnification, principal, tele_poses, tele_rms = calibrate_telecentric(
+                [np.reshape(o, (-1, 3)) for o in object_points],
+                [np.reshape(i, (-1, 2)) for i in image_points],
+                res,
+            )
+            logger.info(
+                f'{cam_name} seeded as telecentric at '
+                f'{magnification[0]:.1f}, {magnification[1]:.1f} px per unit'
+                f', leftover error of {np.mean(tele_rms):.2f} pixels')
+            init_cam = TelecentricCamera(
+                intrinsic=np.array([[magnification[0], 0, principal[0]],
+                                    [0, magnification[1], principal[1]],
+                                    [0, 0, 1.0]]),
+                res=res, distortion_coefs=np.array([0.0]),
+                telecentricity=0.0, name=cam_name)
+            init_cam, ext_was_fixed = self._apply_fixed_params_to(
+                init_cam, fixed_params, fixed_param)
+            if ext_was_fixed or not return_poses:
+                return init_cam
+            return init_cam, np.stack(tele_poses).astype(float), np.asarray(tele_rms, dtype=float)
+
         ic = cv2.calibrateCameraExtended(
             object_points,
             image_points,
@@ -643,6 +717,33 @@ class AbstractTarget(ABC):
         if len(object_points) < 12:
             logger.warning("Low number of points used for pose estimation")
 
+        if isinstance(cam, TelecentricCamera):
+            # solvePnP assumes a perspective camera, and filters its solutions
+            # on the sign of a depth a telecentric camera does not have.  The
+            # affine fit that replaces it has no alternative solutions to pick
+            # between, so it short circuits the rest of this.
+            try:
+                ext, rms = pose_from_affine(
+                    object_points, cam.undistort_points(image_points),
+                    cam.magnification, cam.principal_point)
+            except (ValueError, np.linalg.LinAlgError):
+                if mode == "nan":
+                    if give_error:
+                        return np.ones((4, 4)) * np.nan, np.nan
+                    return np.ones((4, 4)) * np.nan
+                raise
+            if rms > 20:
+                logger.warning(
+                    f"Past 20 pixel error for failed detection - counting detection "
+                    f"as a failure (camera={cam.name}, pose={n_im[0]}) ")
+                if mode == "nan":
+                    if give_error:
+                        return np.ones((4, 4)) * np.nan, np.nan
+                    return np.ones((4, 4)) * np.nan
+                raise ValueError("Failed a detection")
+            if give_error:
+                return ext, rms
+            return ext
 
         try:
             _, rvec, tvec, err_list = cv2.solvePnPGeneric(object_points.astype("float32"),

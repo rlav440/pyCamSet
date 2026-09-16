@@ -28,6 +28,9 @@ theme:
         icon: material/weather-sunny
         name: Switch to light mode
 
+extra_css:
+  - stylesheets/extra.css
+
 plugins:
   - search
   - mkdocstrings:
@@ -51,11 +54,8 @@ hooks:
 
 nav:
   - Home: index.md
-  - Architecture: architecture.md
   - How-To Guides:
       - Calibrating a camera set: how-to/calibrate.md
-      - Self-calibration: how-to/self-calibration.md
-      - Working with cameras: how-to/cameras.md
       - Working with camera sets: how-to/camera-sets.md
       - The graphical workflow: how-to/gui.md
   - Calibration Targets:
@@ -64,11 +64,13 @@ nav:
       - Ccube: targets/ccube.md
       - PuzzleBoard: targets/puzzleboard.md
       - PuzzleBoardCube: targets/puzzleboard-cube.md
+  - Architecture: architecture.md
   - Extending pyCamSet:
       - What is extensible: extending/index.md
       - Calibration targets: extending/targets.md
       - Parameter handlers: extending/parameters.md
       - Bundle adjustment: extending/bundle-adjustment.md
+      - Camera models: extending/camera-models.md
   - Troubleshooting: troubleshooting.md
   - Internals:
       - The workflow package: internals/workflow.md
@@ -84,7 +86,13 @@ nav:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  # Diagrams are drawn in the page, in the theme's own colours, rather than
+  # shipped as a picture that goes stale and stays light in dark mode.
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite

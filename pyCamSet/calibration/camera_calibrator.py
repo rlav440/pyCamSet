@@ -18,6 +18,7 @@ from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
 from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment
 from pyCamSet.optimisation.template_handler import (
     TemplateBundleHandler, DEFAULT_OPTIONS)
+from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
 from pyCamSet.utils.saving import save_pickle, load_pickle, load_CameraSet
 from pyCamSet.utils.general_utils import average_tforms, get_subfolder_names, glob_ims, mad_outlier_detection
 
@@ -43,6 +44,8 @@ def calibrate_cameras(
     problem_options: dict|None = None,
     initial_cams: CameraSet | None= None,
     min_detections_per_board: int = 12,
+    optimise_target: bool = False,
+    model: str = "pinhole",
     ) -> CameraSet:
     """
     This function coordinates the calibration process, from detection to outputing a final camset.
@@ -55,8 +58,13 @@ def calibrate_cameras(
     :param n_lim: the maximum number of images to use for detection
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
     :param high_distortion: Implements an iterative scheme for high distortion cameras.
+    :param model: the lens model to calibrate, "pinhole" or "telecentric". Every
+        camera in a run shares one model, because one kernel is compiled per
+        calibration.
     :param min_detections_per_board: Minimum number of detected corners required
         for a board observation to contribute to the initial per-camera calibration.
+    :param optimise_target: solve the target's own geometry as well, in a second
+        bundle adjustment started from the first.
     """
 
     setup_logging_from_verbosity(
@@ -94,6 +102,7 @@ def calibrate_cameras(
             save_loc=save_loc / ('initial_cameras' + string_tail),
             fixed_params=fixed_params,
             min_detections_per_board=min_detections_per_board,
+            model=model,
         )
 
 
@@ -114,6 +123,7 @@ def calibrate_cameras(
                 save=save,
                 save_loc=save_loc / ('initial_cameras_high_distortion' + string_tail),
                 min_detections_per_board=min_detections_per_board,
+                model=model,
                 )
 
             # as outlier_rejection already does: only open a window when
@@ -123,7 +133,8 @@ def calibrate_cameras(
         logger.info("Using the provided initial cameras.")
 
     initial_cams.set_resolutions_from_file(floc=f_loc)
-    report_initial_calibration(initial_cams, detections, calibration_target)
+    report_initial_calibration(initial_cams, detections, calibration_target,
+                               min_detections_per_board)
     if len(initial_cams) == 1:
         logger.warning("Only found and calibrated one camera - returning single camera calibration")
         return initial_cams
@@ -141,7 +152,53 @@ def calibrate_cameras(
         problem_options = problem_options,
     )
 
+    if optimise_target:
+        calibrated_cameras = run_self_calibration(
+            calibrated_cameras,
+            detections,
+            calibration_target,
+            fixed_params=fixed_params,
+            threads=threads,
+            problem_options=problem_options,
+        )
+
     return calibrated_cameras
+
+
+def run_self_calibration(
+    cams: CameraSet,
+    detections: TargetDetection,
+    target: AbstractTarget,
+    fixed_params: dict|None = None,
+    threads: int = 1,
+    problem_options: dict|None = None,
+) -> CameraSet:
+    """
+    Solves the target's own geometry, starting from a finished calibration.
+
+    The same observations are solved a second time with every feature
+    coordinate free, so what was being blamed on the cameras but is really the
+    printing and assembly of the target comes out of the reprojection error.
+    The scale of the result is then gauged by three of the target's own points
+    rather than by the target as drawn.
+
+    :param cams: the cameras a fixed target calibration produced
+    :param detections: the detections that calibration was solved against
+    :param target: the calibration target, as drawn
+    :param fixed_params: parameters the optimisation is not allowed to move
+    :param threads: evaluation threads for the compiled kernels
+    :param problem_options: options passed through to the solver
+    :return: the camera set that minimises the free target problem
+    """
+    logger.info("Running the calibration again with the target's geometry free")
+    param_handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detections,
+        fixed_params=fixed_params, options=problem_options,
+    )
+    param_handler.set_from_templated_camset(cams)
+    _, self_calibrated = run_bundle_adjustment(
+        param_handler=param_handler, threads=threads)
+    return self_calibrated
 
 
 def run_initial_calibration(detection: TargetDetection,
@@ -151,7 +208,8 @@ def run_initial_calibration(detection: TargetDetection,
                             ref_cam: int|str = 0,
                             fixed_params: dict|None = None,
                             return_poses_and_costs=False,
-                            min_detections_per_board: int = 12) -> CameraSet | tuple[CameraSet, np.ndarray, np.ndarray]:
+                            min_detections_per_board: int = 12,
+                            model: str = "pinhole") -> CameraSet | tuple[CameraSet, np.ndarray, np.ndarray]:
     """
     For all of the cameras, runs the calibration method provided by an abstract target.
     The default is an opencv calibration but may be overwritten.
@@ -161,6 +219,7 @@ def run_initial_calibration(detection: TargetDetection,
     :param save: should the result be saved
     :param save_loc: where should the result be saved
     :param fixed_params: a dictionary of fixed parameters for the optimisation, which will not be changed
+    :param model: the lens model to fit, "pinhole" or "telecentric"
     :param min_detections_per_board: Minimum number of detected corners required
         for a board observation to contribute to the initial per-camera calibration.
     :return: the camera set with the initial calibration
@@ -199,6 +258,7 @@ def run_initial_calibration(detection: TargetDetection,
             pose_im=pose_im,
             fixed_params=fixed_params,
             return_poses=True,
+            model=model,
         )
     cam_names = detection.cam_names
     cam_detections = detection.get_cam_list()
@@ -212,6 +272,7 @@ def run_initial_calibration(detection: TargetDetection,
                 fixed_params=fixed_params,
                 return_poses=True,
                 min_detections_per_board=min_detections_per_board,
+                model=model,
             )
         results = [work_fn(datum) for datum in work_data]
         raw_calibration = [res[0] for res in results]
@@ -226,6 +287,7 @@ def run_initial_calibration(detection: TargetDetection,
                 fixed_params=fixed_params,
                 return_poses=False,
                 min_detections_per_board=min_detections_per_board,
+                model=model,
             )
         raw_calibration = [work_fn(datum) for datum in work_data]
         poses = []
@@ -457,7 +519,9 @@ def images_per_camera(f_loc: Path) -> dict[str, int]:
 
 
 def report_initial_calibration(cams: CameraSet, detection: TargetDetection,
-                               target: AbstractTarget) -> IntrinsicsReport:
+                               target: AbstractTarget,
+                               min_detections_per_board: int = 12,
+                               ) -> IntrinsicsReport:
     """
     Reports what each camera's own calibration came out as.
 
@@ -468,9 +532,11 @@ def report_initial_calibration(cams: CameraSet, detection: TargetDetection,
     :param cams: the per camera calibration to describe
     :param detection: the detections it was solved from
     :param target: the calibration target they were found with
+    :param min_detections_per_board: the per board minimum it was solved under
     :return: the report, which is also logged
     """
-    report = IntrinsicsReport.from_calibration(cams, detection, target)
+    report = IntrinsicsReport.from_calibration(
+        cams, detection, target, min_detections_per_board)
     logger.info("\n" + report.summary())
     return report
 

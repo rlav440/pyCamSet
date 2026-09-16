@@ -19,6 +19,7 @@ import pytest
 
 from pyCamSet import Camera, CameraSet, load_CameraSet
 from pyCamSet.utils.saving import (
+    check_names_match_keys,
     compress,
     decompress,
     load_pickle,
@@ -211,6 +212,77 @@ def test_camera_set_save_accepts_str_and_path(synthetic_camset, tmp_path):
 
     assert load_CameraSet(as_path) == synthetic_camset
     assert load_CameraSet(str(as_str)) == synthetic_camset
+
+
+# --------------------------------------------------------------------------
+# Names as the file's keys
+#
+# The file is keyed on ``Camera.name`` while a ``CameraSet`` indexes on the key
+# it holds a camera under, and nothing forces the two to agree.  A set whose
+# cameras were not named collapsed to a single entry called ``null`` on save --
+# silently, and the loaded set then held one camera instead of five.
+# --------------------------------------------------------------------------
+
+
+def test_every_camera_reaches_the_file(synthetic_camset, tmp_path):
+    """Regression: a save must not lose cameras to a key collision."""
+    target = tmp_path / "rig.camset"
+    synthetic_camset.save(target)
+
+    with open(target) as f:
+        raw = json.load(f)
+
+    assert len(raw["cams"]) == len(synthetic_camset) == 3
+    assert len(load_CameraSet(target)) == 3
+
+
+def test_saving_unnamed_cameras_is_refused(tmp_path):
+    """Regression: five unnamed cameras used to save as one called ``null``.
+
+    ``camera_dict=`` does not name the cameras it is given, so this is the
+    natural way to build a set by hand and was the way to lose four fifths of
+    it.
+    """
+    ring = CameraSet(
+        camera_dict={f"cam_{i}": make_camera(name=None) for i in range(5)}
+    )
+    target = tmp_path / "ring.camset"
+
+    with pytest.raises(ValueError, match="has to be the name its set stores it under"):
+        ring.save(target)
+
+    assert not target.exists()  # refused before anything is written
+
+
+def test_saving_a_renamed_camera_is_refused(tmp_path):
+    """A name disagreeing with its key renames the camera in the file.
+
+    The same fault as the collapse above, in its quiet form: this would save a
+    camera the set calls ``left`` under the name ``right``, and load it back
+    as a set that has no ``left`` at all.
+    """
+    mislabelled = CameraSet(camera_dict={"left": make_camera("right")})
+
+    with pytest.raises(ValueError, match="stored as 'left', named 'right'"):
+        mislabelled.save(tmp_path / "rig.camset")
+
+
+def test_the_refusal_names_every_offending_camera(tmp_path):
+    """Fixing one camera at a time is no use when a whole set is unnamed."""
+    ring = CameraSet(
+        camera_dict={f"cam_{i}": make_camera(name=None) for i in range(3)}
+    )
+
+    with pytest.raises(ValueError) as caught:
+        ring.save(tmp_path / "ring.camset")
+
+    for i in range(3):
+        assert f"stored as 'cam_{i}'" in str(caught.value)
+
+
+def test_check_names_match_keys_passes_a_well_built_set(synthetic_camset):
+    """The check is silent on every set the library itself builds."""
+    assert check_names_match_keys(synthetic_camset) is None
 
 
 # --------------------------------------------------------------------------

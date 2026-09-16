@@ -445,3 +445,46 @@ def test_outlier_rejection_does_not_draw_when_asked_not_to(monkeypatch):
 
     detection, n_rows = _even_error_problem()
     outlier_rejection(np.ones(n_rows), _StubHandler(detection), draw=False)
+
+
+# --------------------------------------------------------------------------
+# the initial intrinsics report -- measured under the model it was solved under
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.data
+def test_the_intrinsics_report_says_what_the_calibration_achieved(
+        session_data_dir, ccube_target, ccube_detections, caplog):
+    """The report's RMS is the calibration's own number, not a remeasurement.
+
+    ``initial_calibration`` hands OpenCV one planar board per cube face per
+    image, each with a pose of its own, so the cube's assembly never enters
+    the residual.  Measuring the finished cameras against a single rigid pose
+    for the whole cube instead reported ~3.4 px where the calibration had
+    achieved ~0.76 -- the cube's build error, charged to the camera, in the
+    one block whose job is to say whether the camera is a usable starting
+    point.
+    """
+    from pyCamSet.utils.intrinsics_report import IntrinsicsReport
+
+    detections, camera_res = ccube_detections
+    with caplog.at_level(logging.INFO, logger="pyCamSet"):
+        cams = run_initial_calibration(
+            detections, ccube_target, camera_res, save=False)
+    cams.set_resolutions_from_file(floc=session_data_dir / "calibration_ccube")
+
+    achieved = {
+        match.group(1): float(match.group(2))
+        for match in (
+            re.match(r"(\S+) took .*leftover error of ([\d.]+) pixels", message)
+            for message in caplog.messages)
+        if match
+    }
+    assert set(achieved) == set(cams.get_names())
+
+    report = IntrinsicsReport.from_calibration(cams, detections, ccube_target)
+
+    for cam in report.per_camera:
+        # The log line rounds to 2dp, which is the whole tolerance here: the
+        # report is meant to be the same number, not a close one.
+        assert cam.rms_px == pytest.approx(achieved[cam.name], abs=0.005)

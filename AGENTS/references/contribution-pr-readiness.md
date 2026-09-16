@@ -1,17 +1,19 @@
 # pyCamSet contribution and PR-readiness guide
 
 **Purpose:** turn a pile of local commits into a small set of themed, evidence-backed
-pull requests against upstream pyCamSet, and prove each one is ready before a human is
-asked to publish it. This is an agent-facing workflow, not permission to publish.
+pull requests, and prove each one is ready before a human is asked to publish it. This
+is the long form, written for an automated contributor that has to show its working.
+Humans contributing by hand want [`CONTRIBUTING.md`](../../CONTRIBUTING.md), which says
+the same things in a tenth of the space.
+
+Nothing here is permission to publish. §0 is the rule that outranks the rest.
 
 **Canonical location:** `AGENTS/references/` on the `development` branch. Keep this
 workflow here; add pointers elsewhere rather than copying it.
 
-`AGENTS/` is local working documentation. It is **not** on `origin/development` and
-must not appear in an upstream candidate diff unless the PR's own theme is this
-documentation. Committing it here means local `development` diverges from
-`origin/development` by that one path; every branch cut from `development` inherits it,
-so the exclusion rule in §3 is load-bearing, not cosmetic.
+`AGENTS/` is documentation about contributing, not part of the package. It ships no
+code, and no PR should carry changes to it alongside changes to `pyCamSet/` — a diff
+that edits both is two themes wearing one hat (§2.2).
 
 ## Hard stops and precedence
 
@@ -25,7 +27,9 @@ so the exclusion rule in §3 is load-bearing, not cosmetic.
 4. A green test run is not a readiness verdict. pyCamSet has several ways for a run to
    be green and wrong — skipped tiers, a missing image corpus, a missing OpenGL
    context, a JIT setting that silences the tests that matter (§9.2). Name what ran and
-   what did not.
+   what did not. A run can also be green because of the machine it ran on rather than
+   the code it ran against, which no ladder executed on that machine can detect
+   (§9.3).
 5. Use these evidence labels:
    - `VERIFIED-BY-EXECUTION` — command actually ran; retain exit code/output.
    - `VERIFIED-BY-READING` — directly checked in a named file or primary source.
@@ -45,7 +49,7 @@ Re-verify each of these at preflight; they are current-source questions, not con
 | Fact | Value | Source |
 |---|---|---|
 | Upstream | `rlav440/pyCamSet` | [`README.md`](../../README.md) badges, `pyproject.toml` `[project.urls]` |
-| Contributor fork | `ColDSnit/pyCamSet` (`origin`) | `git remote -v` |
+| Contributor fork | your fork, usually `origin` | `git remote -v` |
 | Base branch for PRs | `development` | every PR #19–#28 targets it (`gh pr list --json baseRefName`) |
 | Release branch | `master` (upstream `HEAD` symref) | `git ls-remote --symref <upstream> HEAD` |
 | License | Apache-2.0, whole repository | [`LICENSE`](../../LICENSE), `pyproject.toml` `license = "Apache-2.0"` |
@@ -53,11 +57,11 @@ Re-verify each of these at preflight; they are current-source questions, not con
 | Docs CI | `mkdocs build --strict` on every PR | [`.github/workflows/docs.yml`](../../.github/workflows/docs.yml) |
 | Packaging CI | `python -m build` + `twine check --strict` on every PR | [`.github/workflows/release.yml`](../../.github/workflows/release.yml) |
 | Lint/format/type CI | **none exists** | no ruff/flake8/black/mypy/pre-commit config in `pyproject.toml` or the repo |
-| `CONTRIBUTING.md` | **absent** | not in `git ls-tree -r --name-only development` |
+| `CONTRIBUTING.md` | the short human form of this guide | [`CONTRIBUTING.md`](../../CONTRIBUTING.md) |
 | `CODE_OF_CONDUCT.md` | **absent**, though `README.md` links it | same; the README badge line points at a file that is not in the tree |
 | AI-use policy, DCO/CLA, PR template | **none found** | no `.github/PULL_REQUEST_TEMPLATE*`, no policy file at the resolved branch |
 
-The four absences are `OPEN-GAP`, not permission. Do not invent a project rule to fill
+The remaining absences are `OPEN-GAP`, not permission. Do not invent a project rule to fill
 one, and re-check each at every preflight — upstream guidance changes.
 
 ## Required references
@@ -165,7 +169,7 @@ gh run view <run-id> --repo rlav440/pyCamSet --json jobs \
 
 Bind every result to the **full** base SHA, not to the branch name — a branch moves
 between the fetch and the read. A red upstream job is evidence that a local failure may
-pre-exist the candidate (§9.3); it is never a licence to skip a local check.
+pre-exist the candidate (§9.4); it is never a licence to skip a local check.
 
 ## 2. Themed PR planning: turning commits into pull requests
 
@@ -276,7 +280,7 @@ Remove or split:
   `tests/test_data/` — `.gitignore` excludes them because a stale cache outlives the
   OpenCV version that produced it and would hide exactly the detection changes
   `tests/test_detection_consistency.py` exists to catch;
-- `AGENTS/`, workspace scratch directories, review logs, and campaign records.
+- scratch directories, working notes, and review logs kept outside the package.
 
 Review staged files individually. Never `git add -A` merely because the tree is
 non-empty.
@@ -356,10 +360,10 @@ git diff --name-only <base>...<candidate>
 ```
 
 Any intersection, or any same-subsystem collision, is `SPLIT-REQUIRED` or a
-serialisation requirement: merge or close one before opening the next. The seven-PR
-campaign (#22–#28) landed cleanly because the branches were disjoint by construction;
-that is the property to preserve, and it has to be re-checked after every rebase,
-because a rebase can pull in files the plan never assigned.
+serialisation requirement: merge or close one before opening the next. PRs #22–#28
+landed cleanly as a batch because the branches were disjoint by construction; that is
+the property to preserve, and it has to be re-checked after every rebase, because a
+rebase can pull in files the plan never assigned.
 
 Resolve each PR to its current head and base SHAs when doing this — an overlap computed
 from a branch name that has since moved is not evidence.
@@ -444,7 +448,7 @@ verification, not just the default one.
 
 ## 7. Redraft the PR for the maintainer
 
-Write a PR that can be understood without reconstructing the agent's session. One
+Write a PR that can be understood without reconstructing how it was produced. One
 observable change, one problem, one reviewable diff.
 
 ### 7.1 Commit messages
@@ -454,7 +458,7 @@ makes true — *"Measure coverage on the code that ships"*, *"Gate the two tests
 render on whether this machine can"*, *"Make a tag prove itself before it publishes"*.
 No `feat:`/`fix:` prefix, no scope parentheses, no ticket number.
 
-The seven-PR campaign used `feat:`/`fix:` **titles**, which is a drift from the
+An earlier batch used `feat:`/`fix:` **titles**, which is a drift from the
 maintainer's own history rather than a convention to copy. Match the repository. Verify
 before writing:
 
@@ -524,7 +528,32 @@ OPEN-GAP, never a silent pass.>
 Every body claim must map to a changed file, a named source, or an executed check.
 Delete unsupported claims or mark them `OPEN-GAP`.
 
-### 7.4 Make review easy
+### 7.4 Detailed, and therefore short
+
+Completeness and length are not the same thing, and it is length the maintainer pays
+for. A body that records every check, every gap and every trade-off in the fewest
+words that still carry them is doing its job; the same content at three times the
+size is not more rigorous, it is less likely to be read to the end, and the one line
+that mattered — the unverified branch, the open question — is what gets lost.
+
+Write the long version if it helps you think, then cut it. In particular:
+
+- The template's headings are a checklist, not a quota. A heading with nothing to say
+  under it should say so in a clause, or go.
+- Say a thing once. Evidence belongs in the verification table; do not narrate it
+  again in prose above.
+- Numbers instead of adjectives. "877 passed, same failure set as base" beats a
+  sentence about thorough testing, and is shorter.
+- Cut the process. How the change was arrived at, what was tried first, and how long
+  it took are not review inputs.
+- Keep every `OPEN-GAP`, every limitation, and every question. These are the last
+  things to cut, not the first — brevity that removes them is dishonesty with better
+  formatting.
+
+Rule precedence puts brevity last (§0) for a reason: if shortening a body would drop
+a caveat, keep the caveat and cut elsewhere.
+
+### 7.5 Make review easy
 
 - Explain the user's problem before the implementation detail.
 - Show exact commands and real exit codes, including the checks that did not run.
@@ -536,7 +565,7 @@ Delete unsupported claims or mark them `OPEN-GAP`.
   the reviewer. Do not argue from model authority.
 - Do not repeatedly bump a maintainer; one concise status message is enough.
 
-### 7.5 Submission cadence
+### 7.6 Submission cadence
 
 Batched submission is acceptable but governed: keep a batch small enough that a
 maintainer can review it, re-run the overlap check (§4.2) at every batch boundary, and
@@ -561,7 +590,7 @@ Regardless of policy, an AI-assisted candidate must:
 - be independently checked against the upstream source and the intended issue; and
 - include real tests and review evidence rather than a model self-report.
 
-Do not paste confidential, restricted, or unlicensed material into an agent prompt. Do
+Do not paste confidential, restricted, or unlicensed material into a prompt or issue. Do
 not claim generated code is original merely because a model produced it.
 
 ## 9. Independent review and executable verification
@@ -681,7 +710,57 @@ Each of these is documented in the repository and has already cost a real failur
 - **The RNG is seeded** (`deterministic_rng`, seed `20260909`). A test that passes only
   under one seed is not passing.
 
-### 9.3 Failure triage
+### 9.3 The trap the ladder cannot catch: a test that encodes your machine
+
+Every trap in §9.2 is a run that is green and wrong. This is the other direction: a
+test that passes locally for a reason that is not the code, and fails on CI for a
+reason that is not the change.
+
+A real instance, and the shape to recognise. A helper registers the conda
+`Library/bin` directory so `cairosvg` can find the native Cairo library, and its
+interesting half — the registration — never runs on a machine that already finds
+Cairo. To exercise it, the test forced the first `import cairosvg` to fail, then
+asserted the helper recovered:
+
+```python
+assert ok, "the helper gave up where it should have recovered"
+```
+
+That is true on the conda layout it was written on, and false on CI. GitHub's Windows
+runners are a stock CPython with no `Library/bin` to register and no native Cairo to
+find, so the helper correctly reported failure and the test called that a bug. Three
+Windows jobs red, for a machine difference the author's machine cannot produce.
+
+Note what did *not* prevent it. The full suite passed. The fast tier passed. The
+docs build passed. The candidate was `READY` by every check in §9.1, honestly run.
+A ladder cannot catch this, because the ladder runs on the machine that holds the
+assumption.
+
+So it has to be caught while writing the assertion. Before asserting an outcome, ask
+what about the machine makes it true:
+
+- **Assert the mechanism, not the machine's capability.** That the retry happened,
+  that the directory was registered when there was one to register, that the return
+  value matches what the environment can actually deliver — all hold everywhere. That
+  the recovery *succeeded* holds only where the missing piece exists.
+- **Make the expectation conditional on the thing it depends on**, and say so:
+  `if os.path.isdir(expected): ... else: assert registered == []`. A conditional
+  assertion that names its condition is documentation; a skip is a hole.
+- **Anything derived from `sys.prefix`, `PATH`, a native library, a GPU, a drive
+  letter, or an installed optional package is a machine fact**, not a code fact.
+  Native-library and DLL-search behaviour is the most common source, because it is
+  the part of the environment a developer never configured deliberately.
+- **A test written specifically because a branch is hard to reach locally deserves
+  the most suspicion**, not the least. It exists because the local machine is not
+  representative; that is the premise, so do not then assert the local machine's
+  answer.
+
+When the honest answer really is environment-dependent, say which environment in the
+PR body under *What did not run* rather than asserting past it. `OPEN-GAP` on a
+platform you do not have costs a maintainer nothing; a red CI job costs them a
+review cycle.
+
+### 9.4 Failure triage
 
 A local failure is a **regression** unless proven otherwise. To claim it pre-exists the
 candidate, show it at the base:
@@ -702,7 +781,7 @@ If a check cannot run at all — no display, no corpus, no platform — name the
 mark it `OPEN-GAP`/`NOT-READY`. A missing tool is an environment error, never an
 approvable gap.
 
-### 9.4 Minimum evidence record
+### 9.5 Minimum evidence record
 
 ```text
 candidate: <repository, branch, base, head>
@@ -774,7 +853,7 @@ for pyCamSet, and none should be cited as if it did:
 - a machine-readable result manifest, attestation, or ratification artifact;
 - a file-set reservation or locking mechanism across concurrent PRs — §4.2 is a manual
   check, and it is only as good as the moment it was run;
-- a known-failures registry — §9.3 replaces it with a per-failure base replay;
+- a known-failures registry — §9.4 replaces it with a per-failure base replay;
 - a publication wrapper; publication is a human action taken after approval;
 - a post-submission monitoring loop — watch a PR's checks with
   `gh pr checks <n> --repo rlav440/pyCamSet` and escalate by hand.

@@ -15,6 +15,7 @@ from pyCamSet.optimisation.numba_schur import (
     ParamGroup,
     SchurSolver,
     _diag_scale,
+    _solve_reduced,
     spec_from_groups,
 )
 
@@ -112,6 +113,101 @@ def test_group_order_puts_the_eliminated_block_last():
     assert spec.n_elim_blocks == groups[-1].n_rows
     assert spec.elim_size == groups[-1].n_par
     assert spec.n_keep_full == sum(g.base.size for g in groups[:-1])
+
+
+def test_reduced_system_is_symmetric_and_positive_definite():
+    """The premises of the Cholesky solve, asserted on the solver's own matrix.
+
+    This calls ``reduced_system`` rather than rebuilding ``S`` locally: a
+    reimplementation of the assembly would keep passing if the real one gained a
+    wrong transpose or a sign error, leaving ``_solve_reduced`` fed a matrix that
+    is neither symmetric nor positive definite.
+    """
+    groups, blocks, resid = _random_problem()
+    spec = spec_from_groups(groups)
+    solver = SchurSolver(spec, threads=1)
+    B, E, C, v, w = solver.normal_equations(blocks, resid)
+
+    S, g, _Cinv = solver.reduced_system(B, E, C, v, w, 1e-3)
+
+    assert S.shape == (spec.n_keep_full, spec.n_keep_full)
+    assert g.shape == (spec.n_keep_full,)
+
+    asym = float(np.max(np.abs(S - S.T)))
+    scale = float(np.max(np.abs(S)))
+    assert asym < 1e-10 * scale, f"S is not symmetric: {asym:.3e} vs {scale:.3e}"
+    assert float(np.min(np.linalg.eigvalsh(S))) > 0, "the damped S is not PD"
+
+    # and the pinning of fixed parameters preserves both properties, since it
+    # writes the identity over entire rows and columns
+    assert spec.keep_fixed.any(), "this problem should pin something"
+    pinned = np.flatnonzero(spec.keep_fixed)
+    assert np.allclose(S[pinned, :], np.eye(spec.n_keep_full)[pinned, :])
+    assert np.allclose(S[:, pinned], np.eye(spec.n_keep_full)[:, pinned])
+
+
+def test_the_step_solves_the_system_reduced_system_returns():
+    """``_step_from_parts`` must be driven by the matrix it exposes.
+
+    Ties the two together so the exposed assembly cannot drift away from the one
+    the step actually solves.
+    """
+    groups, blocks, resid = _random_problem()
+    spec = spec_from_groups(groups)
+    solver = SchurSolver(spec, threads=1)
+    B, E, C, v, w = solver.normal_equations(blocks, resid)
+    lam = 1e-3
+
+    S, g, _Cinv = solver.reduced_system(B, E, C, v, w, lam)
+    dc = _solve_reduced(S, g)
+
+    step = solver.step_from_parts(B, E, C, v, w, lam)
+    # the step is in free-parameter space, its retained half first, so it holds
+    # the reduced solve's free entries followed by the eliminated block's
+    n_keep_free = int(spec.keep_free.sum())
+    assert np.allclose(step[:n_keep_free], dc[spec.keep_free], rtol=1e-12)
+
+
+@pytest.mark.parametrize("n", [4, 40, 300])
+def test_reduced_solve_matches_the_general_solve(n):
+    """The symmetric solve must agree with LU on a symmetric positive definite S."""
+    rng = np.random.default_rng(n)
+    M = rng.normal(size=(n, n))
+    S = M @ M.T + n * np.eye(n)
+    g = rng.normal(size=n)
+
+    symmetric = _solve_reduced(S, g)
+    general = np.linalg.solve(S, g)
+
+    assert np.allclose(symmetric, general, rtol=1e-9, atol=1e-12)
+    # and it is a solution, not merely close to one
+    assert np.max(np.abs(S @ symmetric - g)) < 1e-8 * max(
+        1.0, float(np.max(np.abs(g))))
+
+
+def test_reduced_solve_falls_back_when_the_system_is_indefinite():
+    """An indefinite S has no Cholesky factor; the general solve must still answer.
+
+    Damping makes S positive definite in the solver's own path, so this pins
+    the fallback for a caller that passes a ``lam`` which does not.
+    """
+    S = np.array([[1.0, 2.0], [2.0, 1.0]])          # eigenvalues -1 and 3
+    g = np.array([1.0, 1.0])
+
+    assert _solve_reduced(S, g) == pytest.approx(np.linalg.solve(S, g))
+
+
+def test_reduced_solve_propagates_a_non_finite_system():
+    """A poisoned system must stay poisoned, not silently return a number.
+
+    A wild iterate can overflow the reduced system; the caller treats a
+    non finite step as "damp harder", so a finite answer here would hide it.
+    """
+    S = np.array([[2.0, 0.5], [0.5, 2.0]])
+    S[0, 0] = np.nan
+
+    out = _solve_reduced(S, np.array([1.0, 1.0]))
+    assert not np.all(np.isfinite(out))
 
 
 @pytest.mark.data

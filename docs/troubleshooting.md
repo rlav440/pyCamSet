@@ -81,7 +81,7 @@ published on PyPI, so it is optional, and constructing the target without it
 raises an `ImportError` naming the fix:
 
 ```bash
-pip install "pyCamSet[puzzle]"
+pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
 ```
 
 The PuzzleBoard source is released under CC0 upstream. Retain the upstream

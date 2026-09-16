@@ -8,10 +8,9 @@
     nothing is implicit. That makes it a poor thing to write a script against.
 
     **For a script, use
-    [`calibrate_cameras`](../how-to/calibrate.md) and, where the target's own
-    geometry needs to move, [explicit
-    self-calibration](../how-to/self-calibration.md).** Both do the same work in
-    a fraction of the code, and both are the supported surface.
+    [`calibrate_cameras`](../how-to/calibrate.md), with `optimise_target=True`
+    where the target's own geometry needs to move.** It does the same work in a
+    fraction of the code, and it is the supported surface.
 
     This page is here so that the GUI's behaviour can be understood and
     reproduced, not as a recommended path.

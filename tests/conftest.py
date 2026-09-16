@@ -1,6 +1,6 @@
 """Shared pytest configuration for the pyCamSet test suite.
 
-Four things happen here that the suite previously relied on the developer's
+Three things happen here that the suite previously relied on the developer's
 shell for:
 
 1. **Headless by default.** pyvista, Qt and matplotlib all try to open a window
@@ -19,14 +19,6 @@ shell for:
    cache or a target PDF cannot make the next run test something different
    from the last one, and the GUI's per-user configuration is redirected
    there too.
-
-4. **Optional-environment gates.** Two regression tests depend on optional
-   runtime capabilities rather than library code: ``test_aruco2_backend.py``
-   imports the optional compiled ``aruco2`` package at module level, and
-   ``bundle_correctness_test.py`` calls the legacy ``cv2.aruco`` ChArUco
-   calibration API that is absent across the supported ``>=4.8,<5`` band.
-   Both are gated here so a fresh checkout collects cleanly on every
-   supported platform instead of erroring at collection time.
 """
 
 from __future__ import annotations
@@ -35,7 +27,6 @@ import functools
 import os
 import subprocess
 import sys
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -56,42 +47,17 @@ MARKERS = {
 }
 
 # --- Optional-environment probes --------------------------------------------
-# ``aruco2`` is an optional compiled backend package; its regression tests
-# import it at module level, so the file cannot be collected (let alone
-# skipped via a marker) when the package is absent.  This mirrors the guarded
-# import used by ``pyCamSet.calibration_targets.markers.aruco2``.
-try:
-    import aruco2  # noqa: F401
-
-    ARUCO2_AVAILABLE = True
-except ImportError:
-    aruco2 = None  # type: ignore[assignment]
-    ARUCO2_AVAILABLE = False
-
-# ``cv2.aruco.calibrateCameraCharucoExtended`` is a legacy API that is absent
-# across the whole supported ``opencv-python>=4.8,<5`` band.  cv2 is a
-# mandatory pyCamSet dependency, so a missing cv2 only matters here for this
-# one legacy-API regression test.
-try:
-    import cv2.aruco  # noqa: F401
-
-    HAS_LEGACY_CHARUCO_CALIBRATION = hasattr(
-        cv2.aruco, "calibrateCameraCharucoExtended"
-    )
-except ImportError:
-    HAS_LEGACY_CHARUCO_CALIBRATION = False
-
-# Files that must not be collected because they import optional packages at
-# module level: a skip marker can never fire for those (collection aborts
-# before items exist), so a visible warning from ``pytest_configure`` carries
-# the skip reason instead.
-collect_ignore_glob = [] if ARUCO2_AVAILABLE else ["test_aruco2_backend.py"]
+# There is deliberately no ``collect_ignore_glob`` here.  A module whose only
+# prerequisite is an optional package gates itself, with ``importorskip``
+# before its other imports -- ``test_aruco2_backend.py`` does exactly that --
+# and pytest then reports one skip naming the missing package.  Dropping the
+# file from collection instead hides those tests from every report, which is
+# how thirty of them went a release without anyone noticing they never ran.
 
 # PySide6 is a base dependency, but requirements_core.txt documents a lean
-# install that leaves it out, and CI keeps one job on that path.  Unlike
-# aruco2 this needs no collect_ignore: no test module imports Qt at module
-# level, so the ``gui`` marker is enough and the non-Qt tests in the same
-# files still run.
+# install that leaves it out, and CI keeps one job on that path.  No test
+# module imports Qt at module level, so the ``gui`` marker is enough and the
+# non-Qt tests in the same files still run.
 try:
     import PySide6  # noqa: F401
 
@@ -131,10 +97,6 @@ def opengl_is_available() -> bool:
     return finished.returncode == 0
 
 
-# Regression test gated on the legacy ChArUco calibration API availability.
-BUNDLE_TEST_BASENAME = "bundle_correctness_test.py"
-
-
 def pytest_configure(config: pytest.Config) -> None:
     """Force offscreen rendering and register the suite's markers."""
     # setdefault so a developer can still override these to watch a run.
@@ -144,15 +106,6 @@ def pytest_configure(config: pytest.Config) -> None:
 
     for name, description in MARKERS.items():
         config.addinivalue_line("markers", f"{name}: {description}")
-
-    if not ARUCO2_AVAILABLE:
-        warnings.warn(
-            "tests/test_aruco2_backend.py is not collected: it imports the "
-            "optional compiled 'aruco2' backend package at module level, "
-            "which is not installed in this environment.",
-            UserWarning,
-            stacklevel=2,
-        )
 
 
 def pytest_collection_modifyitems(
@@ -188,19 +141,6 @@ def pytest_collection_modifyitems(
             item.add_marker(skip_no_gui)
         if not have_opengl and "needs_opengl" in item.keywords:
             item.add_marker(skip_no_opengl)
-
-    if not HAS_LEGACY_CHARUCO_CALIBRATION:
-        skip_legacy_api = pytest.mark.skip(
-            reason=(
-                "requires the legacy ChArUco calibration API "
-                "(cv2.aruco.calibrateCameraCharucoExtended), which this "
-                "environment's opencv-python does not provide; the API is "
-                "absent across the supported >=4.8,<5 release band"
-            )
-        )
-        for item in items:
-            if item.path.name == BUNDLE_TEST_BASENAME:
-                item.add_marker(skip_legacy_api)
 
 
 @pytest.fixture(scope="session")

@@ -1,0 +1,85 @@
+/* The header logo, at twice the theme's 1.2rem.  The button's own padding and
+   vertical margin come off with it, so the taller mark fills the 2.4rem header
+   row rather than making the whole bar taller. */
+.md-header__button.md-logo {
+  margin: 0 .2rem;
+  padding: 0;
+}
+
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 2.4rem;
+}
+
+/* Blocks shown side by side: the three scenes the front page opens with, or a
+   pair of plots meant to be read against each other.  The columns follow
+   whatever the row holds rather than being counted out here.  Below a phone's
+   width they would be postage stamps, so they become a column. */
+.scene-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 0 1rem;
+}
+
+@media screen and (max-width: 45em) {
+  .scene-row {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+  }
+}
+
+/* A scene takes the column it is in; its shape is set on the element itself,
+   by the plotter that drew it. */
+.md-typeset .scene {
+  display: block;
+  width: 100%;
+  margin: .8rem auto;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: .2rem;
+}
+
+/* A plot is drawn at a size, and an SVG carries it; stretching every one to
+   the column would redraw a single-panel figure at twice the scale of a
+   four-panel one, and its text with it.  So a figure is shown at the size it
+   was drawn, centred, and only shrinks when the column is narrower than that. */
+.md-typeset .figure {
+  display: block;
+  max-width: 100%;
+  margin: .8rem auto;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: .2rem;
+}
+
+/* Except in a row meant for comparison, where a figure drawn at its own size
+   would put the two plots beside each other at different scales. */
+.md-typeset .scene-row .figure {
+  width: 100%;
+}
+
+/* A scene that does not need the column it is in.  A camera set reads just as
+   well at half the width, where at full width it is the size of a screen and
+   swamps the text around it. */
+.md-typeset .scene-half .scene {
+  width: 50%;
+}
+
+@media screen and (max-width: 45em) {
+  .md-typeset .scene-half .scene {
+    width: 100%;
+  }
+}
+
+/* A class diagram is drawn at the width it needs, but Material sizes a figure
+   to its content and renders the diagram into a shadow root that offers none
+   -- so the figure collapses and the diagram is drawn at a fraction of its
+   size.  The figure takes the column instead, and a screen narrower than the
+   diagram scrolls it rather than shrinking it out of legibility. */
+.md-typeset figure.class-diagram {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.md-typeset figure.class-diagram .mermaid {
+  min-width: 36rem;
+}

@@ -10,6 +10,12 @@ This is that stage's block, laid out by the same rules as the detection and
 calibration summaries either side of it.  The per view reprojection it is
 measured from lives here too, because the report and the phase diagnostics
 both want it and neither should compute it twice.
+
+It is measured under the model the calibration was solved under -- every face
+of the target an independent board, posed on its own -- so the number here is
+the one OpenCV achieved.  Holding the target rigid instead measures something
+real, but it is the target's build error rather than the camera's, and it
+belongs to the bundle adjustment's summary rather than to this one.
 """
 from __future__ import annotations
 
@@ -37,8 +43,10 @@ class CameraIntrinsicStats:
     What one camera's own calibration came out as.
 
     :param n_views: images the camera was posed in, and so measured over
-    :param n_points: features those views contributed
-    :param rms_px: the pooled reprojection RMS over them
+    :param n_points: features those views contributed, over the boards that
+        met the per board minimum
+    :param rms_px: the reprojection RMS its own calibration achieved, pooled
+        over every board view
     :param distortion_l2: the norm of the distortion coefficients, as one
         number for how much lens model the solve asked for
     """
@@ -72,15 +80,18 @@ class IntrinsicsReport:
     per_view: dict[str, dict] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_calibration(cls, cams, detection, target) -> IntrinsicsReport:
+    def from_calibration(cls, cams, detection, target,
+                         min_detections_per_board: int = 12) -> IntrinsicsReport:
         """
         Measure a per camera calibration against the detections it solved.
 
         :param cams: the calibrated camera set
         :param detection: the detections it was solved from
         :param target: the calibration target they were found with
+        :param min_detections_per_board: the per board minimum it was solved under
         """
-        per_view, pooled_rms = per_view_reprojection(detection, target, cams)
+        per_view, pooled_rms = per_view_reprojection(
+            detection, target, cams, min_detections_per_board)
 
         per_camera = []
         for index, name in enumerate(cams.get_names()):
@@ -186,116 +197,160 @@ class IntrinsicsReport:
         return self.summary()
 
 
-def per_view_reprojection(
-        detections, calibration_target, cams) -> tuple[dict[str, dict], dict[str, float]]:
+#: Every intrinsic parameter held, so the solve moves only the board poses.
+#: The initial calibration has already chosen the intrinsics; what is wanted
+#: back is the reprojection they achieved, not a second opinion on them.
+_POSE_ONLY = (
+    cv2.CALIB_USE_INTRINSIC_GUESS
+    | cv2.CALIB_FIX_FOCAL_LENGTH | cv2.CALIB_FIX_PRINCIPAL_POINT
+    | cv2.CALIB_FIX_ASPECT_RATIO | cv2.CALIB_FIX_TANGENT_DIST
+    | cv2.CALIB_FIX_K1 | cv2.CALIB_FIX_K2 | cv2.CALIB_FIX_K3
+    | cv2.CALIB_FIX_K4 | cv2.CALIB_FIX_K5 | cv2.CALIB_FIX_K6
+)
+
+
+def _board_views(detections, calibration_target, cam_name,
+                 min_detections_per_board):
     """
-    True per-image RMS reprojection error, per camera.
+    The planar board views a camera's own calibration was solved from.
 
-    Each image is posed against the target on its own and its points
-    reprojected, rather than reading a number the calibration reported, so an
-    image that contributed badly is visible as itself.
+    One view per face per image, in that face's own frame, behind the same
+    per board minimum the calibration applied -- so what is measured is what
+    was solved.
 
+    :param detections: the detections the camera was calibrated from
+    :param calibration_target: the target they were found with
+    :param cam_name: the camera to collect for
+    :param min_detections_per_board: the per board minimum the calibration used
+    :return: the object points, the image points, the image each view came
+        from, and which images held any detection at all
+    """
+    max_ims = int(detections.max_ims)
+    n_boards = int(np.prod(calibration_target.point_local.shape[:-2]))
+    cam_detection = detections.get(cam=cam_name)
+
+    objects, images, of_image = [], [], []
+    has_detection = [False] * max_ims
+    if not cam_detection.has_data():
+        return objects, images, of_image, has_detection
+
+    for im_idx in range(max_ims):
+        data = cam_detection.get(global_im_num=im_idx).get_data()
+        if data is None or len(data) == 0:
+            continue
+        has_detection[im_idx] = True
+        keys = get_keys(data)
+        for board in np.unique(keys[:, :-1]):
+            if board >= n_boards:
+                continue
+            mask = np.squeeze(keys[:, :-1] == board)
+            if np.sum(mask) < min_detections_per_board:
+                continue
+            objects.append(calibration_target.point_local[
+                tuple(keys[mask].astype(int).T)][None, ...].astype("float32"))
+            images.append(data[mask, -2:][None, ...].astype("float32"))
+            of_image.append(im_idx)
+
+    return objects, images, of_image, has_detection
+
+
+def _board_errors(objects, images, cam):
+    """
+    Each board view's RMS, with OpenCV solving the poses at fixed intrinsics.
+
+    Its own solver rather than a pose per board of ours, because the number
+    being reproduced is the one its calibration returned, and a weaker pose
+    solve shows up as error the calibration never had.
+
+    :param objects: the object points of each board view
+    :param images: the image points of each board view
+    :param cam: the calibrated camera to measure
+    :return: the RMS of each view, and how many points each holds
+    """
+    counts = np.array([o.shape[1] for o in objects], dtype=int)
+    if not objects:
+        return np.array([], dtype=float), counts
+
+    matrix = np.asarray(cam.intrinsic, dtype=float).copy()
+    coefficients = np.asarray(
+        cam.distortion_coefs, dtype=float).reshape(-1).copy()
+    size = tuple(int(v) for v in np.asarray(cam.res).reshape(-1)[:2])
+    try:
+        *_, per_view = cv2.calibrateCameraExtended(
+            objects, images, size, matrix, coefficients, flags=_POSE_ONLY)
+    except cv2.error as exc:
+        logger.debug("pose only solve failed for %s: %s", cam.name, exc)
+        return np.full(len(objects), float("nan")), counts
+    return np.asarray(per_view, dtype=float).reshape(-1), counts
+
+
+def _pool(rms, counts):
+    """
+    Several views' RMS as one, weighted by the points each was measured over.
+
+    Pooling this way is associative, so an image pooled from its boards and
+    then pooled with other images gives what pooling every board at once
+    would: the per camera figure is OpenCV's own, however it is grouped.
+
+    :param rms: the RMS of each view
+    :param counts: how many points each view holds
+    """
+    total = int(np.sum(counts))
+    if total == 0:
+        return float("nan")
+    return float(np.sqrt(np.sum(np.asarray(rms) ** 2 * counts) / total))
+
+
+def per_view_reprojection(
+        detections, calibration_target, cams,
+        min_detections_per_board: int = 12,
+) -> tuple[dict[str, dict], dict[str, float]]:
+    """
+    The reprojection each camera's own calibration achieved, per image.
+
+    Each face of the target is an independent board with a pose of its own,
+    which is the model the calibration was solved under: ``cv2.calibrateCamera``
+    is handed one planar board per face per image and never asks the faces to
+    agree about where the target is. Measuring the result against a single
+    rigid pose for the whole target instead charges the camera for the
+    target's build error, which on a cube is most of the number.
+
+    :param detections: the detections the cameras were calibrated from
+    :param calibration_target: the target they were found with
+    :param cams: the calibrated cameras
+    :param min_detections_per_board: the per board minimum the calibration used
     :return: the per-view series per camera, and each camera's pooled RMS
     """
     per_view: dict[str, dict] = {}
     overall_rms: dict[str, float] = {}
     max_ims = int(detections.max_ims)
-    pose_failures = 0
 
     for cam_name in cams.get_names():
-        cam = cams[cam_name]
-        cam_detection = detections.get(cam=cam_name)
-        cam_has_any = cam_detection.has_data()
+        objects, images, of_image, has_detection = _board_views(
+            detections, calibration_target, cam_name, min_detections_per_board)
+        board_rms, board_points = _board_errors(objects, images, cams[cam_name])
+        of_image = np.array(of_image, dtype=int)
+        solved = ~np.isnan(board_rms) if board_rms.size else np.zeros(0, bool)
 
-        image_indices: list[int] = []
-        rms_px: list[float] = []
-        n_points: list[int] = []
-        has_detection: list[bool] = []
-        valid_pose: list[bool] = []
-
-        weighted_sq_sum = 0.0
-        total_points = 0
-
+        rms_px, n_points, valid_pose = [], [], []
         for im_idx in range(max_ims):
-            image_indices.append(im_idx)
-            if not cam_has_any:
+            here = solved & (of_image == im_idx) if solved.size else solved
+            if not np.any(here):
                 rms_px.append(float("nan"))
                 n_points.append(0)
-                has_detection.append(False)
                 valid_pose.append(False)
                 continue
-
-            im_detect = cam_detection.get(global_im_num=im_idx)
-            data = im_detect.get_data()
-            if data is None or len(data) == 0:
-                rms_px.append(float("nan"))
-                n_points.append(0)
-                has_detection.append(False)
-                valid_pose.append(False)
-                continue
-
-            has_detection.append(True)
-            n_points.append(int(data.shape[0]))
-
-            try:
-                pose = calibration_target.target_pose_in_cam_image(
-                    im_detect, cam, mode="nan")
-            except Exception as exc:
-                # A view with no pose is a NaN by design.  A target that
-                # raised is also a NaN, but it is not the same thing, so it
-                # is counted and said out loud once at the end.
-                logger.debug(
-                    "target_pose_in_cam_image raised for cam=%s im=%d: %s",
-                    cam_name, im_idx, exc)
-                pose_failures += 1
-                pose = np.ones((4, 4), dtype=float) * np.nan
-
-            pose_arr = np.asarray(pose, dtype=float)
-            if pose_arr.shape != (4, 4) or np.any(np.isnan(pose_arr)):
-                rms_px.append(float("nan"))
-                valid_pose.append(False)
-                continue
-
+            rms_px.append(_pool(board_rms[here], board_points[here]))
+            n_points.append(int(np.sum(board_points[here])))
             valid_pose.append(True)
-            keys = get_keys(data).astype(int)
-            object_points = np.asarray(
-                calibration_target.point_data[tuple(keys.T)],
-                dtype=np.float32).reshape(-1, 3)
-            image_points = np.asarray(
-                data[:, -2:], dtype=np.float32).reshape(-1, 2)
-            rvec, _ = cv2.Rodrigues(pose_arr[:3, :3].astype(np.float64))
-            tvec = pose_arr[:3, 3].astype(np.float64)
-            projected, _ = cv2.projectPoints(
-                object_points,
-                rvec,
-                tvec,
-                np.asarray(cam.intrinsic, dtype=np.float64),
-                np.asarray(cam.distortion_coefs, dtype=np.float64).reshape(-1),
-            )
-            projected = projected.reshape(-1, 2).astype(np.float32)
-            sq_err = np.sum((projected - image_points) ** 2, axis=1)
-            rms_px.append(
-                float(np.sqrt(np.mean(sq_err))) if sq_err.size else float("nan"))
-            if sq_err.size:
-                weighted_sq_sum += float(np.sum(sq_err))
-                total_points += int(sq_err.size)
 
         per_view[cam_name] = {
-            "image_indices": image_indices,
+            "image_indices": list(range(max_ims)),
             "rms_px": rms_px,
             "n_points": n_points,
             "has_detection": has_detection,
             "valid_pose": valid_pose,
         }
-        overall_rms[cam_name] = (
-            float(np.sqrt(weighted_sq_sum / total_points))
-            if total_points else float("nan"))
-
-    if pose_failures:
-        logger.warning(
-            "per_view_reprojection: %d target_pose_in_cam_image call(s) raised "
-            "exceptions (converted to NaN poses). Check debug logs for details.",
-            pose_failures,
-        )
+        overall_rms[cam_name] = _pool(board_rms[solved], board_points[solved])
 
     return per_view, overall_rms

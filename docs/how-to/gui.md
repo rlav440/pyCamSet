@@ -108,7 +108,8 @@ mean reprojection (D3.12) and an extrinsic pose view (D3.13).
 Lets the target's own points move as well, gauged against a fixed subset so the
 solve cannot simply scale everything away. Useful when the printed target is
 not quite the shape it was drawn as — which is
-[self-calibration](self-calibration.md), run for you.
+[stage 5 of a calibration](calibrate.md#stage-5-freeing-the-targets-geometry),
+run for you.
 
 Its diagnostics say how far the target moved (D4.7), how flat it stayed (D4.9),
 and how the result compares against phase 3 (D4.4), which is the number that

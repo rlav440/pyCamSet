@@ -1,6 +1,22 @@
 import importlib
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+# Never true at runtime -- the point of the module is not to import these.
+# It is here for the readers that only read: mkdocstrings' griffe resolves
+# a lazy name by searching for it, and lands on calibration_targets, whose
+# __all__ splices in a list it cannot evaluate, which --strict makes fatal.
+# Type checkers and editors follow the same declarations.
+if TYPE_CHECKING:
+    from .calibration import calibrate_cameras
+    from .calibration_targets.ccube.target import Ccube
+    from .calibration_targets.charuco.target import ChArUco
+    from .calibration_targets.puzzleboard.target import PuzzleBoard
+    from .calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
+    from .cameras import Camera, CameraSet
+    from .utils.calibration_report import CalibrationReport
+    from .utils.logs import setup_logging
+    from .utils.saving import load_CameraSet
 
 # A library must not decide where its records go. Every pyCamSet module logs
 # to a child of this logger; calibrate_cameras installs a coloured handler on
@@ -45,9 +61,9 @@ class _MissingPuzzleBoard:
     def __init__(self, *args, **kwargs):
         raise ImportError(
             "PuzzleBoard requires the optional 'puzzle_board' dependency, which is "
-            "not installed. Install it with: pip install 'pyCamSet[puzzle]' "
-            "(or pip install 'puzzle_board @ "
-            "git+https://github.com/PStelldinger/PuzzleBoard.git')."
+            "not installed. It is not on PyPI, so install it from source: "
+            "pip install 'puzzle_board @ "
+            "git+https://github.com/PStelldinger/PuzzleBoard.git'."
         )
 
 
@@ -57,9 +73,9 @@ class _MissingPuzzleBoardCube:
     def __init__(self, *args, **kwargs):
         raise ImportError(
             "PuzzleBoardCube requires the optional 'puzzle_board' dependency, which is "
-            "not installed. Install it with: pip install 'pyCamSet[puzzle]' "
-            "(or pip install 'puzzle_board @ "
-            "git+https://github.com/PStelldinger/PuzzleBoard.git')."
+            "not installed. It is not on PyPI, so install it from source: "
+            "pip install 'puzzle_board @ "
+            "git+https://github.com/PStelldinger/PuzzleBoard.git'."
         )
 
 

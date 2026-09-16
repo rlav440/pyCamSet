@@ -108,7 +108,10 @@ class Camera:
 
         self.intrinsic = intrinsic
         self.original_matrix = deepcopy(self.intrinsic)  # stored for reference #TODO rename to original_intrinsic_matrix
-        self.distortion_coefs = distortion_coefs
+        # cv2.calibrateCamera hands back a (1, 5) distortion, and the compiled
+        # distort kernel indexes it as a flat 5, so a camera built straight
+        # from an initial calibration could not project its own points.
+        self.distortion_coefs = np.reshape(np.asarray(distortion_coefs, dtype=float), -1)
         self.cam_to_world = None
 
         self.down_scale_factor = 0
@@ -123,7 +126,10 @@ class Camera:
         :param other: The other object. if it's not a camera, returns false.
         :return: True or false.
         """
-        if not isinstance(other, Camera):
+        # type, not isinstance: a TelecentricCamera holding the same arrays is
+        # a different model of the world, not an equal camera, and isinstance
+        # lets every subclass compare equal to its base.
+        if type(self) is not type(other):
             return False
         # np.allclose, not all(np.isclose(...)): isclose returns an array, and
         # all() of a list of arrays raises "truth value is ambiguous" -- which
@@ -219,7 +225,7 @@ class Camera:
 
         :param dist_coefs: A 5 parameter distortion model
         """
-        self.distortion_coefs = dist_coefs
+        self.distortion_coefs = np.reshape(np.asarray(dist_coefs, dtype=float), -1)
         self._update_state()
 
     def view_sensor_distortion(self, ax=None):
@@ -248,6 +254,62 @@ class Camera:
             ax.quiver(grid[:, 0], grid[:, 1], shift[:, 0], shift[:, 1], angles='xy', scale_units='xy', scale=1)
             ax.set_aspect('equal')
             ax.set_title(f"Distortion in camera {self.name}")
+
+    def _update_optical_state(self):
+        """
+        Recalculates the derived quantities that depend on the lens model.
+
+        Split out of ``_update_state`` because both of these read a focal
+        length out of ``intrinsic[0, 0]``, which a camera that is not a pinhole
+        does not have.
+        """
+        self.focal_point = self.position + self.intrinsic[
+            0, 0] / 1000 * self.view  # focal length along principle axis in mm
+        self.fov = self._cam_fov()
+
+    def undistort_points(self, uv: np.ndarray) -> np.ndarray:
+        """
+        Maps detected pixels back to where an undistorted lens would have put them.
+
+        :param uv: an (n, 2) array of detected pixel coordinates
+        :return: the same points with this camera's distortion removed
+        """
+        uv = np.asarray(uv, dtype=float)
+        if uv.ndim == 1:
+            uv = uv[None, ...]
+        if np.all(np.isclose(self.distortion_coefs, 0)):
+            return uv.copy()
+        return nb_undistort_arr(
+            np.ascontiguousarray(uv), self.intrinsic, np.asarray(self.distortion_coefs))
+
+    def to_param_vector(self) -> np.ndarray:
+        """
+        This camera's intrinsics in the order its bundle adjustment block reads them.
+
+        The handlers pack and unpack camera parameters through this pair rather
+        than reaching into a 3x3 matrix, so the layout lives with the model
+        that defines it.
+
+        :return: the per-camera intrinsic parameters
+        """
+        return np.concatenate([
+            self.intrinsic[[0, 0, 1, 1], [0, 2, 1, 2]].squeeze(),
+            np.reshape(self.distortion_coefs, -1),
+        ])
+
+    def from_param_vector(self, params: np.ndarray) -> None:
+        """
+        Writes intrinsics back in the layout :meth:`to_param_vector` produced.
+
+        :param params: the per-camera intrinsic parameters
+        """
+        intrinsic = np.eye(3)
+        intrinsic[0, 0] = params[0]
+        intrinsic[0, 2] = params[1]
+        intrinsic[1, 1] = params[2]
+        intrinsic[1, 2] = params[3]
+        self.intrinsic = intrinsic
+        self.distortion_coefs = np.asarray(params[4:])
 
     def _cam_fov(self):
         """
@@ -454,9 +516,7 @@ class Camera:
         else:
             self.sensor_map = None
             self.world_sensor_map = None
-        self.focal_point = self.position + self.intrinsic[
-            0, 0] / 1000 * self.view  # focal length along principle axis in mm
-        self.fov = self._cam_fov()
+        self._update_optical_state()
         self.proj = self._calc_projection_matrix()
 
     def _make_sensormap(self, mode='linear', distort=True):

@@ -50,12 +50,25 @@ The available blocks are:
 `free_point`
 :   A point whose 3D location is itself optimised, for problems where the target
     geometry is not held fixed. Swapping `template_points` for this is the whole
-    difference between a calibration and a
-    [self-calibration](../how-to/self-calibration.md).
+    difference between a calibration and one that
+    [frees the target's geometry](../how-to/calibrate.md#stage-5-freeing-the-targets-geometry).
+
+`telecentric_intrinsic`
+:   Camera frame point to pixels through a telecentric lens — affine, with a
+    division distortion model and a residual telecentricity term. Owns 6
+    parameters per camera.
+
+`telecentric_extrinsic`
+:   `rigidTform3d` keyed per camera, with **no translation**: none of the three
+    components is identifiable for a telecentric camera. See
+    [camera models](camera-models.md) for why, which is the more interesting
+    half of the story.
 
 Swapping a block, or adding one, changes the formulation without touching the
-optimiser — this is the seam that [parameter handlers](parameters.md) extend
-through.
+optimiser — this is the seam that [parameter handlers](parameters.md) and
+[camera models](camera-models.md) extend through. The first two blocks of every
+chain come from the cameras being calibrated, which is why the telecentric pair
+substitutes for `projection() + extrinsic3D()` without anything else changing.
 
 ## What a block looks like
 

@@ -50,3 +50,25 @@ def test_self_calibration_ccube(data_dir):
         f"Ccube self-calibration reprojection error {mean_reprojection:.3f} px "
         f"exceeds the {MAX_MEAN_REPROJECTION_PX} px baseline."
     )
+
+
+@pytest.mark.data
+@pytest.mark.slow
+def test_calibrate_cameras_can_solve_the_target_itself(data_dir):
+    """``optimise_target`` is the solve above, run from the one call."""
+    target = Ccube(
+        n_points=10, length=40, aruco_dict=aruco.DICT_6X6_1000, border_fraction=0.2
+    )
+
+    cams = calibrate_cameras(
+        data_dir / "calibration_ccube", target, save=False, optimise_target=True
+    )
+
+    assert isinstance(cams.calibration_handler, SelfBundleHandler)
+    mean_reprojection = np.mean(
+        np.linalg.norm(np.reshape(cams.calibration_result, (-1, 2)), axis=1)
+    )
+    assert mean_reprojection < MAX_MEAN_REPROJECTION_PX, (
+        f"Ccube self-calibration reprojection error {mean_reprojection:.3f} px "
+        f"exceeds the {MAX_MEAN_REPROJECTION_PX} px baseline."
+    )

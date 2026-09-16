@@ -209,3 +209,144 @@ def test_charuco_and_ccube_resolve_to_none_when_their_import_fails():
     assert "CHARUCO_NONE_OK" in result.stdout
     assert "CCUBE_NONE_OK" in result.stdout
     assert "ALL_FAILURE_BRANCH_CHECKS_PASSED" in result.stdout
+
+
+def test_target_names_are_all_exported():
+    """
+    Every registered target is named in ``calibration_targets.__all__``.
+
+    That list is written out rather than spliced in from ``TARGET_NAMES``,
+    because griffe parses this file to render the API documentation without
+    running it, and cannot evaluate a splice -- which ``mkdocs build
+    --strict`` turns into a failed build.  The cost of writing the names out
+    is that they can drift from the registry, so this is what stops them.
+    """
+    from pyCamSet import calibration_targets
+    from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES
+
+    missing = set(TARGET_NAMES) - set(calibration_targets.__all__)
+    assert not missing, (
+        f"registered but not exported: {sorted(missing)} -- add them to "
+        "pyCamSet/calibration_targets/__init__.py's __all__")
+
+    unknown = {
+        name for name in calibration_targets.__all__
+        if name not in TARGET_NAMES and not hasattr(calibration_targets, name)
+    }
+    assert not unknown, f"exported but resolves to nothing: {sorted(unknown)}"
+
+
+_CAIRO_REGISTRATION_SCRIPT = r'''
+import builtins, os, sys
+import pyCamSet.utils.cairo_dll_helper as helper
+
+real_import = builtins.__import__
+state = {"attempts": 0, "registered": []}
+
+def failing_first_import(name, *args, **kwargs):
+    """Fail the first `import cairosvg`, as a machine without Cairo would."""
+    if name == "cairosvg":
+        state["attempts"] += 1
+        if state["attempts"] == 1:
+            raise ImportError("simulated: no library called cairo-2 was found")
+    return real_import(name, *args, **kwargs)
+
+real_add = getattr(os, "add_dll_directory", None)
+
+def recording_add(path):
+    state["registered"].append(path)
+    return real_add(path) if real_add is not None else None
+
+helper._cairo_dll_registered = False
+builtins.__import__ = failing_first_import
+if real_add is not None:
+    os.add_dll_directory = recording_add
+try:
+    ok = helper.ensure_cairo_dll_available()
+finally:
+    builtins.__import__ = real_import
+    if real_add is not None:
+        os.add_dll_directory = real_add
+
+expected = os.path.join(sys.prefix, "Library", "bin")
+
+# The retry is the contract, and it holds everywhere.
+assert state["attempts"] >= 2, "the import was never retried"
+
+# Registration only has something to register under a conda layout.  A
+# stock Windows CPython, which is what CI runs, has no Library/bin and
+# nothing to add, so asserting it registered would be asserting the
+# machine rather than the code.
+if os.path.isdir(expected):
+    assert state["registered"] == [expected], state["registered"]
+    assert os.environ.get("PATH", "").startswith(expected), "PATH was not prepended"
+else:
+    assert state["registered"] == [], state["registered"]
+
+# Whether the retry then succeeded is the machine's business: a host with
+# no native Cairo at all cannot be rescued by pointing at a directory that
+# does not exist.  What must hold is that the helper reports it honestly.
+try:
+    import cairosvg  # noqa: F401
+    cairo_usable = True
+except Exception:
+    cairo_usable = False
+assert ok == cairo_usable, f"helper said {ok}, cairosvg is {cairo_usable}"
+print("CAIRO_REGISTRATION_BRANCH_OK")
+'''
+
+
+def test_the_cairo_registration_branch_recovers_a_failed_import():
+    """
+    The helper's whole purpose is the path a working machine never takes.
+
+    A machine that already finds Cairo takes the fast path and returns before
+    doing anything, so registering the DLL directory is never exercised there
+    -- which is every machine this suite usually runs on.  Failing the first
+    import is what makes the interesting half run.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _CAIRO_REGISTRATION_SCRIPT],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    )
+    assert result.returncode == 0, (
+        f"Subprocess failed (exit {result.returncode}):\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}")
+    assert "CAIRO_REGISTRATION_BRANCH_OK" in result.stdout
+
+
+def test_every_cairosvg_import_registers_the_dll_directory_first():
+    """
+    Ordering, at every site, is the guarantee this replaced.
+
+    ``ensure_cairo_dll_available`` used to run once at package import, before
+    anything could reach cairosvg.  Now that the package does not import the
+    targets, each site carries the ordering itself, and a site that imports
+    cairosvg first is a conda-Windows failure that no machine with Cairo on
+    its path will reproduce.
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "pyCamSet"
+    checked = 0
+    for path in root.rglob("*.py"):
+        # The helper imports cairosvg to find out whether it has to do
+        # anything.  It is the check, so it is not subject to it.
+        if path.name == "cairo_dll_helper.py":
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        helper_at = [i for i, s in enumerate(lines)
+                     if "import pyCamSet.utils.cairo_dll_helper" in s]
+        cairo_at = [i for i, s in enumerate(lines)
+                    if s.strip().startswith("import cairosvg")]
+        for site in cairo_at:
+            preceding = [i for i in helper_at if i < site]
+            assert preceding, (
+                f"{path.name}:{site + 1} imports cairosvg with no "
+                "cairo_dll_helper import before it")
+            assert site - max(preceding) <= 3, (
+                f"{path.name}:{site + 1} is too far from its helper import to "
+                "stay in step; keep them adjacent")
+            checked += 1
+    assert checked >= 6, f"expected at least six cairosvg sites, found {checked}"

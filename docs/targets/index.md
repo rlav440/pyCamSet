@@ -13,8 +13,80 @@ pyCamSet ships four:
 |---|---|---|---|
 | [`ChArUco`](charuco.md) | planar board | — | The simplest, and the most robust |
 | [`Ccube`](ccube.md) | cube, six ChArUco faces | — | For inward-facing rigs |
-| [`PuzzleBoard`](puzzleboard.md) | planar board | `pyCamSet[puzzle]` | Dense corners, decoded from a periodic code |
-| [`PuzzleBoardCube`](puzzleboard-cube.md) | cube, six PuzzleBoard faces | `pyCamSet[puzzle]` | PuzzleBoard density on Ccube geometry |
+| [`PuzzleBoard`](puzzleboard.md) | planar board | `puzzle_board` | Dense corners, decoded from a periodic code |
+| [`PuzzleBoardCube`](puzzleboard-cube.md) | cube, six PuzzleBoard faces | `puzzle_board` | PuzzleBoard density on Ccube geometry |
+
+Each of them draws itself, which is the quickest way to tell them apart. The
+cubes below turn.
+
+<div class="scene-row" markdown>
+
+<div markdown>
+```python exec="true" session="targets"
+import matplotlib.pyplot as plt
+
+from pyCamSet import ChArUco
+
+plt.figure(figsize=(7, 7))
+ChArUco(num_squares_x=10, num_squares_y=10, square_size=4).plot()
+```
+
+**[`ChArUco`](charuco.md)** — a chessboard whose white squares carry ArUco
+markers, so a partial view still says which corner is which.
+</div>
+
+<div markdown>
+```python exec="true" session="targets"
+from pyCamSet import Ccube
+
+scene = Ccube(n_points=10, length=40).plot(return_scene=True)
+scene.window_size = (700, 700)
+scene.show()
+```
+
+**[`Ccube`](ccube.md)** — six ChArUco faces on a cube, printed as one foldable
+net so the faces cannot be assembled in the wrong order.
+</div>
+
+</div>
+
+<div class="scene-row" markdown>
+
+<div markdown>
+```python exec="true" session="targets"
+import matplotlib.pyplot as plt
+
+from pyCamSet import PuzzleBoard
+
+plt.figure(figsize=(7, 7))
+
+target = PuzzleBoard(
+    num_squares_x=10,
+    num_squares_y=14,
+    square_size=2.0,
+)
+target.plot()
+```
+
+**[`PuzzleBoard`](puzzleboard.md)** — a planar board whose every corner is
+decoded from the periodic code the pattern is a window onto. Drawn coarse here;
+the default is 105x148 corners at a 2 mm pitch, on A4.
+</div>
+
+<div markdown>
+```python exec="true" session="targets"
+from pyCamSet import PuzzleBoardCube
+
+scene = PuzzleBoardCube(n_points=10, length=200.0).plot(return_scene=True)
+scene.window_size = (700, 700)
+scene.show()
+```
+
+**[`PuzzleBoardCube`](puzzleboard-cube.md)** — six disjoint windows of that same
+code, one per cube face, on Ccube geometry.
+</div>
+
+</div>
 
 The names are also what a target is addressed by in a settings dictionary or on
 a GUI form:

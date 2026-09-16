@@ -9,7 +9,7 @@ def make_cams(nc, plot=False):
     tforms = [
        make_4x4h_tform((0, b/nc*2*np.pi, 0), (0, 0, 0.2)) for b in range(nc)
     ]
-    cams = {f"cam_{i}":Camera(extrinsic=t) for i, t in enumerate(tforms)}
+    cams = {f"cam_{i}":Camera(extrinsic=t, name=f"cam_{i}") for i, t in enumerate(tforms)}
     ring_cameras = CameraSet(camera_dict=cams)
     if plot:
         ring_cameras.plot()

@@ -25,6 +25,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import pyCamSet.optimisation as optimisation_pkg
+import pyCamSet.optimisation.function_block_implementations as fb
 from pyCamSet.optimisation.matmul_map import (
     SPARSITY_PROBE_SAMPLES,
     convert_matrix,
@@ -282,9 +284,103 @@ def test_generated_jacobian_matches_finite_differences(ccube_problem):
     )
 
 
+TEMPLATE_DIR = Path(optimisation_pkg.__file__).parent / "template_functions"
+
+#: Every block chain whose generated kernels are checked in.  A chain that is
+#: not here still works -- it is generated on first use -- but it is not covered
+#: by the staleness guard below, and a user without write access to the install
+#: cannot run it.
+SHIPPED_CHAINS = {
+    "projection_extrinsic3D_template_points":
+        lambda: fb.projection() + fb.extrinsic3D() + fb.template_points(),
+    "projection_extrinsic3D_rigidTform3d_free_point":
+        lambda: fb.projection() + fb.extrinsic3D() + fb.rigidTform3d() + fb.free_point(),
+    "projection_extrinsic3D_free_point":
+        lambda: fb.projection() + fb.extrinsic3D() + fb.free_point(),
+    "telecentric_intrinsic_telecentric_extrinsic_template_points":
+        lambda: fb.telecentric_intrinsic() + fb.telecentric_extrinsic() + fb.template_points(),
+}
+
+
+def _template_hashes() -> dict[str, str]:
+    return {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(TEMPLATE_DIR.glob("*.py"))
+        if path.name != "__init__.py"
+    }
+
+
+def _regenerate_shipped_chains() -> None:
+    """Rewrite every checked-in kernel from its blocks.
+
+    The emitted source depends only on the chain -- the detection data supplies
+    call-time constants, not anything baked into the file -- so a fabricated
+    detection array is enough, and this needs neither the image corpus nor a
+    parameter handler.
+    """
+    rows = [[cam, im, key, 100.0 + key, 200.0 + key]
+            for cam in range(2) for im in range(3) for key in range(4)]
+    detections = np.array(rows, dtype=float)
+    maxima = {"max_cams": 2, "max_imgs": 3, "max_keys": 4}
+    for build in SHIPPED_CHAINS.values():
+        chain = build()
+        chain.make_full_loss_fn(detections, 1, maxima)
+        chain.make_jacobean(detections, 1, problem_maximums=maxima)
+
+
+@pytest.fixture
+def preserve_templates():
+    """Put the checked-in kernels back, whatever the test does to them.
+
+    These are tracked files now, so a test that deletes them to force
+    regeneration would otherwise leave the working tree dirty.
+    """
+    snapshot = {path.name: path.read_bytes() for path in TEMPLATE_DIR.glob("*.py")}
+    try:
+        yield TEMPLATE_DIR
+    finally:
+        for path in list(TEMPLATE_DIR.glob("*.py")):
+            if path.name not in snapshot:
+                path.unlink()
+        for name, data in snapshot.items():
+            (TEMPLATE_DIR / name).write_bytes(data)
+
+
+def test_checked_in_templates_match_their_blocks(preserve_templates):
+    """The generated kernels on disk must be what the current blocks produce.
+
+    Generation is skipped whenever the file already exists, so a checked-in
+    kernel is used in preference to the blocks it came from.  That is the point
+    -- it makes the shipped artefact reviewable and removes the need for a
+    writable install -- but it means editing a block without regenerating would
+    leave the optimiser silently running the old maths.  This is the check that
+    catches it, and it also catches a kernel that differs between platforms.
+    """
+    committed = _template_hashes()
+    assert committed, "no generated kernels are checked in"
+
+    for path in list(TEMPLATE_DIR.glob("*.py")):
+        if path.name != "__init__.py":
+            path.unlink()
+    _regenerate_shipped_chains()
+    regenerated = _template_hashes()
+
+    stale = sorted(name for name in set(committed) | set(regenerated)
+                   if committed.get(name) != regenerated.get(name))
+    assert not stale, (
+        "the generated kernels on disk are not what the current function "
+        "blocks produce:\n"
+        + "\n".join(
+            f"  {name}: committed {committed.get(name, '<missing>')[:16]} "
+            f"-> regenerated {regenerated.get(name, '<missing>')[:16]}"
+            for name in stale)
+        + "\n\nRegenerate them and commit the result; see SHIPPED_CHAINS."
+    )
+
+
 @pytest.mark.data
 @pytest.mark.slow
-def test_codegen_is_reproducible(data_dir):
+def test_codegen_is_reproducible(data_dir, preserve_templates):
     """Regenerating the templates must produce byte-identical source.
 
     Codegen used to probe with the global numpy RNG, so the emitted source --

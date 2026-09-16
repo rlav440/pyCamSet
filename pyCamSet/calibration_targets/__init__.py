@@ -16,12 +16,22 @@ board does not also import PuzzleBoard's optional detector::
 from .core import AbstractTarget, TargetDetection, ImageDetection, FaceToShape
 from .core.target_registry import TARGET_NAMES, target_class
 
+# The target names are written out rather than spliced in from
+# TARGET_NAMES.  __all__ is read by tools that parse this file without
+# running it -- griffe, which renders the API documentation, is one, and it
+# cannot evaluate a name, so under `mkdocs build --strict` an unevaluable
+# entry is a failed build.  test_target_names_are_all_exported keeps the two
+# lists in step, so a target added to TARGET_CLASSES and not to here fails a
+# test rather than quietly going unexported.
 __all__ = [
     "AbstractTarget",
     "TargetDetection",
     "ImageDetection",
     "FaceToShape",
-    *TARGET_NAMES,
+    "Ccube",
+    "ChArUco",
+    "PuzzleBoard",
+    "PuzzleBoardCube",
 ]
 
 

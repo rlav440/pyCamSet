@@ -1,6 +1,7 @@
 from __future__ import annotations
 import datetime
 import logging
+from dataclasses import dataclass
 from math import copysign
 from copy import copy
 import cv2
@@ -20,6 +21,7 @@ from pathlib import Path
 
 from pyCamSet.utils.general_utils import h_tform, get_close_square_tuple
 from pyCamSet.utils.gui_safety import refuse_window_inside_qt
+from pyCamSet.utils.calibration_report import reprojection_residuals
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc, n_inv_pose
 
 logger = logging.getLogger(__name__)
@@ -101,15 +103,33 @@ def finalise_figure(figure, name: str, show: bool = True,
     :param save_dir: a directory to write ``<name>.png`` into
     :return: where it was written, if it was
     """
-    written = None
-    if save_dir is not None:
-        written = Path(save_dir) / f"{name}.png"
-        written.parent.mkdir(parents=True, exist_ok=True)
-        figure.savefig(written, dpi=150, bbox_inches="tight")
+    written = save_figure(figure, name, save_dir)
     if show:
         plt.show()
     else:
         plt.close(figure)
+    return written
+
+
+def save_figure(figure, name: str,
+                save_dir: Path | str | None) -> Path | None:
+    """
+    Write a figure into a directory and leave it open.
+
+    What :func:`finalise_figure` does without disposing of the figure, for a
+    caller drawing several: ``plt.show()`` is global, so closing the earlier
+    ones is what leaves a window with only the last figure in it.
+
+    :param figure: the figure to write
+    :param name: the file stem to write it under
+    :param save_dir: a directory to write ``<name>.png`` into, or None
+    :return: where it was written, if it was
+    """
+    if save_dir is None:
+        return None
+    written = Path(save_dir) / f"{name}.png"
+    written.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(written, dpi=150, bbox_inches="tight")
     return written
 
 
@@ -205,7 +225,7 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
     if s_per is None:
         s_per = [1] * n
 
-    fig, axs = plt.subplots(1,n,)
+    fig, axs = plt.subplots(1, n, layout="constrained")
 
     r_ax = axs.ravel() if n > 1 else [axs]
 
@@ -336,6 +356,278 @@ def fancy_confidence_contours(x,y, ax, ranges):
 
  
 #from pyCamera.optimisers.base_optimiser import AbstractParamHandler
+@dataclass
+class CalibrationDiagnostics:
+    """
+    What a calibration's diagnostic plots are drawn from, computed once.
+
+    Every view below needs the detections triangulated and carried back into
+    the target's own frame, which is the expensive part; building this once
+    means a page or a report can draw the views it wants individually rather
+    than paying for the triangulation per plot.
+    """
+
+    cams: 'CameraSet'
+    detection: 'TargetDetection'
+    residuals: np.ndarray       #: the solver's reprojection residuals, in pixels
+    euclidean_err: np.ndarray   #: one Euclidean error per observation, in pixels
+    e_lim: float                #: the colour limit every view shares
+    scene_points: np.ndarray    #: triangulated features, in scene coordinates
+    object_points: np.ndarray   #: the same features, in the target's own frame
+    point_error: np.ndarray     #: the mean reprojection error of each of them
+    rejected: int               #: features too far from the target to be real
+    accuracy: np.ndarray        #: per feature distance from where it was drawn, mm
+    precision: np.ndarray       #: per feature scatter about its own mean, mm
+    feature_error: np.ndarray   #: the mean reprojection error of each feature
+
+    @classmethod
+    def from_results(cls, o_results: dict, param_handler) -> 'CalibrationDiagnostics':
+        """
+        :param o_results: the optimisation results, as ``x`` and ``err``
+        :param param_handler: the parameter handler that organised the solve
+        :return: everything the views below draw
+        """
+        residuals, _ = reprojection_residuals(o_results['err'], param_handler)
+        euclidean_err = np.linalg.norm(residuals.reshape(-1, 2), axis=1)
+
+        detection = param_handler.get_detection()
+        cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
+
+        to_reconstruct = detection.sort(['key', 'global_im_num']).get_data()
+        reconstructed, subset, where_mask, _ = cams.multi_cam_triangulate(
+            to_reconstruct, return_used=True)
+        point_error = np.array(
+            [np.mean(euclidean_err[datum]) for datum in where_mask])
+
+        # one row per reconstructed point, saying which image it was seen in
+        # and which target feature it is
+        inv = np.sort(np.unique(subset[:, 1:-2], axis=0, return_index=True)[1])
+        im_nums = subset[inv, 1]
+        keys = subset[inv, 2:-2]
+
+        mean_dist = _target_mean_distance(param_handler.target)
+        kept, object_points, feature_locs, feature_errs = [], [], {}, {}
+        for point, im, key, err in zip(reconstructed, im_nums, keys, point_error):
+            inv_pose = np.empty(12)
+            n_inv_pose(poses[int(im)], inv_pose)
+            obj_point = np.empty(3)
+            n_htform_prealloc(point, inv_pose, obj_point)
+            # a point that lands further from the target's centre than the
+            # target extends is a failed triangulation, not a measurement
+            good = bool(np.linalg.norm(obj_point) < 3 * mean_dist)
+            kept.append(good)
+            if good:
+                object_points.append(obj_point)
+                feature_locs.setdefault(tuple(key.astype(int)), []).append(obj_point)
+                feature_errs.setdefault(tuple(key.astype(int)), []).append(err)
+
+        kept = np.array(kept, dtype=bool)
+        accuracy, precision, feature_error = _feature_consistency(
+            param_handler.target, feature_locs, feature_errs)
+
+        return cls(
+            cams=cams,
+            detection=detection,
+            residuals=residuals,
+            euclidean_err=euclidean_err,
+            e_lim=float(np.median(euclidean_err) * 3),
+            scene_points=reconstructed[:len(kept)][kept],
+            object_points=np.array(object_points),
+            point_error=point_error[:len(kept)][kept],
+            rejected=int(np.sum(~kept)),
+            accuracy=accuracy,
+            precision=precision,
+            feature_error=feature_error,
+        )
+
+
+def _reject_outliers(data, m=2.):
+    """The data within m median absolute deviations of its median."""
+    d = np.abs(data - np.median(data))
+    mdev = np.median(d)
+    s = d / mdev if mdev else 0.
+    return data[s < m]
+
+
+def _feature_consistency(target, feature_locs: dict, feature_errs: dict):
+    """
+    How close each target feature landed to where it was drawn, and to itself.
+
+    Accuracy is the mean distance from the drawn location and precision the
+    scatter about wherever the feature actually landed, so the two separate a
+    target that is misprinted -- precise but inaccurate -- from one that is
+    badly observed, which is neither.  A feature seen in two images or fewer
+    has no scatter worth the name and is left out.
+
+    :param target: the calibration target, as drawn
+    :param feature_locs: target frame locations, keyed by feature
+    :param feature_errs: reprojection errors, keyed the same way
+    :return: accuracy and precision in millimetres, and the mean error, per feature
+    """
+    accuracy, precision, errors = [], [], []
+    for (key, locations), errs in zip(feature_locs.items(), feature_errs.values()):
+        if len(locations) <= 2:
+            continue
+        drawn = target.original_points[(0, key[0]) if len(key) == 1 else key]
+        dif = np.array(locations) - drawn
+        accuracy.append(np.mean(np.linalg.norm(dif, axis=1)))
+        precision.append(np.mean(_reject_outliers(
+            np.linalg.norm(dif - np.mean(dif, axis=0), axis=1))))
+        errors.append(np.mean(errs))
+    # the library works in metres and a printed target is discussed in mm
+    return (np.array(accuracy) * 1000, np.array(precision) * 1000,
+            np.array(errors))
+
+
+def per_camera_coverage(diagnostics: CalibrationDiagnostics) -> plt.Figure:
+    """
+    Where on each sensor the error falls, and which way it points.
+
+    A feature is coloured by its Euclidean error, signed by whether the
+    residual points away from the principal point or back towards it: a lens
+    model that has not absorbed the distortion leaves a sensor red at one
+    radius and blue at another, which unsigned error hides.
+
+    :param diagnostics: the calibration to draw
+    :return: the figure
+    """
+    cams, detection = diagnostics.cams, diagnostics.detection
+    n_cams = cams.get_n_cams()
+    windows = get_close_square_tuple(n_cams)
+    fig, axes = plt.subplots(*windows[::-1], layout="constrained")
+    ax = np.atleast_1d(axes).ravel()
+
+    err_buff = copy(diagnostics.euclidean_err)
+    full_err = diagnostics.residuals.reshape(-1, 2)
+
+    im = None
+    for cam_detection in detection.get_cam_list():
+        datum = cam_detection.get_data()
+        if datum is None:
+            continue
+        cam_n = int(datum[0, 0])
+        p_x = cams[cam_n].intrinsic[0, 2]
+        p_y = cams[cam_n].intrinsic[1, 2]
+        loc_x, loc_y = datum[:, -2], datum[:, -1]
+        error, err_buff = err_buff[:len(datum)], err_buff[len(datum):]
+        err, full_err = full_err[:len(datum)], full_err[len(datum):]
+        away = np.copysign(np.ones(datum.shape[0]),
+                           (loc_x - p_x) * err[:, 0] + (loc_y - p_y) * err[:, 1])
+
+        im = ax[cam_n].scatter(loc_x, loc_y, c=error * away, s=2, alpha=0.4,
+                               vmin=-diagnostics.e_lim, vmax=diagnostics.e_lim,
+                               cmap="coolwarm")
+        ax[cam_n].set_title(
+            f"{detection.cam_names[cam_n]} mean error {np.mean(error):.2f}",
+            fontsize=8)
+        ax[cam_n].set_xlim([0, cams[cam_n].res[0]])
+        ax[cam_n].set_ylim([0, cams[cam_n].res[1]])
+        ax[cam_n].set_aspect('equal')
+
+    if n_cams > 15:
+        for axs in ax:
+            axs.set_xticks([])
+            axs.set_yticks([])
+
+    for i in range(n_cams, windows[0] * windows[1]):
+        fig.delaxes(ax[i])
+
+    if im is not None:
+        cbar = fig.colorbar(im, ax=list(ax[:n_cams]))
+        cbar.set_label("Polarised Reprojection Error (px)")
+    fig.suptitle("Per Camera Coverage")
+    return fig
+
+
+def reconstruction_scene(diagnostics: CalibrationDiagnostics) -> 'pv.Plotter':
+    """
+    The triangulated features where the cameras put them, with the cameras.
+
+    :param diagnostics: the calibration to draw
+    :return: the plotter, to show or screenshot
+    """
+    pv.set_plot_theme('document')
+    plotter = pv.Plotter()
+    plotter.title = "Reconstructed Points in Scene Coordinates"
+    plotter.add_text("Reconstructed Points in Scene Coordinates",
+                     position='upper_edge', font_size=10, font="times")
+    diagnostics.cams.get_scene(scene=plotter, labels=False)
+    if len(diagnostics.scene_points):
+        points = pv.PolyData(diagnostics.scene_points)
+        points['Reprojection error (px)'] = diagnostics.point_error
+        plotter.add_mesh(points, render_points_as_spheres=True, point_size=2,
+                         clim=[0, diagnostics.e_lim])
+    else:
+        plotter.add_text("No points within outlier threshold",
+                         position='lower_left', font_size=10, font='times')
+    return plotter
+
+
+def target_space_scene(diagnostics: CalibrationDiagnostics,
+                       title: str = "Reconstructed Points in Target Coordinates",
+                       ) -> 'pv.Plotter':
+    """
+    The same features carried back into the target's own frame.
+
+    Every image's view of a feature lands on top of every other image's, so
+    the size of each cluster is how consistently the target was measured, and
+    the shape of the cloud is the target as the cameras believe it to be.
+
+    :param diagnostics: the calibration to draw
+    :param title: what to write across the top of it
+    :return: the plotter, to show or screenshot
+    """
+    pv.set_plot_theme('document')
+    plotter = pv.Plotter()
+    plotter.title = title
+    plotter.add_text(title, position="upper_edge", font_size=10, font='times')
+    plotter.add_text(f"{diagnostics.rejected} erroneous Points",
+                     position='lower_left', font_size=10, font='times')
+    points = pv.PolyData(diagnostics.object_points)
+    points['Reprojection Error (px)'] = diagnostics.point_error
+    plotter.add_mesh(points, render_points_as_spheres=True, point_size=4,
+                     clim=[0, diagnostics.e_lim])
+    return plotter
+
+
+def accuracy_precision_plot(diagnostics: CalibrationDiagnostics,
+                            title: str = "Accuracy vs precision of target features",
+                            ) -> plt.Figure:
+    """
+    How consistently each target feature was recovered, against how far from
+    its drawn location it was recovered.
+
+    One point per feature seen in more than two images, coloured by the
+    reprojection error it carries.  The diagonal is where the two are equal:
+    a feature below it is reproduced more tightly than it is placed, which is
+    a target printed wrong rather than one observed badly.
+
+    :param diagnostics: the calibration to draw
+    :param title: what to write above it
+    :return: the figure
+    """
+    fig, ax = plt.subplots(layout="constrained")
+    ax.set_title(title)
+    ax.set_xlabel("Accuracy, mean distance from expected location (mm)")
+    ax.set_ylabel("Precision, mean distance from mean location (mm)")
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    if len(diagnostics.accuracy) == 0:
+        # a feature needs to be seen more than twice to have scattered at all
+        ax.text(0.5, 0.5, "n/a for single timestep images", ha='center',
+                transform=ax.transAxes)
+        return fig
+
+    marks = ax.scatter(diagnostics.accuracy, diagnostics.precision, s=8,
+                       c=np.clip(diagnostics.feature_error, 0, diagnostics.e_lim),
+                       cmap='viridis', vmin=0, vmax=diagnostics.e_lim)
+    line = np.linspace(0, np.amax(diagnostics.accuracy), 100)
+    ax.plot(line, line, color='r', lw=1)
+    fig.colorbar(marks, ax=ax, label="Reprojection error (px)")
+    return fig
+
+
 def visualise_calibration(
         o_results:dict,
         param_handler,#: AbstractParamHandler
@@ -355,181 +647,32 @@ def visualise_calibration(
     :param save_dir: a directory to write the figures into
     :return: the files written, if any
     """
-    written: list[Path] = []
     if not _PYVISTA_OK:
         raise ImportError("pyvista is required for visualisation. Install with: pip install pyvista")
     import os as _os
     if _os.name != "nt" and not _os.environ.get("DISPLAY") and not _os.environ.get("PYVISTA_OFF_SCREEN"):
         _os.environ["PYVISTA_OFF_SCREEN"] = "true"
-    euclidean_err = np.linalg.norm(np.reshape(o_results['err'], (-1,2)), axis=1)
-    e_lim = np.median(euclidean_err) * 3
-    # print("Calibration Standard Deviation of euclidean Error:", np.std(euclidean_err))
-    # raise ValueError
 
-    detection = param_handler.get_detection()
-    cams, poses = param_handler.get_camset(o_results['x'], return_pose=True)
+    diagnostics = CalibrationDiagnostics.from_results(o_results, param_handler)
 
-    error_figure = cluster_plot([o_results['err']], alphas=[0.1])
-
-    # the coverage for each camera
-    n_cams = cams.get_n_cams()
-    windows = get_close_square_tuple(n_cams)
-    fig, axes = plt.subplots(*windows[::-1])
-    ax = axes.ravel()
-    err_buff = copy(euclidean_err)
-    full_err = copy(o_results['err'].reshape((-1,2)))
-
-    if param_handler.missing_poses is not None:
-        icam_n = np.cumsum(~param_handler.missing_poses) - 1
-
-
-    for idc_cam, cam_detection in enumerate(detection.get_cam_list()):
-        datum = cam_detection.get_data()
-        if datum is not None:
-            cam_n = int(datum[0,0])
-
-            p_x = cams[cam_n].intrinsic[0,2]
-            p_y = cams[cam_n].intrinsic[1,2]
-
-            loc_x, loc_y = datum[:,-2], datum[:, -1]
-            error, err_buff = err_buff[:len(datum)], err_buff[len(datum):]
-            m_error = np.mean(error)
-            err, full_err = full_err[:len(datum)], full_err[len(datum):]
-            #what we can do is calculate if the error is going away or towards the principle axis
-            away_vec = np.copysign(np.ones(datum.shape[0]), (loc_x - p_x) * err[:, 0] + (loc_y - p_y) * err[:, 1])
-
-            
-            im = ax[cam_n].scatter(loc_x, loc_y, c=error*away_vec, vmin=-e_lim, vmax=e_lim, s=2, alpha=0.4, cmap="coolwarm")
-            ax[cam_n].set_title(detection.cam_names[cam_n] + f" mean error {m_error:.2f}", fontsize=8)
-            ax[cam_n].set_xlim([0, cams[cam_n].res[0]])
-            ax[cam_n].set_ylim([0, cams[cam_n].res[1]])
-            ax[cam_n].set_aspect('equal')
-
-    if n_cams > 15:
-        for axs in ax:
-            axs.set_xticks([])
-            axs.set_yticks([])
-
-    for i in range(n_cams, windows[0]*windows[1]):
-        fig.delaxes(ax[i])
-
-    cbar = fig.colorbar(im, ax=axes.ravel().tolist())
-    cbar.set_label("Polarised Reprojection Error (px)")
-    fig.suptitle("Per Camera Coverage")
-
-    # the error distribution is finalised alongside the coverage plot because
-    # plt.show() is global: showing either shows both
-    written += [path for path in (
-        finalise_figure(error_figure, "error_distribution",
-                        show=False, save_dir=save_dir),
-        finalise_figure(fig, "per_camera_coverage", show, save_dir),
-    ) if path is not None]
-
-    #err_buff = copy.copy(euclidean_err)
-    to_reconstruct = detection.sort(['key', 'global_im_num']).get_data()
-    ## Triangulation of points in world space
-    reconstructed, reconstructed_subset,  where_mask, _ = cams.multi_cam_triangulate(to_reconstruct, return_used=True)
-    error_subset = np.array([np.mean(euclidean_err[datum]) for datum in where_mask])
-    # at the same time
-    pv.set_plot_theme('document')
-    pv.global_theme.multi_rendering_splitting_position = 0.50
-    plotter = pv.Plotter(shape='1|2')
-    plotter.title = "Calibration Evaluation"
-    plotter.subplot(0)
-    plotter.add_text("Reconstructed Points in Scene Coordinates", position='upper_edge', font_size=10, font="times")
-    cams.get_scene(scene=plotter, labels=False)
-    ## Triangulation of points in target space
-    inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True,)[1])
-    im_nums = reconstructed_subset[inv, 1]
-    keys = reconstructed_subset[inv, 2:-2]
-    #point_errors = error_subset[inv]
-    mask = []
-    point_locs = {}
-    col_locs = {}
-    raw_obj_points  = []
-    errors = []
-    mean_dist = _target_mean_distance(param_handler.target)
-    bad_points = 0
-    for point, im, key, c in zip(reconstructed, im_nums, keys, error_subset):
-        inv_pose = np.empty(12)
-        n_inv_pose(poses[int(im)], inv_pose)
-        obj_point = np.empty(3)
-        n_htform_prealloc(point, inv_pose, obj_point)
-        mask.append(np.linalg.norm(obj_point) < 3 * mean_dist)
-        if np.linalg.norm(obj_point) > 3 * mean_dist:
-            bad_points = bad_points + 1
-        else:
-            # # get the error of the point?
-            raw_obj_points.append(obj_point)
-            point_locs.setdefault(tuple(key.astype(int)), []).append(obj_point)
-            col_locs.setdefault(tuple(key.astype(int)), []).append(c)
-            errors.append(c)
-
-    m = np.array(mask, dtype=bool)
-    if np.any(m):
-        seen_pts = pv.PolyData(reconstructed[m])
-        seen_pts['Reprojection error (px)'] = error_subset[m]
-        plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=2, clim=[0, e_lim])
+    written: list[Path | None] = []
+    figures = [
+        (cluster_plot([diagnostics.residuals], alphas=[0.1]), "error_distribution"),
+        (per_camera_coverage(diagnostics), "per_camera_coverage"),
+        (accuracy_precision_plot(diagnostics), "accuracy_precision"),
+    ]
+    # plt.show() is global -- one call draws every figure that is still open --
+    # so they are written first and then disposed of together
+    written += [save_figure(figure, name, save_dir) for figure, name in figures]
+    if show:
+        plt.show()
     else:
-        plotter.add_text(
-            "No points within outlier threshold",
-            position='upper_edge', font_size=10, font='times'
-        )
+        for figure, _ in figures:
+            plt.close(figure)
 
-    plotter.subplot(1)
-    plotter.add_text("Reconstructed Points in Target Coordinates", position="upper_edge", font_size=10, font='times')
-    plotter.add_text(f"{bad_points} erroneous Points", position='lower_left', font_size=10, font='times')
-
-    cube_locs = pv.PolyData(np.array(raw_obj_points))
-    cube_locs['Reprojection Error (px)'] = errors
-    plotter.add_mesh(cube_locs, render_points_as_spheres=True, point_size=4, clim=[0, e_lim])
-
-    def reject_outliers(data, m=2.):
-        d = np.abs(data - np.median(data))
-        mdev = np.median(d)
-        s = d / mdev if mdev else 0.
-        return data[s < m]
-
-    # precision v. accuracy in the recovered object shape
-    plotter.subplot(2)
-    raw_data = []
-    err_buff = []
-    for (key, point_loc), err in zip(point_locs.items(), col_locs.values()):
-        if len(point_loc) > 2:
-            if len(key) == 1:
-                key = (0, key[0])
-            obj_point = param_handler.target.original_points[key]
-            data_array = np.array(point_loc)
-            dif = data_array - obj_point
-            mean_err = np.mean(np.linalg.norm(dif, axis=1))
-            obj_scatter = np.mean(reject_outliers(np.linalg.norm(dif - np.mean(dif, axis=0), axis=1)))
-            raw_data.append([mean_err, obj_scatter])
-            err_buff.append(np.mean(err))
-    raw_data = np.array(raw_data)
-    err_buff = np.array(err_buff)
-
-    if len(raw_data) > 0:
-        norm = plt.Normalize()
-        colours = (plt.cm.viridis(norm(np.clip(err_buff, 0, e_lim)))[:,:3] * 255).astype(np.uint8)
-
-        chart = pv.Chart2D()
-        chart.title = 'Accuracy vs Precision of target feature locations'
-        chart.y_label = 'Precision, mean distance from mean feature location (mm)'
-        chart.x_label = 'Accuracy, mean distance from expected location (mm)'
-        for r0, r1, c in zip(raw_data[:,0], raw_data[:,1], colours):
-            _ = chart.scatter([r0 * 1000], [r1 * 1000], color=c, size=4)
-        line = np.linspace(0, np.amax(raw_data[:,0]) * 1000, 100)
-        _ = chart.line(line, line, color='r')
-        plotter.add_chart(chart)
-
-    else:
-
-        plotter.add_text("n/a for single timestep images", position='upper_edge', font='times')
-
-    reconstruction = finalise_plotter(
-        plotter, "reconstruction", show, save_dir)
-    if reconstruction is not None:
-        written.append(reconstruction)
+    for build, name in ((reconstruction_scene, "reconstruction"),
+                        (target_space_scene, "target_coordinates")):
+        written.append(finalise_plotter(build(diagnostics), name, show, save_dir))
 
     # special_plots opens and drives its own window, and its signature is part
     # of the parameter handler API that lives outside this repository, so it
@@ -538,10 +681,12 @@ def visualise_calibration(
     if show:
         param_handler.special_plots(o_results['x'])
 
+    written = [path for path in written if path is not None]
     if written:
         logger.info(f"Wrote {len(written)} calibration figures to "
                     f"{Path(written[0]).parent}")
     return written
+
 
 
 def _pv_polydata_to_o3d_lineset(pv_mesh):

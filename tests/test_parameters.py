@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from cv2 import aruco
 
-from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_DETECTOR
+from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE, ARUCO2_DETECTOR
 from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
 from pyCamSet.calibration_targets.core.parameters import (
     NO_PARAMETERS,
@@ -553,6 +553,11 @@ def test_a_target_builds_from_the_arguments_it_declares(name, cls):
     still collect what it needs to build one."""
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
+    if name == "ChArUco2" and not ARUCO2_AVAILABLE:
+        # ChArUco2 has no aruco1 equivalent -- it cannot be built at
+        # all without aruco2, unlike ChArUco/Ccube's aruco2 branch.
+        pytest.skip("aruco2 is not installed")
+
     spec = {"type": name, **cls.construction_parameters().defaults()}
     target = build_target(spec)
 
@@ -712,28 +717,34 @@ def test_a_target_names_its_own_file_from_its_own_arguments(name, cls):
         assert "/" not in filename and filename.strip() == filename
 
 
-def test_every_target_writes_itself_as_every_format(tmp_path):
+@pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
+def test_every_target_writes_itself_as_every_format(tmp_path, name, cls):
     """One export path, rather than the four copies of the same dispatch
     the target generators each carried."""
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
+    if name == "ChArUco2" and not ARUCO2_AVAILABLE:
+        # ChArUco2 has no aruco1 equivalent -- it cannot be built at
+        # all without aruco2, unlike ChArUco/Ccube's aruco2 branch.
+        pytest.skip("aruco2 is not installed")
+
     # Small enough to draw quickly; the point is the path, not the page.
     small = {
         "ChArUco": {"num_squares_x": 4, "num_squares_y": 4, "square_size": 10.0},
+        "ChArUco2": {"num_squares_x": 4, "num_squares_y": 4, "square_size": 10.0},
         "Ccube": {"n_points": 4, "length": 20.0},
         "PuzzleBoard": {"num_squares_x": 8, "num_squares_y": 8, "square_size": 2.0},
         "PuzzleBoardCube": {"n_points": 5, "length": 100.0},
     }
-    for name, cls in _targets():
-        target = build_target({"type": name, **small[name]})
-        options = cls.export_parameters().defaults()
-        written = target.save_printable(
-            tmp_path / cls.printable_name(small[name], "svg"), "svg", **options)
+    target = build_target({"type": name, **small[name]})
+    options = cls.export_parameters().defaults()
+    written = target.save_printable(
+        tmp_path / cls.printable_name(small[name], "svg"), "svg", **options)
 
-        assert written.exists() and written.stat().st_size > 0, name
+    assert written.exists() and written.stat().st_size > 0, name
 
-        with pytest.raises(ValueError, match="cannot be written as"):
-            target.save_printable(tmp_path / "x", "postcard", **options)
+    with pytest.raises(ValueError, match="cannot be written as"):
+        target.save_printable(tmp_path / "x", "postcard", **options)
 
 
 @pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from .calibration import calibrate_cameras
     from .calibration_targets.ccube.target import Ccube
     from .calibration_targets.charuco.target import ChArUco
+    from .calibration_targets.charuco2.target import ChArUco2
     from .calibration_targets.puzzleboard.target import PuzzleBoard
     from .calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
     from .cameras import Camera, CameraSet
@@ -38,6 +39,7 @@ __all__ = [
     "CalibrationReport",
     "calibrate_cameras",
     "ChArUco",
+    "ChArUco2",
     "Ccube",
     "PuzzleBoard",
     "PuzzleBoardCube",
@@ -89,6 +91,16 @@ def _resolve_charuco() -> Any:
     return ChArUco
 
 
+def _resolve_charuco2() -> Any:
+    try:
+        from .calibration_targets.charuco2.target import ChArUco2
+    except Exception:
+        # ChArUco2 has no aruco1 equivalent -- it cannot be built at all
+        # without aruco2, which may not be installed in all environments.
+        return None
+    return ChArUco2
+
+
 def _resolve_ccube() -> Any:
     try:
         from .calibration_targets.ccube.target import Ccube
@@ -128,6 +140,7 @@ def _resolve_puzzleboard_cube() -> Any:
 # `_Missing...` placeholder, or `None`); see the resolvers above.
 _LAZY_RESOLVERS: dict[str, Any] = {
     "ChArUco": _resolve_charuco,
+    "ChArUco2": _resolve_charuco2,
     "Ccube": _resolve_ccube,
     "PuzzleBoard": _resolve_puzzleboard,
     "PuzzleBoardCube": _resolve_puzzleboard_cube,

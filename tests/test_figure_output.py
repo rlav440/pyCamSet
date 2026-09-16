@@ -251,7 +251,7 @@ def test_special_plots_are_skipped_when_nobody_is_watching(
 # The docs draw every target by running `target.plot()` while the site is
 # built, so a target that cannot draw itself headlessly breaks the docs build
 # rather than anything a user would see.  These say so here instead.
-PLANAR_TARGETS = ["ChArUco", "PuzzleBoard"]
+PLANAR_TARGETS = ["ChArUco", "ChArUco2", "PuzzleBoard"]
 CUBE_TARGETS = ["Ccube", "PuzzleBoardCube"]
 
 
@@ -286,6 +286,12 @@ def test_a_flat_target_draws_itself_into_a_figure(name, no_new_figures):
     """
     _skip_without_cairo()
     from pyCamSet.calibration_targets import target_class
+    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
+
+    if name == "ChArUco2" and not ARUCO2_AVAILABLE:
+        # ChArUco2 has no aruco1 equivalent -- it cannot be built at all
+        # without aruco2, unlike ChArUco/PuzzleBoard's own dependencies.
+        pytest.skip("aruco2 is not installed")
 
     figure = plt.figure()
     try:

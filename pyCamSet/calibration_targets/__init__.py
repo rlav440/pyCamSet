@@ -30,6 +30,7 @@ __all__ = [
     "FaceToShape",
     "Ccube",
     "ChArUco",
+    "ChArUco2",
     "PuzzleBoard",
     "PuzzleBoardCube",
 ]

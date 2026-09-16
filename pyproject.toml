@@ -9,6 +9,8 @@ version = "1.1.2"
 description = "Object oriented cameras for computer vision"
 readme = "README.md"
 requires-python = ">=3.11"
+# pyCamSet's own code only: the unpackaged third_party/aruco2 submodule has its
+# own licences (Apache-2.0, and MIT for one file), listed in NOTICE.
 license = "Apache-2.0"
 authors = [
     {name = "Robin Laven", email = "r.laven@auckland.ac.nz"},
@@ -97,6 +99,9 @@ viz = ["open3d"]
 #
 #   pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
 #
+# No ``aruco2`` extra either, and for the same reason: aruco2 is not on PyPI,
+# so there is nothing to pin. Build it from the third_party/aruco2 submodule
+# instead, as "Installing the aruco2 backend" in CITATION.md spells out.
 # Defined in terms of the others so it cannot drift out of step with them --
 # the setup.cfg version had already lost pytest-cov this way.
 all = ["pyCamSet[dev,optimisation,gui,viz]"]
@@ -115,7 +120,10 @@ include-package-data = true
 "pyCamSet.calibration_targets.markers" = ["*.json"]
 
 [tool.setuptools.packages.find]
-exclude = ["tests*", "examples*"]
+# third_party holds git submodules that are packaged and licensed on their own
+# (see NOTICE).  Without the exclusion, discovery takes aruco2's Python files
+# into the sdist and the wheel as a ``third_party`` namespace package.
+exclude = ["tests*", "examples*", "third_party*"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

@@ -51,10 +51,6 @@ from pyCamSet.workflow.params import ParamError
 from pyCamSet.workflow.run_quality import blocking_reasons
 from pyCamSet.workflow.workspace import WorkspaceManager
 
-#: What a dictionary combo falls back to when the backend it is being
-#: repopulated for does not offer the dictionary that was selected.
-_DICT_FALLBACK_NAME = "DICT_4X4_1000"
-
 # ---------------------------------------------------------------------------
 # Tab-name constants (shared across modules)
 # ---------------------------------------------------------------------------
@@ -70,35 +66,6 @@ TAB_PHASE4 = "Phase 4 - Self-Calibration"
 TAB_PHASE4_DIAG = "Phase 4 Diagnostics"
 TAB_OPTIMISATION = "Optimisation"
 TAB_EXPORT_CALIBRATION = "Export Calibration"
-
-
-# ---------------------------------------------------------------------------
-# Marker dictionary combo
-# ---------------------------------------------------------------------------
-
-
-def repopulate_dict_combo(combo, marker_backend: str) -> None:
-    """Repopulate a dictionary combo for the given backend (plan v4 R2-H6/H7).
-
-    The caller must set its ``self._repopulating`` guard around the call so
-    connected slots (e.g. ``_sync_default_name``) early-return during the
-    repopulation. When the currently selected dictionary name is absent from
-    the new list, the combo falls back to ``DICT_4X4_1000``. Signals are
-    blocked for the whole repopulation and restored in ``finally``.
-    """
-    from pyCamSet.calibration_targets.markers.backend_registry import dict_names_for_backend
-
-    current_name = combo.currentText()
-    combo.blockSignals(True)
-    try:
-        combo.clear()
-        combo.addItems(dict_names_for_backend(marker_backend))
-        if combo.findText(current_name) >= 0:
-            combo.setCurrentText(current_name)
-        else:
-            combo.setCurrentText(_DICT_FALLBACK_NAME)
-    finally:
-        combo.blockSignals(False)
 
 
 # ---------------------------------------------------------------------------

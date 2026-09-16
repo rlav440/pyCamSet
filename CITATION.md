@@ -23,8 +23,8 @@ Upstream aruco2's `README.md` (https://github.com/rmsalinas/aruco2, commit `93bf
 > R. Muñoz-Salinas et al., *"ArUco Nano: a simpler, faster, and more reliable fiducial marker
 > detector"*, SoftwareX, 2026.
 
-The pinned submodule does not contain this passage: the fork's commit `e902da2` removed it from
-its `README.md`. It is reproduced here from upstream.
+The pinned submodule's `README.md` carries the same passage: the fork's wrapper commit `e902da2`
+had replaced it, and fork commit `1091fb9` restored it verbatim from upstream.
 
 ## ChArUco2
 

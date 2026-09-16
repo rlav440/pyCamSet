@@ -29,11 +29,12 @@ Text:      third_party/aruco2/LICENSE, which is byte-identical to this
 Upstream:  https://github.com/rmsalinas/aruco2 -- the aruco2 library, in the
            repository of R. Muñoz-Salinas (GitHub: rmsalinas).
 Submodule: https://github.com/ColDSnit/aruco2 -- a fork of upstream, pinned
-           at commit 44c41e2. Its three commits on top of upstream commit
+           at commit 1091fb9. Its four commits on top of upstream commit
            8755035 add the Python wrapper (python/, a root pyproject.toml, and
            changes to CMakeLists.txt, README.md and .gitignore), add input
-           checks to src/aruco2.cpp and src/aruco2_fractal.cpp, and fix an
-           image-edge bounds check in the latter.
+           checks to src/aruco2.cpp and src/aruco2_fractal.cpp, fix an
+           image-edge bounds check in the latter, and restore the README's
+           credit to ArUco Nano as upstream words it.
 
 
 3. OpenCV runtime in a Windows build of aruco2

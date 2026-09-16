@@ -270,12 +270,12 @@ class CameraSet:
             lists every other view for each view -- not windowed by
             ``r.minangle``/``r.maxangle`` or capped at ``r.max_n_view`` --
             ranked by that score descending, e.g.
-            :func:`pyCamSet.reconstruction.acmmp_utils.calc_apde_pair_scores`.
+            ``pyCamSet.reconstruction.acmmp_utils.calc_apde_pair_scores``.
             "Every other view" is itself subject to ``max_pair_candidates``
             below, which a caller such as
             :func:`pyCamSet.utils.saving.camset_to_apde` sets by default.
             When omitted (the default), pairs come from
-            :func:`~pyCamSet.reconstruction.acmmp_utils.calc_pairs` as before.
+            ``pyCamSet.reconstruction.acmmp_utils.calc_pairs`` as before.
         :param max_pair_candidates: only used together with ``pair_scores``.
             Keeps only the top-scoring ``max_pair_candidates`` neighbours per
             view instead of every other view -- e.g.

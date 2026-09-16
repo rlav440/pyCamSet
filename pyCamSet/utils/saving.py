@@ -656,13 +656,13 @@ def camset_to_apde(
     ``write_to_txt`` itself:
 
     - the pair score. ``write_to_txt``'s default pairing
-      (:func:`~pyCamSet.reconstruction.acmmp_utils.calc_pairs`) windows
+      (``pyCamSet.reconstruction.acmmp_utils.calc_pairs``) windows
       candidates by the angle *between camera view vectors* and caps the
       list at ``r.max_n_view`` -- tuned for a roughly forward-facing
       capture, not a calibration rig whose cameras converge on a shared
       target and so have *opposing* view directions by construction. This
       instead computes
-      :func:`~pyCamSet.reconstruction.acmmp_utils.calc_apde_pair_scores`'s
+      ``pyCamSet.reconstruction.acmmp_utils.calc_apde_pair_scores``'s
       convergence-point score and passes it as ``write_to_txt``'s
       ``pair_scores`` argument, which writes every other view, ranked by
       that score, capped at ``max_src_views`` -- see that parameter below.

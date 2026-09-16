@@ -1,0 +1,100 @@
+pyCamSet NOTICE
+===============
+
+This file lists the licences that apply to pyCamSet and, separately, to the
+third-party code this repository references as the git submodule
+third_party/aruco2. The entries are kept apart because they are not all the
+same licence.
+
+third_party/aruco2 is not part of pyCamSet's source distribution or wheel:
+pyproject.toml excludes third_party from package discovery. Its files are
+present only in a checkout made with `git clone --recurse-submodules`, or after
+`git submodule update --init`.
+
+
+1. pyCamSet
+-----------
+Licence:   Apache License, Version 2.0 (pyproject.toml: license = "Apache-2.0").
+Text:      LICENSE, at the repository root.
+Note:      The appendix placeholder in LICENSE,
+           "Copyright [yyyy] [name of copyright owner]", is not filled in, and
+           this file does not add a copyright line.
+
+
+2. aruco2 (third_party/aruco2)
+------------------------------
+Licence:   Apache License, Version 2.0.
+Text:      third_party/aruco2/LICENSE, which is byte-identical to this
+           repository's LICENSE. It dates from upstream's initial commit.
+Upstream:  https://github.com/rmsalinas/aruco2 -- the aruco2 library, in the
+           repository of R. Muñoz-Salinas (GitHub: rmsalinas).
+Submodule: https://github.com/ColDSnit/aruco2 -- a fork of upstream, pinned
+           at commit 44c41e2. Its three commits on top of upstream commit
+           8755035 add the Python wrapper (python/, a root pyproject.toml, and
+           changes to CMakeLists.txt, README.md and .gitignore), add input
+           checks to src/aruco2.cpp and src/aruco2_fractal.cpp, and fix an
+           image-edge bounds check in the latter.
+
+
+3. OpenCV runtime in a Windows build of aruco2
+----------------------------------------------
+Licence:   Apache License, Version 2.0.
+Project:   OpenCV, maintained by the OpenCV team.
+Text:      third_party/aruco2/python/OPENCV_LICENSE.txt, which states that its
+           licence text is copied from the OpenCV 4.11.0 distribution used to
+           build the aruco2 package.
+Note:      The submodule's source contains no OpenCV binaries. When the wrapper
+           is built on Windows, third_party/aruco2/CMakeLists.txt copies the
+           release opencv_world*.dll files it finds through OpenCV_DIR into the
+           built aruco2 package; OPENCV_LICENSE.txt is installed into the
+           package on every platform. This is separate from the opencv-python
+           package pyCamSet itself depends on (pyproject.toml, [project]
+           dependencies).
+
+
+4. third_party/aruco2/opencl/aruco2detect.cl -- MIT, not Apache-2.0
+--------------------------------------------------------------------
+Licence:   MIT. Lines 15-31 of the file's header are the MIT License
+           permission notice; the header does not name the licence.
+Copyright: 2026 Francisco J. Romero-Ramirez (the header's @copyright line).
+Origin:    The header states the file is based on the g+aruco project,
+           https://github.com/kiko2r/gpu_aruco.
+History:   Added upstream by rmsalinas in commit 8755035 (2026-07-22). The file
+           is identical at the pinned submodule commit and at upstream's main
+           branch (commit 93bfda4, checked 2026-09-16).
+Location:  Lines 5-32 of the file, quoted below. Lines 1-3 are a separate
+           banner stating that the file is part of the OpenCV project and
+           subject to the licence terms in the LICENSE file of that
+           distribution and at http://opencv.org/license.html; they are not
+           part of this notice.
+
+    /**
+     * @file aruco2detect.cl
+     * @brief OpenCL kernels for GPU-accelerated ArUco marker detection.
+     * @version 1.0
+     * @author Francisco J. Romero-Ramirez
+     * @copyright 2026 Francisco J. Romero-Ramirez
+     *
+     * This project is based on the g+aruco project
+     * (https://github.com/kiko2r/gpu_aruco).
+     *
+     * Permission is hereby granted, free of charge, to any person obtaining a copy
+     * of this software and associated documentation files (the "Software"), to deal
+     * in the Software without restriction, including without limitation the rights
+     * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+     * copies of the Software, and to permit persons to whom the Software is
+     * furnished to do so, subject to the following conditions:
+     *
+     * The above copyright notice and this permission notice shall be included in
+     * all copies or substantial portions of the Software.
+     *
+     * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+     * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+     * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+     * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+     * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+     * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+     * SOFTWARE.
+     */
+
+pyCamSet does not modify this file or its header.

@@ -122,8 +122,10 @@ def dictionary_id(aruco_dict: int | str, marker_backend: str = ARUCO1_BACKEND) -
         raise ValueError(f"Unknown ArUco dictionary name: {aruco_dict}") from exc
     except ImportError as exc:
         raise ImportError(
-            "aruco2 is not installed. Install it with `pip install aruco2` "
-            "to use marker_backend='aruco2'."
+            "aruco2 is not installed and is not published on PyPI. Build it "
+            "from the third_party/aruco2 submodule to use "
+            "marker_backend='aruco2': see 'Installing the aruco2 backend' in "
+            "pyCamSet's CITATION.md."
         ) from exc
 
 
@@ -134,4 +136,4 @@ def marker_backend_availability_text(marker_backend: str) -> str:
         return "backend: built-in OpenCV ArUco"
     if marker_backend_available(marker_backend):
         return "aruco2: available"
-    return "aruco2: not installed - pip install aruco2"
+    return "aruco2: not installed - see CITATION.md"

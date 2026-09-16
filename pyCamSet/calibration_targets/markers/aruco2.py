@@ -47,7 +47,9 @@ def _require_aruco2() -> None:
     if not ARUCO2_AVAILABLE:
         raise ImportError(
             "marker_backend='aruco2' requires the 'aruco2' package, which is not "
-            "installed. Install it with: pip install aruco2"
+            "installed. It is not published on PyPI: build it from the "
+            "third_party/aruco2 submodule, as described under 'Installing the "
+            "aruco2 backend' in pyCamSet's CITATION.md."
         )
 
 
@@ -333,8 +335,9 @@ class Aruco2Detector(DetectorParameterisation):
             return None
         return (
             "ArUco 2 (aruco2) is selected but the 'aruco2' package is not "
-            "installed. Install it with `pip install aruco2` or switch the "
-            "marker backend to ArUco 1 (OpenCV).")
+            "installed. It is not on PyPI: build it from the third_party/aruco2 "
+            "submodule (see CITATION.md), or switch the marker backend to "
+            "ArUco 1 (OpenCV).")
 
 
 #: Shared rather than built per target: it describes nothing per instance.

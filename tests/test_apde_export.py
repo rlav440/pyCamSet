@@ -389,7 +389,8 @@ def test_pair_scores_finite_for_degenerate_parallel_rig(parallel_stereo_camset, 
         assert all(s > 0.0 for s in scores)
 
     assert "parallel" in caplog.text.lower()
-    assert "export_apde_pairs" in caplog.text or "fall" in caplog.text.lower()
+    assert "camset_to_apde: camera axes are near-parallel" in caplog.text
+    assert "falling back" in caplog.text.lower()
 
 
 # --------------------------------------------------------------------------

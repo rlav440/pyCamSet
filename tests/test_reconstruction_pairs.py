@@ -360,6 +360,20 @@ def test_normalise_pair_scores_keeps_the_order_and_puts_the_best_at_one():
     assert np.argsort(-normalised[0]).tolist() == np.argsort(-scores[0]).tolist()
 
 
+def test_normalise_pair_scores_ignores_a_views_score_against_itself():
+    """Without a mask there is nothing to say the diagonal is not a
+    candidate -- and a self-pair subtends an angle of zero, which scores
+    higher than any real pair of a wide-baseline rig, so normalising by it
+    leaves the whole row in the tail this function exists to escape."""
+    scores = np.array([
+        [3.7e-06, 2e-16, 3e-67],
+        [2e-16, 3.7e-06, 2e-16],
+        [3e-67, 2e-16, 3.7e-06],
+    ])
+    normalised = normalise_pair_scores(scores)
+    assert normalised[0, 1] == 1.0
+
+
 def test_normalise_pair_scores_leaves_a_row_without_candidates_alone():
     """A view whose every pair was masked out has no maximum to divide by;
     the row must come back untouched rather than as NaN."""

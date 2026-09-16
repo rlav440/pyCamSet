@@ -155,12 +155,18 @@ def normalise_pair_scores(scores: np.ndarray, mask: np.ndarray | None = None) ->
     :param scores: (N, N) score matrix
     :param mask: optional (N, N) boolean matrix of which entries are
         candidates at all; entries outside it are ignored when finding each
-        row's maximum.
+        row's maximum. The diagonal is excluded whether or not a mask says
+        so -- a view is never its own candidate, and its self-pair subtends
+        an angle of zero, which scores higher than any real pair of a
+        wide-baseline rig and would scale the whole row into the tail it is
+        the point of this function to get out of.
     :return: a new (N, N) matrix; rows whose maximum is not positive and
         finite (no candidates at all) are returned untouched.
     """
     scores = np.asarray(scores, dtype=float)
     candidates = np.isfinite(scores) if mask is None else (mask & np.isfinite(scores))
+    candidates = candidates.copy()
+    np.fill_diagonal(candidates, False)
     row_max = np.max(np.where(candidates, scores, -np.inf), axis=1)
     scale = np.where(np.isfinite(row_max) & (row_max > 0), row_max, 1.0)
     return scores / scale[:, np.newaxis]

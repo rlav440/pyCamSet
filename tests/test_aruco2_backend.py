@@ -421,8 +421,9 @@ def test_build_target_threads_marker_backend():
 
 
 def test_default_detection_fn_plumbing(tmp_path, monkeypatch):
-    """FIX 6: TargetSettings(marker_backend="aruco2") -> default_detection_fn
-    must produce a target whose input_args carry "aruco2".
+    """FIX 6: a target_spec dict carrying marker_backend="aruco2" ->
+    default_detection_fn must produce a target whose input_args carry
+    "aruco2".
 
     The REAL detect_datapoints_in_imfile path has a PRE-EXISTING failure
     unrelated to the backend: features_per_im_per_cam raises IndexError
@@ -435,8 +436,7 @@ def test_default_detection_fn_plumbing(tmp_path, monkeypatch):
     """
     import cv2
     from pyCamSet.calibration_targets.core.target_detections import TargetDetection
-    from pyCamSet.workflow.tuning.worker import (
-        TargetSettings, default_detection_fn)
+    from pyCamSet.workflow.tuning.worker import default_detection_fn
 
     captured = {}
 
@@ -454,14 +454,14 @@ def test_default_detection_fn_plumbing(tmp_path, monkeypatch):
         fake_detect,
     )
 
-    ts = TargetSettings(marker_backend="aruco2", num_squares_x=5, num_squares_y=5,
-                        square_size=10.0, a_dict=0)
+    target_spec = {"type": "ChArUco", "marker_backend": "aruco2",
+                   "num_squares_x": 5, "num_squares_y": 5, "square_size": 10.0}
     cam_dir = tmp_path / "cam0"
     cam_dir.mkdir()
     board = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0,
                     marker_backend="aruco2")
     cv2.imwrite(str(cam_dir / "im_0.png"), board._render_board(px_per_mm=6.0))
-    result = default_detection_fn(tmp_path, {}, ts)
+    result = default_detection_fn(tmp_path, {}, target_spec)
     target = result.get("target")
     assert target is not None, "default_detection_fn returned no target"
     assert target.input_args["marker_backend"] == "aruco2"

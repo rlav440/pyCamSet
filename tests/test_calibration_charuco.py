@@ -53,6 +53,16 @@ def test_charuco_renders_detects_and_returns_saved_path(tmp_path: Path) -> None:
     assert saved.stat().st_size > 0
 
 
+@pytest.mark.parametrize("backend", ["aruco1", "aruco2"])
+def test_charuco_construction_parameters_excludes_apriltag(backend: str) -> None:
+    """AprilTag dictionaries are the only ones aruco1/aruco2 disagree on --
+    they must never be offered, on either backend, in Create Target."""
+    choices = ChArUco.construction_parameters(backend).parameter("a_dict").choices
+    values = [choice.value for choice in choices]
+    assert not any(value.startswith("DICT_APRILTAG_") for value in values)
+    assert len(values) == (18 if backend == "aruco1" else 20)
+
+
 def test_charuco_factory_validates_backend_and_dictionary() -> None:
     # The refusal is the target's now rather than the factory's: a target
     # names the detectors it can be read with, and this is not one of them.

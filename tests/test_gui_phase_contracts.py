@@ -693,6 +693,25 @@ def test_adopting_a_run_sets_the_target_to_match_it():
 
 
 @pytest.mark.gui
+def test_adopting_a_run_with_a_dictionary_no_longer_offered_shows_the_true_value():
+    """A saved run can name a dictionary this combo's current choices do not
+    offer (e.g. an AprilTag dictionary retired from Create Target). Before
+    the fix, ``QComboBox.setCurrentText`` silently no-ops for a value not
+    among its items, so the combo kept showing whatever it already held --
+    a different dictionary than the run actually used, with no warning.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("ChArUco")
+    try:
+        form.apply_spec({"type": "ChArUco", "a_dict": "DICT_APRILTAG_16h5"})
+        assert form._widgets["a_dict"].currentText() == "DICT_APRILTAG_16h5"
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
 def test_adopting_selects_the_marker_backend_by_value():
     from PySide6.QtWidgets import QApplication
 

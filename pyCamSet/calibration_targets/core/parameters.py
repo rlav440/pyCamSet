@@ -326,6 +326,17 @@ def parameters_from_json(path: Path) -> tuple[Parameter, ...]:
     return tuple(Parameter.from_row(row) for row in rows)
 
 
+def exclude_by_prefix(names: Iterable[str], *prefixes: str) -> list[str]:
+    """*names* without any entry starting with one of *prefixes*.
+
+    A target's constructor keeps taking every value its backend can build
+    -- what changes here is only what a form offers to pick from, so a
+    choices list can drop names its target does not want to suggest
+    without the underlying record of what the backend has moving at all.
+    """
+    return [name for name in names if not name.startswith(prefixes)]
+
+
 #: What separates the name a form gives an argument from what it says about
 #: it: ``Squares across -- chessboard squares along the board's x axis.``
 _LABEL_SEPARATOR = " -- "

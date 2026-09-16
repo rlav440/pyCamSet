@@ -608,12 +608,26 @@ def camset_to_colmap(
 # Convert camset to APDe-MVS / ACMMP ("cams/" + pair.txt) format
 # ---------------------------------------------------------------------------
 
+# APD-MVS and APDe-MVS (github.com/whoiszzj/APD-MVS, github.com/whoiszzj/APDe-MVS)
+# both hard-code `#define MAX_IMAGES 32` and load one reference image plus every
+# candidate source image from pair.txt whose score is > 0 -- their reader has no
+# top-k cutoff of its own, and neither tool degrades gracefully past MAX_IMAGES:
+# main.cpp's per-problem image loader does `if (images.size() > MAX_IMAGES) {
+# std::cout << "Can't process so much images: " ...; exit(EXIT_FAILURE); }`.
+# camset_to_apde otherwise hands write_to_txt every other camera as a
+# candidate, unbounded, so a CameraSet with more than 32 cameras would
+# crash both tools on every single reference view. 31 leaves room for the
+# one reference image itself.
+_APDE_MVS_MAX_SRC_VIEWS = 31
+
+
 def camset_to_apde(
     cams,
     output_folder: Path,
     depth_min: float = 0.1,
     depth_max: float = 0.8,
     depth_num: int = 192,
+    max_src_views: int = _APDE_MVS_MAX_SRC_VIEWS,
 ) -> None:
     """
     Export a pyCamSet CameraSet to APDe-MVS format in a single call.
@@ -639,8 +653,8 @@ def camset_to_apde(
       instead computes
       :func:`~pyCamSet.reconstruction.acmmp_utils.calc_apde_pair_scores`'s
       convergence-point score and passes it as ``write_to_txt``'s
-      ``pair_scores`` argument, which writes every other view, unbounded,
-      ranked by that score.
+      ``pair_scores`` argument, which writes every other view, ranked by
+      that score, capped at ``max_src_views`` -- see that parameter below.
     - ``cam_index_map.txt``, and removing a previous, larger export's stale
       ``cams/*_cam.txt`` files before writing -- neither has a COLMAP/MVSNet
       analogue, so both stay specific to this exporter.
@@ -690,7 +704,20 @@ def camset_to_apde(
     :param depth_min: nearest depth plane (placeholder default; tune per scene)
     :param depth_max: furthest depth plane (placeholder default; tune per scene)
     :param depth_num: number of depth planes / DEPTH_NUM (192 is the usual default)
+    :param max_src_views: cap on the number of top-scoring candidates written
+        per reference view in pair.txt (default 31, matching
+        ``_APDE_MVS_MAX_SRC_VIEWS`` above). Should not be raised without also
+        raising ``MAX_IMAGES`` in a matching build of APD-MVS/APDe-MVS.
+    :raises ValueError: if ``max_src_views`` is not a non-negative integer --
+        this parameter exists specifically to keep the export from crashing
+        the downstream tool, so a caller's own bug computing it (e.g. a
+        negative value, which ``write_to_txt`` would otherwise take via
+        Python's "drop the last few" slice semantics instead of raising)
+        should not be able to silently reintroduce that failure mode.
     """
+    if not isinstance(max_src_views, int) or isinstance(max_src_views, bool) or max_src_views < 0:
+        raise ValueError(f"max_src_views must be a non-negative int, got {max_src_views!r}")
+
     output_folder = Path(output_folder)                 # normalise to Path
     cams_dir = output_folder / "cams"
 
@@ -736,8 +763,19 @@ def camset_to_apde(
             "at the rig's own mean baseline scale, for pair scoring.",
         )
 
+    n_other_views = len(cam_names) - 1
+    if n_other_views > max_src_views:
+        logger.warning(
+            "camset_to_apde: %d camera(s) exceeds the %d-source-view cap "
+            "(max_src_views); pair.txt keeps only the %d best-scoring "
+            "candidates per reference view, dropping %d.",
+            len(cam_names), max_src_views, max_src_views, n_other_views - max_src_views,
+        )
+
     r = ReconParams(mindist=depth_min, maxdist=depth_max, steps=depth_num)
-    cams.write_to_txt(cams_dir, r, pair_scores=scores)   # writes cams/*_cam.txt and pair.txt
+    cams.write_to_txt(                                   # writes cams/*_cam.txt and pair.txt
+        cams_dir, r, pair_scores=scores, max_pair_candidates=max_src_views,
+    )
 
     index_lines = [f"{idx:08d} {name}" for idx, name in enumerate(cam_names)]
     map_path = output_folder / "cam_index_map.txt"

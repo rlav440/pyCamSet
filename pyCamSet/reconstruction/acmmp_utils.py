@@ -32,9 +32,10 @@ def write_pair_file(f: TextIOWrapper, pair_list, scores: np.ndarray | None = Non
     :param scores: an optional ``(N, N)`` matrix of per-pair scores. When
         given, view ``i``'s candidate ``cam_id`` is written with
         ``scores[i, cam_id]`` in place of the original writer's constant
-        score of ``1`` -- used by an unbounded, ranked-by-score export such
-        as :func:`pyCamSet.utils.saving.camset_to_apde`, where "1" would
-        throw away the ranking the caller computed.
+        score of ``1`` -- used by a ranked-by-score export such as
+        :func:`pyCamSet.utils.saving.camset_to_apde`, where "1" would throw
+        away the ranking the caller computed. ``pair_list`` decides how many
+        candidates each view gets; this function does not itself cap it.
     :param score_fmt: format spec applied to each score (e.g. ``"{:.6e}"``
         for scientific notation). Only used when ``scores`` is given.
     """

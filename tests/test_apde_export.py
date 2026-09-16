@@ -426,3 +426,193 @@ def test_reexport_with_fewer_cameras_removes_stale_cam_files(apde_camset, tmp_pa
     assert index_lines == ["00000000 left"]
     pair_lines = _read_lines(tmp_path / "pair.txt")
     assert int(pair_lines[0]) == 1
+
+
+# --------------------------------------------------------------------------
+# pair.txt source-view cap (DEFECT 3)
+#
+# APD-MVS and APDe-MVS (github.com/whoiszzj/APD-MVS,
+# github.com/whoiszzj/APDe-MVS) both `#define MAX_IMAGES 32` and abort
+# (exit(EXIT_FAILURE), "Can't process so much images") rather than truncate
+# once a reference view's loaded image count -- one reference plus every
+# pair.txt candidate scoring above 0 -- exceeds it. Their pair.txt reader
+# itself applies no top-k cutoff of its own: it keeps every candidate with
+# score > 0, in file order. camset_to_apde must therefore cap the candidate
+# list itself, at export time, rather than writing every other camera
+# unbounded the way it did before this cap existed.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def large_ring_camset():
+    """40 cameras on a ring, pointed at a common centre -- enough views that
+    "every other camera" (39 candidates) exceeds APD-MVS/APDe-MVS's 31-source
+    limit, so a correct exporter must cap the candidate list rather than
+    write all 39."""
+    n = 40
+    cams = {
+        f"cam{i}": _ring_camera(f"cam{i}", angle_deg=360.0 * i / n)
+        for i in range(n)
+    }
+    return CameraSet(camera_dict=cams)
+
+
+def _parse_pair_row(lines, i):
+    """(n_neighbours, [source_ids], [scores]) for reference view i, from an
+    already-read pair.txt -- shared by the cap tests below to keep the
+    header-offset/stride/interleaving assumptions in one place."""
+    parts = lines[2 + 2 * i].split()
+    rest = parts[1:]
+    return int(parts[0]), [int(v) for v in rest[0::2]], [float(v) for v in rest[1::2]]
+
+
+def _top_k_ranking(scores, i, n_views, k):
+    """The ids expected for reference view i under a correct top-k-by-score
+    cap, recomputed independently of the exporter for comparison."""
+    full_ranking = sorted((j for j in range(n_views) if j != i), key=lambda j: scores[i, j], reverse=True)
+    return full_ranking[:k]
+
+
+def test_pair_txt_caps_candidates_at_the_apde_mvs_limit(large_ring_camset, tmp_path):
+    from pyCamSet.utils.saving import _APDE_MVS_MAX_SRC_VIEWS
+
+    camset_to_apde(large_ring_camset, tmp_path, depth_min=0.2, depth_max=1.0, depth_num=64)
+    lines = _read_lines(tmp_path / "pair.txt")
+
+    n_views = len(large_ring_camset)
+    assert n_views - 1 > _APDE_MVS_MAX_SRC_VIEWS  # the fixture must actually exercise the cap
+
+    for i in range(n_views):
+        n_neighbours, _, scores = _parse_pair_row(lines, i)
+        assert n_neighbours == _APDE_MVS_MAX_SRC_VIEWS
+        assert len(scores) == _APDE_MVS_MAX_SRC_VIEWS
+        assert scores == sorted(scores, reverse=True)
+
+
+def test_pair_txt_cap_keeps_the_highest_scoring_candidates(large_ring_camset, tmp_path):
+    """Not just the right *count* -- capping must drop the worst-scoring
+    candidates, not an arbitrary 8 out of 39 (e.g. not the last 8 written)."""
+    from pyCamSet.reconstruction.acmmp_utils import calc_apde_pair_scores
+    from pyCamSet.utils.saving import _APDE_MVS_MAX_SRC_VIEWS
+
+    camset_to_apde(large_ring_camset, tmp_path, depth_min=0.2, depth_max=1.0, depth_num=64)
+    lines = _read_lines(tmp_path / "pair.txt")
+
+    scores, _ = calc_apde_pair_scores(large_ring_camset)
+    n_views = len(large_ring_camset)
+
+    for i in range(n_views):
+        _, got_ids, _ = _parse_pair_row(lines, i)
+        assert got_ids == _top_k_ranking(scores, i, n_views, _APDE_MVS_MAX_SRC_VIEWS)
+
+
+def test_max_src_views_is_configurable(large_ring_camset, tmp_path):
+    """A caller building against a recompiled MAX_IMAGES must be able to
+    move the cap, not just live with the APD-MVS/APDe-MVS default."""
+    camset_to_apde(large_ring_camset, tmp_path, depth_min=0.2, depth_max=1.0, depth_num=64, max_src_views=5)
+    lines = _read_lines(tmp_path / "pair.txt")
+
+    for i in range(len(large_ring_camset)):
+        n_neighbours, _, _ = _parse_pair_row(lines, i)
+        assert n_neighbours == 5
+
+
+def test_small_rig_is_unaffected_by_the_cap(apde_camset, tmp_path):
+    """The default cap (31) must not change output for any rig smaller than
+    it -- e.g. the 3-camera fixture every other test in this file uses."""
+    camset_to_apde(apde_camset, tmp_path, depth_min=0.2, depth_max=1.0, depth_num=64)
+    lines = _read_lines(tmp_path / "pair.txt")
+
+    n_views = len(apde_camset)
+    for i in range(n_views):
+        n_neighbours, _, _ = _parse_pair_row(lines, i)
+        assert n_neighbours == n_views - 1  # every other view, uncapped
+
+
+def test_write_to_txt_max_pair_candidates_caps_and_keeps_top_scores(large_ring_camset, tmp_path):
+    """The cap is implemented in CameraSet.write_to_txt itself (camset_to_apde
+    just supplies the APD-MVS/APDe-MVS-specific default), so it must work
+    when called directly too."""
+    from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_apde_pair_scores
+
+    scores, _ = calc_apde_pair_scores(large_ring_camset)
+    cams_dir = tmp_path / "cams"
+    cams_dir.mkdir(parents=True)
+    r = ReconParams(mindist=0.2, maxdist=1.0, steps=64)
+    large_ring_camset.write_to_txt(cams_dir, r, pair_scores=scores, max_pair_candidates=10)
+
+    lines = _read_lines(tmp_path / "pair.txt")
+    n_views = len(large_ring_camset)
+    for i in range(n_views):
+        n_neighbours, got_ids, _ = _parse_pair_row(lines, i)
+        assert n_neighbours == 10
+        assert got_ids == _top_k_ranking(scores, i, n_views, 10)
+
+
+def test_truncation_logs_a_warning_naming_how_many_were_dropped(large_ring_camset, tmp_path, caplog):
+    with caplog.at_level(logging.WARNING, logger="pyCamSet.utils.saving"):
+        camset_to_apde(large_ring_camset, tmp_path, depth_min=0.2, depth_max=1.0, depth_num=64)
+
+    assert "40" in caplog.text  # camera count
+    assert "31" in caplog.text  # the cap
+    assert "8" in caplog.text  # 39 other views - 31 kept = 8 dropped
+
+
+def test_no_truncation_warning_under_the_cap(apde_camset, tmp_path, caplog):
+    with caplog.at_level(logging.WARNING, logger="pyCamSet.utils.saving"):
+        camset_to_apde(apde_camset, tmp_path, depth_min=0.2, depth_max=1.0, depth_num=64)
+
+    assert "cap" not in caplog.text.lower()
+
+
+# --------------------------------------------------------------------------
+# max_src_views / max_pair_candidates validation (DEFECT 4)
+#
+# A negative value is not itself an error under Python's slice semantics --
+# `row[:-1]` silently drops only the last element instead of capping the
+# list -- so a caller's own bug (e.g. an off-by-one computing a cap from a
+# rebuilt tool's MAX_IMAGES) would reintroduce the near-unbounded, crash-
+# triggering output this whole cap exists to prevent, without pyCamSet ever
+# raising. Validated eagerly, before anything is written, so a bad value
+# never leaves a half-exported directory behind either.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", [-1, -31, 1.5, "31", True])
+def test_camset_to_apde_rejects_invalid_max_src_views(apde_camset, tmp_path, bad_value):
+    with pytest.raises(ValueError):
+        camset_to_apde(apde_camset, tmp_path, depth_min=0.2, depth_max=1.0, depth_num=64, max_src_views=bad_value)
+    # rejected before anything was written -- no half-exported directory left behind
+    assert not (tmp_path / "cams").exists()
+    assert not (tmp_path / "pair.txt").exists()
+
+
+@pytest.mark.parametrize("bad_value", [-1, -5, 1.5, "5", True])
+def test_write_to_txt_rejects_invalid_max_pair_candidates(apde_camset, tmp_path, bad_value):
+    from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_apde_pair_scores
+
+    scores, _ = calc_apde_pair_scores(apde_camset)
+    cams_dir = tmp_path / "cams"
+    cams_dir.mkdir(parents=True)
+    r = ReconParams(mindist=0.2, maxdist=1.0, steps=64)
+    with pytest.raises(ValueError):
+        apde_camset.write_to_txt(cams_dir, r, pair_scores=scores, max_pair_candidates=bad_value)
+    # rejected before any *_cam.txt was written -- no partial export
+    assert list(cams_dir.glob("*_cam.txt")) == []
+
+
+def test_max_pair_candidates_zero_is_allowed_and_empties_every_row(apde_camset, tmp_path):
+    from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_apde_pair_scores
+
+    scores, _ = calc_apde_pair_scores(apde_camset)
+    cams_dir = tmp_path / "cams"
+    cams_dir.mkdir(parents=True)
+    r = ReconParams(mindist=0.2, maxdist=1.0, steps=64)
+    apde_camset.write_to_txt(cams_dir, r, pair_scores=scores, max_pair_candidates=0)
+
+    lines = _read_lines(tmp_path / "pair.txt")
+    for i in range(len(apde_camset)):
+        n_neighbours, ids, row_scores = _parse_pair_row(lines, i)
+        assert n_neighbours == 0
+        assert ids == []
+        assert row_scores == []

@@ -258,13 +258,21 @@ class CameraSet:
             return False
         return True
 
-    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet', crop=None, use_closest_cams=True, only_crop_cams=False):
+    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet', crop=None, use_closest_cams=True, only_crop_cams=False, pair_scores: np.ndarray|None = None):
         """
         Writes an entire camera set to some form of defined camera structure.
         Currently only MVSnet is defined.
 
         :param loc: the file location to write to
         :param r: the reconstruction parameters to follow
+        :param pair_scores: an optional (N, N) matrix of per-pair scores, in
+            this set's ``get_names()``/iteration order. When given, pair.txt
+            lists every other view for each view -- not windowed by
+            ``r.minangle``/``r.maxangle`` or capped at ``r.max_n_view`` --
+            ranked by that score descending, e.g.
+            :func:`pyCamSet.reconstruction.acmmp_utils.calc_apde_pair_scores`.
+            When omitted (the default), pairs come from
+            :func:`~pyCamSet.reconstruction.acmmp_utils.calc_pairs` as before.
         """
         if not mode == 'MVSnet':
             raise NotImplementedError
@@ -290,12 +298,22 @@ class CameraSet:
                     ]
                 cv2.imwrite(str(im_loc/f"{idx:08}.jpg"), im_temp,  [cv2.IMWRITE_JPEG_QUALITY, 100])
 
-        cvwc = np.array(
-            [cam.view for cam in self]
-        )
-        pairs = calc_pairs(cvwc, r, pick_closest=use_closest_cams)
-        with open((loc.parent) / "pair.txt", 'w', encoding="utf-8", newline="\n") as f:
-            write_pair_file(f, pairs)
+        if pair_scores is None:
+            cvwc = np.array(
+                [cam.view for cam in self]
+            )
+            pairs = calc_pairs(cvwc, r, pick_closest=use_closest_cams)
+            with open((loc.parent) / "pair.txt", 'w', encoding="utf-8", newline="\n") as f:
+                write_pair_file(f, pairs)
+        else:
+            n_cams = len(self)
+            ranked = [
+                sorted((j for j in range(n_cams) if j != i),
+                       key=lambda j: pair_scores[i, j], reverse=True)
+                for i in range(n_cams)
+            ]
+            with open((loc.parent) / "pair.txt", 'w', encoding="utf-8", newline="\n") as f:
+                write_pair_file(f, ranked, scores=pair_scores, score_fmt="{:.6e}")
 
 
     def return_view_overlaps(self):

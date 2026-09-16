@@ -336,9 +336,9 @@ def test_pair_scores_are_exactly_zero_under_the_old_cosine_score(converging_ring
     this rig scores exactly 0.0 under it, which is what made pair.txt
     degenerate to ascending-index order with no information content.
     """
-    from pyCamSet.utils.saving import _apde_view_geometry
+    from pyCamSet.reconstruction.acmmp_utils import apde_view_geometry
 
-    centres, directions = _apde_view_geometry(converging_ring_camset)
+    centres, directions = apde_view_geometry(converging_ring_camset)
     n_views = len(centres)
     for i in range(n_views):
         baselines = np.linalg.norm(centres - centres[i], axis=1)

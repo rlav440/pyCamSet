@@ -248,8 +248,8 @@ class ExportCalibrationTab(QWidget):
                         "     -> supply images/ yourself: one image per line of "
                         "cam_index_map.txt, in that same order.")
                     # The scores are honest but tiny for a wide-baseline rig; see
-                    # export_apde_pairs. Said here so nobody reads pair.txt, sees
-                    # 2e-16, and concludes the export went wrong.
+                    # camset_to_apde / calc_apde_pair_scores. Said here so nobody
+                    # reads pair.txt, sees 2e-16, and concludes the export went wrong.
                     self._terminal.append_line(
                         "     -> pair.txt ranks neighbours correctly, but its scores are "
                         "very small for a wide-baseline rig: use the order, not the values.")

@@ -23,4 +23,8 @@ under [Calibration Targets](../targets/index.md).
 
 ---
 
+::: pyCamSet.calibration_targets.charuco2.target.ChArUco2
+
+---
+
 ::: pyCamSet.calibration_targets.ccube.target.Ccube

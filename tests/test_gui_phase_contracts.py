@@ -604,6 +604,36 @@ def test_the_preset_selector_never_offers_another_detectors_presets():
 
 
 @pytest.mark.gui
+def test_set_parameter_widget_shows_a_combo_value_its_items_do_not_offer():
+    """``QComboBox.setCurrentText`` silently no-ops for a value that is not
+    among the combo's current items, so a saved spec naming a value the
+    combo no longer offers used to leave the combo showing whatever it
+    already held instead. ``set_parameter_widget`` must add the value
+    first, then select it -- and must not duplicate a value the combo
+    already offers.
+    """
+    from PySide6.QtWidgets import QApplication, QComboBox
+
+    from pyCamSet.gui.shared_functions import set_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    combo = QComboBox()
+    combo.addItems(["alpha", "beta"])
+    try:
+        set_parameter_widget(combo, "gamma")
+        assert combo.currentText() == "gamma"
+        assert [combo.itemText(i) for i in range(combo.count())] == \
+            ["alpha", "beta", "gamma"]
+
+        set_parameter_widget(combo, "beta")
+        assert combo.currentText() == "beta"
+        assert [combo.itemText(i) for i in range(combo.count())] == \
+            ["alpha", "beta", "gamma"], "an offered value must gain no duplicate"
+    finally:
+        combo.deleteLater()
+
+
+@pytest.mark.gui
 def test_a_preset_still_sets_the_bounds_of_the_rows_it_covers():
     """The rows are rebuilt now, so the preset has to reach the new ones."""
     from PySide6.QtWidgets import QApplication

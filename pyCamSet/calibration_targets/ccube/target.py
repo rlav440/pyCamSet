@@ -13,7 +13,9 @@ import svgwrite
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
-from pyCamSet.calibration_targets.core import AbstractTarget, ImageDetection, FaceToShape
+from pyCamSet.calibration_targets.core import (
+    AbstractTarget, ImageDetection, FaceToShape, exclude_by_prefix,
+)
 from pyCamSet.calibration_targets.markers.backend_registry import (
     ARUCO1_BACKEND,
     dict_names_for_backend,
@@ -96,6 +98,12 @@ def make_blank_square(draw_res, line_fraction, border_fraction):
     canvas[-int_line:, :] = 0
     return canvas, int(border_fraction * draw_res[0]/2)
 
+#: aruco1 and aruco2 only disagree on these four dictionaries, so neither is
+#: offered as a construction choice -- a saved run naming one still loads,
+#: since build_target() reads a spec's raw dict rather than going through
+#: choices.
+_UNOFFERED_DICT_PREFIXES = ("DICT_APRILTAG_",)
+
 class Ccube(AbstractTarget):
     """
     This class defines a calibration target that consists of a Cube of ChArUco boards.
@@ -112,7 +120,12 @@ class Ccube(AbstractTarget):
         return DocumentedParameters(
             cls.__init__,
             "n_points", "length", "border_fraction", "aruco_dict", "legacy",
-            choices={"aruco_dict": dict_names_for_backend(backend or ARUCO1_BACKEND)},
+            choices={
+                "aruco_dict": exclude_by_prefix(
+                    dict_names_for_backend(backend or ARUCO1_BACKEND),
+                    *_UNOFFERED_DICT_PREFIXES,
+                )
+            },
         )
 
     @classmethod

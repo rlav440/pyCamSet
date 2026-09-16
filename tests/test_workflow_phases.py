@@ -637,6 +637,25 @@ def test_every_target_rebuilds_from_what_it_recorded(spec):
     assert (again.point_data == built.point_data).all()
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [{"type": "ChArUco", "num_squares_x": 5, "num_squares_y": 7,
+      "square_size": 10.0, "a_dict": "DICT_APRILTAG_16h5"},
+     {"type": "Ccube", "n_points": 3, "length": 20.0, "aruco_dict": 17}],
+    ids=["ChArUco", "Ccube"],
+)
+def test_a_saved_apriltag_spec_still_builds(spec):
+    """AprilTag dictionaries are gone from Create Target's own choices (Stage
+    1), but a run saved before that removal still names one -- and
+    ``build_target`` reads a spec's raw dict rather than going through
+    ``.parse()``/``choices``, so it must keep loading regardless.
+    """
+    from pyCamSet.calibration_targets.core.target_registry import build_target
+
+    built = build_target(spec)
+    assert built.point_data is not None
+
+
 def test_a_target_nobody_registered_says_so():
     from pyCamSet.calibration_targets.core.target_registry import build_target
 

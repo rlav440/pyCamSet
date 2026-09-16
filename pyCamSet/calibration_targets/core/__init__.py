@@ -11,6 +11,7 @@ from .parameters import (
     Parameterisation,
     DocumentedParameters,
     DetectorParameterisation,
+    exclude_by_prefix,
 )
 from .target_detections import TargetDetection, ImageDetection
 from .shape_by_faces import FaceToShape
@@ -25,4 +26,5 @@ __all__ = [
     "Parameterisation",
     "DocumentedParameters",
     "DetectorParameterisation",
+    "exclude_by_prefix",
 ]

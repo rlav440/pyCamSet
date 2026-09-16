@@ -22,6 +22,7 @@ from pyCamSet.calibration_targets.core.abstract_target import EXPORT_SUFFIXES
 from pyCamSet.calibration_targets.core.parameters import (
     DocumentedParameters,
     Parameterisation,
+    exclude_by_prefix,
 )
 from pyCamSet.calibration_targets.markers.aruco2 import (
     ARUCO2_DETECTOR,
@@ -44,6 +45,12 @@ _MIN_CORNERS = 2
 #: The dictionary a board is printed with unless another is asked for.
 _DEFAULT_DICT_NAME = "DICT_4X4_1000"
 
+#: aruco1 and aruco2 only disagree on these four dictionaries, so neither is
+#: offered as a construction choice -- a saved run naming one still loads,
+#: since build_target() reads a spec's raw dict rather than going through
+#: choices.
+_UNOFFERED_DICT_PREFIXES = ("DICT_APRILTAG_",)
+
 
 class ChArUco(AbstractTarget):
 
@@ -59,7 +66,12 @@ class ChArUco(AbstractTarget):
             cls.__init__,
             "num_squares_x", "num_squares_y", "square_size", "marker_fraction",
             "a_dict", "legacy",
-            choices={"a_dict": dict_names_for_backend(backend or ARUCO1_BACKEND)},
+            choices={
+                "a_dict": exclude_by_prefix(
+                    dict_names_for_backend(backend or ARUCO1_BACKEND),
+                    *_UNOFFERED_DICT_PREFIXES,
+                )
+            },
         )
 
     @classmethod

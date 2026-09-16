@@ -336,9 +336,9 @@ def test_pair_scores_are_exactly_zero_under_the_old_cosine_score(converging_ring
     this rig scores exactly 0.0 under it, which is what made pair.txt
     degenerate to ascending-index order with no information content.
     """
-    from pyCamSet.reconstruction.acmmp_utils import apde_view_geometry
+    from pyCamSet.reconstruction.acmmp_utils import view_geometry
 
-    centres, directions = apde_view_geometry(converging_ring_camset)
+    centres, directions = view_geometry(converging_ring_camset)
     n_views = len(centres)
     for i in range(n_views):
         baselines = np.linalg.norm(centres - centres[i], axis=1)
@@ -493,13 +493,13 @@ def test_pair_txt_caps_candidates_at_the_apde_mvs_limit(large_ring_camset, tmp_p
 def test_pair_txt_cap_keeps_the_highest_scoring_candidates(large_ring_camset, tmp_path):
     """Not just the right *count* -- capping must drop the worst-scoring
     candidates, not an arbitrary 8 out of 39 (e.g. not the last 8 written)."""
-    from pyCamSet.reconstruction.acmmp_utils import calc_apde_pair_scores
+    from pyCamSet.reconstruction.acmmp_utils import calc_convergence_pair_scores
     from pyCamSet.utils.saving import _APDE_MVS_MAX_SRC_VIEWS
 
     camset_to_apde(large_ring_camset, tmp_path, depth_min=0.2, depth_max=1.0, depth_num=64)
     lines = _read_lines(tmp_path / "pair.txt")
 
-    scores, _ = calc_apde_pair_scores(large_ring_camset)
+    scores, _ = calc_convergence_pair_scores(large_ring_camset)
     n_views = len(large_ring_camset)
 
     for i in range(n_views):
@@ -534,9 +534,9 @@ def test_write_to_txt_max_pair_candidates_caps_and_keeps_top_scores(large_ring_c
     """The cap is implemented in CameraSet.write_to_txt itself (camset_to_apde
     just supplies the APD-MVS/APDe-MVS-specific default), so it must work
     when called directly too."""
-    from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_apde_pair_scores
+    from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_convergence_pair_scores
 
-    scores, _ = calc_apde_pair_scores(large_ring_camset)
+    scores, _ = calc_convergence_pair_scores(large_ring_camset)
     cams_dir = tmp_path / "cams"
     cams_dir.mkdir(parents=True)
     r = ReconParams(mindist=0.2, maxdist=1.0, steps=64)
@@ -590,9 +590,9 @@ def test_camset_to_apde_rejects_invalid_max_src_views(apde_camset, tmp_path, bad
 
 @pytest.mark.parametrize("bad_value", [-1, -5, 1.5, "5", True])
 def test_write_to_txt_rejects_invalid_max_pair_candidates(apde_camset, tmp_path, bad_value):
-    from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_apde_pair_scores
+    from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_convergence_pair_scores
 
-    scores, _ = calc_apde_pair_scores(apde_camset)
+    scores, _ = calc_convergence_pair_scores(apde_camset)
     cams_dir = tmp_path / "cams"
     cams_dir.mkdir(parents=True)
     r = ReconParams(mindist=0.2, maxdist=1.0, steps=64)
@@ -603,9 +603,9 @@ def test_write_to_txt_rejects_invalid_max_pair_candidates(apde_camset, tmp_path,
 
 
 def test_max_pair_candidates_zero_is_allowed_and_empties_every_row(apde_camset, tmp_path):
-    from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_apde_pair_scores
+    from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_convergence_pair_scores
 
-    scores, _ = calc_apde_pair_scores(apde_camset)
+    scores, _ = calc_convergence_pair_scores(apde_camset)
     cams_dir = tmp_path / "cams"
     cams_dir.mkdir(parents=True)
     r = ReconParams(mindist=0.2, maxdist=1.0, steps=64)

@@ -247,12 +247,13 @@ class ExportCalibrationTab(QWidget):
                     self._terminal.append_line(
                         "     -> supply images/ yourself: one image per line of "
                         "cam_index_map.txt, in that same order.")
-                    # The scores are honest but tiny for a wide-baseline rig; see
-                    # camset_to_apde / calc_apde_pair_scores. Said here so nobody
-                    # reads pair.txt, sees 2e-16, and concludes the export went wrong.
+                    # Each reference view's scores are normalised to its best
+                    # candidate (see normalise_pair_scores), so the numbers are
+                    # relative within a row and mean nothing between rows. Said
+                    # here so nobody reads a 1 as a co-visibility measurement.
                     self._terminal.append_line(
-                        "     -> pair.txt ranks neighbours correctly, but its scores are "
-                        "very small for a wide-baseline rig: use the order, not the values.")
+                        "     -> pair.txt ranks each view's neighbours, scored relative to its "
+                        "best candidate (1): use the order, not the values.")
                     distorted = [
                         name for name in cams.get_names()
                         if np.any(np.abs(np.asarray(cams[name].distortion_coefs)) > 1e-9)

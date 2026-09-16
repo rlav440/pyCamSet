@@ -16,7 +16,7 @@ import importlib
 from copy import copy
 
 from pyCamSet.utils.calibration_report import CalibrationReport
-from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_apde_pair_scores
+from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_convergence_pair_scores
 
 logger = logging.getLogger(__name__)
 
@@ -644,17 +644,18 @@ def camset_to_apde(
     to APDe-MVS and are handled here, around that call, rather than inside
     ``write_to_txt`` itself:
 
-    - the pair score. ``write_to_txt``'s default pairing
-      (``pyCamSet.reconstruction.acmmp_utils.calc_pairs``) windows
-      candidates by the angle *between camera view vectors* and caps the
-      list at ``r.max_n_view`` -- tuned for a roughly forward-facing
-      capture, not a calibration rig whose cameras converge on a shared
-      target and so have *opposing* view directions by construction. This
-      instead computes
-      ``pyCamSet.reconstruction.acmmp_utils.calc_apde_pair_scores``'s
-      convergence-point score and passes it as ``write_to_txt``'s
-      ``pair_scores`` argument, which writes every other view, ranked by
-      that score, capped at ``max_src_views`` -- see that parameter below.
+    - the pair score. ``write_to_txt`` would score this rig at its
+      convergence point anyway (its ``pair_scoring="auto"`` default picks
+      that for a rig whose cameras look at a shared point), but it would
+      also cap the list at ``r.max_n_view``, which is a reconstruction
+      quality knob rather than the downstream reader's hard limit. So this
+      computes
+      ``pyCamSet.reconstruction.acmmp_utils.calc_convergence_pair_scores``
+      explicitly and passes it as ``write_to_txt``'s ``pair_scores``
+      argument, which writes every other view, ranked by that score, capped
+      at ``max_src_views`` -- see that parameter below. The scores reaching
+      pair.txt are row-normalised, so each reference view's best candidate
+      is written as 1.
     - ``cam_index_map.txt``, and removing a previous, larger export's stale
       ``cams/*_cam.txt`` files before writing -- neither has a COLMAP/MVSNet
       analogue, so both stay specific to this exporter.
@@ -754,7 +755,7 @@ def camset_to_apde(
             len(distorted), ", ".join(distorted),
         )
 
-    scores, well_conditioned = calc_apde_pair_scores(cams)
+    scores, well_conditioned = calc_convergence_pair_scores(cams)
     if not well_conditioned:
         logger.warning(
             "camset_to_apde: camera axes are near-parallel (the rig does not "

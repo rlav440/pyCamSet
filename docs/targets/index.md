@@ -7,11 +7,12 @@ draw itself in a 3D plot, and how to produce a printable surface at controlled
 dimensions — for a 3D target, that surface is a *net* to be folded over some
 underlying geometry.
 
-pyCamSet ships four:
+pyCamSet ships five:
 
 | Target | Shape | Needs | |
 |---|---|---|---|
 | [`ChArUco`](charuco.md) | planar board | — | The simplest, and the most robust |
+| [`ChArUco2`](charuco2.md) | planar board | `aruco2` | Every square marked, aruco2's `GridBoard` design |
 | [`Ccube`](ccube.md) | cube, six ChArUco faces | — | For inward-facing rigs |
 | [`PuzzleBoard`](puzzleboard.md) | planar board | `puzzle_board` | Dense corners, decoded from a periodic code |
 | [`PuzzleBoardCube`](puzzleboard-cube.md) | cube, six PuzzleBoard faces | `puzzle_board` | PuzzleBoard density on Ccube geometry |

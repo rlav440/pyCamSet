@@ -205,6 +205,12 @@ def test_every_target_type_can_be_built_from_what_the_dialog_sends(target_type):
     constructors it named.
     """
     from pyCamSet.calibration_targets.core.target_registry import target_class
+    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
+
+    if target_type == "ChArUco2" and not ARUCO2_AVAILABLE:
+        # ChArUco2 has no aruco1 equivalent -- it cannot be built at all
+        # without aruco2, unlike every other registered target.
+        pytest.skip("aruco2 is not installed")
 
     spec = {"type": target_type,
             **target_class(target_type).construction_parameters().defaults()}

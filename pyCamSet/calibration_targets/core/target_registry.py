@@ -28,6 +28,7 @@ from typing import Any
 TARGET_CLASSES: dict[str, tuple[str, str]] = {
     "Ccube": ("pyCamSet.calibration_targets.ccube.target", "Ccube"),
     "ChArUco": ("pyCamSet.calibration_targets.charuco.target", "ChArUco"),
+    "ChArUco2": ("pyCamSet.calibration_targets.charuco2.target", "ChArUco2"),
     "PuzzleBoard": (
         "pyCamSet.calibration_targets.puzzleboard.target", "PuzzleBoard"),
     "PuzzleBoardCube": (

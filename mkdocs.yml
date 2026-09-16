@@ -61,6 +61,7 @@ nav:
   - Calibration Targets:
       - Choosing a target: targets/index.md
       - ChArUco: targets/charuco.md
+      - ChArUco2: targets/charuco2.md
       - Ccube: targets/ccube.md
       - PuzzleBoard: targets/puzzleboard.md
       - PuzzleBoardCube: targets/puzzleboard-cube.md

@@ -270,7 +270,7 @@ class CameraSet:
         :param pair_scoring: which angle pair.txt's candidate scores are
             computed from -- ``"auto"`` (the default), ``"view_angle"`` or
             ``"convergence"``; see
-            :func:`pyCamSet.reconstruction.acmmp_utils.calc_pair_scores`.
+            ``pyCamSet.reconstruction.acmmp_utils.calc_pair_scores``.
             ``"auto"`` scores a rig that converges on a shared target by the
             angle subtended there, and anything else by the angle between
             view vectors, windowed by ``r.minangle``/``r.maxangle``. Ignored

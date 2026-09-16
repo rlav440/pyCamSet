@@ -499,7 +499,14 @@ def read_parameter_widget(widget):
 def set_parameter_widget(widget, value) -> None:
     """Show *value* in one of :func:`build_parameter_widget`'s controls."""
     if isinstance(widget, QComboBox):
-        widget.setCurrentText(str(value))
+        text = str(value)
+        if widget.findText(text) < 0:
+            # A saved spec can name a value this combo's current choices no
+            # longer offer (e.g. a dictionary retired from the dropdown).
+            # Add it rather than silently keeping whatever was already
+            # selected -- the displayed value must always match the spec.
+            widget.addItem(text)
+        widget.setCurrentText(text)
     elif isinstance(widget, QCheckBox):
         widget.setChecked(bool(value))
     elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):

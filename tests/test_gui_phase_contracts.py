@@ -32,12 +32,13 @@ def _with(params, **changes):
 # The form's controls were a map of widget names, one copy per phase, read
 # by a helper.  They are the target's own declared arguments now, so the
 # tests below are about the form rather than about the map.
-def _target_form(target_type=None):
+def _target_form(target_type=None, detector_mode=None):
     from pyCamSet.gui.shared_functions import TargetSettingsForm
 
-    form = TargetSettingsForm()
+    form = (TargetSettingsForm() if detector_mode is None
+            else TargetSettingsForm(detector_mode=detector_mode))
     if target_type is not None:
-        form._target_combo.setCurrentText(target_type)
+        form.set_target_type(target_type)
     return form
 
 
@@ -119,10 +120,13 @@ def test_the_dead_cross_tab_sync_names_never_come_back(qt_app_for_tabs):
     assert not hasattr(app, "_syncing_target")
 
     # The widget path signals actually could reach, had anything wired to
-    # it: the shared form each target-bearing tab really owns.
-    for tab_attr in ("phase1_tab", "phase2_tab", "phase3_tab"):
+    # it: the shared form each target-bearing tab really owns.  Only Phase 1
+    # chooses a detector; Phases 2 and 3 read that run's detections with the
+    # detector it used, so their forms have no combo to wire to.
+    assert isinstance(app.phase1_tab._target_form._backend_combo, QComboBox)
+    for tab_attr in ("phase2_tab", "phase3_tab"):
         tab = getattr(app, tab_attr)
-        assert isinstance(tab._target_form._backend_combo, QComboBox)
+        assert tab._target_form._backend_combo is None
 
 
 @pytest.mark.gui
@@ -545,7 +549,7 @@ def test_the_detection_form_shows_what_the_chosen_detector_takes(
     QApplication.instance() or QApplication([])
     tab = _phase1_tab()
     try:
-        tab._target_form._target_combo.setCurrentText(target_type)
+        tab._target_form.set_target_type(target_type)
         if backend is not None:
             tab._target_form._backend_combo.setCurrentIndex(
                 tab._target_form._backend_combo.findData(backend))
@@ -685,7 +689,7 @@ def test_a_preset_still_sets_the_bounds_of_the_rows_it_covers():
     QApplication.instance() or QApplication([])
     tab = _optimisation_tab()
     try:
-        tab._target_form._target_combo.setCurrentText("Ccube")
+        tab._target_form.set_target_type("Ccube")
         tab._detection_profile_combo.setCurrentText("Aggressive Recovery")
         row = tab._param_rows["adaptiveThreshWinSizeMax"]
 
@@ -831,7 +835,7 @@ def test_the_form_offers_every_target_the_registry_knows():
     QApplication.instance() or QApplication([])
     form = _target_form()
     try:
-        offered = [form._target_combo.itemText(i)
+        offered = [form._target_combo.itemData(i)
                    for i in range(form._target_combo.count())]
         assert offered == list(TARGET_NAMES)
     finally:
@@ -882,7 +886,7 @@ def test_a_phase_adopts_the_target_of_the_run_it_continues(phase):
                      if k.endswith("Tab") and isinstance(v, type))
     tab = tab_class(QTabWidget(), QCheckBox(), QCheckBox(), WorkspaceManager(None))
     try:
-        tab._target_form._target_combo.setCurrentText("ChArUco")
+        tab._target_form.set_target_type("ChArUco")
         run = {"run_id": "r1", "params": CCUBE_12}
 
         adopt = getattr(tab, "_adopt_target_from_phase1_run", None) or \
@@ -920,11 +924,11 @@ def test_flipping_target_type_keeps_a_shared_value_and_restores_it_on_return():
         set_parameter_widget(form._widgets["square_size"], 42.0)
         set_parameter_widget(form._widgets["marker_fraction"], 0.5)
 
-        form._target_combo.setCurrentText("PuzzleBoard")
+        form.set_target_type("PuzzleBoard")
         assert read_parameter_widget(form._widgets["square_size"]) == "42.0"
         assert "marker_fraction" not in form._widgets  # PuzzleBoard has no such field
 
-        form._target_combo.setCurrentText("ChArUco")
+        form.set_target_type("ChArUco")
         assert read_parameter_widget(form._widgets["square_size"]) == "42.0"
         assert read_parameter_widget(form._widgets["marker_fraction"]) == "0.5"
     finally:
@@ -933,8 +937,8 @@ def test_flipping_target_type_keeps_a_shared_value_and_restores_it_on_return():
 
 @pytest.mark.gui
 def test_flipping_the_detector_backend_keeps_a_typed_value():
-    """The detector combo rebuilds the same rows :meth:`_rebuild` does, so
-    a value survives that flip exactly as it does a target-type flip."""
+    """A typed value survives a detector flip: the detector says what reads
+    the board, not what the board is."""
     from PySide6.QtWidgets import QApplication
 
     from pyCamSet.gui.shared_functions import read_parameter_widget, set_parameter_widget
@@ -954,6 +958,71 @@ def test_flipping_the_detector_backend_keeps_a_typed_value():
 
 
 @pytest.mark.gui
+def test_choosing_a_detector_keeps_the_target_a_spec_loaded():
+    """A remembered or adopted target is loaded with apply_spec, which marks
+    nothing as edited; choosing the detector afterwards must not put the
+    board back to the target's defaults."""
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    form = _target_form(detector_mode="choose")
+    try:
+        form.apply_spec({"type": "ChArUco", "num_squares_x": 12,
+                         "num_squares_y": 9, "square_size": 4.0,
+                         "marker_backend": "aruco1"})
+        heard = []
+        form.changed.connect(lambda: heard.append(True))
+
+        form._backend_combo.setCurrentIndex(form._backend_combo.findData("aruco2"))
+
+        spec = form.spec()
+        assert spec["num_squares_x"] == 12
+        assert spec["num_squares_y"] == 9
+        assert spec["square_size"] == 4.0
+        assert spec["marker_backend"] == "aruco2"
+        assert heard, "the detection options still hear of the new detector"
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("detector_mode", ["choose", "inherit"])
+@pytest.mark.parametrize("target_type,dict_key", [("ChArUco", "a_dict"),
+                                                  ("Ccube", "aruco_dict")])
+def test_a_loaded_spec_naming_an_unoffered_dictionary_reads_back(
+        detector_mode, target_type, dict_key):
+    """A run saved with a dictionary the list no longer offers is still the
+    run Phases 2 and 3 adopt, so the form must read it back, not refuse it."""
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    form = _target_form(detector_mode=detector_mode)
+    try:
+        form.apply_spec({"type": target_type, dict_key: "DICT_ALVAR_7X7_1000",
+                         "marker_backend": "aruco2"})
+        spec = form.spec()
+        assert spec[dict_key] == "DICT_ALVAR_7X7_1000"
+        assert spec["marker_backend"] == "aruco2"
+
+        # Only the loaded value is let through: another unoffered name is
+        # still refused, and so is the loaded one once the rows are rebuilt.
+        from pyCamSet.gui.shared_functions import set_parameter_widget
+        from pyCamSet.workflow.params import ParamError
+
+        set_parameter_widget(form._widgets[dict_key], "DICT_APRILTAG_36h11")
+        with pytest.raises(ParamError):
+            form.spec()
+        other = "Ccube" if target_type == "ChArUco" else "ChArUco"
+        form.set_target_type(other)
+        form.set_target_type(target_type)
+        set_parameter_widget(form._widgets[dict_key], "DICT_ALVAR_7X7_1000")
+        with pytest.raises(ParamError):
+            form.spec()
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
 def test_adopting_a_run_does_not_leak_a_stale_retained_value():
     """A key retained several flips ago, from a target no longer on
     screen, must not resurface just because :meth:`apply_spec` loads a
@@ -968,8 +1037,8 @@ def test_adopting_a_run_does_not_leak_a_stale_retained_value():
     form = _target_form("ChArUco")
     try:
         set_parameter_widget(form._widgets["num_squares_x"], 999)
-        form._target_combo.setCurrentText("PuzzleBoard")  # retains num_squares_x=999
-        form._target_combo.setCurrentText("Ccube")  # Ccube has no such field either
+        form.set_target_type("PuzzleBoard")  # retains num_squares_x=999
+        form.set_target_type("Ccube")  # Ccube has no such field either
 
         # A spec that says nothing about num_squares_x at all.
         form.apply_spec({"type": "ChArUco", "square_size": 5.0})
@@ -1007,7 +1076,7 @@ def test_browsing_target_types_with_no_edits_shows_each_ones_own_defaults():
     form = _target_form()
     try:
         for target_type in TARGET_NAMES:
-            form._target_combo.setCurrentText(target_type)
+            form.set_target_type(target_type)
             spec = form.spec()
             sig = inspect.signature(target_class(target_type).__init__)
             for name, param in sig.parameters.items():
@@ -1046,7 +1115,7 @@ def test_an_edited_shared_value_survives_a_flip_while_an_untouched_one_takes_the
     try:
         set_parameter_widget(form._widgets["length"], 55.0)
 
-        form._target_combo.setCurrentText("PuzzleBoardCube")
+        form.set_target_type("PuzzleBoardCube")
 
         spec = form.spec()
         assert spec["length"] == 55.0, "the edited value survives the target flip"
@@ -1059,7 +1128,7 @@ def test_an_edited_shared_value_survives_a_flip_while_an_untouched_one_takes_the
 
         # The detector-flip path: ChArUco's square_size, edited, must
         # survive a backend change the same way.
-        form._target_combo.setCurrentText("ChArUco")
+        form.set_target_type("ChArUco")
         set_parameter_widget(form._widgets["square_size"], 42.0)
 
         form._backend_combo.setCurrentIndex(form._backend_combo.findData("aruco2"))
@@ -1219,7 +1288,7 @@ def test_the_suggested_name_tracks_a_value_edit():
     QApplication.instance() or QApplication([])
     dialog = _create_target_dialog()
     try:
-        dialog._target_form._target_combo.setCurrentText("Ccube")
+        dialog._target_form.set_target_type("Ccube")
         # A QLineEdit's setText() emits textChanged, which is exactly the
         # signal a row's value is wired to -- no simulated keystroke needed.
         set_parameter_widget(dialog._target_form._widgets["n_points"], 30)
@@ -1246,7 +1315,7 @@ def test_the_suggested_name_stops_once_typed_into_and_resumes_when_cleared():
     QApplication.instance() or QApplication([])
     dialog = _create_target_dialog()
     try:
-        dialog._target_form._target_combo.setCurrentText("Ccube")
+        dialog._target_form.set_target_type("Ccube")
 
         dialog._name_edit.setText("my_own_name.svg")
         dialog._name_edit.textEdited.emit("my_own_name.svg")
@@ -1266,3 +1335,232 @@ def test_the_suggested_name_stops_once_typed_into_and_resumes_when_cleared():
             "the resume must not touch any other widget")
     finally:
         dialog.deleteLater()
+
+
+# --------------------------------------------------------------------------
+# The detector is chosen where detection happens
+# --------------------------------------------------------------------------
+#
+# The detector used to be part of describing a target, so Create Target
+# asked for it -- though a board prints the same whichever detector reads
+# it -- and Phases 2 and 3 offered it again, though they only read the
+# detections a Phase 1 run already made.  Phase 1 and the Optimisation tab
+# choose it now; Phases 2 and 3 show the adopted run's.
+
+
+def _combo_items(combo):
+    """Each item's value, whether it can be picked, and its hover text."""
+    from PySide6.QtCore import Qt
+
+    model = combo.model()
+    return {combo.itemData(i): (model.item(i).isEnabled(),
+                                combo.itemData(i, Qt.ItemDataRole.ToolTipRole) or "")
+            for i in range(combo.count())}
+
+
+@pytest.mark.gui
+def test_the_detection_options_follow_the_detector_charuco2_forces():
+    """The forced selection is a structural change like any other."""
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.calibration_targets.core.target_registry import target_class
+
+    QApplication.instance() or QApplication([])
+    tab = _phase1_tab()
+    try:
+        tab._target_form.set_target_type("ChArUco")
+        assert tab._current_detector_parameterisation().name == "aruco1"
+
+        tab._target_form.set_target_type("ChArUco2")
+        expected = target_class("ChArUco2").detector_parameterisation().name
+        assert tab._current_detector_parameterisation().name == expected
+        assert tuple(tab._detection_option_widgets) == tuple(
+            p.key for p in tab._current_detector_parameterisation().settable())
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("phase", ["phase_2_intrinsics", "phase_3_bundle_adjustment"])
+def test_phases_2_and_3_round_trip_the_adopted_runs_detection_options(phase):
+    """The adopted Phase 1 run's detector tuning has no widget in ``inherit``
+    mode, but it must still reach ``spec()`` -- otherwise a fallback
+    redetection (``phase2.py``'s ``_load_or_detect``) silently uses the
+    detector's built-in defaults instead of the tuning that made the
+    adopted run's own detection succeed.
+    """
+    import importlib
+
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    QApplication.instance() or QApplication([])
+    module = importlib.import_module(f"pyCamSet.gui.{phase}")
+    tab_class = next(v for k, v in vars(module).items()
+                     if k.endswith("Tab") and isinstance(v, type))
+    tab = tab_class(QTabWidget(), QCheckBox(), QCheckBox(), WorkspaceManager(None))
+    try:
+        form = tab._target_form
+
+        # No run adopted yet: nothing to carry.
+        assert form.spec().get("detection_options") is None
+
+        tuned = {"cornerRefinementWinSize": 9}
+        tab._adopt_target_from_phase1_run(
+            {"run_id": "r1", "params": _with(CCUBE_12, detection_options=tuned)})
+        assert form.spec()["detection_options"] == tuned
+
+        # A later run without tuning of its own must not keep the previous
+        # run's -- adopting wins outright, the same as every other field.
+        tab._adopt_target_from_phase1_run({"run_id": "r2", "params": CCUBE_12})
+        assert form.spec().get("detection_options") is None
+
+        # A run recorded without a target spec drops it too.
+        tab._adopt_target_from_phase1_run(
+            {"run_id": "r3", "params": _with(CCUBE_12, detection_options=tuned)})
+        assert form.spec()["detection_options"] == tuned
+        tab._adopt_target_from_phase1_run({"run_id": "r4", "params": {}})
+        assert form.spec().get("detection_options") is None
+
+        # A different target picked by hand after adopting gets none of the
+        # run's tuning -- it is that run's own target's, and may not even
+        # apply to this one's detector.
+        tab._adopt_target_from_phase1_run(
+            {"run_id": "r5", "params": _with(CCUBE_12, detection_options=tuned)})
+        assert form.spec()["detection_options"] == tuned
+        form.set_target_type("ChArUco")
+        assert form.spec().get("detection_options") is None
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("phase, refresh", [
+    ("phase_2_intrinsics", "_update_detection_source_label"),
+    ("phase_3_bundle_adjustment", "_update_source_label"),
+])
+def test_a_workspace_with_no_run_drops_the_adopted_runs_detector(phase, refresh, tmp_path):
+    """Moved to a workspace with no run of its own, a phase no longer reads
+    with the detector of a run that does not apply there."""
+    import importlib
+
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    QApplication.instance() or QApplication([])
+    module = importlib.import_module(f"pyCamSet.gui.{phase}")
+    tab_class = next(v for k, v in vars(module).items()
+                     if k.endswith("Tab") and isinstance(v, type))
+    manager = WorkspaceManager(None)
+    manager.set_workspace_path(tmp_path / "a" / ".pycamset_workspace")
+    tab = tab_class(QTabWidget(), QCheckBox(), QCheckBox(), manager)
+    try:
+        form = tab._target_form
+        tab._adopt_target_from_phase1_run(
+            {"run_id": "r1", "params": _with(CCUBE_12, marker_backend="aruco2")})
+        assert form.spec()["marker_backend"] == "aruco2"
+
+        manager.set_workspace_path(tmp_path / "b" / ".pycamset_workspace")
+        getattr(tab, refresh)()
+        assert form.target_type() == "Ccube"
+        assert form.backend() == "aruco1"
+        assert form.spec()["marker_backend"] == "aruco1"
+        assert "(this target's default)" in form._inherited_backend_label.text()
+
+        # The same run, once it applies again, is adopted afresh.
+        tab._adopt_target_from_phase1_run(
+            {"run_id": "r1", "params": _with(CCUBE_12, marker_backend="aruco2")})
+        assert form.spec()["marker_backend"] == "aruco2"
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
+def test_setting_a_detection_override_drops_the_previously_adopted_detector(tmp_path):
+    """Phase 2's target form must not keep showing a stale detector, adopted
+    from whichever Phase 1 run was last auto-adopted, once a manual
+    detection-source override is in play (round-2 review, P2).
+
+    The override may read a different run's detections, or the same run's
+    detections made with a different detector -- and the target form is
+    DETECTOR_INHERIT here, with no detector row for the user to correct it
+    by hand, so a stale value would otherwise be silently uncontrollable.
+    """
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.gui.phase_2_intrinsics import Phase2Tab
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    QApplication.instance() or QApplication([])
+    manager = WorkspaceManager(None)
+    manager.set_workspace_path(tmp_path / "ws" / ".pycamset_workspace")
+    tab = Phase2Tab(QTabWidget(), QCheckBox(), QCheckBox(), manager)
+    try:
+        form = tab._target_form
+        tab._adopt_target_from_phase1_run(
+            {"run_id": "r1", "params": _with(CCUBE_12, marker_backend="aruco2")})
+        assert form.spec()["marker_backend"] == "aruco2"
+
+        tab._det_pickle_edit.setText(str(tmp_path / "nonexistent.pickle"))
+        tab._update_detection_source_label()
+
+        assert "override file" in tab._phase1_lbl.text()
+        assert form.backend() == "aruco1"
+        assert form.spec()["marker_backend"] == "aruco1"
+        assert "(this target's default)" in form._inherited_backend_label.text()
+        assert tab._adopted_target_run_id is None
+
+        # Because the adopted run_id was forgotten above, the SAME run,
+        # re-offered once the override no longer applies, is adopted
+        # afresh -- it is not silently skipped as "already adopted", which
+        # is what would keep the form stuck on the target's default forever.
+        tab._adopt_target_from_phase1_run(
+            {"run_id": "r1", "params": _with(CCUBE_12, marker_backend="aruco2")})
+        assert form.spec()["marker_backend"] == "aruco2"
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
+def test_the_optimisation_tab_still_chooses_its_detector():
+    """A study runs its own detections, so it keeps the choice."""
+    from PySide6.QtWidgets import QApplication, QComboBox
+
+    from pyCamSet.gui.shared_functions import DETECTOR_CHOOSE
+
+    QApplication.instance() or QApplication([])
+    tab = _optimisation_tab()
+    try:
+        form = tab._target_form
+        assert form.detector_mode() == DETECTOR_CHOOSE
+        assert isinstance(form._backend_combo, QComboBox)
+        form.set_target_type("Ccube")
+        assert not form._backend_combo.isHidden()
+        form._backend_combo.setCurrentIndex(form._backend_combo.findData("aruco2"))
+        assert form.spec()["marker_backend"] == "aruco2"
+    finally:
+        tab.deleteLater()
+
+
+def test_every_target_label_names_a_registered_target():
+    from pyCamSet.calibration_targets.core.target_registry import (
+        TARGET_LABELS,
+        target_label,
+    )
+
+    assert set(TARGET_LABELS) <= set(TARGET_NAMES)
+    assert target_label("PuzzleBoardCube") == "PuzzleBoardCube", "falls back to the name"
+    assert len(set(map(target_label, TARGET_NAMES))) == len(TARGET_NAMES)
+
+
+@pytest.mark.gui
+def test_a_form_refuses_a_detector_mode_it_does_not_know():
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import TargetSettingsForm
+
+    QApplication.instance() or QApplication([])
+    with pytest.raises(ValueError, match="detector_mode"):
+        TargetSettingsForm(detector_mode="sometimes")

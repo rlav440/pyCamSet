@@ -38,6 +38,27 @@ TARGET_CLASSES: dict[str, tuple[str, str]] = {
 #: The target names, in the order an interface should offer them.
 TARGET_NAMES: tuple[str, ...] = tuple(TARGET_CLASSES)
 
+#: What an interface calls a target, where that is not its registry name.
+#: The names are persisted in every saved spec, so they stay as they are;
+#: these only say which marker generation a board is printed with, which
+#: the names on their own leave a reader to guess.
+TARGET_LABELS: dict[str, str] = {
+    "ChArUco": "ChArUco1",
+    "Ccube": "ChArUco1 ccube",
+    "ChArUco2": "ChArUco2",
+}
+
+
+def target_label(name: str) -> str:
+    """
+    What an interface shows for a target name.
+
+    :param name: the target's name, as :data:`TARGET_CLASSES` keys it
+    :return: its label, or the name itself for a target with no label
+    """
+    return TARGET_LABELS.get(name, name)
+
+
 #: The key under which a spec names its class.
 TYPE_KEY = "type"
 

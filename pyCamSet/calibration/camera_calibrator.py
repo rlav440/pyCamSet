@@ -400,6 +400,25 @@ def run_stereo_calibration(
     return optimised_cams
 
 
+def detector_backend_of(target) -> str | None:
+    """
+    The detector a target object is read with, when it says.
+
+    ChArUco and Ccube carry the one they were built with as
+    ``marker_backend``; a target that can only be read one way (ChArUco2,
+    PuzzleBoard) has no such attribute, and is read with its only detector.
+
+    :param target: any calibration target
+    :return: a key of the target's ``DETECTOR_BACKENDS``, or None when it
+        cannot be told
+    """
+    backend = getattr(target, "marker_backend", None)
+    if backend:
+        return str(backend)
+    backends = tuple(getattr(type(target), "DETECTOR_BACKENDS", None) or ())
+    return backends[0] if len(backends) == 1 else None
+
+
 def detect_datapoints_in_imfile(
     f_loc: Path,
     calibration_target: AbstractTarget,

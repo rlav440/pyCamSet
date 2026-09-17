@@ -34,11 +34,13 @@ def test_calibration_ccube(data_dir):
 @pytest.mark.parametrize("backend", ["aruco1", "aruco2"])
 def test_ccube_construction_parameters_excludes_apriltag(backend: str) -> None:
     """AprilTag dictionaries are the only ones aruco1/aruco2 disagree on --
-    they must never be offered, on either backend, in Create Target."""
+    they must never be offered, on either backend, in Create Target.  The
+    detector is chosen in the detection phase, so the offer is the same
+    18 names whichever backend is asked about."""
     choices = Ccube.construction_parameters(backend).parameter("aruco_dict").choices
     values = [choice.value for choice in choices]
     assert not any(value.startswith("DICT_APRILTAG_") for value in values)
-    assert len(values) == (18 if backend == "aruco1" else 20)
+    assert len(values) == 18
 
 
 def test_ccube_texture_is_detector_compatible_and_detects(tmp_path: Path) -> None:

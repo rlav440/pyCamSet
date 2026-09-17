@@ -29,12 +29,39 @@ before spending a session photographing the wrong thing.
 | Argument | Default | |
 |---|---|---|
 | `length` | 20.0 | Printed edge of the cube, in millimetres |
-| `n_points` | 5 | Corners along one edge of one face |
+| `n_points` | 5 | Squares along one edge of one face |
 | `aruco_dict` | `DICT_4X4_1000` | The ArUco dictionary the markers come from |
 | `border_fraction` | 0.1 | Blank margin around each face, as a fraction |
 | `line_fraction` | 0.003 | Width of the fold lines on the net |
 | `legacy` | `False` | OpenCV's pre-4.6 marker origin |
-| `marker_backend` | `"aruco1"` | Which detector reads the markers back |
+| `marker_backend` | `"aruco1"` | Which detector reads the markers back: `"aruco1"` or `"aruco2"` |
+
+`legacy` must match how the physical cube was printed: `False` is OpenCV's
+current pattern (the default), `True` its pre-4.6 one. pyCamSet does not
+switch patterns automatically — both detectors read only the pattern each
+face is configured with. If a face's images look like the other pattern, it
+logs a once-per-target warning naming the face and the likely correct
+setting; this only matters for a face with an even number of rows
+(`n_points`), since an odd one reads identically either way.
+
+`marker_backend` describes how the cube is read, not what is printed: the
+dictionaries offered print identically under both detectors, so one printed
+cube can be read with either. The GUI, where this target is labelled
+**ChArUco1 ccube**, therefore asks for no detector in **Create Target…**; it is chosen
+in Phase 1 (and in the Optimisation tab), and Phases 2 and 3 use the detector of
+the Phase 1 run they continue. See [The graphical workflow](../how-to/gui.md).
+
+Both detectors read the same printed cube, so choosing between them is purely
+about detection quality, not what to print. In synthetic tests ArUco 1
+(OpenCV, the default) gave the lowest corner outlier counts; ArUco 2 found more
+corners under blur, noise and strong tilt, with comparable camera pose
+accuracy, but produced more corners over 3 px off and a worse lens-model fit on
+some cube datasets. These are synthetic-test results, not a guarantee for a
+particular camera or lighting — if in doubt, try both on your own images.
+
+For accuracy, use at least 10 squares per face side (`n_points`): 5-square
+faces were 3–11x worse in rotation, translation and focal-length error in
+synthetic tests, for both Ccube and [Ccube2](ccube2.md).
 
 ## Calibrating with it
 

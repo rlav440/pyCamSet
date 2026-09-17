@@ -67,7 +67,7 @@ params = {
         'marker_fraction': 0.8,
         'marker_backend': 'aruco1',
         'a_dict': 3,
-        'legacy': True,
+        'legacy': False,
     },
     'f_loc': '/data/my_rig',
     'caching': True,

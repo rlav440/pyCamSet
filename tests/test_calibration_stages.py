@@ -452,39 +452,59 @@ def test_outlier_rejection_does_not_draw_when_asked_not_to(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.data
-def test_the_intrinsics_report_says_what_the_calibration_achieved(
-        session_data_dir, ccube_target, ccube_detections, caplog):
-    """The report's RMS is the calibration's own number, not a remeasurement.
+def _rigid_pose_rms(cams, detections, target) -> float:
+    """What the report would say if it charged the cube's build error to the camera.
 
-    ``initial_calibration`` hands OpenCV one planar board per cube face per
+    One rigid pose for the whole cube per image, rather than a pose per face,
+    so every millimetre the cube was not assembled to lands in the residual.
+    """
+    from pyCamSet.calibration_targets.core.abstract_target import get_keys
+    from pyCamSet.utils.general_utils import h_tform
+
+    squared, count = 0.0, 0
+    for name in cams.get_names():
+        cam = cams[name]
+        for image in detections.get(cam=name).get_image_list():
+            if not image.has_data():
+                continue
+            pose = target.target_pose_in_cam_image(image, cam, mode="nan")
+            if np.isnan(pose[0, 0]):
+                continue
+            data = image.get_data()
+            object_points = target.point_data[tuple(get_keys(data).astype(int).T)]
+            projected = cam.project_points(h_tform(object_points, pose))
+            squared += float(np.sum((projected - data[:, -2:]) ** 2))
+            count += len(data)
+    return float(np.sqrt(squared / count))
+
+
+@pytest.mark.data
+def test_the_intrinsics_report_measures_the_camera_not_the_cube(
+        session_data_dir, ccube_target, ccube_detections):
+    """The report's RMS is per board, which is how the cameras were seeded.
+
+    ``initial_calibration`` seeds from one planar board per cube face per
     image, each with a pose of its own, so the cube's assembly never enters
     the residual.  Measuring the finished cameras against a single rigid pose
-    for the whole cube instead reported ~3.4 px where the calibration had
-    achieved ~0.76 -- the cube's build error, charged to the camera, in the
-    one block whose job is to say whether the camera is a usable starting
-    point.
+    for the whole cube instead reported ~3.4 px where the per board figure is
+    sub-pixel -- the cube's build error, charged to the camera, in the one
+    block whose job is to say whether the camera is a usable starting point.
+
+    Measured here both ways rather than against the seed's own log line, which
+    reports the closed form's residual: a different quantity, several times
+    larger, because those poses are never solved against the pixels.
     """
     from pyCamSet.utils.intrinsics_report import IntrinsicsReport
 
     detections, camera_res = ccube_detections
-    with caplog.at_level(logging.INFO, logger="pyCamSet"):
-        cams = run_initial_calibration(
-            detections, ccube_target, camera_res, save=False)
+    cams = run_initial_calibration(
+        detections, ccube_target, camera_res, save=False)
     cams.set_resolutions_from_file(floc=session_data_dir / "calibration_ccube")
 
-    achieved = {
-        match.group(1): float(match.group(2))
-        for match in (
-            re.match(r"(\S+) took .*leftover error of ([\d.]+) pixels", message)
-            for message in caplog.messages)
-        if match
-    }
-    assert set(achieved) == set(cams.get_names())
-
     report = IntrinsicsReport.from_calibration(cams, detections, ccube_target)
+    rigid = _rigid_pose_rms(cams, detections, ccube_target)
 
+    assert {cam.name for cam in report.per_camera} == set(cams.get_names())
     for cam in report.per_camera:
-        # The log line rounds to 2dp, which is the whole tolerance here: the
-        # report is meant to be the same number, not a close one.
-        assert cam.rms_px == pytest.approx(achieved[cam.name], abs=0.005)
+        assert cam.rms_px < 1.5
+        assert cam.rms_px < 0.5 * rigid

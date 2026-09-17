@@ -156,14 +156,19 @@ def staged_camera_root(
     cam_folders: list[Path],
     log: LogFn = discard,
     prefix: str = "pycamset_",
+    all_camera_folders: Optional[list[Path]] = None,
 ) -> Iterator[Path]:
     """
     Yield a folder holding only *cam_folders*, for a detection pass to read.
 
     A detection pass treats every sub-folder of its root as a camera.  An
-    image folder that also holds a workspace, a camset, or the cameras not
-    selected for this run therefore cannot be handed over as it stands.  When
-    it holds nothing else, it is yielded unchanged and nothing is copied.
+    image folder that also holds the cameras not selected for this run
+    therefore cannot be handed over as it stands.  Staging is triggered by an
+    unselected *candidate camera folder* -- a directory with images of its
+    own that is not one of the selected cameras -- never by any other kind of
+    entry: a workspace directory, a detection cache pickle, its identity
+    sidecar, a `.camset` file, and any other non-candidate entry are all left
+    in place and the folder is yielded unchanged, nothing copied.
 
     The staged folder is symlinks where the platform allows them, and copies
     where it does not, and is removed on the way out.
@@ -172,9 +177,18 @@ def staged_camera_root(
     :param cam_folders: the camera folders this run should see
     :param log: what to call with each line of output
     :param prefix: distinguishes one phase's staging folder from another's
+    :param all_camera_folders: *image_folder*'s full candidate-camera-folder
+        scan, when the caller already has it (e.g. from its own earlier
+        :func:`selected_camera_folders` call) -- reused here instead of
+        repeating :func:`~pyCamSet.workflow.workspace.get_camera_subfolders`'s
+        full per-folder image glob a second time. Scanned fresh when
+        omitted, exactly as before.
     """
     allowed = {folder.name for folder in cam_folders}
-    if all(entry.name in allowed for entry in image_folder.iterdir()):
+    present_folders = (get_camera_subfolders(image_folder)
+                       if all_camera_folders is None else all_camera_folders)
+    present = {folder.name for folder in present_folders}
+    if present <= allowed:
         yield image_folder
         return
 
@@ -191,14 +205,20 @@ def staged_camera_root(
 
 
 def selected_camera_folders(
-        image_folder: Path, selected: Optional[list[str]]) -> list[Path]:
+        image_folder: Path, selected: Optional[list[str]],
+        all_camera_folders: Optional[list[Path]] = None) -> list[Path]:
     """
     Return the camera folders of *image_folder*, narrowed to *selected*.
 
     :param image_folder: the root holding one folder per camera
     :param selected: the camera names to keep, or empty for all of them
+    :param all_camera_folders: *image_folder*'s full candidate-camera-folder
+        scan, when the caller already has it -- reused instead of a second
+        :func:`~pyCamSet.workflow.workspace.get_camera_subfolders` scan.
+        Scanned fresh when omitted, exactly as before.
     """
-    folders = get_camera_subfolders(image_folder)
+    folders = (get_camera_subfolders(image_folder)
+              if all_camera_folders is None else all_camera_folders)
     if selected:
         wanted = set(selected)
         folders = [folder for folder in folders if folder.name in wanted]

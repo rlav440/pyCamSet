@@ -85,6 +85,7 @@ from pyCamSet.workflow.targets import describe_target, TARGET_KEY
 from pyCamSet.workflow.workspace import (
     IMAGE_EXTS as _IMAGE_EXTS,
     WorkspaceManager,
+    as_io_path,
     get_camera_subfolders,
     path_exists,
     workspace_path_for,
@@ -275,7 +276,9 @@ class Phase1Tab(QWidget):
         self._cache_cb.setChecked(True)
         self._cache_cb.setToolTip(
             "Concept: when enabled pyCamSet can reuse a previously saved\n"
-            "detected_datapoints.pickle rather than reprocessing every image.\n\n"
+            "detected_datapoints.pickle rather than reprocessing every image --\n"
+            "but only when it was made for the same target, cameras and image\n"
+            "cap; otherwise it redetects and overwrites the cache.\n\n"
             "Default: enabled\n"
             "Range: on / off\n"
             "Guidance: disable only if you suspect a stale cache is masking\n"
@@ -1142,15 +1145,41 @@ class Phase1DiagnosticsTab(QWidget):
             return
 
         floc = Path(chosen["params"]["f_loc"])
-        det_path = self._resolve_pickle_path_for_run(chosen)
-        if det_path is None or not path_exists(det_path):
-            if show_errors:
-                QMessageBox.warning(self, "No detections file", "No pickle found for this run.")
-            return
 
+        # A run-private path (its own artifact, or its own run directory) is
+        # never a slot another run writes to, so a raw read of it is safe.
+        # The last-resort image-folder cache is a *shared* slot instead --
+        # a concurrent Phase 1 run against the same folder can overwrite it
+        # between being resolved and being read -- so that branch alone is
+        # re-verified right here, at the point of reading it, rather than
+        # trusted from an earlier resolution. See
+        # phase1_workflow.load_matching_image_folder_cache's own docstring.
+        private_path = self._resolve_private_pickle_path_for_run(chosen)
         try:
-            with open(det_path, "rb") as fh:
-                payload = pickle.load(fh)
+            if private_path is not None:
+                # A recorded artifact/run-dir path that turns out to be
+                # missing is a dead end here, same as before this fix --
+                # never silently substituted with a different run's shared
+                # cache.
+                if not path_exists(private_path):
+                    if show_errors:
+                        QMessageBox.warning(
+                            self, "No detections file",
+                            "No pickle found for this run.")
+                    return
+                # as_io_path, like path_exists above: a raw open() fails on
+                # a Windows path past 260 characters.
+                with open(as_io_path(private_path), "rb") as fh:
+                    payload = pickle.load(fh)
+            else:
+                payload = phase1_workflow.load_matching_image_folder_cache(
+                    chosen.get("params", {}))
+                if payload is None:
+                    if show_errors:
+                        QMessageBox.warning(
+                            self, "No detections file",
+                            "No pickle found for this run.")
+                    return
             detections = self._extract_detections_obj(payload)
             if detections is None:
                 raise TypeError("Unsupported pickle payload (no object with get_cam_list).")
@@ -1292,8 +1321,21 @@ class Phase1DiagnosticsTab(QWidget):
         self._draw_status_lbl.setText(f"{idx + 1}/{max_images}")
         self._draw_state["canvas"].draw_idle()
 
-    def _resolve_pickle_path_for_run(self, run: dict) -> Optional[Path]:
-        """Resolve detected_datapoints.pickle path for a Phase 1 run."""
+    def _resolve_private_pickle_path_for_run(self, run: dict) -> Optional[Path]:
+        """This run's own detected_datapoints.pickle -- never a shared slot.
+
+        Either its recorded artifact, or its own run directory's copy: both
+        written only by this run itself (see ``phase1_workflow.run``'s own
+        docstring), so nothing else can overwrite either between being
+        resolved here and being read a moment later, and a raw read of
+        whichever is found is safe. ``None`` means only the image folder's
+        *shared* cache slot might still have something to offer -- see
+        :meth:`_resolve_pickle_path_for_run` -- and that one is never safe
+        to read raw, because another run can overwrite it at any moment; it
+        must be re-verified at the point of reading it instead, which is
+        what :meth:`_draw_detections_for_run` does via
+        ``phase1_workflow.load_matching_image_folder_cache``.
+        """
         art_path = run.get("artifacts", {}).get("detected_datapoints_pickle")
         if art_path:
             return Path(art_path)
@@ -1304,12 +1346,31 @@ class Phase1DiagnosticsTab(QWidget):
             p = ws / "phase1_runs" / run_id / "detected_datapoints.pickle"
             if path_exists(p):
                 return p
-
-        f_loc = run.get("params", {}).get("f_loc")
-        if f_loc:
-            return Path(f_loc) / "detected_datapoints.pickle"
-
         return None
+
+    def _resolve_pickle_path_for_run(self, run: dict) -> Optional[Path]:
+        """Resolve detected_datapoints.pickle path for a Phase 1 run.
+
+        For *presence* checks only (the run-selection loops in
+        :meth:`_draw_detections_clicked`/:meth:`open_draw_detections_for_latest`,
+        which just need to know something is there to choose this run) --
+        never read raw for its content. The last-resort branch below can
+        point at the image folder's shared cache slot, which a concurrent
+        Phase 1 run can overwrite at any moment after this resolves it;
+        :meth:`_draw_detections_for_run` re-verifies that branch itself at
+        the point of reading it rather than trusting this resolution.
+        """
+        private_path = self._resolve_private_pickle_path_for_run(run)
+        if private_path is not None:
+            return private_path
+
+        # The image folder's cache, verified against this run's own target,
+        # camera selection and image cap -- never a same-named cache a
+        # different target or detector left behind in the same folder (the
+        # run's own detector and upscale decide the filename, but only the
+        # identity sidecar confirms it is actually this run's).
+        params = run.get("params", {})
+        return phase1_workflow.matching_image_folder_cache(params)
 
     @staticmethod
     def _extract_detections_obj(payload):

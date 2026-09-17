@@ -33,6 +33,13 @@ import cv2
 import numpy as np
 import pytest
 
+# The cache's identity is a target's identity, and these check it with the two
+# targets that share one cache name -- ChArUco2 and a Ccube read with ArUco 2 --
+# which is the collision the sidecar exists to catch. Both need the optional
+# aruco2 package, so this module skips itself where it is absent, as
+# ``test_aruco2_backend.py`` and ``test_charuco2_target.py`` do.
+pytest.importorskip("aruco2")
+
 from pyCamSet.calibration.camera_calibrator import (
     cache_identity_path,
     cache_matches,

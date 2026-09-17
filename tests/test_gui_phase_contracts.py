@@ -14,6 +14,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
+
 from pyCamSet.workflow.targets import describe_target_mismatch
 from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES
 
@@ -1442,6 +1444,8 @@ def test_phase_1_greys_out_aruco1_for_charuco2_and_gives_charuco_its_choice_back
 
 
 @pytest.mark.gui
+@pytest.mark.skipif(not ARUCO2_AVAILABLE,
+                    reason="reads a target that only ArUco 2 detects")
 def test_drawing_a_run_without_an_artifact_reads_its_own_detectors_cache(tmp_path):
     """The last resort is the image folder's cache, named per detector and
     upscale -- but only trusted once its identity sidecar confirms it was

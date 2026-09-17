@@ -37,6 +37,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
+
 # The module rather than the names: a backend symbol that goes missing is
 # what these tests are here to report, and importing it by name at module
 # scope would turn that into a collection error that takes the whole file
@@ -1102,6 +1104,8 @@ def _registered_counting_target(spec, per_folder):
     return target
 
 
+@pytest.mark.skipif(not ARUCO2_AVAILABLE,
+                    reason="reads a target that only ArUco 2 detects")
 def test_an_aruco2_run_never_loads_an_aruco1_runs_cache(tmp_path):
     """Two detectors reading one image folder keep two caches: the ArUco 2
     run neither loads nor overwrites what the ArUco 1 run cached, and the
@@ -1132,10 +1136,14 @@ def test_an_aruco2_run_never_loads_an_aruco1_runs_cache(tmp_path):
         "the ArUco 1 run lost its own cache"
 
 
+_needs_aruco2 = pytest.mark.skipif(
+    not ARUCO2_AVAILABLE, reason="reads a target that only ArUco 2 detects")
+
+
 @pytest.mark.parametrize("target", [
     {"type": "Ccube", "marker_backend": "aruco1"},
-    {"type": "Ccube", "marker_backend": "aruco2"},
-    {"type": "ChArUco2"},
+    pytest.param({"type": "Ccube", "marker_backend": "aruco2"}, marks=_needs_aruco2),
+    pytest.param({"type": "ChArUco2"}, marks=_needs_aruco2),
 ])
 def test_a_failed_phase_1_run_records_its_error_and_no_artifact_even_with_a_matching_cache(
         tmp_path, monkeypatch, target):
@@ -1172,6 +1180,8 @@ def test_a_failed_phase_1_run_records_its_error_and_no_artifact_even_with_a_matc
     assert matching_cache.read_bytes() == b"a cache that matches this run's own identity"
 
 
+@pytest.mark.skipif(not ARUCO2_AVAILABLE,
+                    reason="reads a target that only ArUco 2 detects")
 def test_a_phase_1_run_adopts_only_its_own_detectors_cache(tmp_path, monkeypatch):
     """The detector-isolation guarantee itself, exercised through a REAL,
     non-raising phase1.run() pass -- round-10 review, P3: the version this

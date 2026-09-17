@@ -590,3 +590,32 @@ def test_set_from_templated_camset_requires_a_templated_calibration(self_handler
 
     with pytest.raises(ValueError, match="not a templated adjustment"):
         self_handler.set_from_templated_camset(cams)
+
+
+def test_an_image_with_no_detections_does_not_make_the_problem_degenerate(
+        synthetic_problem, caplog):
+    """A frame nothing was seen in costs that frame, not the calibration.
+
+    Its six pose parameters have no residual mentioning them, so leaving them
+    free puts six all-zero columns in the jacobian and the degeneracy check
+    refuses to solve at all.
+    """
+    cams, target, detection, poses = synthetic_problem
+    blank = 1
+    without = detection.delete_row(global_im_num=blank)
+
+    full = TemplateBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    with caplog.at_level(logging.WARNING):
+        gapped = TemplateBundleHandler(
+            camset=cams, target=target, detection=without, options={"outliers": "n"})
+
+    free_full = np.asarray(full.bundlePrimitive.poses_unfixed)
+    free_gapped = np.asarray(gapped.bundlePrimitive.poses_unfixed)
+
+    assert not free_gapped[blank], "the pose nothing was seen in is held fixed"
+    assert free_gapped.sum() == free_full.sum() - 1, "six fewer free parameters"
+    assert "no detections" in caplog.text
+
+    # and nothing else changed: the blank pose is the only one newly held
+    assert np.flatnonzero(free_gapped != free_full).tolist() == [blank]

@@ -172,6 +172,16 @@ class OptimisationTab(QWidget):
         self._thread: Optional[QThread] = None
         self._worker: Optional[_StudyWorker] = None
         self._param_rows: dict[str, BoundedSliderRow] = {}
+        #: Bounds captured just before a rebuild tears a row down -- but
+        #: only for a key in :attr:`_bounds_edited`. Without this, widening
+        #: a sweep bound by hand and then flipping the detector combo to
+        #: compare and back silently reverted it to the detection profile's
+        #: default bounds.
+        self._edited_bounds: dict[str, tuple] = {}
+        #: Keys whose bounds a person has actually moved, as opposed to a
+        #: bound only ever shown because a detection profile set it.
+        #: Populated by :meth:`_on_row_bounds_edited`.
+        self._bounds_edited: set[str] = set()
         self._retained_results: list[TrialResult] = []
         self._applying_trial_gating_profile = False
         self._applying_detection_profile = False
@@ -433,6 +443,14 @@ class OptimisationTab(QWidget):
         detector = self._current_detector_parameterisation()
         parameters = detector.tunable()
 
+        # Remember bounds someone actually widened before the rows that
+        # hold them are torn down -- but only for a key that was edited.
+        for key in self._bounds_edited:
+            row = self._param_rows.get(key)
+            if row is None:
+                continue
+            self._edited_bounds[key] = row.bounds()
+
         self._param_rows = {}
         while self._param_rows_layout.count():
             item = self._param_rows_layout.takeAt(0)
@@ -450,10 +468,30 @@ class OptimisationTab(QWidget):
             row = BoundedSliderRow(entry)
             # Watch bound edits so manual changes can flip the selector to Custom.
             row.boundsChanged.connect(self._on_detection_profile_bounds_changed)
+            # Watch bound edits so a real edit is remembered across a rebuild.
+            row.boundsChanged.connect(self._on_row_bounds_edited)
             self._param_rows[entry.key] = row
             self._param_rows_layout.addWidget(row)
 
         self._rebuild_detection_profiles(detector)
+
+        # Put back any bounds a person had already widened for a key this
+        # detector still has -- after the profile above, so a retained
+        # value is not immediately overwritten by the profile's own
+        # default, and the selector flips to Custom the same way a live
+        # edit would.
+        for key, row in self._param_rows.items():
+            if key in self._bounds_edited and key in self._edited_bounds:
+                try:
+                    row.set_bounds(*self._edited_bounds[key])
+                except Exception:
+                    pass
+
+    def _on_row_bounds_edited(self, key: str, _lower, _upper) -> None:
+        """A row's bounds moved by a person, not by a profile being applied."""
+        if self._applying_detection_profile:
+            return
+        self._bounds_edited.add(key)
 
     def _rebuild_detection_profiles(self, detector) -> None:
         """Offer the presets this detector has, and start from the first."""

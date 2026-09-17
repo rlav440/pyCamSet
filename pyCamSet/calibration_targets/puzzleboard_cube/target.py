@@ -473,6 +473,21 @@ class PuzzleBoardCube(AbstractTarget):
         affine[:2, 2] *= self.face_length  # Convert unit-face translations into metres.
         return affine  # Return the net transform for this face.
 
+    def _label_fill_colour(self, face_index: int) -> str:
+        """Contrasting text colour for the face-number label's border cell.
+
+        The label sits in the bottom-left border cell (x=0, y=n_points), whose
+        colour follows the same checkerboard parity as :meth:`_face_rectangles`.
+        That parity is fixed for faces whose net origin makes ``start_x +
+        start_y`` always even (2, 4, 6 in the printed 1-based numbering), but
+        for the others it tracks the parity of ``n_points`` -- an odd corner
+        count flips their border cell from black to white, so a label fixed
+        at "white" goes invisible on those faces.
+        """
+        start_x, start_y = self.face_origins[face_index]
+        corner_is_black = (self.n_points + start_x + start_y) % 2 == 0
+        return "white" if corner_is_black else "black"
+
     def _face_rectangles(self, face_index: int) -> list[np.ndarray]:
         """Return black checkerboard polygons for one face in local metres."""
         size = self.n_points  # Use the square face dimension.
@@ -577,14 +592,14 @@ class PuzzleBoardCube(AbstractTarget):
                 points_mm = self._apply_affine(outline, affine) * 1000.0 + offset_m * 1000.0
                 drawing.add(drawing.polygon(points=[tuple(point) for point in points_mm], fill="none", stroke="black", stroke_width=0.2))
             if draw_face_ids:  # Add optional assembly labels without changing the default calibration pattern.
-                label = np.array([[0.02 * self.face_length, 0.985 * self.face_length]])  # Put the baseline in the bottom-left black border.
+                label = np.array([[0.02 * self.face_length, 0.985 * self.face_length]])  # Put the baseline in the bottom-left border cell.
                 label_mm = self._apply_affine(label, affine)[0] * 1000.0 + offset_m * 1000.0
                 label_size_mm = self.face_length * 1000.0 * 0.045  # Keep printed label height proportional to the cube face.
                 label_angle_deg = float(np.degrees(np.arctan2(affine[1, 0], affine[0, 0])))  # Follow the corresponding net-face orientation.
                 label_text = drawing.text(  # Use viewBox millimetres directly; an additional mm suffix would rescale the text.
                     str(face_index + 1),
                     insert=tuple(label_mm),
-                    fill="white",
+                    fill=self._label_fill_colour(face_index),
                     font_size=f"{label_size_mm:.6f}",
                     font_family="Arial",
                     font_weight="bold",
@@ -604,8 +619,8 @@ class PuzzleBoardCube(AbstractTarget):
         self._add_face_geometry(drawing, face_index, np.eye(3), np.zeros(2))  # Add the untransformed face pattern.
         drawing.add(drawing.text(  # Match Ccube by marking each visualised face with a human-readable number.
             str(face_index + 1),
-            insert=(float(side_mm * 0.02), float(side_mm * 0.985)),  # Put the baseline in the bottom-left black border.
-            fill="white",
+            insert=(float(side_mm * 0.02), float(side_mm * 0.985)),  # Put the baseline in the bottom-left border cell.
+            fill=self._label_fill_colour(face_index),
             font_size=f"{side_mm * 0.045:.6f}",
             font_family="Arial",
             font_weight="bold",

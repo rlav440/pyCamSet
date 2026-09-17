@@ -166,14 +166,17 @@ def test_charuco_board_geometry_is_what_the_images_show():
 
 @pytest.mark.data
 def test_the_legacy_flag_changes_the_board():
-    """legacy=True is load bearing for this corpus, so it must still do something."""
+    """``legacy`` must still do something -- CHARUCO_ARGS's own value
+    (legacy=False, matching how the checked-in corpus was actually printed;
+    see its comment in conftest.py) is not itself under test here, just
+    that the constructor keyword reaches ``board.getLegacyPattern()``
+    unchanged in either direction."""
     from pyCamSet import ChArUco
 
     from conftest import CHARUCO_ARGS
 
-    legacy = ChArUco(**CHARUCO_ARGS)
-    modern_args = dict(CHARUCO_ARGS, legacy=False)
-    modern = ChArUco(**modern_args)
+    legacy = ChArUco(**dict(CHARUCO_ARGS, legacy=True))
+    modern = ChArUco(**dict(CHARUCO_ARGS, legacy=False))
 
     assert legacy.board.getLegacyPattern() is True
     assert modern.board.getLegacyPattern() is False

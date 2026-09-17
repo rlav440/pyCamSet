@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 from pathlib import Path
@@ -31,6 +32,7 @@ from pyCamSet.calibration_targets.markers.aruco2 import (
     resolve_dictionary,
 )
 from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
+from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform, downsample_valid
 
@@ -182,11 +184,18 @@ class Ccube(AbstractTarget):
         :param line_fraction: the thickness of a face's edge line, as a
             fraction of the face width.
         :param legacy: Legacy pattern -- which of OpenCV's two marker
-            layouts the faces were printed to. Detection: the wrong one
-            finds every marker and no corners. Suggested: off, unless the
-            cube predates OpenCV 4.6.
-        :param marker_backend: the marker backend to use, "aruco1" (OpenCV)
-            or "aruco2" (aruco2 package). Defaults to "aruco1".
+            layouts the faces were printed to; must match how the physical
+            cube was printed, since detection never switches patterns
+            automatically. Detection: the wrong one finds every marker and
+            no corners (and, for a face with an even number of rows, logs a
+            warning naming the likely correct setting and the face).
+            Suggested: off (OpenCV's current pattern, and the default),
+            unless the cube predates OpenCV 4.6.
+        :param marker_backend: the detector the cube is read with,
+            "aruco1" (OpenCV) or "aruco2" (the aruco2 package). Chosen in the
+            detection phase rather than when the cube is made: both print
+            the offered dictionaries identically, so it says how the cube
+            is read, not what it is. Defaults to "aruco1".
         :param detection_options: what the detector is told, by the keys
             :meth:`detector_parameterisation` describes.
         """
@@ -295,16 +304,58 @@ class Ccube(AbstractTarget):
 
         self.board_detectors = None
         self.given_legacy_warning = False
+        #: The message ``_warn_legacy_once`` fired, once it has (else None).
+        #: Read back by ``_process_image`` in a worker process, whose own
+        #: ``logger.warning`` call never reaches the main process's logger
+        #: (round-2 review, P1) -- see charuco/target.py's own
+        #: ``legacy_warning_message`` and ``abstract_target.py``.
+        self.legacy_warning_message: str | None = None
+        #: Guards ``given_legacy_warning``'s check-then-set in
+        #: ``_warn_legacy_once`` against genuine concurrent callers sharing
+        #: this instance (round-3 review, P2) -- without it, two threads can
+        #: both observe ``given_legacy_warning`` as False before either sets
+        #: it, each fire its own (possibly differently-worded, per-face)
+        #: warning, and both pay for the opposite-pattern probe. Same
+        #: per-instance-lock pattern as the module-level
+        #: ``_CHARUCO_DETECTOR_CACHE_LOCK`` in markers/aruco2.py.
+        self._legacy_warning_lock = threading.Lock()
 
-    def _warn_legacy_once(self) -> None:
-        """Warn once per target when aruco2 interpolation still disagrees."""
-        if not self.given_legacy_warning:
-            logger.warning(
-                "Ccube (aruco2): cross-marker disagreement remains above 5px "
-                "after the legacy-pattern toggle on an even-row face. Verify "
-                "your physical board matches legacy=True."
+    def _warn_legacy_once(self, idb: int, board) -> None:
+        """Warn once per target when a frame on one face gives strong
+        evidence that face's physical board uses the OTHER legacy pattern
+        than the one this target is configured with. Shared wording with
+        ChArUco's own ``_warn_legacy_once`` (charuco/target.py), plus the
+        face index: detection never switches patterns itself, so this is a
+        warning only -- corners are never taken from the other pattern (see
+        markers.legacy_probe.should_warn_legacy_mismatch).
+
+        Also stashes the message on ``self.legacy_warning_message`` -- see
+        that attribute's docstring above.
+
+        The ``given_legacy_warning`` check-then-set is done under
+        ``self._legacy_warning_lock`` so concurrent callers on the same
+        instance cannot both pass the check before either sets the flag
+        (round-3 review, P2): only the first caller to acquire the lock
+        actually builds and logs a message.
+
+        :param idb: the face index (0-5) that triggered the warning, so the
+            message names WHICH face looks mismatched.
+        :param board: that face's own board (``self.boards[idb]``), read
+            dynamically rather than hardcoded, but never mutated here.
+        """
+        with self._legacy_warning_lock:
+            if self.given_legacy_warning:
+                return
+            configured = board.getLegacyPattern()
+            likely = not configured
+            msg = (
+                f"Ccube: face {idb} images look like a legacy={likely} "
+                f"board but this target is legacy={configured}; check the "
+                f"target's legacy setting."
             )
+            logger.warning(msg)
             self.given_legacy_warning = True
+            self.legacy_warning_message = msg
 
     def plot(self, return_scene = False):
         """
@@ -793,7 +844,22 @@ class Ccube(AbstractTarget):
                     image,
                     board,
                     face_markers,
-                    warn_legacy=self._warn_legacy_once,
+                    # warn_legacy is called as a zero-arg callable (see
+                    # interpolate_board_corners's docstring); bind the
+                    # CURRENT loop iteration's face index and board via
+                    # default args so the warning names the face that
+                    # actually failed, not whichever board the loop has
+                    # moved on to by the time it fires (see
+                    # _warn_legacy_once's docstring, P3). Once this target
+                    # has already warned, withhold the callback entirely
+                    # (P2, round-1 review): interpolate_board_corners only
+                    # pays for the opposite-pattern probe when warn_legacy
+                    # is not None, so this also stops the probe itself
+                    # being paid on every later qualifying face/frame.
+                    warn_legacy=(
+                        None if self.given_legacy_warning else
+                        (lambda _i=idb, _b=board: self._warn_legacy_once(_i, _b))
+                    ),
                 )
                 if c_ids is None:
                     continue
@@ -817,12 +883,21 @@ class Ccube(AbstractTarget):
         for idb, bd in enumerate(self.board_detectors):
             c_corners, c_ids, mloc, mid =  bd.detectBoard(image)
             if c_corners is None and mloc is not None:
-                if not self.given_legacy_warning:
-                    logger.warning("Found markers, but no corners, trying using alternative board detection")
-                    self.given_legacy_warning = True
-                am_legacy = self.boards[idb].getLegacyPattern()
-                self.boards[idb].setLegacyPattern(not am_legacy)
-                c_corners, c_ids, mloc, mid = bd.detectBoard(image, markerCorners=mloc, markerIds=mid)
+                # Approved policy: detect using ONLY this face's configured
+                # legacy pattern -- no retry under the opposite one, and
+                # self.boards[idb]'s own legacy flag is never touched here.
+                # A strong-evidence mismatch still gets a once-per-target
+                # warning naming the face (never corners) -- see
+                # markers.legacy_probe.should_warn_legacy_mismatch. Once
+                # already warned, skip the probe itself (P2, round-1
+                # review): it is expensive (a throwaway board + detector +
+                # a whole detectBoard call) and can never change the
+                # outcome once given_legacy_warning is True.
+                if (not self.given_legacy_warning) and should_warn_legacy_mismatch(
+                    self.boards[idb], self.detection_options, image,
+                    len(mloc), mloc, mid,
+                ):
+                    self._warn_legacy_once(idb, self.boards[idb])
 
             if c_ids is not None:
                 # OpenCV 5 squeezes detectBoard's singleton axis; normalise.

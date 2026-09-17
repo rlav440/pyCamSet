@@ -9,6 +9,8 @@ Future: Add cross-detection-family parity cases when real-image fixtures exist.
 '''
 
 import json
+import logging
+import random
 import tempfile
 from pathlib import Path
 
@@ -39,6 +41,44 @@ def _count(det):
     if det.keys is None or len(det.keys) == 0:
         return 0
     return len(det.keys)
+
+
+def _true_markers_for_board(board, img):
+    """Ground-truth ``(marker_id, (4, 2) float32 corners)`` for every ArUco
+    marker OpenCV's own (unmodified) aruco1 detector finds in *img* -- a
+    stand-in for aruco2's own marker detection so these tests can corrupt
+    one marker in a controlled way without depending on aruco2's detector
+    internals."""
+    aruco_detector = cv2.aruco.ArucoDetector(
+        board.getDictionary(), cv2.aruco.DetectorParameters())
+    corners, ids, _ = aruco_detector.detectMarkers(img)
+    assert ids is not None and len(ids) > 0, "no markers found in the rendered board"
+    return [(int(i), np.asarray(c, dtype=np.float32).reshape(4, 2))
+            for c, i in zip(corners, ids.reshape(-1))]
+
+
+def _random_crops(img, n, seed=0, min_frac=0.12, max_frac=0.98):
+    """*n* random axis-aligned crops of *img*, each a contiguous rectangle
+    covering a random fraction (of each side) between *min_frac* and
+    *max_frac* -- a stand-in for "many rendered partial views" without real
+    image fixtures, and a much closer proxy for what a camera actually sees
+    than a scattered marker-id subset would be: a contiguous crop can clip
+    a whole edge row of markers, which a random id subset never models.
+    Deliberately dips low enough that some crops legitimately show markers
+    but no corners (not a mismatch, just under-constrained), and stays
+    below max_frac=1.0 so it is never accidentally the exact full view --
+    callers that need a guaranteed full view pass *img* itself instead.
+    """
+    rng = random.Random(seed)
+    h, w = img.shape[:2]
+    crops = []
+    for _ in range(n):
+        frac = rng.uniform(min_frac, max_frac)
+        cw, ch = max(1, int(w * frac)), max(1, int(h * frac))
+        x0 = rng.randint(0, w - cw)
+        y0 = rng.randint(0, h - ch)
+        crops.append(np.ascontiguousarray(img[y0:y0 + ch, x0:x0 + cw]))
+    return crops
 
 
 def test_headless_backend_registry_has_stable_backend_contract():
@@ -102,6 +142,1079 @@ def test_interpolation_skips_malformed_marker_quads():
         [(0, np.array([[10, 10], [30, 10], [20, 30]], dtype=np.float32))],
     )
     assert ids is None and points is None
+
+
+# -- P0: CharucoDetector cache must survive id(board) reuse ------------------
+
+
+def test_charuco_detector_cache_rebuilds_on_id_reuse_not_stale_hit():
+    """P0: even when CPython reuses id(board) for a new, differently-shaped
+    board after the old one is garbage-collected (observed directly: a
+    construct/delete/gc loop alternating 5x5 and 9x7 boards reused ids for
+    most iterations), the cache must rebuild rather than hand back the
+    stale detector. The exact collision state a real reuse would leave the
+    cache in is reproduced directly here, rather than depending on GC
+    timing to happen to trigger it this run."""
+    from pyCamSet.calibration_targets.markers import aruco2 as a2mod
+
+    board_5x5 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0).board
+    board_9x7 = ChArUco(num_squares_x=9, num_squares_y=7, square_size=10.0).board
+
+    stale_detector = a2mod._charuco_detector_for(board_5x5)
+    # Poison the cache under the 9x7 board's OWN id: exactly the state a
+    # real id() collision (5x5 collected, its address handed to a new 9x7
+    # board) would leave it in, without depending on whether that actually
+    # happens this run.
+    a2mod._CHARUCO_DETECTOR_CACHE[id(board_9x7)] = (board_5x5, stale_detector)
+
+    detector = a2mod._charuco_detector_for(board_9x7)
+    assert detector is not stale_detector, (
+        "cache returned the stale 5x5 detector for a 9x7 board sharing its id()")
+
+    img = np.ascontiguousarray(board_9x7.generateImage((700, 700)), dtype=np.uint8)
+    c_corners, c_ids, _, _ = detector.detectBoard(img)
+    assert c_corners is not None
+    assert len(np.asarray(c_ids).reshape(-1)) == 8 * 6  # (9-1)*(7-1) interior corners
+
+
+def test_charuco_detector_cache_matches_fresh_detector_across_gc_churn():
+    """P0: alternate two differently-shaped boards through construct/
+    delete/gc many times and check every cached-detector detection against
+    a detector built fresh for that exact board object. With the fix this
+    holds regardless of whether CPython actually reuses an id() this run --
+    the cache checks object identity, not just id()."""
+    import gc
+
+    from pyCamSet.calibration_targets.markers.aruco2 import _charuco_detector_for
+
+    dict_ = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
+    shapes = [(5, 5), (9, 7)]
+    for i in range(40):
+        nx, ny = shapes[i % 2]
+        board = cv2.aruco.CharucoBoard((nx, ny), 0.02, 0.015, dict_)
+        img = np.ascontiguousarray(board.generateImage((500, 500)), dtype=np.uint8)
+        cached = _charuco_detector_for(board)
+        fresh = cv2.aruco.CharucoDetector(board, cv2.aruco.CharucoParameters())
+        c1, ids1, _, _ = cached.detectBoard(img)
+        c2, ids2, _, _ = fresh.detectBoard(img)
+        assert (c1 is None) == (c2 is None), f"iteration {i}: cached vs fresh disagree"
+        if c1 is not None:
+            assert np.array_equal(
+                np.asarray(ids1).reshape(-1), np.asarray(ids2).reshape(-1))
+            assert np.allclose(
+                np.asarray(c1).reshape(-1, 2), np.asarray(c2).reshape(-1, 2))
+        del board, cached, fresh
+        if i % 3 == 0:
+            gc.collect()
+
+
+def test_charuco_detector_cache_sees_legacy_flag_toggle_on_same_board():
+    """P0: the cache must keep the SAME board object it was built from (not
+    a copy), so toggling board.setLegacyPattern() after the cache already
+    holds a detector for it is still seen by that detector on the next
+    call."""
+    from pyCamSet.calibration_targets.markers.aruco2 import _charuco_detector_for
+
+    board = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0,
+                    legacy=True).board
+    img = np.ascontiguousarray(board.generateImage((700, 700)), dtype=np.uint8)
+    detector = _charuco_detector_for(board)
+    c1, ids1, _, _ = detector.detectBoard(img)
+    assert c1 is not None
+    n1 = len(np.asarray(ids1).reshape(-1))
+    assert n1 > 0
+
+    board.setLegacyPattern(False)
+    detector_again = _charuco_detector_for(board)
+    assert detector_again is detector, "cache rebuilt for the same board object"
+    c2, ids2, _, _ = detector_again.detectBoard(img)
+    n2 = 0 if ids2 is None else len(np.asarray(ids2).reshape(-1))
+    assert n2 < n1, "cached detector did not see the legacy-flag toggle on its board"
+
+
+def test_charuco_detector_cache_eviction_is_thread_safe():
+    """P2 (round-2 review): _CHARUCO_DETECTOR_CACHE's LRU eviction used to be
+    a bare dict's check-then-delete, which is not atomic. This is about
+    genuine OS threads sharing one process (a GUI worker thread, a
+    user-authored ThreadPoolExecutor pipeline) -- NOT pyCamSet's own
+    multiprocessing.Pool, whose workers are separate processes with
+    independent caches. Two threads evicting concurrently could compute the
+    same "oldest" key and both try to delete it (KeyError), or a mutation
+    could land between another thread's iter() and its lookup
+    ("dictionary changed size during iteration"). Reproduced directly
+    against the real cache with a widened thread-switch interval before the
+    fix; this must run clean with the default interval too now that the
+    whole lookup/build/evict body is under one lock."""
+    import sys
+    import threading
+
+    from pyCamSet.calibration_targets.markers.aruco2 import _charuco_detector_for
+
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)  # widen the race window, as the review's own repro did
+    try:
+        errors: list[BaseException] = []
+        base_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+
+        def worker(offset: int) -> None:
+            try:
+                for i in range(150):
+                    # A fresh, distinct CharucoBoard object every call (never
+                    # reused across iterations or threads) so this forces
+                    # continuous eviction well past the cache's maxsize (64).
+                    n_x = 3 + ((offset * 150 + i) % 5)
+                    board = cv2.aruco.CharucoBoard((n_x, 4), 0.02, 0.015, base_dict)
+                    _charuco_detector_for(board)
+            except BaseException as exc:  # pragma: no cover - failure path only
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(t,)) for t in range(16)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        assert errors == [], (
+            f"concurrent cache eviction raised {len(errors)} exception(s): "
+            f"{[repr(e) for e in errors]}")
+    finally:
+        sys.setswitchinterval(old_interval)
+
+
+# -- P1(a)/P0: duplicate-id input is dropped; a corrupted/mislocated marker
+# is left for detectBoard to reject outright (fail safe), never "fixed" by
+# guessing which one is bad -- see the round-1/round-2 finding below.
+
+
+def test_duplicate_marker_id_dropped_recovers_clean_corners():
+    """P1(a): a duplicate id (the real marker plus a garbage-location
+    marker sharing its id) must not zero the whole frame -- both copies of
+    the ambiguous id are dropped and the rest of the board is still
+    recovered, matching the clean detection closely."""
+    from pyCamSet.calibration_targets.markers.aruco2 import interpolate_board_corners
+
+    board = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0).board
+    img = np.ascontiguousarray(board.generateImage((700, 700)), dtype=np.uint8)
+    true_markers = _true_markers_for_board(board, img)
+    assert len(true_markers) >= 6
+
+    clean_ids, clean_pts = interpolate_board_corners(img, board, true_markers)
+    assert clean_ids is not None and len(clean_ids) == 16
+
+    dup_id = int(true_markers[0][0])
+    garbage = np.array([[5, 5], [25, 5], [25, 25], [5, 25]], dtype=np.float32)
+    poisoned = true_markers + [(dup_id, garbage)]
+
+    ids2, pts2 = interpolate_board_corners(img, board, poisoned)
+    assert ids2 is not None, "duplicate-id marker zeroed the whole frame"
+    clean_map = {int(i): np.asarray(p, float) for i, p in zip(clean_ids, clean_pts)}
+    matched = 0
+    for cid, pt in zip(ids2, pts2):
+        if int(cid) in clean_map:
+            matched += 1
+            assert np.linalg.norm(np.asarray(pt, float) - clean_map[int(cid)]) < 0.1
+    assert matched >= 12, f"only recovered {matched}/16 corners: {sorted(int(c) for c in ids2)}"
+
+
+def test_single_marker_wrong_location_returns_no_corners_not_wrong_ones():
+    """P0 (overseer decision, round 2): one marker replaced at a garbage
+    location under its OWN (still-unique) id used to be "recovered" by the
+    now-removed _drop_inconsistent_markers heuristic. That heuristic could
+    itself return wrong, mislabelled corners under a legacy mismatch (see
+    test_legacy_mismatch_partial_view_never_mislabels_corners below), so it
+    was removed rather than patched. This board is odd-rowed (5x5), so the
+    legacy-pattern retry cannot help either (see
+    test_legacy_retry_skipped_for_odd_row_board) -- the frame must fail
+    safe with NO corners, not a "fixed" one."""
+    from pyCamSet.calibration_targets.markers.aruco2 import interpolate_board_corners
+
+    board = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0).board
+    img = np.ascontiguousarray(board.generateImage((700, 700)), dtype=np.uint8)
+    true_markers = _true_markers_for_board(board, img)
+
+    clean_ids, clean_pts = interpolate_board_corners(img, board, true_markers)
+    assert clean_ids is not None and len(clean_ids) == 16
+
+    bad_id = int(true_markers[0][0])
+    garbage = np.array([[5, 5], [25, 5], [25, 25], [5, 25]], dtype=np.float32)
+    corrupted = [(mid, garbage if mid == bad_id else c) for mid, c in true_markers]
+
+    ids2, pts2 = interpolate_board_corners(img, board, corrupted)
+    assert ids2 is None and pts2 is None, (
+        "a corrupted marker must fail safe with no corners, not be "
+        "silently 'fixed' by a heuristic")
+
+
+def test_heavy_noise_on_one_marker_returns_no_corners_not_wrong_ones():
+    """P0 (overseer decision, round 2): the same >=20 px single-marker
+    noise the round-1 review used to justify _drop_inconsistent_markers
+    must, now that heuristic is removed, fail safe with no corners rather
+    than a guessed-at recovery. Confirms the premise (this frame's own
+    first, only pass through detectBoard is rejected outright -- an
+    odd-rowed 9x9 board, so the legacy-pattern retry is also a no-op here)
+    before checking the public function agrees."""
+    from pyCamSet.calibration_targets.markers.aruco2 import interpolate_board_corners
+
+    board = ChArUco(num_squares_x=9, num_squares_y=9, square_size=10.0).board
+    img = np.ascontiguousarray(board.generateImage((900, 900)), dtype=np.uint8)
+    true_markers = _true_markers_for_board(board, img)
+
+    clean_ids, clean_pts = interpolate_board_corners(img, board, true_markers)
+    assert clean_ids is not None and len(clean_ids) == 64
+
+    bad_id = int(true_markers[0][0])
+    offset = np.array([100.0, 100.0], dtype=np.float32)
+    noisy = [(mid, (np.asarray(c, dtype=np.float32) + offset) if mid == bad_id else c)
+             for mid, c in true_markers]
+
+    # Confirm the premise: this frame's first (only) pass through
+    # detectBoard is rejected outright.
+    marker_corners = tuple(c.reshape(1, 4, 2) for _mid, c in noisy)
+    marker_ids = np.asarray([mid for mid, _c in noisy], dtype=np.int32).reshape(-1, 1)
+    first_pass, _, _, _ = cv2.aruco.CharucoDetector(
+        board, cv2.aruco.CharucoParameters()).detectBoard(
+            img, markerCorners=marker_corners, markerIds=marker_ids)
+    assert first_pass is None, "test setup no longer reproduces a rejected frame"
+
+    ids2, pts2 = interpolate_board_corners(img, board, noisy)
+    assert ids2 is None and pts2 is None, (
+        "heavy single-marker noise must fail safe with no corners, not be "
+        "silently 'fixed' by a heuristic")
+
+
+def test_frame_with_all_consistent_markers_is_unaffected_by_duplicate_id_drop():
+    """The duplicate-id-drop logic must leave a frame that never needed it
+    exactly as before: same clean board, same clean detection."""
+    from pyCamSet.calibration_targets.markers.aruco2 import interpolate_board_corners
+
+    board = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0).board
+    img = np.ascontiguousarray(board.generateImage((700, 700)), dtype=np.uint8)
+    true_markers = _true_markers_for_board(board, img)
+    ids, pts = interpolate_board_corners(img, board, true_markers)
+    assert ids is not None and len(ids) == 16
+    assert np.array_equal(np.sort(np.asarray(ids).reshape(-1)), np.arange(16))
+
+
+def test_legacy_retry_skipped_for_odd_row_board():
+    """P2: toggling legacy is a provable no-op for an odd chessboard row
+    count (the class default, num_squares_y=5): getObjPoints(),
+    getChessboardCorners(), getIds() and generateImage() are bit-identical
+    between legacy=True and legacy=False for every odd row count checked
+    (5, 7, 9), and differ for every even one (4, 6, 8). Approved policy:
+    there is no retry at all any more, but the mismatch-warning gate must
+    still be skipped outright for such a board (toggling cannot possibly be
+    evidence of anything): a genuine no-interior-corner partial view (two
+    markers far enough apart that no interior corner has enough support --
+    not a mismatch, not corruption) must fail safe with the board's own
+    legacy flag left exactly as configured, and without firing
+    warn_legacy."""
+    from pyCamSet.calibration_targets.markers.aruco2 import interpolate_board_corners
+
+    board = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0)  # odd rows
+    assert board.board.getChessboardSize()[1] % 2 == 1
+    assert board.board.getLegacyPattern() is False
+    img = np.ascontiguousarray(board.board.generateImage((700, 700)), dtype=np.uint8)
+    true_markers = _true_markers_for_board(board.board, img)
+
+    # Two markers far apart on the board: enough to pass minMarkers but not
+    # enough to bound any interior corner -- a legitimate, uncorrupted
+    # "found markers but no corners" frame, not a mismatch.
+    far_apart = sorted(true_markers, key=lambda m: m[0])
+    subset = [far_apart[0], far_apart[-1]]
+
+    calls = []
+    ids2, pts2 = interpolate_board_corners(
+        img, board.board, subset, warn_legacy=lambda: calls.append(1))
+    assert ids2 is None and pts2 is None
+    assert board.board.getLegacyPattern() is False, (
+        "the board's own legacy flag changed -- detection must never touch it")
+    assert calls == [], (
+        "warn_legacy fired for an odd-row board, where a legacy mismatch "
+        "is a provable no-op and the mismatch probe must be skipped outright")
+
+
+# -- Approved policy: warn-only, no retry, no ambiguity-discard --------------
+#
+# Calibration tests for the thresholds in markers/legacy_probe.py. Numbers
+# below are what these tests actually measured on this build (see the
+# session's calibration script): a correctly configured odd x even board
+# (7x6, 9x6) warned ZERO times over 240 random, REALISTIC (contiguous-crop,
+# not scattered-marker-id) partial views across both detectors; a
+# misconfigured board's exact, uncropped full view reliably gave zero
+# corners and warned on the very first frame, for both detectors and both
+# mismatch directions (8/8). A partial (even a near-full, edge-clipped) crop
+# of a misconfigured board can still occasionally interpolate SOME corners
+# under the wrong pattern -- confirmed directly (e.g. clipping just one edge
+# row of markers off a 21-marker board dropped it to 15 markers and flipped
+# a wrong-pattern detection from 0 to 20 corners) -- which is the accepted,
+# documented trade-off the warning exists to mitigate, not a bug this test
+# suite tries to eliminate.
+
+
+def test_legacy_flag_never_changes_during_detection_sequence():
+    """(1) A target's OWN configured legacy flag must never change during
+    detection, for EITHER detector, over a whole sequence of frames --
+    matched, mismatched, or a mix of full/partial/no-marker-at-all frames."""
+    printed_true = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0, legacy=True)
+    img = np.ascontiguousarray(printed_true.board.generateImage((900, 900)), dtype=np.uint8)
+
+    for backend in ("aruco1", "aruco2"):
+        for target_legacy in (True, False):  # matched and mismatched
+            target = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0,
+                             legacy=target_legacy, marker_backend=backend)
+            frames = [img] + _random_crops(img, 8, seed=1) + [
+                np.zeros((200, 200), dtype=np.uint8)]  # a genuine no-marker frame
+            for frame in frames:
+                target.find_in_image(frame)  # never raises
+                assert target.board.getLegacyPattern() is target_legacy, (
+                    f"legacy flag changed mid-sequence: backend={backend} "
+                    f"target_legacy={target_legacy}")
+
+
+#: Board sizes the legacy-pattern policy applies to (even chessboard row
+#: count), spanning small (below the OLD flat LEGACY_WARNING_MIN_PROBE_CORNERS
+#: of 20 total corners) through large. Used to calibrate and test
+#: min_probe_corners_for's board-size scaling (overseer finding (a),
+#: round-2 review): 5x4 has 12 total corners, 5x6 has 20, 7x4 has 18, 7x6
+#: has 30, 9x6 has 40, 11x8 has 70, 13x10 has 108, 10x8 has 63.
+_LEGACY_POLICY_SIZES = [
+    (5, 4), (5, 6), (7, 4), (7, 6), (9, 6), (11, 8), (13, 10), (10, 8),
+]
+
+
+def test_legacy_correctly_configured_odd_x_even_board_never_warns_or_drifts(caplog):
+    """(2) A CORRECTLY configured odd x even board (legacy=False, the
+    default), seen through many rendered partial views -- including frames
+    with markers but no corners -- must never warn, for either detector,
+    across the small-through-large size range _LEGACY_POLICY_SIZES
+    calibrates min_probe_corners_for against; and every corner it does
+    return must exactly match a target built FRESH for that exact frame (no
+    cross-frame state, e.g. a warmed detector cache, changing what is
+    detected)."""
+    logger_name = "pyCamSet.calibration_targets.charuco.target"
+    for backend in ("aruco1", "aruco2"):
+        for nx, ny in _LEGACY_POLICY_SIZES:
+            printed = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0, legacy=False)
+            img = np.ascontiguousarray(printed.board.generateImage((900, 900)), dtype=np.uint8)
+            target = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0,
+                             legacy=False, marker_backend=backend)
+            frames = [img] + _random_crops(img, 14, seed=2) + [
+                np.zeros((200, 200), dtype=np.uint8)]
+            caplog.clear()
+            with caplog.at_level(logging.WARNING, logger=logger_name):
+                for frame in frames:
+                    det = target.find_in_image(frame)
+                    fresh = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0,
+                                    legacy=False, marker_backend=backend)
+                    fresh_det = fresh.find_in_image(frame)
+                    got_ids = (np.asarray(det.keys).reshape(-1)
+                               if det.keys is not None and len(det.keys) else np.array([]))
+                    fresh_ids = (np.asarray(fresh_det.keys).reshape(-1)
+                                 if fresh_det.keys is not None and len(fresh_det.keys) else np.array([]))
+                    assert np.array_equal(np.sort(got_ids), np.sort(fresh_ids)), (
+                        f"{backend} {nx}x{ny}: cached-target ids {sorted(got_ids.tolist())} "
+                        f"disagree with a freshly built target {sorted(fresh_ids.tolist())}")
+                    if got_ids.size:
+                        got_map = {int(i): p for i, p in zip(got_ids, np.asarray(det.image_points))}
+                        fresh_map = {int(i): p for i, p in zip(fresh_ids, np.asarray(fresh_det.image_points))}
+                        for cid in got_map:
+                            assert np.allclose(got_map[cid], fresh_map[cid]), (
+                                f"{backend} {nx}x{ny}: corner {cid} differs from a fresh target")
+            assert caplog.records == [], (
+                f"{backend} {nx}x{ny}: correctly configured board warned "
+                f"{len(caplog.records)} time(s) over {len(frames)} views: "
+                f"{[r.getMessage() for r in caplog.records]}")
+
+
+def _random_crop_on_background(img, rng, bg_value, min_frac=0.12, max_frac=0.98):
+    """Like :func:`_random_crops`, but pastes the crop back at its original
+    position/size into a canvas the same shape as *img*, filled with
+    *bg_value* -- i.e. the crop's pixels are unchanged, but the array is
+    NOT shrunk to just the visible board region. This is what a real
+    camera frame actually looks like (full sensor resolution, board
+    occupying only part of the frame, background/table/wall around it),
+    unlike :func:`_random_crops`'s shrunk-to-crop arrays."""
+    h, w = img.shape[:2]
+    frac = rng.uniform(min_frac, max_frac)
+    ch, cw = max(1, int(h * frac)), max(1, int(w * frac))
+    y0 = rng.integers(0, h - ch + 1)
+    x0 = rng.integers(0, w - cw + 1)
+    canvas = np.full_like(img, bg_value)
+    canvas[y0:y0 + ch, x0:x0 + cw] = img[y0:y0 + ch, x0:x0 + cw]
+    return canvas
+
+
+def test_legacy_correctly_configured_board_never_warns_with_background(caplog):
+    """P1 (round-1 review): a CORRECTLY configured odd x even board (7x6,
+    9x6, legacy=False), seen through partial views embedded in a
+    full-resolution background around the crop (a real camera frame, not
+    a shrunk-to-crop array -- see :func:`_random_crop_on_background`),
+    must never warn. Before the fix (LEGACY_WARNING_MIN_PROBE_CORNERS=6),
+    this reliably false-warned: e.g. 7x6, bg=255, numpy seed 4, frame 21
+    found 14/18 markers under the configured (correct) pattern with zero
+    corners, while the opposite-pattern probe interpolated 16 corners --
+    enough to clear the old floor and fire 'images look like a
+    legacy=True board but this target is legacy=False' on a board that
+    was never misconfigured. An empirical sweep (7x6/9x6, 7 background
+    shades, 30 seeds, 60 crops each = 25200 frames) found a hard ceiling
+    of 16 probe corners for this false-positive shape, so
+    LEGACY_WARNING_MIN_PROBE_CORNERS=20 (with margin) is what this test
+    guards."""
+    logger_name = "pyCamSet.calibration_targets.charuco.target"
+    for nx, ny in [(7, 6), (9, 6)]:
+        printed = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0, legacy=False)
+        img = np.ascontiguousarray(printed.board.generateImage((900, 900)), dtype=np.uint8)
+        target = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0,
+                         legacy=False, marker_backend="aruco1")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger=logger_name):
+            for bg in (255, 128, 0):
+                # Same rng-seeding scheme as the round-1 review's own
+                # reproducer: seed=4, bg=255, nx=7, ny=6 gives, on this
+                # build, frame 21 with 14/18 markers found under the
+                # configured pattern and 0 corners, opposite-pattern probe
+                # corners=16 -- exactly the false positive this test
+                # guards against (16 < LEGACY_WARNING_MIN_PROBE_CORNERS).
+                for seed in range(15):
+                    rng = np.random.default_rng(seed * 1000 + bg + nx * 10 + ny)
+                    for _ in range(60):
+                        frame = _random_crop_on_background(img, rng, bg)
+                        target.find_in_image(frame)
+        assert caplog.records == [], (
+            f"aruco1 {nx}x{ny}: correctly configured board warned "
+            f"{len(caplog.records)} time(s) over background-padded partial "
+            f"views: {[r.getMessage() for r in caplog.records]}")
+
+
+def test_legacy_min_probe_threshold_scales_with_board_size():
+    """Overseer finding (a), round-2 review: LEGACY_WARNING_MIN_PROBE_CORNERS
+    used to be a flat 20, which EXCEEDS OR EQUALS the TOTAL chessboard-corner
+    count of several small odd-width x even-height boards (5x4 has 12; 5x6
+    has 20; 7x4 has 18) -- exactly the class a legacy mismatch mislabels
+    corners on -- so a misconfigured one of the two strictly-below-20 sizes
+    could never clear the flat floor even on an EXACT full view, where the
+    opposite-pattern probe interpolates the board's WHOLE corner set (see
+    :func:`min_probe_corners_for`'s and the module's threshold-constant
+    docstrings for the calibration sweep behind the replacement). The
+    threshold must scale to (and never exceed) each board's own total, with
+    margin, across the whole size range this policy applies to."""
+    from pyCamSet.calibration_targets.markers.legacy_probe import min_probe_corners_for
+
+    for nx, ny in _LEGACY_POLICY_SIZES:
+        board = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0).board
+        total_corners = (nx - 1) * (ny - 1)
+        threshold = min_probe_corners_for(board)
+        assert 1 <= threshold <= total_corners, (
+            f"{nx}x{ny}: threshold {threshold} is not in [1, {total_corners}] "
+            f"-- a threshold above the board's own total corner count could "
+            f"never be cleared, not even by an exact full view")
+
+    # The concrete regression: the OLD flat threshold (20) was un-clearable
+    # for these two sizes' total corner count, so no view could ever warn.
+    for nx, ny in [(5, 4), (7, 4)]:
+        board = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0).board
+        threshold = min_probe_corners_for(board)
+        assert threshold < 20, (
+            f"{nx}x{ny}: threshold {threshold} did not scale below the old "
+            f"flat 20, which exceeded this board's own "
+            f"{(nx - 1) * (ny - 1)} total corners")
+
+
+@pytest.mark.parametrize("nx, ny", _LEGACY_POLICY_SIZES)
+def test_legacy_misconfigured_board_of_any_size_warns_on_exact_full_view(nx, ny):
+    """Overseer finding (a): a misconfigured board of ANY size this policy
+    applies to -- including the small ones a flat probe threshold used to
+    leave unable to ever warn (see
+    test_legacy_min_probe_threshold_scales_with_board_size) -- must give NO
+    corners and fire the mismatch warning on an EXACT, uncropped full view,
+    for both detectors and both mismatch directions."""
+    for backend in ("aruco1", "aruco2"):
+        for printed_legacy in (True, False):
+            printed = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0,
+                              legacy=printed_legacy)
+            full_img = np.ascontiguousarray(
+                printed.board.generateImage((900, 900)), dtype=np.uint8)
+            target_legacy = not printed_legacy
+            target = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0,
+                             legacy=target_legacy, marker_backend=backend)
+            det = target.find_in_image(full_img)
+            n = 0 if det.keys is None else len(det.keys)
+            assert n == 0, (
+                f"{backend} {nx}x{ny} printed_legacy={printed_legacy}: an "
+                f"exact full view of a misconfigured board returned {n} "
+                f"corner(s), not the guaranteed zero")
+            assert target.board.getLegacyPattern() is target_legacy, (
+                f"{backend} {nx}x{ny} printed_legacy={printed_legacy}: "
+                f"detection changed the target's own configured legacy flag")
+            assert target.given_legacy_warning is True, (
+                f"{backend} {nx}x{ny} printed_legacy={printed_legacy}: the "
+                f"mismatch warning did not fire on the first (full-view) frame")
+
+
+def test_legacy_correctly_configured_small_board_never_warns_with_background(caplog):
+    """Overseer finding (a) companion to
+    test_legacy_correctly_configured_board_never_warns_with_background: the
+    same background-embedded partial-view sweep, but over the smaller and
+    larger sizes that test does not itself cover (5x4, 5x6, 7x4, 11x8,
+    13x10, 10x8) -- the ones the board-size scaling was introduced for. A
+    lighter sweep than the original (2 background shades, 10 seeds, 40
+    crops = 800 frames/size, vs. that test's 2700) keeps this bounded while
+    still exercising every size the scaled threshold must hold for."""
+    logger_name = "pyCamSet.calibration_targets.charuco.target"
+    sizes = [(nx, ny) for nx, ny in _LEGACY_POLICY_SIZES if (nx, ny) not in [(7, 6), (9, 6)]]
+    for nx, ny in sizes:
+        printed = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0, legacy=False)
+        img = np.ascontiguousarray(printed.board.generateImage((900, 900)), dtype=np.uint8)
+        target = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0,
+                         legacy=False, marker_backend="aruco1")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger=logger_name):
+            for bg in (255, 0):
+                for seed in range(10):
+                    rng = np.random.default_rng(seed * 1000 + bg + nx * 10 + ny)
+                    for _ in range(40):
+                        frame = _random_crop_on_background(img, rng, bg)
+                        target.find_in_image(frame)
+        assert caplog.records == [], (
+            f"aruco1 {nx}x{ny}: correctly configured board warned "
+            f"{len(caplog.records)} time(s) over background-padded partial "
+            f"views: {[r.getMessage() for r in caplog.records]}")
+
+
+#: Sizes well beyond _LEGACY_POLICY_SIZES' own range (13x10's 108 total
+#: corners is the largest that calibrates), used to test the markers-found
+#: ceiling round-3 review added to min_probe_corners_for for boards this
+#: large -- see legacy_probe.py's LEGACY_WARNING_PROBE_MARKER_FRACTION
+#: docstring.
+_LARGE_LEGACY_SIZES = [(16, 16), (20, 20)]
+
+
+def test_legacy_min_probe_threshold_scales_down_for_large_boards_when_markers_are_known():
+    """Round-3 review (P1): a REALISTIC partial view of a large board (this
+    project's own 20x20 reference board has 361 total corners) can never
+    clear a threshold scaled only to the board's total size -- reproduced
+    directly against tests/test_data/calibration_charuco, where every one
+    of 90 misconfigured-target frames gave 46-78 markers and only 81-130
+    opposite-pattern probe corners, nowhere near the old flat-scaled
+    threshold of 241, so the mismatch warning never fired on any of them.
+
+    min_probe_corners_for must therefore scale DOWN, not just up, once
+    n_markers_found is known and the board is past the already-calibrated
+    size range -- while never changing anything for a board within that
+    range (5x4 through 13x10), whose own false-positive floor is already
+    calibrated close to its total-scaled threshold (see
+    test_legacy_correctly_configured_board_never_warns_with_background's
+    docstring: 16 probe corners from 14 markers there, a ratio of ~1.14,
+    too close to a genuine mismatch's own ~1.55+ to also anchor safely to
+    markers found at that size)."""
+    from pyCamSet.calibration_targets.markers.legacy_probe import min_probe_corners_for
+
+    # Within the already-calibrated range: passing n_markers_found changes
+    # nothing, whatever value it is given -- the existing total-scaled
+    # threshold (already proven safe by the sweeps above) is untouched.
+    for nx, ny in _LEGACY_POLICY_SIZES:
+        board = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0).board
+        without = min_probe_corners_for(board)
+        for n_markers_found in (1, 10, 1000):
+            assert min_probe_corners_for(board, n_markers_found) == without, (
+                f"{nx}x{ny}: threshold changed for n_markers_found="
+                f"{n_markers_found} within the already-calibrated size range")
+
+    # Past it: the threshold must scale down with markers actually found,
+    # and stay reachable by the corpus's own real numbers (46-78 markers,
+    # 81-130 probe corners -- see the docstring above).
+    for nx, ny in _LARGE_LEGACY_SIZES:
+        board = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0).board
+        import math as _math
+        total_corners = (nx - 1) * (ny - 1)
+        flat = min_probe_corners_for(board)
+        assert flat == min(total_corners, _math.ceil(2 / 3 * total_corners)), (
+            f"{nx}x{ny}: unexpected flat (no-markers-given) threshold {flat}")
+        scaled_down = min_probe_corners_for(board, n_markers_found=52)
+        assert scaled_down < flat, (
+            f"{nx}x{ny}: threshold with n_markers_found=52 ({scaled_down}) "
+            f"did not scale below the flat total-only threshold ({flat})")
+        assert scaled_down <= 85, (
+            f"{nx}x{ny}: threshold {scaled_down} for 52 markers found still "
+            f"exceeds the corpus's own smallest observed probe-corner count "
+            f"(85) for a genuine mismatch at 52 markers found")
+        # Never below the module's own floor, whatever markers_found says.
+        assert min_probe_corners_for(board, n_markers_found=0) >= 1
+
+
+def test_legacy_correctly_configured_large_board_never_warns_with_background(caplog):
+    """Companion to test_legacy_correctly_configured_small_board_never_warns
+    _with_background, at the sizes round-3 review's markers-found ceiling
+    (_LARGE_LEGACY_SIZES) applies to. Same lighter sweep (2 background
+    shades, 10 seeds, 40 crops = 800 frames/size): a correctly configured
+    board must never warn just because the new, smaller ceiling makes a
+    mismatch easier to report."""
+    logger_name = "pyCamSet.calibration_targets.charuco.target"
+    for nx, ny in _LARGE_LEGACY_SIZES:
+        printed = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0, legacy=False)
+        img = np.ascontiguousarray(printed.board.generateImage((900, 900)), dtype=np.uint8)
+        target = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0,
+                         legacy=False, marker_backend="aruco1")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger=logger_name):
+            for bg in (255, 0):
+                for seed in range(10):
+                    rng = np.random.default_rng(seed * 1000 + bg + nx * 10 + ny)
+                    for _ in range(40):
+                        frame = _random_crop_on_background(img, rng, bg)
+                        target.find_in_image(frame)
+        assert caplog.records == [], (
+            f"aruco1 {nx}x{ny}: correctly configured large board warned "
+            f"{len(caplog.records)} time(s) over background-padded partial "
+            f"views: {[r.getMessage() for r in caplog.records]}")
+
+
+def test_legacy_misconfigured_large_board_warns_promptly_on_the_real_corpus(session_data_dir):
+    """The concrete regression this round's review reported: a 20x20
+    ChArUco target configured with the WRONG legacy flag, read against the
+    real, checked-in tests/test_data/calibration_charuco corpus (which is
+    legacy=False -- tests/conftest.py's CHARUCO_ARGS), must warn within the
+    first few frames of an ordinary calibration sequence -- not never, as it
+    did before round-3 review's markers-found ceiling (see
+    test_legacy_min_probe_threshold_scales_down_for_large_boards_when_markers
+    _are_known's docstring for the reproduction)."""
+    image_dir = session_data_dir / "calibration_charuco" / "1"
+    if not image_dir.is_dir():
+        pytest.skip(f"corpus camera folder not found at {image_dir}")
+    images = sorted(image_dir.glob("*.jpg"))
+    assert images, f"no images found in {image_dir}"
+
+    target = ChArUco(num_squares_x=20, num_squares_y=20, square_size=4.0, legacy=True)
+    fired_at = None
+    for i, img_path in enumerate(images):
+        img = cv2.imread(str(img_path))
+        target.find_in_image(img)
+        if target.given_legacy_warning and fired_at is None:
+            fired_at = i
+            break
+    assert fired_at is not None, (
+        "misconfigured 20x20 board never warned over the real corpus's own "
+        f"{len(images)} images")
+    assert fired_at <= 4, (
+        f"misconfigured 20x20 board did not warn promptly: fired on frame "
+        f"{fired_at} of {len(images)}")
+
+
+def test_legacy_misconfigured_board_warns_promptly_and_full_view_never_returns_corners():
+    """(3) A misconfigured board (printed the OTHER way from how the target
+    is configured): the target's own legacy flag must never change; an
+    EXACT, uncropped full view must give NO corners at all (the concrete
+    guarantee the approved policy makes); and the warning must fire within
+    the first few frames of a realistic sequence, naming both the
+    configured and the likely setting.
+
+    A merely LARGE (but not exactly full) crop is NOT asserted to warn or to
+    withhold corners here: clipping even one edge row of markers off the
+    board can make the rest self-consistent under the wrong pattern too and
+    interpolate real-looking (but wrong) corners -- an accepted, documented
+    trade-off (see markers/aruco2.py's and legacy_probe.py's docstrings),
+    not something this test tries to eliminate.
+    """
+    for backend in ("aruco1", "aruco2"):
+        for printed_legacy in (True, False):
+            printed = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0,
+                              legacy=printed_legacy)
+            full_img = np.ascontiguousarray(
+                printed.board.generateImage((900, 900)), dtype=np.uint8)
+            target_legacy = not printed_legacy
+            target = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0,
+                             legacy=target_legacy, marker_backend=backend)
+
+            # The exact, uncropped full view is frame 0 -- "the first few
+            # frames that show a reasonable part of the board" always
+            # includes it in a real run, and it is the one view this policy
+            # guarantees is both corner-free and warns.
+            frames = [full_img] + _random_crops(full_img, 4, seed=3)
+            fired_at = None
+            for i, frame in enumerate(frames):
+                det = target.find_in_image(frame)
+                assert target.board.getLegacyPattern() is target_legacy, (
+                    f"{backend} printed_legacy={printed_legacy}: legacy flag "
+                    f"changed mid-sequence")
+                if i == 0:
+                    n = 0 if det.keys is None else len(det.keys)
+                    assert n == 0, (
+                        f"{backend} printed_legacy={printed_legacy}: an exact "
+                        f"full view of a misconfigured board returned {n} "
+                        f"corner(s), not the guaranteed zero")
+                if target.given_legacy_warning and fired_at is None:
+                    fired_at = i
+            assert fired_at == 0, (
+                f"{backend} printed_legacy={printed_legacy}: warning did not "
+                f"fire on the full-view frame (fired_at={fired_at})")
+
+
+def test_ccube_legacy_warning_names_the_actual_face_flag(caplog):
+    """(3)/(4) for Ccube: the shared legacy-mismatch warning must name the
+    FACE that failed and its actual (dynamically read) configured flag, not
+    a hardcoded guess -- for either detector. Build a cube whose OWN
+    configured flag is legacy=False and confirm the fired warning names
+    False as configured and True as the likely setting."""
+    for backend in ("aruco1", "aruco2"):
+        printed = Ccube(n_points=6, length=20.0, legacy=True)  # even n_points: legacy matters
+        tex = np.ascontiguousarray(printed.textures[0], dtype=np.uint8)
+        # Mismatched on purpose (printed legacy=True, read as legacy=False) so
+        # the first pass genuinely fails and the warning fires with the face's
+        # CURRENT flag (False) still in effect -- never touched by detection.
+        cube = Ccube(n_points=6, length=20.0, legacy=False, marker_backend=backend)
+
+        with caplog.at_level(logging.WARNING,
+                             logger="pyCamSet.calibration_targets.ccube.target"):
+            det = cube.find_in_image(tex)
+
+        n = 0 if det.keys is None else len(det.keys)
+        assert n == 0, f"{backend}: an exact full-view mismatch must give no corners"
+        warnings = [r.getMessage() for r in caplog.records if "Ccube: face 0" in r.getMessage()]
+        assert warnings, f"{backend}: expected the legacy-mismatch warning to fire on face 0"
+        assert "legacy=False" in warnings[0], (
+            f"{backend}: warning did not name the face's actual (False) legacy flag: "
+            f"{warnings[0]!r}")
+        assert "legacy=True" in warnings[0], (
+            f"{backend}: warning did not name the likely (True) legacy setting: "
+            f"{warnings[0]!r}")
+        assert cube.boards[0].getLegacyPattern() is False, (
+            f"{backend}: the face's own configured legacy flag changed during detection")
+
+
+def test_ccube_legacy_flag_never_changes_and_odd_face_never_warns():
+    """(1)/(4) for Ccube: a face's own configured legacy flag must never
+    change during detection (matched or mismatched, either detector), and
+    an ODD n_points face (row count odd -- toggling legacy is a provable
+    no-op) must never warn even when genuinely mismatched."""
+    for backend in ("aruco1", "aruco2"):
+        for n_points, printed_legacy, target_legacy in [
+            (6, True, True), (6, True, False),  # even face: matched, mismatched
+            (5, True, False),  # odd face: mismatched, but must never warn
+        ]:
+            printed = Ccube(n_points=n_points, length=20.0, legacy=printed_legacy)
+            tex = np.ascontiguousarray(printed.textures[0], dtype=np.uint8)
+            cube = Ccube(n_points=n_points, length=20.0, legacy=target_legacy,
+                        marker_backend=backend)
+            for frame in [tex] + _random_crops(tex, 4, seed=4):
+                cube.find_in_image(frame)
+                assert cube.boards[0].getLegacyPattern() is target_legacy, (
+                    f"{backend} n_points={n_points}: face legacy flag changed")
+            if n_points % 2 == 1:
+                assert cube.given_legacy_warning is False, (
+                    f"{backend}: odd-n_points face warned, but toggling legacy "
+                    f"is a provable no-op for it")
+
+
+def test_ccube_correctly_configured_even_face_never_warns():
+    """(2)/(4) for Ccube: a CORRECTLY configured even-n_points face, over
+    many rendered partial views, must never warn, for either detector."""
+    for backend in ("aruco1", "aruco2"):
+        cube = Ccube(n_points=6, length=20.0, legacy=False, marker_backend=backend)
+        tex = np.ascontiguousarray(cube.textures[0], dtype=np.uint8)
+        frames = [tex] + _random_crops(tex, 14, seed=5) + [
+            np.zeros((100, 100), dtype=np.uint8)]
+        for frame in frames:
+            cube.find_in_image(frame)
+        assert cube.given_legacy_warning is False, (
+            f"{backend}: correctly configured Ccube face warned over "
+            f"{len(frames)} views")
+
+
+def test_charuco_warn_legacy_once_check_then_set_is_atomic():
+    """P2 (round-3 review): given_legacy_warning's check-then-set inside
+    _warn_legacy_once used to be a bare bool's check-then-set with no lock,
+    so genuine OS threads sharing ONE long-lived target instance (a GUI
+    worker thread, a user-authored ThreadPoolExecutor pipeline -- the same
+    threat model the codebase already defends for
+    _CHARUCO_DETECTOR_CACHE_LOCK in markers/aruco2.py) calling find_in_image
+    concurrently could both observe given_legacy_warning as False before
+    either set it, each building and logging its own warning -- breaking
+    the documented once-per-target contract (corners themselves are
+    unaffected either way). Rather than relying on OS thread-scheduling
+    luck (as test_charuco_detector_cache_eviction_is_thread_safe must, for
+    its own analogous race), this pins thread 1 deterministically between
+    the read and the write with a fake board whose getLegacyPattern()
+    blocks on an Event until released, so a second thread can be started
+    while thread 1 is paused exactly there."""
+    import threading
+
+    class _SlowLegacyBoard:
+        """_warn_legacy_once only ever calls getLegacyPattern() on the
+        board it is given; this stand-in blocks inside that call so the
+        calling thread can be pinned mid-critical-section."""
+
+        def __init__(self, entered: threading.Event, release: threading.Event):
+            self._entered = entered
+            self._release = release
+
+        def getLegacyPattern(self) -> bool:
+            self._entered.set()
+            assert self._release.wait(timeout=5), "release event was never set"
+            return False
+
+    target = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0,
+                     legacy=False, marker_backend="aruco1")
+    entered = threading.Event()
+    release = threading.Event()
+    target.board = _SlowLegacyBoard(entered, release)
+
+    logger_name = "pyCamSet.calibration_targets.charuco.target"
+    messages: list[str] = []
+
+    class _Recorder(logging.Handler):
+        def emit(self, record):
+            messages.append(record.getMessage())
+
+    handler = _Recorder()
+    logging.getLogger(logger_name).addHandler(handler)
+    try:
+        t1 = threading.Thread(target=target._warn_legacy_once)
+        t1.start()
+        assert entered.wait(timeout=5), "thread 1 never reached getLegacyPattern()"
+
+        # Thread 1 is now paused exactly between the (pre-fix, unlocked)
+        # check and the set. With the fix, thread 2 must block on the lock
+        # here and never itself reach getLegacyPattern().
+        t2 = threading.Thread(target=target._warn_legacy_once)
+        t2.start()
+        t2.join(timeout=1)
+
+        release.set()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+        assert not t1.is_alive() and not t2.is_alive(), "a racing thread never finished"
+    finally:
+        logging.getLogger(logger_name).removeHandler(handler)
+
+    assert len(messages) == 1, (
+        f"expected exactly one legacy-mismatch warning from two racing "
+        f"threads on one shared target instance, got {len(messages)}: {messages}")
+    assert target.given_legacy_warning is True
+
+
+def test_ccube_warn_legacy_once_check_then_set_is_atomic():
+    """Ccube counterpart of test_charuco_warn_legacy_once_check_then_set_is_atomic
+    -- see that test's docstring for the race and how this reproduces it
+    deterministically. Ccube's _warn_legacy_once is the same check-then-set
+    logic plus a face index."""
+    import threading
+
+    class _SlowLegacyBoard:
+        def __init__(self, entered: threading.Event, release: threading.Event):
+            self._entered = entered
+            self._release = release
+
+        def getLegacyPattern(self) -> bool:
+            self._entered.set()
+            assert self._release.wait(timeout=5), "release event was never set"
+            return False
+
+    cube = Ccube(n_points=6, length=20.0, legacy=False, marker_backend="aruco1")
+    entered = threading.Event()
+    release = threading.Event()
+    board = _SlowLegacyBoard(entered, release)
+
+    logger_name = "pyCamSet.calibration_targets.ccube.target"
+    messages: list[str] = []
+
+    class _Recorder(logging.Handler):
+        def emit(self, record):
+            messages.append(record.getMessage())
+
+    handler = _Recorder()
+    logging.getLogger(logger_name).addHandler(handler)
+    try:
+        t1 = threading.Thread(target=cube._warn_legacy_once, args=(0, board))
+        t1.start()
+        assert entered.wait(timeout=5), "thread 1 never reached getLegacyPattern()"
+
+        t2 = threading.Thread(target=cube._warn_legacy_once, args=(1, board))
+        t2.start()
+        t2.join(timeout=1)
+
+        release.set()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+        assert not t1.is_alive() and not t2.is_alive(), "a racing thread never finished"
+    finally:
+        logging.getLogger(logger_name).removeHandler(handler)
+
+    assert len(messages) == 1, (
+        f"expected exactly one legacy-mismatch warning from two racing "
+        f"threads on one shared target instance, got {len(messages)}: {messages}")
+    assert cube.given_legacy_warning is True
+
+
+# -- Approved policy: no ambiguity-discard, warning only, gated evaluation ---
+
+
+def test_warn_legacy_gate_not_evaluated_when_corners_are_found(monkeypatch):
+    """The mismatch-evidence gate (``should_warn_legacy_mismatch``) must only
+    ever be reached when the configured pattern found markers but ZERO
+    corners -- a normal, successful detection must never pay for (or risk a
+    false positive from) the opposite-pattern probe at all."""
+    import pyCamSet.calibration_targets.markers.aruco2 as a2mod
+
+    board = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0).board  # even rows
+    img = np.ascontiguousarray(board.generateImage((900, 900)), dtype=np.uint8)
+    true_markers = _true_markers_for_board(board, img)
+
+    def _boom(*_a, **_kw):
+        raise AssertionError("should_warn_legacy_mismatch was evaluated for a successful frame")
+
+    monkeypatch.setattr(a2mod, "should_warn_legacy_mismatch", _boom)
+    ids, pts = a2mod.interpolate_board_corners(img, board, true_markers)
+    assert ids is not None, "a full, clean board view must still detect"
+
+
+def test_warn_legacy_gate_evaluated_once_when_markers_found_but_no_corners(monkeypatch):
+    """Companion to the test above: the gate IS reached, exactly once, for a
+    frame that found markers but no corners under the configured pattern --
+    this is the only place ``warn_legacy`` can possibly fire from."""
+    import pyCamSet.calibration_targets.markers.aruco2 as a2mod
+
+    # Printed legacy=True, read as legacy=False: a full view mismatch always
+    # finds markers and no corners (see the module's own testing below).
+    printed = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0, legacy=True)
+    img = np.ascontiguousarray(printed.board.generateImage((900, 900)), dtype=np.uint8)
+    true_markers = _true_markers_for_board(printed.board, img)
+    mismatched_board = ChArUco(
+        num_squares_x=7, num_squares_y=6, square_size=10.0, legacy=False).board
+
+    calls = []
+    orig = a2mod.should_warn_legacy_mismatch
+
+    def _counting(*args, **kwargs):
+        calls.append(1)
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(a2mod, "should_warn_legacy_mismatch", _counting)
+    ids, pts = a2mod.interpolate_board_corners(
+        img, mismatched_board, true_markers, warn_legacy=lambda: None)
+    assert ids is None and pts is None, "a full-view mismatch must give no corners"
+    assert len(calls) == 1, f"gate evaluated {len(calls)} times, expected exactly 1"
+
+
+def test_legacy_warn_probe_paid_once_per_target_not_every_frame(monkeypatch):
+    """P2 (round-1 review): once a target has already warned
+    (given_legacy_warning is True), should_warn_legacy_mismatch's own probe
+    -- a throwaway board + detector plus a whole detectBoard call -- must
+    not be paid again on every subsequent qualifying frame; only up to and
+    including the frame that actually fires the warning. Before the fix,
+    every qualifying frame for the rest of the target's life repeated the
+    full probe cost even though given_legacy_warning was already True and
+    no further warning could ever fire."""
+    import pyCamSet.calibration_targets.charuco.target as charuco_mod
+    import pyCamSet.calibration_targets.markers.aruco2 as aruco2_mod
+
+    # aruco1's probe is called from charuco.target; aruco2's is called from
+    # markers.aruco2 (shared by both ChArUco's and Ccube's aruco2 branch).
+    gate_module = {"aruco1": charuco_mod, "aruco2": aruco2_mod}
+
+    for backend in ("aruco1", "aruco2"):
+        mod = gate_module[backend]
+        calls = []
+        orig = mod.should_warn_legacy_mismatch
+
+        def _counting(*args, **kwargs):
+            calls.append(1)
+            return orig(*args, **kwargs)
+
+        monkeypatch.setattr(mod, "should_warn_legacy_mismatch", _counting)
+
+        # Printed legacy=True, read as legacy=False: a full view mismatch
+        # always finds markers and no corners under the configured
+        # pattern, so every frame below is a qualifying frame.
+        printed = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0, legacy=True)
+        img = np.ascontiguousarray(printed.board.generateImage((900, 900)), dtype=np.uint8)
+        target = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0,
+                         legacy=False, marker_backend=backend)
+
+        for _ in range(5):
+            target.find_in_image(img)
+
+        assert target.given_legacy_warning is True, f"{backend}: warning never fired"
+        assert len(calls) == 1, (
+            f"{backend}: probe evaluated {len(calls)} times across 5 identical "
+            f"mismatched frames, expected exactly 1 (paid once per target, not "
+            f"once per qualifying frame)")
+
+
+def test_ccube_legacy_warn_probe_paid_once_per_target_not_every_frame(monkeypatch):
+    """Ccube companion to the ChArUco test above (P2, round-1 review):
+    ccube/target.py's own call site (aruco1: ccube.target's imported
+    should_warn_legacy_mismatch; aruco2: shared with ChArUco via
+    markers.aruco2) must likewise stop paying for the probe once
+    given_legacy_warning is already True."""
+    import pyCamSet.calibration_targets.ccube.target as ccube_mod
+    import pyCamSet.calibration_targets.markers.aruco2 as aruco2_mod
+
+    gate_module = {"aruco1": ccube_mod, "aruco2": aruco2_mod}
+
+    for backend in ("aruco1", "aruco2"):
+        mod = gate_module[backend]
+        calls = []
+        orig = mod.should_warn_legacy_mismatch
+
+        def _counting(*args, **kwargs):
+            calls.append(1)
+            return orig(*args, **kwargs)
+
+        monkeypatch.setattr(mod, "should_warn_legacy_mismatch", _counting)
+
+        printed = Ccube(n_points=6, length=20.0, legacy=True)  # even n_points: legacy matters
+        tex = np.ascontiguousarray(printed.textures[0], dtype=np.uint8)
+        cube = Ccube(n_points=6, length=20.0, legacy=False, marker_backend=backend)
+
+        for _ in range(5):
+            cube.find_in_image(tex)
+
+        assert cube.given_legacy_warning is True, f"{backend}: warning never fired"
+        assert len(calls) == 1, (
+            f"{backend}: probe evaluated {len(calls)} times across 5 identical "
+            f"mismatched frames, expected exactly 1 (paid once per target, not "
+            f"once per qualifying frame)")
+
+
+def test_interpolate_board_corners_drops_int32_overflow_id():
+    """P3 (round 3): interpolate_board_corners is documented as tolerating
+    out-of-bounds and foreign-id markers without raising, but a marker id
+    outside int32 range used to escape that guarantee: _detect()'s own
+    ``np.asarray(..., dtype=np.int32)`` cast raises OverflowError, uncaught,
+    instead of the fail-safe empty/partial result every other malformed
+    input gets. Such an id must be dropped, the same way a wrong-shaped
+    quad already is."""
+    from pyCamSet.calibration_targets.markers.aruco2 import interpolate_board_corners
+
+    board = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0).board
+    img = np.ascontiguousarray(board.generateImage((700, 700)), dtype=np.uint8)
+    true_markers = _true_markers_for_board(board, img)
+
+    clean_ids, clean_pts = interpolate_board_corners(img, board, true_markers)
+    assert clean_ids is not None and len(clean_ids) == 16
+
+    bad_id_marker = (2**31 + 5, true_markers[0][1].copy())
+    ids2, pts2 = interpolate_board_corners(img, board, true_markers + [bad_id_marker])
+    assert ids2 is not None and len(ids2) == 16, (
+        "a marker id outside int32 range must be dropped (fail safe), not "
+        "raise OverflowError or corrupt the frame")
+
+
+# -- P2: a single marker deliberately yields no corners -----------------------
+
+
+def test_single_marker_gives_no_corners_aruco2():
+    """P2: CharucoParameters.minMarkers is deliberately left at OpenCV's
+    default of 2 (parity with aruco1, and with the pre-adapter aruco2
+    path); a lone marker must not extrapolate a corner. See
+    interpolate_board_corners's docstring for why."""
+    from pyCamSet.calibration_targets.markers.aruco2 import interpolate_board_corners
+
+    board = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0).board
+    img = np.ascontiguousarray(board.generateImage((700, 700)), dtype=np.uint8)
+    true_markers = _true_markers_for_board(board, img)
+    ids, pts = interpolate_board_corners(img, board, true_markers[:1])
+    assert ids is None and pts is None
 
 
 def test_default_backend_is_aruco1_exactly():
@@ -283,6 +1396,117 @@ def test_accuracy_vs_charuco_detector():
         assert np.max(errs) < 3.5, f"max {np.max(errs):.2f}px"
 
 
+def test_charuco_partial_view_does_not_raise():
+    """(a) A board cut by the image edge, read with marker_backend='aruco2',
+    must not raise. Regression test: the old homography-based interpolation
+    fed cropped/out-of-bounds marker corners into cv2.cornerSubPix, which
+    raised cv2.error ("cornersubpix.cpp:99 ... contains(cT)") on some
+    partial views; the adapter hands markers straight to
+    CharucoDetector.detectBoard, which tolerates them."""
+    board = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0,
+                    marker_backend="aruco2")
+    img = board._render_board(px_per_mm=8.0).astype(np.uint8)
+    # Crop to the left 55% of the image: several markers (and the corners
+    # that depend on them) are cut clean off by the new image edge, so the
+    # board is genuinely partial rather than merely warped or shrunk.
+    cropped = np.ascontiguousarray(img[:, : int(img.shape[1] * 0.55)])
+    det = board.find_in_image(cropped)  # must not raise
+    assert det is not None
+
+
+def test_ccube_partial_view_does_not_raise():
+    """(a) Same as above for Ccube: a face texture cut by the image edge
+    must not raise under marker_backend='aruco2'."""
+    cube = Ccube(n_points=5, length=20.0, marker_backend="aruco2")
+    tex = np.ascontiguousarray(cube.textures[0], dtype=np.uint8)
+    cropped = np.ascontiguousarray(tex[:, : int(tex.shape[1] * 0.55)])
+    det = cube.find_in_image(cropped)  # must not raise
+    assert det is not None
+
+
+def test_charuco_aruco2_agrees_tightly_with_aruco1_on_clean_render():
+    """(b) On a clean rendered/mildly-warped board, ArUco2 and ArUco1 must
+    agree tightly -- the adapter hands the SAME image to the SAME
+    CharucoDetector.detectBoard OpenCV call the aruco1 path uses, differing
+    only in which detector found the input marker corners, so the two
+    should be near-identical rather than merely close (probed empirically:
+    median ~0.03px / max ~0.07px at a mild 20% top-edge warp)."""
+    b2 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0,
+                marker_backend="aruco2")
+    img = b2._render_board(px_per_mm=8.0).astype(np.uint8)
+    img = _trapezoid_warp(img, top_frac=0.8)  # mild perspective tilt
+    b1 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0)
+    gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
+        b1.board, ARUCO_OPENCV_DETECTOR.resolve(None))
+    gt_c, gt_ids, _, _ = gt_det.detectBoard(img)
+    det = b2.find_in_image(img)
+    assert _count(det) > 0
+    gt_map = {int(i): np.asarray(pt, float).reshape(-1)
+              for i, pt in zip(np.asarray(gt_ids).reshape(-1), gt_c[:, 0])}
+    det_ids = np.asarray(det.keys).reshape(-1).astype(int)
+    errs = [float(np.linalg.norm(np.asarray(p, float) - gt_map[int(c)]))
+            for c, p in zip(det_ids, np.asarray(det.image_points))
+            if int(c) in gt_map]
+    assert errs, "no overlapping corner ids with ground truth"
+    assert np.median(errs) < 0.1, f"median {np.median(errs):.3f}px"
+    assert np.max(errs) < 0.5, f"max {np.max(errs):.3f}px"
+
+
+def test_ccube_aruco2_agrees_tightly_with_aruco1_on_clean_render():
+    """(b) Same tight-agreement check as above, for one Ccube face."""
+    c2 = Ccube(n_points=5, length=20.0, marker_backend="aruco2")
+    tex = np.ascontiguousarray(c2.textures[0], dtype=np.uint8)
+    c1 = Ccube(n_points=5, length=20.0)
+    gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
+        c1.boards[0], ARUCO_OPENCV_DETECTOR.resolve(None))
+    gt_c, gt_ids, _, _ = gt_det.detectBoard(tex)
+    det = c2.find_in_image(tex)
+    assert _count(det) > 0
+    gt_map = {int(i): np.asarray(pt, float).reshape(-1)
+              for i, pt in zip(np.asarray(gt_ids).reshape(-1), gt_c[:, 0])}
+    keys = np.asarray(det.keys)
+    face_mask = keys[:, 0] == 0
+    det_ids = keys[face_mask, 1].astype(int)
+    pts = np.asarray(det.image_points)[face_mask]
+    errs = [float(np.linalg.norm(np.asarray(p, float) - gt_map[int(c)]))
+            for c, p in zip(det_ids, pts) if int(c) in gt_map]
+    assert errs, "no overlapping corner ids with ground truth"
+    assert np.median(errs) < 0.1, f"median {np.median(errs):.3f}px"
+    assert np.max(errs) < 0.5, f"max {np.max(errs):.3f}px"
+
+
+def test_charuco_aruco2_matches_aruco1_under_blur_noise_and_tilt():
+    """(c) On a harder synthetic image (perspective tilt + Gaussian blur +
+    sensor noise), every ArUco2 corner must still land close to the ArUco1
+    answer -- not just the well-conditioned clean-render case. Probed
+    empirically at these settings: max ~0.2-0.3px, well inside the 3px
+    budget asserted here."""
+    b2 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0,
+                marker_backend="aruco2")
+    img = b2._render_board(px_per_mm=8.0).astype(np.uint8)
+    img = _trapezoid_warp(img, top_frac=0.6)
+    img = cv2.GaussianBlur(img, (0, 0), 1.2)
+    rng = np.random.default_rng(0)
+    img = np.clip(
+        img.astype(np.float64) + rng.normal(0, 8.0, img.shape), 0, 255
+    ).astype(np.uint8)
+    b1 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0)
+    gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
+        b1.board, ARUCO_OPENCV_DETECTOR.resolve(None))
+    gt_c, gt_ids, _, _ = gt_det.detectBoard(img)
+    det = b2.find_in_image(img)
+    assert _count(det) > 0
+    assert gt_ids is not None and len(gt_ids) > 0
+    gt_map = {int(i): np.asarray(pt, float).reshape(-1)
+              for i, pt in zip(np.asarray(gt_ids).reshape(-1), gt_c[:, 0])}
+    det_ids = np.asarray(det.keys).reshape(-1).astype(int)
+    errs = [float(np.linalg.norm(np.asarray(p, float) - gt_map[int(c)]))
+            for c, p in zip(det_ids, np.asarray(det.image_points))
+            if int(c) in gt_map]
+    assert errs, "no overlapping corner ids with ground truth"
+    assert np.max(errs) < 3.0, f"max {np.max(errs):.2f}px"
+
+
 def test_legacy_even_row_position_level_both_backends():
     # 7x6 (even rows): legacy matters. Assert POSITIONS match CharucoDetector,
     # not just counts.
@@ -304,30 +1528,27 @@ def test_legacy_even_row_position_level_both_backends():
         assert np.mean(errs) < 2.0, f"{backend}: mean {np.mean(errs):.2f}px"
 
 
-def test_legacy_wrong_flag_auto_toggle():
-    # Legacy-printed board + modern constructor board: the cross-marker
-    # disagreement discriminator must toggle the flag and recover positions.
-    ref = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0, legacy=True)
-    img = np.ascontiguousarray(ref.board.generateImage((700, 700)), dtype=np.uint8)
-    board = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0,
-                    legacy=False, marker_backend="aruco2")
-    det = board.find_in_image(img)
-    assert _count(det) > 0
-    # FIX 8(c): the wrong-flag auto-toggle must have flipped the board's
-    # legacy flag to True (the kept run is the legacy one), matching the
-    # once-per-target warning text.
-    assert board.board.getLegacyPattern() is True, (
-        "auto-toggle did not leave the board flagged legacy")
-    gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
-        ref.board, ARUCO_OPENCV_DETECTOR.resolve(None))
-    gt_c, gt_ids, _, _ = gt_det.detectBoard(img)
-    gt_map = {int(i): np.asarray(pt, float).reshape(-1)
-              for i, pt in zip(np.asarray(gt_ids).reshape(-1), gt_c[:, 0])}
-    errs = [float(np.linalg.norm(np.asarray(p, float) - gt_map[int(c)]))
-            for c, p in zip(np.asarray(det.keys).reshape(-1),
-                            np.asarray(det.image_points)) if int(c) in gt_map]
-    assert errs
-    assert np.mean(errs) < 2.0, f"auto-toggle failed: mean {np.mean(errs):.2f}px"
+def test_legacy_wrong_flag_no_auto_toggle():
+    """Approved policy supersedes the old auto-toggle: a legacy-printed
+    board read by a target configured the other way must NOT recover
+    positions by flipping the target's own flag. It must instead: find no
+    corners at all on this exact full view, leave the target's configured
+    flag untouched, and fire the once-per-target mismatch warning naming
+    both settings. Covers both detectors."""
+    for backend in ("aruco1", "aruco2"):
+        ref = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0, legacy=True)
+        img = np.ascontiguousarray(ref.board.generateImage((900, 900)), dtype=np.uint8)
+        board = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0,
+                        legacy=False, marker_backend=backend)
+        det = board.find_in_image(img)
+        assert _count(det) == 0, (
+            f"{backend}: an exact full view of a mismatched board returned "
+            f"{_count(det)} corner(s), not the guaranteed zero")
+        assert board.board.getLegacyPattern() is False, (
+            f"{backend}: detection changed the target's own configured "
+            f"legacy flag -- the approved policy forbids this")
+        assert board.given_legacy_warning is True, (
+            f"{backend}: the mismatch warning did not fire")
 
 
 def test_input_args_roundtrip_preserves_backend():
@@ -570,3 +1791,110 @@ def test_worker_multiprocess_path(tmp_path):
     assert 30 <= total <= 34, (
         f"worker path found {total} corner instances over 2 images, "
         f"expected ~32 (ALVAR aruco2-only board proves the aruco2 path)")
+
+
+def test_legacy_warning_reaches_main_process_under_multiprocessing(tmp_path, caplog):
+    """P1 (round-1 review) / overseer addition (b), round-2 review: the
+    once-per-target legacy-mismatch warning must reach the user when
+    detection runs through find_in_imfolder's multiprocessing.Pool path
+    (threads > 1, the real default -- camera_calibrator.py's
+    ``min(max(1, cpu_count()-2), 20)``), not just the single-process
+    (threads=1) path. A worker process's own logger.warning call never
+    reaches the main process's logger (no log-forwarding exists between
+    them, and each worker rebuilds a fresh target instance with
+    given_legacy_warning=False from input_args) -- so this exercises the
+    message being carried back to the main process with each image's
+    result and logged there once (abstract_target.py's find_in_imfolder),
+    rather than relying on the worker's own (invisible) log call."""
+    printed = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0, legacy=True)
+    img = np.ascontiguousarray(printed.board.generateImage((700, 700)), dtype=np.uint8)
+    cam_dir = tmp_path / "cam0"
+    cam_dir.mkdir()
+    for i in range(3):
+        cv2.imwrite(str(cam_dir / f"im_{i}.png"), img)
+
+    # Mismatched on purpose: printed legacy=True, target configured legacy=False.
+    target = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0,
+                     legacy=False, marker_backend="aruco1")
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        dets = target.find_in_imfolder(cam_dir, cam_names=["cam0"], threads=2)
+
+    data = dets.get(cam="cam0").get_data()
+    n = 0 if data is None else data.shape[0]
+    assert n == 0, (
+        f"a full-view mismatch must give no corners under the multi-worker "
+        f"path either, got {n}")
+    assert target.given_legacy_warning is False, (
+        "the ORIGINAL (main-process) target instance is never the one that "
+        "runs detection under threads>1 -- each worker rebuilds its own "
+        "fresh copy from input_args -- so this instance's own flag must "
+        "stay False even though the warning did fire (in a worker)")
+
+    messages = [r.getMessage() for r in caplog.records]
+    matches = [m for m in messages if "legacy=True" in m and "legacy=False" in m]
+    assert matches, (
+        f"the legacy-mismatch warning fired in a worker process but never "
+        f"reached the main process's log under threads=2; records seen: "
+        f"{messages}")
+
+
+def test_legacy_warning_single_process_path_unchanged(tmp_path, caplog):
+    """Companion to the multiprocessing test above: threads=1 must keep
+    warning exactly as it always did (no Pool involved, self IS the
+    instance detection runs on)."""
+    printed = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0, legacy=True)
+    img = np.ascontiguousarray(printed.board.generateImage((700, 700)), dtype=np.uint8)
+    cam_dir = tmp_path / "cam0"
+    cam_dir.mkdir()
+    cv2.imwrite(str(cam_dir / "im_0.png"), img)
+
+    target = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0,
+                     legacy=False, marker_backend="aruco1")
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        target.find_in_imfolder(cam_dir, cam_names=["cam0"], threads=1)
+
+    assert target.given_legacy_warning is True, (
+        "threads=1 runs detection on the SAME instance -- the warning must "
+        "fire on it directly, exactly as before this fix")
+    messages = [r.getMessage() for r in caplog.records]
+    matches = [m for m in messages if "legacy=True" in m and "legacy=False" in m]
+    assert matches, f"threads=1 must still log the warning; records seen: {messages}"
+
+
+def test_legacy_warning_deduplicated_across_camera_folders_under_multiprocessing(tmp_path, caplog):
+    """P2 (round-4 review): the real multi-camera workflow calls
+    ``find_in_imfolder`` once per camera subfolder on ONE target instance
+    (``camera_calibrator.py``: ``[work_fn(file) for file in
+    detected_sub_folders]``), with the production-default ``threads > 1``
+    (the Pool path). Each call rebuilds fresh Pool workers from
+    ``self.input_args``, so nothing tracked a previous camera folder's
+    warning -- the once-per-target contract
+    (``ChArUco._warn_legacy_once``'s own docstring, and the approved
+    policy text) must still hold across the WHOLE run, not just within one
+    folder: a genuinely misconfigured rig (all cameras see the same
+    wrongly-configured physical board) must warn once for the run, not
+    once per camera."""
+    printed = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0, legacy=True)
+    img = np.ascontiguousarray(printed.board.generateImage((700, 700)), dtype=np.uint8)
+
+    # Mismatched on purpose: printed legacy=True, target configured legacy=False.
+    target = ChArUco(num_squares_x=7, num_squares_y=6, square_size=10.0,
+                     legacy=False, marker_backend="aruco1")
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        for cam_idx in range(3):
+            cam_dir = tmp_path / f"cam{cam_idx}"
+            cam_dir.mkdir()
+            cv2.imwrite(str(cam_dir / "im_0.png"), img)
+            target.find_in_imfolder(cam_dir, cam_names=[cam_dir.name], threads=2)
+
+    messages = [r.getMessage() for r in caplog.records]
+    matches = [m for m in messages if "legacy=True" in m and "legacy=False" in m]
+    assert len(matches) == 1, (
+        f"expected exactly one legacy-mismatch warning across 3 camera "
+        f"folders sharing one (genuinely misconfigured) target instance, "
+        f"got {len(matches)}: {matches}")
+
+

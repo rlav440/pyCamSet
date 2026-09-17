@@ -11,7 +11,7 @@ A *spec* is those arguments plus the ``type`` that says which class they
 belong to::
 
     {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
-     "square_size": 4.0, "legacy": True}
+     "square_size": 4.0, "legacy": False}
 
 Anything the class defaults, a spec may leave out.  Adding a target is one
 line in :data:`TARGET_CLASSES` and nothing else.

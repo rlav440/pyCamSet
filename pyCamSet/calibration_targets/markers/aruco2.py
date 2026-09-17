@@ -1,17 +1,34 @@
 '''
 :Purpose: ArUco2 (aruco2 package) marker backend for pyCamSet ChArUco/Ccube
     targets. Implements plan v4 decisions D3 (dictionary resolution) and
-    D4/D5 (marker detection + ChArUco corner interpolation) for the
-    aruco2 backend; the aruco1 (OpenCV) path is untouched.
-:Status: Active. Batch B1 of the aruco1/aruco2 backend work (plan v4).
-:Future: If aruco2 gains native ChArUco support, this module may shrink to a
-    thin adapter; the cross-marker disagreement metric stays as the
-    legacy-pattern discriminator.
+    D5 (marker detection) for the aruco2 backend; the aruco1 (OpenCV) path
+    is untouched. ChArUco corner interpolation (D4) is an adapter: aruco2's
+    own markers are handed straight to a cached ``cv2.aruco.CharucoDetector``
+    per board, so the same native interpolation and sub-pixel refinement the
+    aruco1 path uses also reads aruco2's markers -- there is no separate
+    homography/refinement implementation to keep in step with OpenCV's own.
+:Status: Active. aruco1/aruco2 backend work (plan v4), corner-interpolation
+    adapter revision; legacy-pattern handling rewritten to the approved
+    warn-only policy (no per-frame retry, no ambiguity-discard -- see
+    :func:`interpolate_board_corners`'s docstring and
+    ``markers/legacy_probe.py``).
+:Future: If aruco2 gains native ChArUco support, this module may shrink
+    further. A duplicate marker id is dropped before detection reaches
+    OpenCV at all (an ambiguous INPUT, never a corrupted one: which of the
+    two same-id markers is real cannot be told here). Beyond that, this
+    module does not try to guess which marker is "wrong": a round-1 review
+    found that an earlier per-marker consistency heuristic could itself
+    return confidently wrong, mislabelled corners under a legacy-pattern
+    mismatch on a partial view, which is worse than the fail-safe empty
+    result it was meant to avoid (see :func:`interpolate_board_corners`'s
+    docstring). A frame that the configured pattern rejects outright is
+    therefore left as no corners -- fewer corners, never a wrong one.
 '''
 
 from __future__ import annotations
 
 import logging
+import threading
 
 import cv2
 import numpy as np
@@ -28,6 +45,12 @@ from pyCamSet.calibration_targets.core.parameters import (
     Parameter,
     DetectorParameterisation,
 )
+# The corner-interpolation adapter (below) hands aruco2's markers to
+# OpenCV's own CharucoDetector, built through the SAME helper the aruco1
+# path uses -- for configuration parity, not because it changes anything
+# observable here (see _charuco_detector_for's docstring).
+from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
+from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
 
 # Module-level lazy aruco2 import guard (D3): the module must import cleanly
 # even when aruco2 is not installed. ARUCO2_AVAILABLE is the single source of
@@ -114,6 +137,16 @@ def resolve_dictionary(a_dict, marker_backend: str = "aruco1") -> cv2.aruco.Dict
     )
 
 
+#: Bounds a marker id must fall within to survive _detect()'s own
+#: ``np.asarray(..., dtype=np.int32)`` cast further down this module: an id
+#: outside this range raises OverflowError from numpy rather than being
+#: skipped the way an out-of-bounds/foreign id normally is (round-3
+#: finding, P3). See the ``good = []`` filtering loop in
+#: :func:`interpolate_board_corners`.
+_INT32_MIN = int(np.iinfo(np.int32).min)
+_INT32_MAX = int(np.iinfo(np.int32).max)
+
+
 def detect_markers(image, dict_int):
     """Run aruco2 detection on a uint8 image.
 
@@ -127,14 +160,106 @@ def detect_markers(image, dict_int):
     return [(int(m.id), np.asarray(m.corners, dtype=np.float32)) for m in markers]
 
 
+#: Bounds how many (board, detector) entries _CHARUCO_DETECTOR_CACHE keeps
+#: alive at once. Arbitrary but generous: a target holds at most a handful
+#: of live boards (a ChArUco one, six for a Ccube), so this is not expected
+#: to bind in normal use -- it exists so the cache cannot grow without
+#: bound across many short-lived boards (e.g. a study that rebuilds targets
+#: repeatedly), which the strong board reference below would otherwise do.
+_CHARUCO_DETECTOR_CACHE_MAXSIZE = 64
+
+#: One cv2.aruco.CharucoDetector per board, built once and reused. Keyed by
+#: id(board), but each entry ALSO holds a strong reference to the board
+#: itself: CPython reuses a garbage-collected object's address for a new
+#: object (verified empirically: alternating two differently-shaped boards
+#: through a construct/delete/gc loop reused ids for most iterations), so a
+#: bare id()-keyed cache can hand a new, differently-shaped board the OLD
+#: board's detector -- silently, since detectBoard never re-validates that
+#: its detector's own board matches the geometry the caller thinks it is
+#: reading. Keeping the board alongside its detector lets a lookup check
+#: identity (``is``) before reusing an entry, which is correct regardless
+#: of whether an id() match is a genuine hit or a collision: a collision
+#: simply misses (rebuilds), because the stored board is never the one
+#: being asked for. See :func:`_charuco_detector_for`.
+_CHARUCO_DETECTOR_CACHE: dict[int, tuple[cv2.aruco.CharucoBoard, cv2.aruco.CharucoDetector]] = {}
+
+#: Guards every read-check-insert-evict sequence on
+#: :data:`_CHARUCO_DETECTOR_CACHE` (round-2 review, P2). The cache is
+#: process-local -- pyCamSet's own ``multiprocessing.Pool`` workers each get
+#: an independent copy, so this is not about that -- but a caller that drives
+#: this backend from real OS threads (a GUI worker thread, a
+#: ``ThreadPoolExecutor`` pipeline) could otherwise race the dict's
+#: check-then-delete eviction step: two threads evicting concurrently can
+#: compute the same "oldest" key and both try to delete it (``KeyError``), or
+#: a mutation can land between another thread's ``iter()`` and its lookup
+#: (``RuntimeError: dictionary changed size during iteration``). Both were
+#: reproduced directly against this cache under a widened thread-switch
+#: interval. The common path is cache-hit-dominated, so a single lock around
+#: the whole lookup/build/evict body costs it a negligible uncontended
+#: acquisition.
+_CHARUCO_DETECTOR_CACHE_LOCK = threading.Lock()
+
+
+def _charuco_detector_for(board) -> cv2.aruco.CharucoDetector:
+    """The ``cv2.aruco.CharucoDetector`` for *board*, built once and cached.
+
+    Safe under id(board) reuse (see :data:`_CHARUCO_DETECTOR_CACHE`'s
+    docstring): a cache hit is only trusted when the entry's own board
+    ``is`` *board*, so a collision with a garbage-collected board's old
+    address always rebuilds instead of returning a stale, wrong-shaped
+    detector. Because an entry holds a strong reference to its board, the
+    cache is bounded (:data:`_CHARUCO_DETECTOR_CACHE_MAXSIZE`, least-
+    recently-used eviction) rather than left to grow forever; evicting an
+    entry is also what lets its board be collected and its id() safely
+    recycled, since eviction removes the dict key a later collision would
+    otherwise be checked against.
+
+    Mutating *board* in place (e.g. ``board.setLegacyPattern(...)``) still
+    reaches a cached detector built from it: the cache holds the same board
+    object, not a copy, so this is unaffected by the identity check above.
+
+    Built through the same :meth:`ArucoOpenCVDetector.build_detector` helper
+    the aruco1 path uses, for configuration parity with it -- though this is
+    belt-and-braces rather than load-bearing: empirically indistinguishable
+    from a bare ``cv2.aruco.CharucoDetector(board, cv2.aruco.CharucoParameters())``
+    on this path, because the ``DetectorParameters``/``RefineParameters`` the
+    helper also sets only change anything when OpenCV runs its *own*
+    (re)detection against rejected marker candidates -- which never happens
+    here, since markers are always supplied directly (see
+    :func:`interpolate_board_corners`).
+
+    The whole lookup/build/evict sequence runs under
+    :data:`_CHARUCO_DETECTOR_CACHE_LOCK` (round-2 review, P2): a bare dict's
+    check-then-delete eviction is not atomic and can raise under genuine
+    multi-threaded access (see the lock's own docstring).
+    """
+    key = id(board)
+    with _CHARUCO_DETECTOR_CACHE_LOCK:
+        entry = _CHARUCO_DETECTOR_CACHE.get(key)
+        if entry is not None and entry[0] is board:
+            # Re-insert at the end so eviction below stays least-recently-used
+            # (plain dicts are insertion-ordered; this is that, not a hash quirk).
+            del _CHARUCO_DETECTOR_CACHE[key]
+            _CHARUCO_DETECTOR_CACHE[key] = entry
+            return entry[1]
+
+        detector = ARUCO_OPENCV_DETECTOR.build_detector(
+            board, ARUCO_OPENCV_DETECTOR.resolve(None))
+        _CHARUCO_DETECTOR_CACHE[key] = (board, detector)
+        if len(_CHARUCO_DETECTOR_CACHE) > _CHARUCO_DETECTOR_CACHE_MAXSIZE:
+            oldest_key = next(iter(_CHARUCO_DETECTOR_CACHE))
+            del _CHARUCO_DETECTOR_CACHE[oldest_key]
+        return detector
+
+
 def detect_charuco_corners(image, board, dict_int, warn_legacy=None):
-    """D4: detect markers with aruco2 and interpolate ChArUco corners.
+    """D4/D5: detect markers with aruco2 and interpolate ChArUco corners.
 
     :param image: the (uint8) image to detect in.
     :param board: a cv2.aruco.CharucoBoard defining the target geometry.
     :param dict_int: the dictionary int used for detection.
-    :param warn_legacy: optional zero-arg callable fired once when the best
-        legacy-pattern run still exceeds the disagreement threshold.
+    :param warn_legacy: optional zero-arg callable; see
+        :func:`interpolate_board_corners`.
     :return: (corner_ids 1D int array, pts (N,2) float32) or (None, None).
     """
     image = _as_uint8_image(image)
@@ -143,172 +268,163 @@ def detect_charuco_corners(image, board, dict_int, warn_legacy=None):
 
 
 def interpolate_board_corners(image, board, markers, warn_legacy=None):
-    """D4 steps 3-10: interpolate chessboard corners from detected markers.
+    """D4: interpolate ChArUco corners from aruco2-detected markers.
+
+    An adapter, not a reimplementation: aruco2's own marker corners are
+    handed straight to OpenCV's native ``CharucoDetector.detectBoard``
+    (via :func:`_charuco_detector_for`), which does the per-marker
+    homography, corner matching and sub-pixel refinement itself -- the
+    same code the aruco1 path already runs on its own, natively-detected
+    markers. aruco2's marker detection (:func:`detect_markers`) and
+    Ccube's global-id-to-face-local-id remap (done by the caller before
+    this function ever sees the markers) are unchanged.
+
+    A single visible marker never yields corners: ``CharucoParameters.
+    minMarkers`` is left at OpenCV's default of 2, deliberately, rather than
+    lowered to 1. This is parity with the aruco1 path, which reads the same
+    default; a lone marker still fixes a corner's position by extrapolation
+    (one marker's own homography, not a triangulation between several), and
+    that used to be a source of this path's grosser errors before the
+    switch to this CharucoDetector-based adapter. A frame with only one
+    marker in view is therefore skipped rather than answered inaccurately.
+
+    Fail-safe by construction, not by a corrective heuristic: beyond
+    dropping a duplicate marker id (an ambiguous INPUT -- which of two
+    same-id markers is real cannot be told here, never a signal that either
+    one is corrupt), a frame OpenCV's own ``detectBoard`` rejects outright
+    is returned as no corners, full stop. An earlier revision of this
+    module also tried to recover such a frame by dropping whichever single
+    marker looked geometrically inconsistent with the rest -- a round-1
+    review found that heuristic could itself return WRONG, mislabelled
+    corners: under a legacy-pattern mismatch on a partial view, a board's
+    real, uncorrupted markers can split into a majority/minority group
+    that each look internally consistent, and pruning the minority as "the
+    bad one" let detection succeed anyway, under the still-wrong legacy
+    flag, with no warning. That heuristic was removed rather than patched,
+    because a corner interpolator that can turn a safe empty result into a
+    confidently wrong one violates this module's whole reason for being
+    conservative here (fewer corners is acceptable, wrong corners are not
+    -- see the module docstring).
+
+    Approved policy (legacy pattern): detection reads ONLY the legacy flag
+    *board* is configured with when this function is called -- no per-frame
+    retry under the opposite one, and *board*'s own legacy flag is never
+    changed here. A frame that finds markers but no corners under that
+    configured flag may still trigger a WARNING (see *warn_legacy* below)
+    when a throwaway probe under the opposite pattern gives strong evidence
+    of a mismatch, but the probe's own corners are evidence only and are
+    never returned. Accepted trade-off, not a bug: on a partial view of a
+    misconfigured board, a small marker subset can occasionally be
+    self-consistent enough to interpolate SOME corners even under the
+    wrong, configured pattern; the warning is the mitigation for that, not
+    a guarantee it cannot happen. See ``markers/legacy_probe.py``.
 
     :param image: the (uint8) image the markers were detected in.
     :param board: a cv2.aruco.CharucoBoard whose geometry defines the corners.
     :param markers: list of (marker_id, corners (4,2) float32) with ids in the
         board's local id space (Ccube callers remap global ids first).
-    :param warn_legacy: optional zero-arg callable fired once when the best
-        legacy-pattern run still exceeds the disagreement threshold.
-    :return: (corner_ids 1D int array, pts (N,2) float32) or (None, None).
+    :param warn_legacy: optional zero-arg callable fired at most once
+        (per-target de-duplication is the caller's own responsibility) when
+        markers were found but no ChArUco corners could be interpolated
+        under *board*'s configured legacy-pattern flag, AND a throwaway
+        probe under the opposite pattern gives strong evidence of a
+        mismatch -- see ``markers.legacy_probe.should_warn_legacy_mismatch``
+        for exactly what that requires. Mirrors the aruco1 path's own
+        warning point (``charuco/target.py``'s ``find_in_image``). Pass
+        ``None`` once the caller has already warned: that also skips the
+        probe itself, not just the (no-op) callback, so a caller should
+        stop passing a real callable once its own de-duplication state
+        says the warning has already fired.
+    :return: (corner_ids 1D int32 array, pts (N,2) float32) or (None, None).
     """
     image = _as_uint8_image(image)
-    square_len = float(board.getSquareLength())
-    marker_len = float(board.getMarkerLength())
-    inset = (square_len - marker_len) / 2.0
-    h, w = image.shape[:2]
 
-    def _interpolate_with_board(b):
-        """D4 steps 2-7 against one board geometry.
-
-        Returns (ids, pts, max_disagreement, estimates) where estimates maps
-        corner id -> list of (marker_id, image_pt, marker_corners) so the
-        refinement step can find the contributing markers.
-        """
-        board_ids = np.asarray(b.getIds()).reshape(-1).astype(int)
-        board_id_set = set(int(i) for i in board_ids)
-        chess = np.asarray(b.getChessboardCorners(), dtype=np.float64).squeeze()
-        if chess.ndim == 3:
-            chess = chess.reshape(-1, chess.shape[-1])
-        chess_xy = chess[:, :2]
-
-        estimates = {}
-        for mid, corners in markers:
-            mid = int(mid)
-            # step 2: keep only markers whose id is on this board; stray ids
-            # are skipped (prevents IndexError on foreign markers).
-            if mid not in board_id_set:
-                _LOG.debug("aruco2: skipping marker id %d not on board", mid)
-                continue
-            corners = np.asarray(corners, dtype=np.float32)
-            if corners.shape != (4, 2):
-                _LOG.debug("aruco2: skipping marker id %d with shape %s", mid, corners.shape)
-                continue
-            # skip markers with non-finite or zero-area quads, or corners
-            # outside the image (R2-P1-2: the old |H(obj)-img| check was
-            # tautological because H maps its own sources exactly).
-            if not np.all(np.isfinite(corners)):
-                continue
-            if cv2.contourArea(corners) <= 0.0:
-                continue
-            if (np.any(corners[:, 0] < 0) or np.any(corners[:, 1] < 0)
-                    or np.any(corners[:, 0] >= w) or np.any(corners[:, 1] >= h)):
-                continue
-            # step 3: local quad from the board. getObjPoints() is a TUPLE of
-            # (4,3) arrays; index with the int row position, never fancy-index.
-            row = np.where(board_ids == mid)[0]
-            if len(row) == 0:
-                continue
-            idx = int(row[0])
-            obj_quad = np.asarray(b.getObjPoints()[idx], dtype=np.float64)[:, :2]
-            # expand the marker quad to the full square by the inset, diagonally
-            # from the quad centre (axis-aligned in board coords, so this is the
-            # exact square-corner expansion; valid for both legacy patterns).
-            expanded = obj_quad.copy()
-            expanded[0] += [-inset, -inset]
-            expanded[1] += [inset, -inset]
-            expanded[2] += [inset, inset]
-            expanded[3] += [-inset, inset]
-            # step 4: match expanded square corners to chessboard corners;
-            # drop unmatched (board-boundary) corners.
-            matched = []
-            for corner in expanded:
-                d = np.linalg.norm(chess_xy - corner, axis=1)
-                j = int(np.argmin(d))
-                if d[j] < 1e-6:
-                    matched.append(j)
-            if not matched:
-                continue
-            # step 5: local homography from the marker's own corners.
-            marker_obj = np.asarray(obj_quad, dtype=np.float32).reshape(4, 1, 2)
-            img_corners = corners.reshape(4, 1, 2)
-            H = cv2.getPerspectiveTransform(marker_obj, img_corners)
-            # step 6: map the matched chessboard corners through H.
-            src = np.asarray(chess_xy[matched], dtype=np.float32).reshape(-1, 1, 2)
-            mapped = cv2.perspectiveTransform(src, H).reshape(-1, 2)
-            for cid, pt in zip(matched, mapped):
-                estimates.setdefault(cid, []).append((mid, pt, corners))
-
-        if not estimates:
-            return None, None, 0.0, {}
-
-        # step 7: average duplicate corner ids across markers; record the
-        # per-corner contributor lists for the disagreement metric.
-        ids = sorted(estimates.keys())
-        pts = np.empty((len(ids), 2), dtype=np.float32)
-        max_disagreement = 0.0
-        for k, cid in enumerate(ids):
-            ests = estimates[cid]
-            pts[k] = np.mean([e[1] for e in ests], axis=0)
-            if len(ests) >= 2:
-                for i in range(len(ests)):
-                    for j in range(i + 1, len(ests)):
-                        max_disagreement = max(
-                            max_disagreement,
-                            float(np.linalg.norm(ests[i][1] - ests[j][1])),
-                        )
-        return np.asarray(ids, dtype=np.int32), pts, max_disagreement, estimates
-
-    corner_ids, pts, disagreement, estimates = _interpolate_with_board(board)
-    if corner_ids is None:
+    # aruco2's own detect_markers() always returns (4,2) float32 quads, so
+    # this is not a validation pass over well-formed real input -- it is
+    # what keeps a malformed/foreign marker list (the regression test
+    # below; interpolate_board_corners is a public seam) from being cast
+    # into one inhomogeneous array. OpenCV's own detectBoard needs no
+    # finite/area/bounds guarding beyond that: verified to tolerate
+    # out-of-bounds (cropped/partial-view) and foreign-id markers without
+    # raising, unlike the D4-step homography this replaces -- EXCEPT an id
+    # outside int32 range, which _detect()'s own np.int32 cast (below) would
+    # otherwise raise OverflowError on (round-3 finding, P3): drop it here,
+    # the same fail-safe way a wrong-shaped quad is dropped, rather than let
+    # a single foreign id abort the whole frame.
+    good = []
+    for mid, corners in markers:
+        corners = np.asarray(corners, dtype=np.float32)
+        if corners.shape != (4, 2):
+            _LOG.debug(
+                "aruco2: skipping marker id %s with shape %s (need (4, 2))",
+                mid, corners.shape)
+            continue
+        mid = int(mid)
+        if not (_INT32_MIN <= mid <= _INT32_MAX):
+            _LOG.debug(
+                "aruco2: skipping marker id %s outside int32 range %s..%s "
+                "(detectBoard's own marker-id cast would overflow)",
+                mid, _INT32_MIN, _INT32_MAX)
+            continue
+        good.append((mid, corners))
+    if not good:
+        # An EMPTY markerCorners container makes detectBoard silently run
+        # its own aruco1-style (re)detection instead of skipping straight
+        # to "nothing to interpolate" -- short-circuit before that happens.
         return None, None
 
-    # step 8: cross-marker disagreement legacy toggle. Even-row boards only
-    # (odd-row boards never toggle - aruco_board.cpp:335). On mismatch, toggle
-    # the board flag, re-run interpolation with the SAME markers, and keep the
-    # run with the lower disagreement; warn once if the best run still exceeds
-    # 5px (the geometry supports no better answer).
-    n_y = int(board.getChessboardSize()[1])
-    if n_y % 2 == 0 and disagreement > 5.0:
-        board.setLegacyPattern(not board.getLegacyPattern())
-        t_ids, t_pts, t_disagreement, t_estimates = _interpolate_with_board(board)
-        # FIX 8(f): only accept the toggled run when it actually produced
-        # corners (t_ids is not None); a None toggled run must not be kept.
-        if t_ids is not None and t_disagreement < disagreement:
-            corner_ids, pts, disagreement, estimates = (
-                t_ids, t_pts, t_disagreement, t_estimates,
-            )
-        else:
-            # the original flag was right (or the toggled run found nothing);
-            # restore it so the board object stays consistent with the kept run.
-            board.setLegacyPattern(not board.getLegacyPattern())
-        if disagreement > 5.0 and warn_legacy is not None:
+    # An id seen twice in one frame is ambiguous -- which of the two is the
+    # real marker cannot be told here -- and detectBoard's own consistency
+    # check rejects the WHOLE frame over it rather than picking one. Drop
+    # every marker sharing a repeated id (not just the extras) before it
+    # ever reaches detectBoard.
+    id_counts: dict[int, int] = {}
+    for mid, _corners in good:
+        id_counts[mid] = id_counts.get(mid, 0) + 1
+    duplicate_ids = {mid for mid, count in id_counts.items() if count > 1}
+    if duplicate_ids:
+        _LOG.debug("aruco2: dropping duplicate-id marker(s) %s", sorted(duplicate_ids))
+        good = [(mid, corners) for mid, corners in good if mid not in duplicate_ids]
+    if not good:
+        return None, None
+
+    detector = _charuco_detector_for(board)
+
+    def _detect(marker_list):
+        marker_corners = tuple(corners.reshape(1, 4, 2) for _mid, corners in marker_list)
+        # int32, not the platform default int: float64/int64 ids raise
+        # inside OpenCV's own binding for this call.
+        marker_ids = np.asarray(
+            [mid for mid, _corners in marker_list], dtype=np.int32).reshape(-1, 1)
+        return detector.detectBoard(image, markerCorners=marker_corners, markerIds=marker_ids)
+
+    c_corners, c_ids, mloc, mid = _detect(good)
+
+    if c_corners is None and mloc is not None:
+        # Approved policy: no retry -- board's own legacy flag is never
+        # touched here, and the configured pattern's own "no corners" result
+        # stands. The only thing left to decide is whether this frame is
+        # strong enough evidence of a mismatch to warn about (see
+        # markers.legacy_probe.should_warn_legacy_mismatch's docstring for
+        # exactly what "strong" means); a throwaway probe board/detector is
+        # used for that check, built for the OPPOSITE pattern, never
+        # board's own -- its corners are evidence only, never returned.
+        # warn_legacy is None once the caller has already warned (P2,
+        # round-1 review): that also skips should_warn_legacy_mismatch's
+        # own probe below via this short-circuit, so it is paid at most
+        # once per target, not on every later qualifying frame.
+        if warn_legacy is not None and should_warn_legacy_mismatch(
+            board, ARUCO_OPENCV_DETECTOR.resolve(None), image,
+            len(mloc), mloc, mid,
+        ):
             warn_legacy()
 
-    # step 9: subpixel refinement (belt-and-braces; aruco2 already refines
-    # marker corners, but the extrapolated square corners need it).
-    gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # FIX 8(e): cornerSubPix requires uint8; integral float64/float32 inputs
-    # (e.g. raw Ccube textures) are converted here too, matching detect_markers.
-    if gray.dtype in (np.float32, np.float64) and np.allclose(gray, np.round(gray)):
-        gray = gray.astype(np.uint8)
-    refined = np.empty_like(pts)
-    for k, (cid, pt) in enumerate(zip(corner_ids, pts)):
-        # window = max(1, min(10, int(dist)-2)) where dist is the distance to
-        # the nearest corner of any CONTRIBUTING marker (charuco_detector.cpp:120).
-        dist = float("inf")
-        for _mid, _pt, mcorners in estimates[int(cid)]:
-            dist = min(dist, float(np.min(np.linalg.norm(mcorners - pt, axis=1))))
-        win = max(1, min(10, int(dist) - 2))
-        in_pt = np.asarray([[pt[0] - 0.5, pt[1] - 0.5]], dtype=np.float32)
-        cv2.cornerSubPix(
-            gray,
-            in_pt,
-            (win, win),
-            (-1, -1),
-            (cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 30, 0.1),
-        )
-        new_pt = in_pt[0] + 0.5
-        # accept the refined position only if it moved < 2px, else keep the
-        # homography point (R1-P0(CV) belt-and-braces contract).
-        if float(np.linalg.norm(new_pt - pt)) < 2.0:
-            refined[k] = new_pt
-        else:
-            refined[k] = pt
+    if c_corners is None:
+        return None, None
 
-    # step 10: return (corner_ids 1D, pts (N,2)).
-    return corner_ids, refined
+    ids = np.asarray(c_ids).reshape(-1).astype(np.int32)
+    pts = np.asarray(c_corners).reshape(-1, 2).astype(np.float32)
+    return ids, pts
 
 
 class Aruco2Detector(DetectorParameterisation):

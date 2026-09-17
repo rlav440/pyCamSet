@@ -325,7 +325,7 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
         tab.set_cameras(["1", "2", "3"], ["1", "2", "3"])
         tab._target_form.apply_spec(
             {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
-             "square_size": 4.0, "legacy": True})
+             "square_size": 4.0, "legacy": False})
         tab._nlim_edit.setText("4")          # four images is enough to solve
         # Caching on: the cache file is what phase 1 saves as its artifact,
         # and what phase 2 reads.  Without it a run records no detections.
@@ -343,7 +343,7 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
         tab._floc_edit.setText(str(images))
         tab._target_form.apply_spec(
             {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
-             "square_size": 4.0, "legacy": True})
+             "square_size": 4.0, "legacy": False})
         tab._run_phase2()
 
         assert not refused, refused
@@ -357,7 +357,7 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
         tab._floc_edit.setText(str(images))
         tab._target_form.apply_spec(
             {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
-             "square_size": 4.0, "legacy": True})
+             "square_size": 4.0, "legacy": False})
         tab._max_nfev_spin.setValue(10)
         tab._run_phase3()
 

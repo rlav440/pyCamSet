@@ -57,6 +57,31 @@ A standard detection, with an optional `draw` flag. With those two methods
 defined the new target can be passed to `calibrate_cameras`, and used to
 calibrate *n* cameras at once.
 
+### Where a corner sits inside a pixel
+
+Report corners on the same convention every other target uses, or a rig
+calibrated from two kinds of target mixes two coordinate systems and the
+difference is absorbed into the principal point.
+
+That convention is OpenCV's. `ChArUco` and `Ccube` inherit it by construction:
+they call `cv2.aruco.CharucoDetector`, which decides where a corner sits, and
+they apply no shift of their own. A target whose detector is not OpenCV's has
+nothing to inherit it from, so it must land on the same convention explicitly —
+`ChArUco2` adds half a pixel after refinement and validation, for exactly that
+reason. The check that the two agree is to render a pixel-aligned board of each
+kind with matching analytic corner positions and confirm both `find_in_image`
+implementations return the same points, which they do to about 0.05 px
+(`tests/test_aruco2_gridboard_quality.py`). Do the same for a new detector
+rather than assuming it.
+
+What is deliberately left open is whether OpenCV's convention coincides exactly
+with the pixel centres `cv2.projectPoints` projects onto. If it does not, the
+residual is a half-pixel offset in the principal point that every target in
+pyCamSet carries equally, since they all report on the one convention — it would
+move `cx`/`cy`, not the comparison between two targets. It is recorded here
+rather than corrected because changing a convention silently changes every
+calibration already made with this library.
+
 ## 3. Say what your arguments mean
 
 A target's arguments are described **once**, in the docstring of the
@@ -173,5 +198,5 @@ TARGET_CLASSES: dict[str, tuple[str, str]] = {
 
 The name is then what a settings dictionary addresses and stores, what the GUI
 offers, and what `pyCamSet.calibration_targets.MyTarget` resolves to. To show the
-GUI a different name, add an entry to `TARGET_LABELS` beside it â€” ChArUco is
-offered as "ChArUco1" that way â€” while specs keep the registry name.
+GUI a different name, add an entry to `TARGET_LABELS` beside it — ChArUco is
+offered as "ChArUco1" that way — while specs keep the registry name.

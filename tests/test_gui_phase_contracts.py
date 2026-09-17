@@ -846,14 +846,14 @@ def test_the_form_offers_every_target_the_registry_knows():
 @pytest.mark.parametrize("name", TARGET_NAMES, ids=list(TARGET_NAMES))
 def test_the_form_can_build_every_target_it_offers(name):
     """Each target the form offers, it also collects enough to build --
-    except ChArUco2, which has no aruco1 equivalent and cannot be built
-    at all without aruco2 installed."""
+    except ChArUco2 and Ccube2, which have no aruco1 equivalent and cannot
+    be built at all without aruco2 installed."""
     from PySide6.QtWidgets import QApplication
 
     from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
-    if name == "ChArUco2" and not ARUCO2_AVAILABLE:
+    if name in ("ChArUco2", "Ccube2") and not ARUCO2_AVAILABLE:
         pytest.skip("aruco2 is not installed")
 
     QApplication.instance() or QApplication([])
@@ -1359,6 +1359,89 @@ def _combo_items(combo):
 
 
 @pytest.mark.gui
+def test_the_create_target_dialog_asks_for_no_detector():
+    from PySide6.QtWidgets import QApplication, QLabel
+
+    from pyCamSet.gui.shared_functions import DETECTOR_NONE
+
+    QApplication.instance() or QApplication([])
+    dialog = _create_target_dialog()
+    try:
+        form = dialog._target_form
+        assert form.detector_mode() == DETECTOR_NONE
+        assert form._backend_combo is None
+        assert not any(label.text() == "Detector:"
+                       for label in form.findChildren(QLabel))
+        for target_type in ("ChArUco", "Ccube", "ChArUco2", "Ccube2"):
+            form.set_target_type(target_type)
+            assert "marker_backend" not in form.spec(), target_type
+    finally:
+        dialog.deleteLater()
+
+
+@pytest.mark.gui
+def test_phase_1_greys_out_aruco1_for_charuco2_and_gives_charuco_its_choice_back():
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import DETECTOR_CHOOSE
+
+    QApplication.instance() or QApplication([])
+    tab = _phase1_tab()
+    try:
+        form = tab._target_form
+        combo = form._backend_combo
+        assert form.detector_mode() == DETECTOR_CHOOSE
+
+        # A ChArUco read with ArUco 1, as chosen by default.
+        form.set_target_type("ChArUco")
+        assert form.backend() == "aruco1"
+        assert all(enabled for enabled, _ in _combo_items(combo).values())
+
+        # ChArUco2 selects ArUco 2 by itself, and says why ArUco 1 is grey.
+        form.set_target_type("ChArUco2")
+        assert form.backend() == "aruco2"
+        assert combo.currentData() == "aruco2"
+        assert not combo.isHidden()
+        items = _combo_items(combo)
+        assert items["aruco1"][0] is False
+        assert "ChArUco2" in items["aruco1"][1] and "ArUco 2" in items["aruco1"][1]
+        assert items["aruco2"] == (True, "")
+        assert "marker_backend" not in form.spec(), "ChArUco2 takes none"
+
+        # Picking the grey item from code cannot stick either.
+        combo.setCurrentIndex(combo.findData("aruco1"))
+        assert form.backend() == "aruco2"
+        assert combo.currentData() == "aruco2"
+
+        # Back to ChArUco: the choice made for it, not the one forced.
+        form.set_target_type("ChArUco")
+        assert form.backend() == "aruco1"
+        assert form.spec()["marker_backend"] == "aruco1"
+        assert all(enabled for enabled, _ in _combo_items(combo).values())
+
+        # And a choice of ArUco 2 survives the same round trip.
+        combo.setCurrentIndex(combo.findData("aruco2"))
+        form.set_target_type("ChArUco2")
+        form.set_target_type("Ccube")
+        assert form.backend() == "aruco2"
+        assert form.spec()["marker_backend"] == "aruco2"
+
+        # A ChArUco2 ccube is read the ChArUco2 board's way, and a ChArUco1
+        # ccube chosen after it gets its own choice back just the same.
+        combo.setCurrentIndex(combo.findData("aruco1"))
+        form.set_target_type("Ccube2")
+        assert form.backend() == "aruco2"
+        items = _combo_items(combo)
+        assert items["aruco1"][0] is False
+        assert "ChArUco2 ccube" in items["aruco1"][1]
+        assert "marker_backend" not in form.spec(), "Ccube2 takes none"
+        form.set_target_type("Ccube")
+        assert form.backend() == "aruco1"
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
 def test_the_detection_options_follow_the_detector_charuco2_forces():
     """The forced selection is a structural change like any other."""
     from PySide6.QtWidgets import QApplication
@@ -1376,6 +1459,88 @@ def test_the_detection_options_follow_the_detector_charuco2_forces():
         assert tab._current_detector_parameterisation().name == expected
         assert tuple(tab._detection_option_widgets) == tuple(
             p.key for p in tab._current_detector_parameterisation().settable())
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("phase", ["phase_2_intrinsics", "phase_3_bundle_adjustment"])
+def test_phases_2_and_3_read_with_the_detector_of_the_run_they_adopt(phase):
+    import importlib
+
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.gui.shared_functions import DETECTOR_INHERIT
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    QApplication.instance() or QApplication([])
+    module = importlib.import_module(f"pyCamSet.gui.{phase}")
+    tab_class = next(v for k, v in vars(module).items()
+                     if k.endswith("Tab") and isinstance(v, type))
+    tab = tab_class(QTabWidget(), QCheckBox(), QCheckBox(), WorkspaceManager(None))
+    try:
+        form = tab._target_form
+        assert form.detector_mode() == DETECTOR_INHERIT
+        assert form._backend_combo is None, "no detector to choose here"
+
+        # No run adopted yet: each target's own default.
+        form.set_target_type("Ccube")
+        assert form.backend() == "aruco1"
+        assert "ArUco 1" in form._inherited_backend_label.text()
+        form.set_target_type("ChArUco2")
+        assert form.backend() == "aruco2"
+        assert "ArUco 2" in form._inherited_backend_label.text()
+
+        # The adopted run's detector is shown and written back.
+        tab._adopt_target_from_phase1_run(
+            {"run_id": "r1", "params": _with(CCUBE_12, marker_backend="aruco2")})
+        assert form.target_type() == "Ccube"
+        assert form.backend() == "aruco2"
+        assert form._inherited_backend_label.text().startswith("ArUco 2")
+        assert "default" not in form._inherited_backend_label.text()
+        assert not form._inherited_backend_label.isHidden()
+        assert form.spec()["marker_backend"] == "aruco2"
+
+        # A run read with ArUco 1 is followed just as faithfully.
+        tab._adopt_target_from_phase1_run({"run_id": "r2", "params": CCUBE_12})
+        assert form.spec()["marker_backend"] == "aruco1"
+
+        # A ChArUco2 run names no detector, and is still an adopted run.
+        tab._adopt_target_from_phase1_run(
+            {"run_id": "r3", "params": {"target": {"type": "ChArUco2"}}})
+        assert form.backend() == "aruco2"
+        assert form._inherited_backend_label.text().startswith("ArUco 2")
+        assert "default" not in form._inherited_backend_label.text()
+
+        # A target picked by hand after adopting is not the run's, however
+        # the detectors line up.
+        tab._adopt_target_from_phase1_run(
+            {"run_id": "r4", "params": _with(CCUBE_12, marker_backend="aruco2")})
+        form.set_target_type("Ccube2")
+        assert form.backend() == "aruco2"
+        assert "(this target's default)" in form._inherited_backend_label.text()
+
+        # A target picked by hand whose own default does NOT line up with
+        # the adopted run's detector must not inherit it either -- the
+        # backend row, spec() and the label all fall back to this target's
+        # own default (Ccube's aruco2 run must not leak onto ChArUco, whose
+        # own default is aruco1).
+        form.set_target_type("ChArUco")
+        assert form.backend() == "aruco1"
+        assert "(this target's default)" in form._inherited_backend_label.text()
+        assert form.spec()["marker_backend"] == "aruco1"
+
+        # A run recorded without a target spec has no detector to adopt:
+        # the previous run's must not linger.
+        form.set_target_type("Ccube")
+        tab._adopt_target_from_phase1_run(
+            {"run_id": "r5", "params": _with(CCUBE_12, marker_backend="aruco2")})
+        assert form.spec()["marker_backend"] == "aruco2"
+        tab._adopt_target_from_phase1_run({"run_id": "r6", "params": {}})
+        assert form.target_type() == "Ccube"
+        assert form.backend() == "aruco1"
+        assert form.spec()["marker_backend"] == "aruco1"
+        assert "(this target's default)" in form._inherited_backend_label.text()
     finally:
         tab.deleteLater()
 
@@ -1542,6 +1707,41 @@ def test_the_optimisation_tab_still_chooses_its_detector():
         assert form.spec()["marker_backend"] == "aruco2"
     finally:
         tab.deleteLater()
+
+
+@pytest.mark.gui
+def test_the_target_combo_shows_labels_and_answers_with_registry_names():
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.calibration_targets.core.target_registry import target_label
+
+    QApplication.instance() or QApplication([])
+    form = _target_form()
+    try:
+        combo = form._target_combo
+        for i in range(combo.count()):
+            assert combo.itemText(i) == target_label(combo.itemData(i))
+        shown = {combo.itemData(i): combo.itemText(i) for i in range(combo.count())}
+        assert shown["ChArUco"] == "ChArUco1"
+        assert shown["Ccube"] == "ChArUco1 ccube"
+        assert shown["ChArUco2"] == "ChArUco2"
+        assert shown["Ccube2"] == "ChArUco2 ccube"
+        assert shown["PuzzleBoard"] == "PuzzleBoard"
+
+        form.set_target_type("Ccube")
+        assert combo.currentText() == "ChArUco1 ccube"
+        assert form.target_type() == "Ccube"
+        assert form.spec()["type"] == "Ccube"
+
+        form.apply_spec({"type": "ChArUco", "num_squares_x": 7})
+        assert combo.currentText() == "ChArUco1"
+        assert form.spec()["type"] == "ChArUco"
+        assert form.spec()["num_squares_x"] == 7
+
+        with pytest.raises(ValueError, match="ChArUco1"):
+            form.set_target_type("ChArUco1")  # a label is not a name
+    finally:
+        form.deleteLater()
 
 
 def test_every_target_label_names_a_registered_target():

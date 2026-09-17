@@ -29,6 +29,7 @@ __all__ = [
     "ImageDetection",
     "FaceToShape",
     "Ccube",
+    "Ccube2",
     "ChArUco",
     "ChArUco2",
     "PuzzleBoard",

@@ -621,8 +621,14 @@ def test_a_high_distortion_camset_wins_over_the_plain_one(tmp_path):
          marks=pytest.mark.skipif(
              not ARUCO2_AVAILABLE, reason="aruco2 is not installed"),
      ),
+     pytest.param(
+         {"type": "Ccube2", "n_points": 4, "length": 20.0,
+          "border_fraction": 0.15},
+         marks=pytest.mark.skipif(
+             not ARUCO2_AVAILABLE, reason="aruco2 is not installed"),
+     ),
      {"type": "PuzzleBoardCube", "n_points": 8, "length": 100.0}],
-    ids=["Ccube", "ChArUco", "ChArUco2", "PuzzleBoardCube"],
+    ids=["Ccube", "ChArUco", "ChArUco2", "Ccube2", "PuzzleBoardCube"],
 )
 def test_every_target_rebuilds_from_what_it_recorded(spec):
     """The property the registry rests on, and that a new target must keep.

@@ -252,7 +252,7 @@ def test_special_plots_are_skipped_when_nobody_is_watching(
 # built, so a target that cannot draw itself headlessly breaks the docs build
 # rather than anything a user would see.  These say so here instead.
 PLANAR_TARGETS = ["ChArUco", "ChArUco2", "PuzzleBoard"]
-CUBE_TARGETS = ["Ccube", "PuzzleBoardCube"]
+CUBE_TARGETS = ["Ccube", "Ccube2", "PuzzleBoardCube"]
 
 
 def _skip_without_cairo():
@@ -310,6 +310,12 @@ def test_a_cube_target_renders_a_scene(name, no_new_figures):
     what pyvista serialises into the page's turnable frame."""
     _skip_without_cairo()
     from pyCamSet.calibration_targets import target_class
+    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
+
+    if name == "Ccube2" and not ARUCO2_AVAILABLE:
+        # Ccube2's faces are ChArUco2 boards, which cannot be built at all
+        # without aruco2.
+        pytest.skip("aruco2 is not installed")
 
     scene = target_class(name)().plot(return_scene=True)
     scene.off_screen = True

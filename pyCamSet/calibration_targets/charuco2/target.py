@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import io
 import logging
 from pathlib import Path
 
@@ -28,8 +26,17 @@ from pyCamSet.calibration_targets.markers.backend_registry import (
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     CHARUCO2_DETECTOR,
     detect_grid_board_corners,
-    dictionary_marker_bits,
-    render_grid_board_image,
+    dictionary_marker_count,
+    grid_board_marker_bits,
+    refuse_rotation_ambiguous_markers,
+    warn_known_false_detections,
+)
+from pyCamSet.calibration_targets.charuco2.layout import (
+    grid_board_bounds,
+    grid_board_corners,
+    grid_board_rectangles,
+    rasterise_rectangles,
+    rectangles_svg_path,
 )
 from pyCamSet.cameras import Camera
 
@@ -67,18 +74,23 @@ class ChArUco2(AbstractTarget):
     aruco2 only; there is no backend to choose.
 
     **Detection is a fixed pipeline with nothing to tune.**
-    ``aruco2.detect_grid_board`` takes an image, a board size and a
-    dictionary and nothing else -- there is no ``DetectionParameters``-style
-    control for a form to show or a study to sweep, unlike
+    ``aruco2.detect_grid_board`` takes an image, a board size, a dictionary
+    and, optionally, the marker ids, and nothing else -- there is no
+    ``DetectionParameters``-style control for a form to show or a study to
+    sweep, unlike
     :class:`ChArUco`/:class:`~pyCamSet.calibration_targets.ccube.target
     .Ccube`'s OpenCV-backed detection.
+
+    **Printing is true vector.** Every output draws from the one geometric
+    layout in :mod:`pyCamSet.calibration_targets.charuco2.layout`, which is
+    checked pixel for pixel against aruco2's own ``get_grid_board_image``.
 
     **ChArUco2 has not been validated on a real printed and photographed
     board.** Every check behind it -- the corner-id mapping, occlusion,
     rotation and perspective-warp recovery, and the SVG round trip -- runs
-    against aruco2's own rendered raster, not against a camera photograph
-    of a printed board. Treat detection quality on a real capture as
-    unverified until it has been.
+    against rendered images, not against a camera photograph of a printed
+    board. Treat detection quality on a real capture as unverified until it
+    has been.
     """
 
     DETECTOR_BACKENDS = {ARUCO2_BACKEND: CHARUCO2_DETECTOR}
@@ -132,6 +144,17 @@ class ChArUco2(AbstractTarget):
         """
         super().__init__(inputs=locals(), backend=ARUCO2_BACKEND)
 
+        # A board is a whole number of squares. Checked first -- like
+        # Ccube2's own equivalent guard -- so a near-integer float (e.g. a
+        # spec read back from JSON carrying 5.9999999997, or 5.0 for 5)
+        # never reaches the `int(...)` conversion below and gets silently
+        # truncated to a smaller board than intended.
+        if (isinstance(num_squares_x, bool) or isinstance(num_squares_y, bool)
+                or not float(num_squares_x).is_integer()
+                or not float(num_squares_y).is_integer()):
+            raise ValueError(
+                f"A ChArUco2 board is a whole number of squares; got "
+                f"num_squares_x={num_squares_x!r}, num_squares_y={num_squares_y!r}.")
         if num_squares_x < _MIN_SQUARES or num_squares_y < _MIN_SQUARES:
             raise ValueError(
                 f"A ChArUco2 board must be at least {_MIN_SQUARES}x"
@@ -147,21 +170,31 @@ class ChArUco2(AbstractTarget):
         self.square_size = float(square_size) / 1000.0  # metres
         self._aruco_dict_int = dictionary_id(a_dict, ARUCO2_BACKEND)
 
+        # Every square carries its own marker, so the dictionary must hold
+        # one per square. aruco2 would only refuse at print time.
+        n_markers = dictionary_marker_count(self._aruco_dict_int)
+        n_squares = self.num_squares_x * self.num_squares_y
+        if n_squares > n_markers:
+            raise ValueError(
+                f"A {self.num_squares_x}x{self.num_squares_y} ChArUco2 board "
+                f"needs {n_squares} markers, one per square, but {a_dict!r} "
+                f"holds only {n_markers}. Choose a larger dictionary or a "
+                f"smaller board.")
+        # The board carries markers 0 .. n_squares-1, row-major.
+        board_name = f"A {self.num_squares_x}x{self.num_squares_y} ChArUco2 board"
+        refuse_rotation_ambiguous_markers(
+            self._aruco_dict_int, range(n_squares), a_dict, board_name)
+        warn_known_false_detections(
+            self._aruco_dict_int, range(n_squares), a_dict, board_name)
+
         # (grid_x+1) x (grid_y+1) intersection corners, row-major, so a
         # corner's array index equals aruco2's own global corner id (gid =
         # row * (grid_x+1) + col; verified empirically, by round-tripping
         # detection against a full, an occluded, a rotated and a
         # perspective-warped board -- see aruco2_gridboard.detect_grid_board_corners).
-        cols, rows = np.meshgrid(
-            np.arange(self.num_squares_x + 1, dtype=np.float64),
-            np.arange(self.num_squares_y + 1, dtype=np.float64),
-        )
-        self.point_data = np.stack(
-            [cols.ravel() * self.square_size,
-             rows.ravel() * self.square_size,
-             np.zeros(cols.size, dtype=np.float64)],
-            axis=-1,
-        )
+        corners = grid_board_corners(self.grid_size, self.square_size)
+        self.point_data = np.concatenate(
+            [corners, np.zeros((corners.shape[0], 1), dtype=np.float64)], axis=-1)
 
         self._process_data()
 
@@ -213,29 +246,42 @@ class ChArUco2(AbstractTarget):
 
     # -- printing -----------------------------------------------------------
 
-    def _marker_bits(self) -> int:
-        return dictionary_marker_bits(self._aruco_dict_int)
-
-    def _render(self, dpi: float) -> tuple[np.ndarray, float]:
+    def _board_rectangles(self) -> np.ndarray:
         """
-        The board raster aruco2 would both print and detect, at *dpi*.
-
-        Unlike ``ChArUco._render_board``, which hardcodes 12 px/mm no
-        matter what dpi was asked for, ``bit_size`` here is chosen so the
-        rendered image's actual pixels-per-mm matches ``dpi / 25.4`` as
-        closely as an integer bit size allows.
-
-        :return: ``(image, px_per_mm)`` -- the image, and the px/mm it was
-            actually rendered at (nearest integer ``bit_size`` to the
-            request, so not always exactly ``dpi / 25.4``).
+        Every black shape the board prints, in metres, as ``(x0, y0, x1, y1)``
+        rectangles with the first intersection corner at the origin.
         """
-        marker_bits = self._marker_bits()
-        square_size_mm = self.square_size * 1000.0
-        wanted_px_per_mm = float(dpi) / 25.4
-        bit_size = max(1, round(wanted_px_per_mm * square_size_mm / marker_bits))
-        image = render_grid_board_image(self.grid_size, self._aruco_dict_int, bit_size)
-        actual_px_per_mm = (marker_bits * bit_size) / square_size_mm
-        return image, actual_px_per_mm
+        bits = grid_board_marker_bits(self.grid_size, self._aruco_dict_int)
+        return grid_board_rectangles(self.grid_size, self.square_size, bits)
+
+    def _board_bounds(self) -> tuple[float, float, float, float]:
+        """The board's printed extent in metres, its tabbed band included."""
+        return grid_board_bounds(self.grid_size, self.square_size)
+
+    def _render(self, dpi: float, border_width: float = 0.0) -> tuple[np.ndarray, float]:
+        """
+        Rasterise the board's vector layout at *dpi*.
+
+        The image covers the board and its tabbed band -- the same frame
+        aruco2's ``get_grid_board_image`` draws -- plus ``border_width`` mm
+        of white on every side. The corner at ``point_data`` ``(x, y)`` mm
+        is at pixel ``((x + band + border_width) * px_per_mm, ...)``, the
+        band being a quarter of a square.
+
+        :return: ``(image, px_per_mm)`` -- the uint8 image, and the px/mm it
+            was drawn at (exactly ``dpi / 25.4``).
+        """
+        px_per_mm = float(dpi) / 25.4
+        px_per_m = px_per_mm * 1000.0
+        border_m = float(border_width) / 1000.0
+        x_min, y_min, x_max, y_max = self._board_bounds()
+        x_min, y_min = x_min - border_m, y_min - border_m
+        x_max, y_max = x_max + border_m, y_max + border_m
+        shape = (max(1, int(round((y_max - y_min) * px_per_m))),
+                 max(1, int(round((x_max - x_min) * px_per_m))))
+        image = rasterise_rectangles(
+            self._board_rectangles(), px_per_m, top_left=(x_min, y_min), shape=shape)
+        return image, px_per_mm
 
     def save_printable(self, path, kind: str = "svg", border_width: float = 10.0,
                         dpi: int = 300) -> Path:
@@ -245,20 +291,18 @@ class ChArUco2(AbstractTarget):
         :param path: where to write it
         :param kind: one of :data:`EXPORT_KINDS`
         :param border_width: Border (mm) -- the white margin drawn around
-            the board, in millimetres, on top of the marker border aruco2
-            already draws into the image itself. Detection: markers at the
-            very edge of a page are harder to find. Suggested: 10.
-        :param dpi: Raster DPI -- the resolution the board is rendered at.
-            Every export kind is a raster of aruco2's own board image (the
-            same image aruco2 both prints and detects from), sized so its
-            actual pixels-per-mm matches this value. Suggested: 300-600.
+            the board, in millimetres, outside the tabbed band the board
+            already has. Detection: markers at the very edge of a page are
+            harder to find. Suggested: 10.
+        :param dpi: Raster DPI -- the resolution a raster PDF is rendered
+            at. Ignored by the vector formats. Suggested: 300-600.
         :raises ValueError: for a format a board cannot be written as
         """
         if kind == "svg":
-            return self.save_to_svg(path, border_width=border_width, dpi=dpi)
+            return self.save_to_svg(path, border_width=border_width)
         if kind == "pdf_vector":
             return self.save_to_pdf(path, data_format="vector",
-                                     border_width=border_width, dpi=dpi)
+                                     border_width=border_width)
         if kind == "pdf_raster":
             return self.save_to_pdf(path, data_format="raster",
                                      border_width=border_width, dpi=int(dpi))
@@ -271,7 +315,20 @@ class ChArUco2(AbstractTarget):
             dpi: float = 300.0,
             suppress_svg_log: bool = False,
     ) -> Path:
-        """Embed aruco2's own board raster in an SVG, at true mm scale."""
+        """
+        Write the board as a true-vector SVG, at true mm scale.
+
+        Every black cell, tab and corner square is one rectangle sub-path of a
+        single ``<path>``, so abutting cells rasterise as one shape with no
+        seams between them. There is no embedded image.
+
+        :param f_out: where to write it; a default name when None.
+        :param border_width: the white margin around the board's tabbed
+            band, in millimetres.
+        :param dpi: unused -- a vector file has no resolution. Kept so
+            existing callers that pass it still work.
+        :param suppress_svg_log: skip the "Saved" log line.
+        """
         if f_out is None:
             f_out = Path(
                 f"charuco2_{self.num_squares_x}x{self.num_squares_y}_"
@@ -282,27 +339,25 @@ class ChArUco2(AbstractTarget):
         f_out = f_out.expanduser().with_suffix(".svg").resolve()
         f_out.parent.mkdir(parents=True, exist_ok=True)
 
-        image, px_per_mm = self._render(dpi)
-        board_w_mm = image.shape[1] / px_per_mm
-        board_h_mm = image.shape[0] / px_per_mm
-        canvas_w = board_w_mm + 2 * float(border_width)
-        canvas_h = board_h_mm + 2 * float(border_width)
-
-        png_bytes = io.BytesIO()
-        Image.fromarray(image).save(png_bytes, format="PNG")
-        data_uri = "data:image/png;base64," + base64.b64encode(
-            png_bytes.getvalue()).decode("ascii")
+        # Metres throughout, as ChArUco's and Ccube's SVGs are: the viewBox is
+        # in metres and width/height carry the physical size in mm.
+        border_m = float(border_width) * 0.001
+        x_min, y_min, x_max, y_max = self._board_bounds()
+        # Rounded to the path's own precision, so the page rectangle is not
+        # written with float noise such as 0.07500000000000001.
+        canvas_w = round((x_max - x_min) + 2 * border_m, 8)
+        canvas_h = round((y_max - y_min) + 2 * border_m, 8)
+        offset = (border_m - x_min, border_m - y_min)
 
         dwg = svgwrite.Drawing(
             str(f_out),
-            size=(f"{canvas_w:.6f}mm", f"{canvas_h:.6f}mm"),
-            viewBox=f"0 0 {canvas_w:.6f} {canvas_h:.6f}",
+            size=(f"{canvas_w * 1000.0:.6f}mm", f"{canvas_h * 1000.0:.6f}mm"),
+            viewBox=f"0 0 {canvas_w:.8f} {canvas_h:.8f}",
         )
         dwg.add(dwg.rect(insert=(0, 0), size=(canvas_w, canvas_h), fill="white"))
-        dwg.add(dwg.image(
-            href=data_uri,
-            insert=(float(border_width), float(border_width)),
-            size=(board_w_mm, board_h_mm),
+        dwg.add(dwg.path(
+            d=rectangles_svg_path(self._board_rectangles(), offset=offset),
+            fill="black", stroke="none", fill_rule="nonzero",
         ))
 
         svg_text = dwg.tostring()
@@ -354,7 +409,7 @@ class ChArUco2(AbstractTarget):
                     "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
                 ) from _cairo_err
             svg_out = f_out.with_suffix(".svg")
-            self.save_to_svg(svg_out, border_width=border_width, dpi=dpi,
+            self.save_to_svg(svg_out, border_width=border_width,
                               suppress_svg_log=True)
             cairosvg.svg2pdf(url=str(svg_out), write_to=str(f_out))
             logger.info("Saved ChArUco2 Vector PDF: %s", f_out)
@@ -363,18 +418,9 @@ class ChArUco2(AbstractTarget):
         if data_format != "raster":
             raise ValueError("data_format must be one of: raster, vector")
 
-        image, px_per_mm = self._render(dpi)
-        border_px = int(round(float(border_width) * px_per_mm))
-        if border_px > 0:
-            padded = np.full(
-                (image.shape[0] + 2 * border_px, image.shape[1] + 2 * border_px),
-                255, dtype=np.uint8)
-            padded[border_px:border_px + image.shape[0],
-                   border_px:border_px + image.shape[1]] = image
-            image = padded
-        resolution_dpi = px_per_mm * 25.4
+        image, _ = self._render(dpi, border_width=border_width)
         with Image.fromarray(image) as im:
-            im.save(fp=f_out, resolution=float(resolution_dpi))
+            im.save(fp=f_out, resolution=float(dpi))
 
         logger.info("Saved ChArUco2 Raster PDF: %s", f_out)
         return f_out
@@ -384,4 +430,5 @@ class ChArUco2(AbstractTarget):
         from matplotlib import pyplot as plt
         image, _ = self._render(dpi)
         plt.imshow(image, cmap='gray')
+        plt.axis("off")  # the raster's pixel indices say nothing about the board
         plt.show()

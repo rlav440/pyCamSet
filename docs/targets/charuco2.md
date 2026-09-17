@@ -16,18 +16,16 @@ The design is described in
 !!! note "ChArUco2 is an optional dependency"
 
     Detection is read with the `aruco2` package, which is not published on
-    PyPI. Constructing the target without it raises an `ImportError` naming
-    the fix:
-
-    ```bash
-    pip install aruco2
-    ```
+    PyPI: build it from the `third_party/aruco2` submodule, as described
+    under "Installing the aruco2 backend" in pyCamSet's `CITATION.md`.
+    Constructing the target without it raises an `ImportError` naming the
+    fix.
 
 !!! warning "Not yet validated on a real board"
 
-    Every check behind `ChArUco2` runs against aruco2's own rendered raster —
-    the corner-id mapping, occlusion, rotation and perspective-warp recovery,
-    and the SVG round trip. None of it has been checked against a camera
+    Every check behind `ChArUco2` runs against rendered images — the
+    corner-id mapping, occlusion, rotation and perspective-warp recovery, and
+    the SVG round trip. None of it has been checked against a camera
     photograph of a printed and laminated board. Treat detection quality on a
     real capture as unverified until it has been.
 
@@ -119,7 +117,27 @@ target.save_printable("charuco2.svg")
 target.save_printable("charuco2.pdf", kind="pdf_vector")
 ```
 
-Every export kind embeds the exact raster aruco2 both prints and detects
-from, at true real-world millimetre scale — there is no separate rendering
-path to fall out of sync with what the detector reads. Print at 100% scale —
-see the warning under [Choosing a target](index.md#printing).
+The SVG and the vector PDF are true vector, at real-world millimetre scale:
+every black marker cell, band tab and corner square is a rectangle in one
+filled `<path>`, with no embedded image. Drawn as one shape, abutting cells
+meet exactly and rasterise without hairline seams between them. The raster
+PDF and `plot()` rasterise the same geometry at the requested `dpi`, so
+there is one description of the board behind every output.
+
+That description reproduces aruco2's own board image rather than trusting
+a re-implementation of it. Each square holds one whole marker — a one-cell
+border around the payload bits, inverted on every other square — and a band
+a quarter of a square deep surrounds the board, with black tabs opposite
+each white edge square and a black square at each outer corner. The tests
+rasterise this layout and compare it pixel for pixel with
+`aruco2.get_grid_board_image`, for 4x4, 5x5, 6x6 and 7x7 dictionaries, odd
+and even board sizes, and default as well as custom marker ids. The
+comparison uses scales at which aruco2's raster puts every edge on a whole
+pixel (for a 4x4 dictionary, a bit size divisible by 3); at other scales
+aruco2's integer rounding shifts edges by up to a pixel, which is aruco2's
+approximation, not the board's geometry. The SVG is also rasterised with
+cairo, compared pixel for pixel with that raster at such a scale, and
+detected back to every corner at the position its millimetre scale implies.
+
+Print at 100% scale — see the warning under
+[Choosing a target](index.md#printing).

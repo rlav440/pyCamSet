@@ -129,11 +129,25 @@ def save_detections(path: Path, detections, cam_res=None) -> Path:
     return path
 
 
-def detection_cache_name(upscale_factor: int = 1) -> str:
-    """The filename a detection pass caches its results under."""
+def detection_cache_name(upscale_factor: int = 1,
+                         marker_backend: str | None = None) -> str:
+    """
+    The filename a detection pass caches its results under.
+
+    Mirrors :func:`pyCamSet.calibration.camera_calibrator.detect_datapoints_in_imfile`,
+    which writes it.
+
+    :param upscale_factor: the upscale the pass ran at
+    :param marker_backend: the detector it read the markers with; only
+        ``"aruco2"`` changes the name, so an ArUco 1 cache keeps the name it
+        always had
+    """
+    name = "detected_datapoints"
     if upscale_factor != 1:
-        return f"detected_datapoints_upscale{upscale_factor}x.pickle"
-    return "detected_datapoints.pickle"
+        name += f"_upscale{upscale_factor}x"
+    if marker_backend == "aruco2":
+        name += "_aruco2"
+    return f"{name}.pickle"
 
 
 @contextlib.contextmanager

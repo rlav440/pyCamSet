@@ -67,6 +67,24 @@ Finds the calibration target in every image. The calibration target is
 described here, and the detector's own options appear in a section named for
 the backend in use — *Detection Options (aruco1)* above.
 
+Phase 1 is also where the **Detector** is chosen, because which library reads
+the markers is a property of the detection rather than of the printed target.
+For ChArUco1 and ChArUco1 ccube targets, pick **ArUco 1 (OpenCV)** or
+**ArUco 2 (aruco2)**. A ChArUco2 or ChArUco2 ccube target can only be read
+with ArUco 2, so selecting it chooses ArUco 2 by itself and greys ArUco 1 out;
+switching back restores the detector you last chose for a ChArUco1 or ChArUco1
+ccube target. PuzzleBoard targets have their own detector and show no choice.
+Detections are cached per detector, so a run with one never picks up the other's
+cache.
+
+Both detectors read the same printed ChArUco1/ChArUco1 ccube board, so this is
+a detection-quality choice, not a printing one. In synthetic tests ArUco 1 (the
+default) gave the lowest corner outlier counts; ArUco 2 found more corners
+under blur, noise and strong tilt, with comparable camera pose accuracy, but
+produced more corners over 3 px off and a worse lens-model fit on some cube
+datasets. These are synthetic-test results — try both on your own images if
+in doubt.
+
 Leave **Cache detections** on unless there is a reason not to: with it off the
 run is saved with its diagnostics but no detections, and the later phases have
 nothing to pick up.
@@ -81,6 +99,9 @@ Calibrates each camera independently, producing the camset the bundle
 adjustment starts from. Its diagnostics cover per-camera RMS reprojection
 (D2.1), the intrinsics and distortion themselves (D2.2, D2.3), the spread
 across views (D2.5) and per-view error (D2.6, D2.7).
+
+Phases 2 and 3 offer no detector: they read the detections of the Phase 1 run
+they continue, so the target section shows that run's detector instead.
 
 ### Phase 3 — Bundle Adjustment
 
@@ -152,11 +173,22 @@ rather than embedding them.
 ![The Create Target dialog.](../assets/gui/create-target-light.png#only-light)
 ![The Create Target dialog.](../assets/gui/create-target-dark.png#only-dark)
 
-**Create Target…** generates a printable Ccube, ChArUco, PuzzleBoard or
-PuzzleBoardCube. Both halves of the form are built from what the selected target
-declares about itself — the arguments that decide what it is, and the options
-that decide how it is drawn — so the form and the validation follow the target
-rather than being written out per target.
+**Create Target…** generates a printable ChArUco1, ChArUco1 ccube, ChArUco2,
+ChArUco2 ccube, PuzzleBoard or PuzzleBoardCube. Both halves of the form are
+built from what the selected target declares about itself — the arguments that
+decide what it is, and the options that decide how it is drawn — so the form and
+the validation follow the target rather than being written out per target.
+
+The dialog asks for no detector: a ChArUco1 or ChArUco1 ccube prints identically
+for ArUco 1 and ArUco 2, so the same printed board can be read with either, and
+the other targets have only one detector. The detector is chosen in Phase 1
+instead. The screenshot above predates this:
+it still shows a Detector row, and "Ccube" where the dialog now says
+"ChArUco1 ccube".
+
+The labels are the names the GUI shows; saved settings and scripts use the class
+names, which are unchanged: ChArUco1 is `ChArUco`, ChArUco1 ccube is `Ccube`,
+ChArUco2 is `ChArUco2`, and ChArUco2 ccube is `Ccube2`.
 
 **Visualise Target** opens the target in a window of its own, so it can be
 compared against the form that drew it. **Save Target** writes the SVG or PDF.
@@ -178,8 +210,10 @@ can call directly.
 
 Sweeps the detector's settings, scores the calibrations that result, and retains
 the best. The settings offered are the ones the selected target's detector says
-it can be swept over. The work runs on a background thread, so the window stays
-responsive.
+it can be swept over. A study runs detections of its own, so this tab keeps a
+**Detector** choice, which behaves as it does in Phase 1. The work runs on a
+background thread, so the window stays responsive. The screenshot above predates
+the new target names, and shows "Ccube" where the tab now says "ChArUco1 ccube".
 
 This tab needs Optuna, which is optional. Without it the tab still appears, but
 **Start** is disabled with a tooltip saying why:

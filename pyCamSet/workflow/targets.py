@@ -17,6 +17,7 @@ from pyCamSet.calibration_targets.core.target_registry import (
     TYPE_KEY as TARGET_KEY_TYPE,
     build_target,
     target_class,
+    target_label,
 )
 
 #: Where a phase's parameters keep the target's spec.
@@ -47,6 +48,25 @@ def detector_parameterisation_of(spec: dict):
     backend = (spec.get("marker_backend")
                if len(cls.DETECTOR_BACKENDS) > 1 else None)
     return cls.detector_parameterisation(backend)
+
+
+def detector_backend_of_spec(spec: dict) -> str | None:
+    """
+    The detector the target a spec describes is read with.
+
+    The spec's ``marker_backend`` for a target with a choice of detector --
+    its constructor's default when the spec names none -- and the only one
+    for a target without a choice.
+
+    :param spec: a target spec
+    :return: a key of the target's ``DETECTOR_BACKENDS``, or None for a
+        target that declares none
+    :raises ValueError: for an unknown target
+    """
+    backends = tuple(target_class(spec[TARGET_KEY_TYPE]).DETECTOR_BACKENDS)
+    if len(backends) > 1:
+        return str(spec.get("marker_backend") or backends[0])
+    return backends[0] if backends else None
 
 
 def target_of_params(params: dict):
@@ -105,8 +125,9 @@ def describe_target(params: dict) -> str:
     """
     A target in one line, for a log or a status label.
 
-    Names the target and the arguments that decide its point layout, which
-    are the ones someone reading a run wants to check.
+    Names the target, by the label an interface shows it by, and the
+    arguments that decide its point layout, which are the ones someone
+    reading a run wants to check.  For a person to read, never to parse.
 
     :param params: a phase's parameters, or a saved run's ``params``
     """
@@ -114,7 +135,8 @@ def describe_target(params: dict) -> str:
     settings = ", ".join(
         f"{key}={value}" for key, value in sorted(spec.items())
         if key != TARGET_KEY_TYPE and key not in READING_ONLY_FIELDS)
-    return f"{spec.get(TARGET_KEY_TYPE, 'unknown')}({settings})"
+    name = spec.get(TARGET_KEY_TYPE)
+    return f"{target_label(str(name)) if name else 'unknown'}({settings})"
 
 
 def target_params_of_run(run: dict | None) -> dict:
@@ -155,8 +177,8 @@ def describe_target_mismatch(run_params: dict, current_params: dict) -> list[str
 
     run_type, current_type = run_spec.get(TARGET_KEY_TYPE), current_spec.get(TARGET_KEY_TYPE)
     if run_type != current_type:
-        return [f"target type: the run used {run_type}, "
-                f"these settings say {current_type}"]
+        return [f"target type: the run used {target_label(str(run_type))}, "
+                f"these settings say {target_label(str(current_type))}"]
 
     differences = []
     for key in sorted(set(run_spec) | set(current_spec)):

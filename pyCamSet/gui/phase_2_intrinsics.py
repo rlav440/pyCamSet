@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 
 from pyCamSet.gui.shared_functions import (
     CollapsibleSection,
+    DETECTOR_INHERIT,
     MatplotlibFigureCard,
     PhaseWorker,
     RunSelectorWidget,
@@ -251,7 +252,9 @@ class Phase2Tab(QWidget):
         target_sect = CollapsibleSection("Calibration Target", expanded=False)
         form_root.addWidget(target_sect)
 
-        self._target_form = TargetSettingsForm()
+        # The detector is the adopted Phase 1 run's: its detections are
+        # what this phase reads.
+        self._target_form = TargetSettingsForm(detector_mode=DETECTOR_INHERIT)
         target_sect.addRow(self._target_form)
 
         # ── Initial Calibration Options ────────────────────────────────
@@ -455,7 +458,14 @@ class Phase2Tab(QWidget):
         next refresh.
         """
         run_id = (run or {}).get("run_id")
-        if run_id is None or run_id == self._adopted_target_run_id:
+        if run_id is None:
+            # No run applies any more (another workspace, say): its detector
+            # must not linger as if it still did.
+            if self._adopted_target_run_id is not None:
+                self._adopted_target_run_id = None
+                self._target_form.clear_inherited()
+            return
+        if run_id == self._adopted_target_run_id:
             return
         self._adopted_target_run_id = run_id
         self._target_form.apply_spec(
@@ -466,6 +476,21 @@ class Phase2Tab(QWidget):
         if override:
             p = Path(override)
             self._phase1_lbl.setText(f"Detection source: override file ({'exists' if path_exists(p) else 'missing'})")
+            # An override may name a different run's (or a different
+            # detector's) detections than whichever Phase 1 run was last
+            # auto-adopted (round-2 review, P2) -- and the target form is
+            # DETECTOR_INHERIT here, with no detector row to correct it by
+            # hand. Rather than silently keeping a stale, possibly-wrong
+            # detector from a run this override no longer reads, fall back
+            # to the target's own default: not guaranteed right for an
+            # arbitrary override file either, but at least not
+            # masquerading as this file's own. Re-adopting the same run
+            # later (once the override is cleared) still works, since
+            # forgetting it here just means the next resolved run is
+            # treated as newly adopted.
+            if self._adopted_target_run_id is not None:
+                self._adopted_target_run_id = None
+                self._target_form.clear_inherited()
             return
 
         run = self._load_phase1_run()

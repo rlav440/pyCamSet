@@ -144,9 +144,13 @@ return DocumentedParameters(
     cls.__init__,
     "num_squares_x", "num_squares_y", "square_size", "marker_fraction",
     "a_dict", "legacy",
-    choices={"a_dict": dict_names_for_backend(backend or ARUCO1_BACKEND)},
+    choices={"a_dict": exclude_by_prefix(
+        dict_names_for_backend(ARUCO1_BACKEND), "DICT_APRILTAG_")},
 )
 ```
+
+That is ChArUco's list: fixed, whatever `backend` says, because the detector is
+chosen in the detection phase and a board prints the same under either one.
 
 ### Two parameterisations, not one
 
@@ -167,5 +171,7 @@ TARGET_CLASSES: dict[str, tuple[str, str]] = {
 }
 ```
 
-The name is then what the GUI offers, what a settings dictionary addresses, and
-what `pyCamSet.calibration_targets.MyTarget` resolves to.
+The name is then what a settings dictionary addresses and stores, what the GUI
+offers, and what `pyCamSet.calibration_targets.MyTarget` resolves to. To show the
+GUI a different name, add an entry to `TARGET_LABELS` beside it â€” ChArUco is
+offered as "ChArUco1" that way â€” while specs keep the registry name.

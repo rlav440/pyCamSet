@@ -20,6 +20,9 @@ from pyCamSet.workflow.user_config import MAX_RECENT, read_list, write_list
 _FILE_NAME = "recent_targets.json"
 _KEY = "targets"
 
+#: Spec keys that say how a target is read, not which target it is.
+_READING_KEYS = frozenset({"detection_options", "marker_backend"})
+
 
 def load_recent_targets() -> list[dict]:
     """
@@ -67,12 +70,13 @@ def _identity(spec: dict) -> str:
     What makes two remembered targets the same one.
 
     Everything the target is built from, so a board of a different size is a
-    different entry -- but not the detector's tuning, which is how a marker
-    is read rather than what the target is, and which would otherwise fill
-    the list with the same board over and over.
+    different entry -- but not the detector it was read with or that
+    detector's tuning, which are how a marker is read rather than what the
+    target is, and which would otherwise fill the list with the same board
+    over and over.
 
     :param spec: the target spec
     """
     return json.dumps(
-        {k: v for k, v in spec.items() if k != "detection_options"},
+        {k: v for k, v in spec.items() if k not in _READING_KEYS},
         sort_keys=True, default=str)

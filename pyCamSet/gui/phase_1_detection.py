@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
 
 from pyCamSet.gui.shared_functions import (
     CollapsibleSection,
+    DETECTOR_CHOOSE,
     IMAGE_FOLDER_SCHEMATIC,
     MatplotlibFigureCard,
     PhaseWorker,
@@ -255,7 +256,9 @@ class Phase1Tab(QWidget):
         recent_row.addWidget(forget_btn)
         target_sect.addRow("Recent targets:", recent_row)
 
-        self._target_form = TargetSettingsForm()
+        # Phase 1 is where the detector is chosen; the phases after it
+        # read its detections with the detector it used.
+        self._target_form = TargetSettingsForm(detector_mode=DETECTOR_CHOOSE)
         self._target_form.changed.connect(self._on_target_changed)
         target_sect.addRow(self._target_form)
 

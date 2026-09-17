@@ -50,7 +50,8 @@ _DEFAULT_DICT_NAME = "DICT_4X4_1000"
 #: aruco1 and aruco2 only disagree on these four dictionaries, so neither is
 #: offered as a construction choice -- a saved run naming one still loads,
 #: since build_target() reads a spec's raw dict rather than going through
-#: choices.
+#: choices.  aruco2's two ALVAR dictionaries are not offered either: the
+#: choices are aruco1's, whichever detector later reads the target.
 _UNOFFERED_DICT_PREFIXES = ("DICT_APRILTAG_",)
 
 
@@ -63,14 +64,20 @@ class ChArUco(AbstractTarget):
 
     @classmethod
     def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
-        """What decides where a board's corners are, and how it prints."""
+        """
+        What decides where a board's corners are, and how it prints.
+
+        :param backend: accepted for the signature every target shares, and
+            not used: the detector is chosen in the detection phase, and the
+            dictionaries offered are the ones both detectors print alike.
+        """
         return DocumentedParameters(
             cls.__init__,
             "num_squares_x", "num_squares_y", "square_size", "marker_fraction",
             "a_dict", "legacy",
             choices={
                 "a_dict": exclude_by_prefix(
-                    dict_names_for_backend(backend or ARUCO1_BACKEND),
+                    dict_names_for_backend(ARUCO1_BACKEND),
                     *_UNOFFERED_DICT_PREFIXES,
                 )
             },

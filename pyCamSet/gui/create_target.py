@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 from pyCamSet.calibration_targets.core.target_registry import build_target, target_class
 from pyCamSet.gui.viewer_process import spawn_viewer
 from pyCamSet.gui.shared_functions import (
+    DETECTOR_NONE,
     TargetSettingsForm,
     TerminalWidget,
     build_parameter_widget,
@@ -91,9 +92,11 @@ class CreateTargetDialog(QDialog):
         root.setContentsMargins(8, 8, 8, 8)
 
         root.addWidget(make_section_label("Target"))
-        self._target_form = TargetSettingsForm()
+        # No detector here: a board prints the same whichever detector
+        # reads it, and that choice is made where it is detected.
+        self._target_form = TargetSettingsForm(detector_mode=DETECTOR_NONE)
         self._target_form.changed.connect(self._on_target_changed)
-        # A structural change (target type, detector) goes through
+        # A structural change (the target type) goes through
         # _on_target_changed, which also rebuilds the export-options rows;
         # a value edit (n_points, square size, ...) only needs the name
         # re-synced, so it is wired straight to that instead of through

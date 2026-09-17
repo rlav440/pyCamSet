@@ -653,16 +653,38 @@ def test_what_a_target_may_be_is_the_targets_own_to_refuse():
         PuzzleBoard(num_squares_x=500, num_squares_y=10, start_x=100)
 
 
-def test_the_dictionary_a_marker_target_offers_depends_on_its_backend():
-    """aruco2 has two dictionaries OpenCV does not, so the names a form
-    offers are the selected backend's."""
-    from pyCamSet.calibration_targets.charuco.target import ChArUco
+@pytest.mark.parametrize("target_type,key", [("ChArUco", "a_dict"),
+                                             ("Ccube", "aruco_dict")])
+def test_the_dictionary_a_marker_target_offers_does_not_depend_on_a_backend(
+        target_type, key):
+    """The detector is chosen in the detection phase, after the board is
+    made, so the dictionaries a board is made with cannot depend on it:
+    both detectors print these alike, and aruco2's ALVAR ones are not
+    offered."""
+    from pyCamSet.calibration_targets.core.target_registry import target_class
+    from pyCamSet.calibration_targets.markers.backend_registry import (
+        ARUCO1_DICT_NAMES,
+    )
 
-    aruco1 = ChArUco.construction_parameters("aruco1").parameter("a_dict")
-    aruco2 = ChArUco.construction_parameters("aruco2").parameter("a_dict")
+    cls = target_class(target_type)
+    offered = [cls.construction_parameters(backend).parameter(key).choice_labels()
+               for backend in (None, "aruco1", "aruco2")]
 
-    assert set(aruco1.choice_labels()) < set(aruco2.choice_labels())
-    assert "DICT_ALVAR_7X7_1000" in aruco2.choice_labels()
+    assert offered[0] == offered[1] == offered[2]
+    assert offered[0] == [name for name in ARUCO1_DICT_NAMES
+                          if not name.startswith("DICT_APRILTAG_")]
+    assert len(offered[0]) == 18
+    assert not any("ALVAR" in name for name in offered[0])
+
+
+def test_a_saved_spec_naming_an_unoffered_dictionary_still_builds():
+    """Choices are what a form offers, not what a target accepts."""
+    from pyCamSet.calibration_targets.core.target_registry import build_target
+
+    target = build_target({"type": "ChArUco", "num_squares_x": 5,
+                           "num_squares_y": 5, "square_size": 10.0,
+                           "a_dict": "DICT_APRILTAG_36h11"})
+    assert target.input_args["a_dict"] == "DICT_APRILTAG_36h11"
 
 
 def test_a_dictionary_is_named_rather_than_numbered():

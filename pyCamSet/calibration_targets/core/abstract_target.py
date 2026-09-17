@@ -20,6 +20,7 @@ import signal
 from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.cameras.telecentric_calibration import calibrate_telecentric
+from pyCamSet.cameras.zhang_calibration import calibrate_zhang
 from pyCamSet.cameras.telecentric_camera import TelecentricCamera
 from pyCamSet.cameras.telecentric_calibration import pose_from_affine
 from pyCamSet.calibration_targets.core.parameters import (
@@ -510,6 +511,10 @@ class AbstractTarget(ABC):
         If the object has a special model of calibration associated, this can
         be overwritten.
 
+        No lens distortion is estimated: the camera is seeded as a pinhole,
+        or an affine one for a telecentric lens, and its distortion is left at
+        zero for the bundle adjustment to solve along with everything else.
+
         :param cam_name: The name of the camera being calibrated
         :param detection: A TargetDetection of only the detections of the currently
             being calibrated camera
@@ -518,7 +523,7 @@ class AbstractTarget(ABC):
         :param fixed_params: A dict containing any fixed params of the camera to calibrate
             accepted options are "ext", "int", and "dst" respectively.
         :param min_detections_per_board: Minimum number of detected corners required
-            for a board observation to contribute to the initial OpenCV calibration.
+            for a board observation to contribute to the initial calibration.
         :param model: the lens model to fit, "pinhole" or "telecentric"
         :return: A camera object.
         """
@@ -627,43 +632,36 @@ class AbstractTarget(ABC):
                 return init_cam
             return init_cam, np.stack(tele_poses).astype(float), np.asarray(tele_rms, dtype=float)
 
-        ic = cv2.calibrateCameraExtended(
-            object_points,
-            image_points,
-            tuple(res[::-1]),
-            None,
-            None,
-            # flags=(
-            #     cv2.CALIB_RATIONAL_MODEL + \
-            #     cv2.CALIB_THIN_PRISM_MODEL +\
-            #     cv2.CALIB_TILTED_MODEL
-            # ),
-            None,
+        # Zhang's closed form rather than cv2.calibrateCamera, and no
+        # distortion with it.  The bundle adjustment solves for the distortion
+        # anyway -- projection carries five Brown-Conrady parameters per camera
+        # alongside the four intrinsic ones -- so anything fit here is refit a
+        # few seconds later, and all the seed owes the solve is a starting
+        # point close enough to converge from.
+        intrinsic, board_poses, board_rms = calibrate_zhang(
+            [np.reshape(o, (-1, 3)) for o in object_points],
+            [np.reshape(i, (-1, 2)) for i in image_points],
+            res,
         )
         end = time.time()
 
+        # what the closed form leaves behind, not what the camera reaches:
+        # these poses come straight out of the homographies, and a pose solved
+        # against the pixels at these same intrinsics does several times
+        # better.  The intrinsics report measures that number; this one says
+        # how far the board views sit from a distortion free pinhole model.
         logger.info(f'{cam_name} took {end - start:.1f} seconds'
-            f', leftover error of {ic[0]:.2f} pixels')
+            f', closed form residual of {np.mean(board_rms):.2f} pixels'
+            ' with no distortion fit')
 
-        # perform an initial pose estimate on the first images
-
-        
-
-        init_cam = Camera(intrinsic=ic[1], distortion_coefs=np.array(ic[2]), res=res, name=cam_name)
-        if fixed_params is not None:
-            if "int" in fixed_param:
-                init_cam.intrinsic = fixed_param['int']
-            if 'dst' in fixed_param:
-                init_cam.distortion_coefs = fixed_param['dst']
-            if "ext" in fixed_param:
-                init_cam.set_extrinsic(fixed_param['ext'])
-                return init_cam
-        if not return_poses:
+        init_cam = Camera(intrinsic=intrinsic, distortion_coefs=np.zeros(5),
+                          res=res, name=cam_name)
+        init_cam, ext_was_fixed = self._apply_fixed_params_to(
+            init_cam, fixed_params, fixed_param)
+        if ext_was_fixed or not return_poses:
             return init_cam
-
-        poses = np.stack([make_4x4h_tform(rot, tran) for rot, tran in zip(ic[3], ic[4])]).astype(float)
-        per_im_reproj = np.asarray(ic[-1], dtype=float)
-        return init_cam, poses, per_im_reproj
+        return (init_cam, np.stack(board_poses).astype(float),
+                np.asarray(board_rms, dtype=float))
 
     def target_pose_in_cam_image(
             self, detection: TargetDetection, cam: Camera, 

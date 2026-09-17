@@ -212,7 +212,8 @@ def run_initial_calibration(detection: TargetDetection,
                             model: str = "pinhole") -> CameraSet | tuple[CameraSet, np.ndarray, np.ndarray]:
     """
     For all of the cameras, runs the calibration method provided by an abstract target.
-    The default is an opencv calibration but may be overwritten.
+    The default is a closed form seed that fits no distortion, leaving that to
+    the bundle adjustment, but may be overwritten.
 
     :param detection: the detection data to use for the calibration
     :param calibration_target: the calibration target to use for the calibration

@@ -45,12 +45,20 @@ def save_pickle(dic, filename):
     """
     Saves an object to a pickle file
 
+    Serialises to bytes in memory first, then writes those bytes, rather than
+    streaming straight from ``dill.dump`` -- a caller that needs to know
+    exactly what was written (e.g. to hash it for a cache identity sidecar,
+    without a second, racy read of the file back off disk) gets those same
+    bytes back as the return value.
+
     :param dic: object to save
     :param filename: filename to save to
+    :return: the bytes written
     """
-    with open(filename, 'wb') as f:
-        dill.dump(dic, f)
-    return
+    data = dill.dumps(dic)
+    with open(_normalise_windows_open_path(filename), 'wb') as f:
+        f.write(data)
+    return data
 
 def load_pickle(filename):
     """
@@ -60,7 +68,7 @@ def load_pickle(filename):
     :return: object
     """
 
-    with open(filename, 'rb') as f:
+    with open(_normalise_windows_open_path(filename), 'rb') as f:
         object_n = dill.load(f)
     return object_n
 

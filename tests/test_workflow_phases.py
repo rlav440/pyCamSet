@@ -605,6 +605,89 @@ def test_a_high_distortion_camset_wins_over_the_plain_one(tmp_path):
     assert resolved.name == "initial_cameras_high_distortion.camset"
 
 
+def _make_camera_folders(root, names=("camA", "camB")):
+    """A minimal image folder: one tiny real image per camera, enough for
+    ``get_subfolder_names``' candidate-camera-folder scan to pick each one
+    up (content is irrelevant -- detection itself is monkeypatched out)."""
+    import cv2
+    import numpy as np
+
+    for name in names:
+        folder = root / name
+        folder.mkdir(parents=True)
+        cv2.imwrite(str(folder / "im_00.png"), np.zeros((8, 8, 3), dtype="uint8"))
+    return root
+
+
+@pytest.mark.parametrize("high_distortion", [False, True])
+def test_phase_2_pins_cam_names_through_every_detect_call(tmp_path, monkeypatch, high_distortion):
+    """Phase 2's fallback detection (``_load_or_detect``) and its
+    high-distortion redetection must both pass the camera selection pinned
+    at the top of ``_calibrate`` through to ``detect_datapoints_in_imfile``,
+    not leave it to re-derive the camera list from a fresh scan of
+    ``root``/``f_loc`` (round-2 review, P1 -- the same race
+    ``pyCamSet/workflow/phase1.py``'s own ``_detect`` was hardened against).
+
+    With ``selected_cameras`` empty (the common case), ``staged_camera_root``
+    hands back ``root == f_loc``, the real, persistent image folder -- so an
+    omitted ``cam_names`` here is not just a theoretical gap, it means a
+    camera folder appearing under ``f_loc`` after the selection was made
+    could silently join this call's own detection pass.
+    """
+    image_folder = _make_camera_folders(tmp_path / "images")
+    workspace = WorkspaceManager(workspace_path_for(tmp_path))
+
+    captured_calls = []
+
+    class _StubDetection:
+        cam_names = ["camA", "camB"]
+
+    def fake_detect(**kwargs):
+        captured_calls.append(kwargs)
+        return _StubDetection(), [(8, 8), (8, 8)]
+
+    def fake_calibrate(detections, cam_res, target, *, fixed_params=None,
+                       min_detections_per_board=12):
+        class _StubCams:
+            def save(self, path):
+                path.write_text("")
+        return _StubCams()
+
+    def fake_diagnostics_of(detections, target, cams, min_detections_per_board=12):
+        return {"cam_names": ["camA", "camB"]}, {"per_camera": []}
+
+    monkeypatch.setattr(phase2, "detect_datapoints_in_imfile", fake_detect)
+    monkeypatch.setattr(phase2, "calibrate", fake_calibrate)
+    monkeypatch.setattr(phase2, "diagnostics_of", fake_diagnostics_of)
+
+    run_dir = workspace.run_dir("phase2", "r1")
+    params = {
+        "target": {"type": "Ccube", "n_points": 5, "length": 20.0},
+        "f_loc": str(image_folder),
+        "selected_cameras": [],
+        "fixed_params": None,
+        "high_distortion": high_distortion,
+        "n_lim": None,
+        "caching": False,
+        "min_detections_per_board": 12,
+    }
+
+    phase2._calibrate(params, run_dir, detections_path=None, prune=None,
+                      log=lambda _line: None)
+
+    assert captured_calls, "detect_datapoints_in_imfile was never called"
+    for call in captured_calls:
+        assert call.get("cam_names") == ["camA", "camB"], (
+            "detect_datapoints_in_imfile must read the pinned camera "
+            f"selection, not re-scan f_loc/root itself; got {call.get('cam_names')!r}"
+        )
+    if high_distortion:
+        # The fallback call plus the high-distortion redetect.
+        assert len(captured_calls) == 2
+    else:
+        assert len(captured_calls) == 1
+
+
 # ---------------------------------------------------------------------------
 # A target is a class and the arguments it was built with
 # ---------------------------------------------------------------------------

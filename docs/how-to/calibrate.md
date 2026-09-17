@@ -69,7 +69,9 @@ detections, camera_res = detect_datapoints_in_imfile(
 
 The result is cached beside the images as `detected_datapoints.pickle`, which is
 what makes re-running a calibration cheap — the run above loads that cache
-rather than re-detecting. Deleting it forces a fresh detection.
+rather than re-detecting, but only when the cache was made for the same
+target, cameras and image cap; otherwise it redetects and overwrites the
+cache. Deleting it forces a fresh detection.
 
 !!! note "Why `threads=1` here"
 

@@ -87,9 +87,9 @@ run = phase1.run(params, workspace, log=print)
 `'aruco2'`, and only ChArUco and Ccube specs carry it; ChArUco2 and Ccube2 are always
 read with aruco2. It belongs to the detection rather than the target: the GUI chooses
 it in Phase 1 and the Optimisation tab, and Phases 2 and 3 take it from the
-Phase 1 run they continue. Phase 1 caches detections per detector â€” an aruco2
+Phase 1 run they continue. Phase 1 caches detections per detector — an aruco2
 run caches to `detected_datapoints_aruco2.pickle` beside the images, and an
-aruco1 run keeps `detected_datapoints.pickle` â€” so a run never reuses the other
+aruco1 run keeps `detected_datapoints.pickle` — so a run never reuses the other
 detector's detections. Remembered recent targets ignore it: the same board read
 with the other detector is the same target.
 
@@ -122,9 +122,14 @@ pickle_path = saved['artifacts']['detected_datapoints_pickle']
 
 !!! note
 
-    Phase 1 only records its detections as an artifact when `caching` is `True`.
-    Run it with caching off and the run is saved with its diagnostics but no
-    `artifacts` entry, and the later phases have nothing to pick up.
+    Phase 1 records its own detections as the run's artifact whenever detection
+    succeeds, whether `caching` is `True` or `False`: the artifact is always
+    written from what that run itself detected, never copied from an image
+    folder's cache file. `caching` only controls whether Phase 1 also reads and
+    writes the image folder's on-disk detection cache as a speed-up for a
+    *later* run — it has no effect on whether this run gets an artifact. A run
+    is only saved with no `artifacts` entry when its own detection pass failed
+    (`run['error']` is set).
 
 ## Chaining the phases
 

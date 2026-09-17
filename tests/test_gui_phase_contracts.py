@@ -1442,6 +1442,215 @@ def test_phase_1_greys_out_aruco1_for_charuco2_and_gives_charuco_its_choice_back
 
 
 @pytest.mark.gui
+def test_drawing_a_run_without_an_artifact_reads_its_own_detectors_cache(tmp_path):
+    """The last resort is the image folder's cache, named per detector and
+    upscale -- but only trusted once its identity sidecar confirms it was
+    made for this run's own target, cameras and image cap.  An ArUco 2 run
+    must not draw ArUco 1's, and ChArUco2 and Ccube(aruco2) -- which compute
+    the *same* cache name -- must not draw each other's either."""
+    import cv2
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.calibration.camera_calibrator import write_cache_identity
+    from pyCamSet.calibration_targets.core.target_registry import build_target
+    from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    cam_names = ["cam0", "cam1"]
+    for camera in cam_names:
+        (tmp_path / camera).mkdir()
+        cv2.imwrite(str(tmp_path / camera / "im0.png"),
+                    np.zeros((8, 12, 3), dtype=np.uint8))
+
+    def seed(name, target_spec):
+        """Write a (fake) cache and the sidecar that pairs it with
+        *target_spec*, and return the path written."""
+        path = tmp_path / name
+        path.write_bytes(f"detections for {target_spec}".encode())
+        write_cache_identity(path, build_target(target_spec), cam_names, None)
+        return path
+
+    QApplication.instance() or QApplication([])
+    tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))
+    try:
+        def run(**target):
+            return {"run_id": None,
+                    "params": {"f_loc": str(tmp_path), "target": target}}
+
+        resolve = tab._resolve_pickle_path_for_run
+
+        aruco1 = seed("detected_datapoints.pickle",
+                      {"type": "ChArUco", "marker_backend": "aruco1"})
+        assert resolve(run(type="ChArUco", marker_backend="aruco1")) == aruco1
+
+        aruco2 = seed("detected_datapoints_aruco2.pickle",
+                      {"type": "ChArUco", "marker_backend": "aruco2"})
+        assert resolve(run(type="ChArUco", marker_backend="aruco2")) == aruco2
+
+        upscaled = seed("detected_datapoints_upscale2x_aruco2.pickle",
+                        {"type": "Ccube", "marker_backend": "aruco2"})
+        upscaled_run = run(type="Ccube", marker_backend="aruco2")
+        upscaled_run["params"]["upscale_factor"] = 2
+        assert resolve(upscaled_run) == upscaled
+
+        # detected_datapoints_aruco2.pickle above was seeded for
+        # ChArUco(aruco2), not ChArUco2 -- same filename, different
+        # identity, so the unverified collision the two used to share is
+        # now refused rather than silently adopted.
+        assert resolve(run(type="ChArUco2")) is None
+
+        # Seeded for ChArUco2 itself, the same filename now resolves for it.
+        charuco2 = seed("detected_datapoints_aruco2.pickle", {"type": "ChArUco2"})
+        assert resolve(run(type="ChArUco2")) == charuco2
+        # ...and no longer for ChArUco(aruco2), which just lost the slot.
+        assert resolve(run(type="ChArUco", marker_backend="aruco2")) is None
+    finally:
+        tab.deleteLater()
+
+
+class _FakeCamDet:
+    """A minimal stand-in for a camera's detections, just enough for
+    ``_draw_detections_for_run`` to read ``cam_idx``/``im_idx``/points off
+    of, via ``get_data()``."""
+
+    def __init__(self, data):
+        self._data = data
+
+    def get_data(self):
+        return self._data
+
+
+class _FakeDetections:
+    """A minimal stand-in for a ``TargetDetection``, picklable at module
+    scope so it survives a real ``save_detections``/``load_verified_cache``
+    round-trip (unlike a class defined inside a test function)."""
+
+    def __init__(self, cam_names, points_by_cam):
+        self.cam_names = cam_names
+        self._points_by_cam = points_by_cam
+
+    def get_cam_list(self):
+        return [_FakeCamDet(self._points_by_cam[name]) for name in self.cam_names]
+
+
+@pytest.mark.gui
+def test_draw_detections_never_shows_another_runs_overwritten_cache(tmp_path):
+    """Round-9 review, P1: the last-resort image-folder cache is a slot a
+    concurrent Phase 1 run can overwrite at any moment, so
+    ``_draw_detections_for_run`` must re-verify identity at the instant it
+    reads the pickle -- not just trust a path an earlier, separate
+    resolution confirmed. Without that, a same-named cache a differently
+    parameterised run just overwrote (same target/detector/upscale,
+    different ``n_lim`` here) would be read raw and displayed as if it were
+    this run's own detections."""
+    import cv2
+
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.calibration.camera_calibrator import write_cache_identity
+    from pyCamSet.calibration_targets.core.target_registry import build_target
+    from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.workflow.detections import save_detections
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    cam_names = ["cam0", "cam1"]
+    for camera in cam_names:
+        (tmp_path / camera).mkdir()
+        cv2.imwrite(str(tmp_path / camera / "im0.png"),
+                    np.zeros((8, 12, 3), dtype=np.uint8))
+
+    target_spec = {"type": "ChArUco", "marker_backend": "aruco1"}
+    cache_path = tmp_path / "detected_datapoints.pickle"
+
+    def seed(marker_xy, n_lim):
+        data0 = np.array([[0.0, 0.0, marker_xy, marker_xy]])
+        data1 = np.array([[1.0, 0.0, marker_xy, marker_xy]])
+        payload = _FakeDetections(cam_names, {"cam0": data0, "cam1": data1})
+        save_detections(cache_path, payload)
+        write_cache_identity(cache_path, build_target(target_spec), cam_names, n_lim)
+
+    # Run A's own detections: n_lim=None, marker at (1.0, 1.0).
+    seed(1.0, n_lim=None)
+
+    QApplication.instance() or QApplication([])
+    tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))
+    try:
+        run_a = {"run_id": None,
+                 "params": {"f_loc": str(tmp_path), "target": target_spec, "n_lim": None}}
+
+        # The run-selection loop's own, separate resolution: confirms A's
+        # cache is there right now (mirrors _draw_detections_clicked /
+        # open_draw_detections_for_latest, run moments before the read).
+        assert tab._resolve_pickle_path_for_run(run_a) == cache_path
+
+        # A concurrent Phase 1 run against the same folder, with a
+        # DIFFERENT n_lim, overwrites the identical cache filename and
+        # sidecar before the draw actually reads it.
+        seed(9.0, n_lim=7)
+
+        tab._draw_detections_for_run(run_a, show_errors=False)
+
+        # Fail closed: an identity that no longer confirms is a miss, so
+        # run A must never be drawn with run B's overwritten points.
+        if tab._draw_state:
+            cam0_points = tab._draw_state["cam_points"].get("cam0", {})
+            drawn_x = {float(pt[0]) for pts in cam0_points.values() for pt in pts}
+            assert 9.0 not in drawn_x, (
+                "Draw Detections displayed the concurrently-overwritten "
+                "run's data under the originally selected run's label")
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(__import__("os").name != "nt",
+                    reason="Windows MAX_PATH is Windows-specific")
+def test_draw_detections_reads_a_run_artifact_past_max_path(tmp_path):
+    """A run's own detections pickle is read through the long-path-safe
+    form, like the existence check before it: a raw ``open()`` of a path
+    past Windows' 260 characters fails, and the run draws nothing."""
+    import cv2
+
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.workflow.detections import save_detections
+    from pyCamSet.workflow.workspace import WorkspaceManager, ensure_directory
+
+    cam_names = ["cam0", "cam1"]
+    for camera in cam_names:
+        (tmp_path / camera).mkdir()
+        cv2.imwrite(str(tmp_path / camera / "im0.png"),
+                    np.zeros((8, 12, 3), dtype=np.uint8))
+
+    deep = tmp_path / "runs"
+    while len(str(deep)) < 280:
+        deep = deep / ("a" * 40)
+    ensure_directory(deep)
+    artifact = deep / "detected_datapoints.pickle"
+    assert len(str(artifact)) > 260
+    save_detections(artifact, _FakeDetections(cam_names, {
+        "cam0": np.array([[0.0, 0.0, 5.0, 5.0]]),
+        "cam1": np.array([[1.0, 0.0, 5.0, 5.0]]),
+    }))
+
+    QApplication.instance() or QApplication([])
+    tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))
+    try:
+        run = {"run_id": None,
+               "params": {"f_loc": str(tmp_path),
+                          "target": {"type": "ChArUco", "marker_backend": "aruco1"}},
+               "artifacts": {"detected_datapoints_pickle": str(artifact)}}
+
+        tab._draw_detections_for_run(run, show_errors=False)
+
+        assert tab._draw_state, "the run's detections were not read"
+        assert tab._draw_state["cams"] == cam_names
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
 def test_the_detection_options_follow_the_detector_charuco2_forces():
     """The forced selection is a structural change like any other."""
     from PySide6.QtWidgets import QApplication

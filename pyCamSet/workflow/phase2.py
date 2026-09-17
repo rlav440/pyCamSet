@@ -224,10 +224,20 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
     if selected and len(cam_folders) < 2:
         raise RuntimeError(
             "Need at least two selected camera folders for Phase 2.")
+    # This run's own selection, fixed here before any staging decision or
+    # later race window -- passed through explicitly to every
+    # detect_datapoints_in_imfile call below so it never re-derives the
+    # camera list from a fresh scan of root/f_loc (round-2 review, P1, the
+    # same gap phase1.py's own _detect was hardened against). Without this,
+    # when selected_cameras is empty, staged_camera_root hands back root ==
+    # f_loc (the real, shared image folder, not a staged copy), so a camera
+    # folder that appears under f_loc after cam_folders was selected here
+    # would otherwise be silently folded into this pass's own detections.
+    cam_names = [folder.name for folder in cam_folders]
 
     with staged_camera_root(f_loc, cam_folders, log, "pycamset_phase2_") as root:
         detections, cam_res = _load_or_detect(
-            params, target, root, detections_path, set(selected), log)
+            params, target, root, detections_path, set(selected), cam_names, log)
 
         cams = calibrate(
             detections, cam_res, target,
@@ -244,6 +254,7 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
                 draw=False,
                 n_lim=params["n_lim"],
                 camset=cams,
+                cam_names=cam_names,
             )
             cams = calibrate(
                 detections, cam_res, target,
@@ -300,7 +311,7 @@ def _calibrate_pruned(params: dict, run_dir: Path,
 
 def _load_or_detect(params: dict, target, root: Path,
                     detections_path: Optional[Path],
-                    selected: set[str], log: LogFn):
+                    selected: set[str], cam_names: list[str], log: LogFn):
     """Read phase 1's detections, or detect again if they cannot be used."""
     detections = cam_res = None
 
@@ -322,6 +333,10 @@ def _load_or_detect(params: dict, target, root: Path,
             caching=params["caching"],
             draw=False,
             n_lim=params["n_lim"],
+            # This pass's own selection, pinned by the caller -- see
+            # _calibrate's own comment for why this must not be left to a
+            # fresh scan of root/f_loc.
+            cam_names=cam_names,
         )
     return detections, cam_res
 

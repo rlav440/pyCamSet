@@ -1,4 +1,6 @@
 from copy import copy
+import hashlib
+import json
 import multiprocessing
 import cv2
 import matplotlib.pyplot as plt
@@ -14,12 +16,15 @@ from typing import Optional
 
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
+from pyCamSet.calibration_targets.core.target_registry import spec_of
 # from pyCamSet.optimisation.base_optimiser import run_bundle_adjustment, TemplateBundleHandler
 from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment
 from pyCamSet.optimisation.template_handler import (
     TemplateBundleHandler, DEFAULT_OPTIONS)
 from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
-from pyCamSet.utils.saving import save_pickle, load_pickle, load_CameraSet
+from pyCamSet.utils.saving import (
+    save_pickle, load_CameraSet, _normalise_windows_open_path,
+)
 from pyCamSet.utils.general_utils import average_tforms, get_subfolder_names, glob_ims, mad_outlier_detection
 
 import logging
@@ -349,10 +354,10 @@ def run_stereo_calibration(
     target: AbstractTarget,
     param_handler = None,
     save: bool=True,
-    save_loc: Path|None = None, 
+    save_loc: Path|None = None,
     fixed_params: dict|None=None,
     floc: Path|None=None,
-    threads: int = 1, 
+    threads: int = 1,
     problem_options: dict|None = None,
     est_poses: Optional[np.ndarray] = None,
     pose_errors: Optional[np.ndarray] = None,
@@ -419,6 +424,326 @@ def detector_backend_of(target) -> str | None:
     return backends[0] if len(backends) == 1 else None
 
 
+def cache_identity_path(cache_path: Path) -> Path:
+    """The identity sidecar written beside a detection cache."""
+    return cache_path.with_name(cache_path.stem + ".identity.json")
+
+
+def _target_identity(calibration_target, cam_names: list[str],
+                      n_lim: int | None,
+                      camset: CameraSet | None = None) -> dict | None:
+    """The identity a detection cache is checked against.
+
+    None when the target cannot be described (not a registered type, e.g. a
+    hand-built test double) -- callers must then never trust, and never
+    write, an identity for it. Also unconditionally None whenever *camset*
+    was passed at all.
+
+    A camset is only ever passed on the ``high_distortion`` redetection path
+    (detection biased toward a specific, evolving calibration), and an
+    earlier version of this function tried to fingerprint that camset's per
+    camera parameters (intrinsic/extrinsic/distortion_coefs/res) so two
+    different camsets on the same target/cam_names/n_lim would not share a
+    cache slot. That fingerprint kept missing model-specific state -- it
+    took a P1 finding about ``TelecentricCamera.telecentricity`` to notice
+    the gap, and every future camera model with its own extra parameter
+    would reopen it the same way. Rather than chase Camera subclasses one at
+    a time, a camset-bearing identity is simply unconfirmable, exactly like
+    an unregistered target: such a call is always a cache miss (a safe,
+    if occasionally redundant, redetection) and, via ``write_cache_identity``
+    reading this same None, never gets an identity sidecar written for it
+    either -- so a camset-bearing cache can never be read back as a hit,
+    under its own camset or anyone else's.
+
+    :param camset: the camera set the caller is biasing detection with, when
+        there is one. Passing one always makes the identity unconfirmable
+        (see above). ``None`` (the ordinary case) leaves the identity
+        exactly as before -- a cache written or checked without a camset is
+        unaffected either way.
+    """
+    if camset is not None:
+        return None
+    try:
+        spec = spec_of(calibration_target)
+    except ValueError:
+        return None
+    return {"target_spec": spec, "cam_names": sorted(cam_names), "n_lim": n_lim}
+
+
+def _identity_text(payload: dict) -> str:
+    # Strict equality only: a spurious MISS just costs one extra, safe
+    # redetection; a spurious HIT is the exact defect being removed. No
+    # numeric/float tolerance, unlike workflow/targets.py's _same_value,
+    # which answers an unrelated question over a narrower field set.
+    #
+    # Also used to canonicalise the identity half of a sidecar that has
+    # already been round-tripped through JSON (cache_matches), so the same
+    # comparison applies whether *payload* still holds live target objects
+    # or plain JSON-native values read back off disk.
+    return json.dumps(payload, sort_keys=True, default=str)
+
+
+def _long_path(path: Path | str) -> Path:
+    """*path* as a ``Path`` safe for Windows long-path I/O.
+
+    Windows caps a path at 260 characters unless it is given in
+    extended-length (``\\\\?\\``) form -- see
+    :func:`pyCamSet.utils.saving._normalise_windows_open_path`, reused here
+    for the identical prefixing, so ``open()``, ``.exists()``,
+    ``.write_text()`` and ``.unlink()`` on the detection cache and its
+    identity sidecar all engage at the same path lengths
+    ``save_pickle``/``load_pickle`` (also in that module) already do.
+    Without this, every one of those calls silently degrades to "cache
+    unreadable/unwritable" once the cache path crosses ~248 characters --
+    realistic for a deeply nested image-folder layout -- and caching never
+    engages for that folder, even though the underlying file is fine.
+    """
+    return Path(_normalise_windows_open_path(path))
+
+
+def file_sha256(path: Path) -> str | None:
+    """SHA-256 of *path*'s current bytes, or None when it cannot be read.
+
+    Pairs a sidecar with the exact pickle bytes it was written for, so a
+    hand-copied sidecar next to someone else's pickle, or a pickle rewritten
+    mid-crash while an old sidecar happened to survive, is always a MISS
+    rather than a silently trusted mismatch. Public (not ``_file_sha256``)
+    because :func:`cache_matches` and :mod:`pyCamSet.workflow.phase1`'s own
+    identity checks (``matching_image_folder_cache``) both call it directly,
+    as a standalone digest of whatever is currently on disk -- unlike
+    :func:`_load_cache_if_verified`'s hot-path hash, which is taken from
+    bytes already held in memory rather than a second read of the file.
+    """
+    try:
+        digest = hashlib.sha256()
+        with open(_long_path(path), "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def _sidecar_record(cache_path: Path) -> dict | None:
+    """The sidecar's parsed identity and digest, or None when it cannot be
+    trusted at all -- missing, unreadable, not JSON, or missing either field.
+
+    Shared by :func:`cache_matches` (a standalone predicate reused by
+    :mod:`pyCamSet.workflow.phase1`'s resolvers, and by tests) and by
+    :func:`_load_cache_if_verified` (the hot detection path's own,
+    single-read check), so the two agree on what counts as a well-formed
+    sidecar.
+    """
+    sidecar = cache_identity_path(cache_path)
+    if not _long_path(sidecar).exists():
+        return None
+    try:
+        with open(_long_path(sidecar), encoding="utf-8") as fh:
+            recorded = json.load(fh)
+    except (OSError, ValueError):
+        # ValueError also covers json.JSONDecodeError and the UnicodeDecodeError
+        # of a sidecar that is not valid UTF-8 -- both are just an unreadable
+        # sidecar, so both are a miss, not a crash.
+        return None
+    if not isinstance(recorded, dict):
+        return None
+    recorded_identity = recorded.get("identity")
+    recorded_sha256 = recorded.get("cache_sha256")
+    if not isinstance(recorded_identity, dict) or not isinstance(recorded_sha256, str):
+        return None
+    return recorded
+
+
+def cache_matches(cache_path: Path, calibration_target, cam_names: list[str],
+                   n_lim: int | None, camset: CameraSet | None = None) -> bool:
+    """Whether *cache_path* was produced for this exact target, camera
+    selection and image cap. False whenever this cannot be confirmed --
+    cache missing, sidecar missing/unreadable, target unregistered, a
+    genuine identity mismatch, the pickle's bytes no longer matching the
+    sidecar's recorded digest, or *camset* being given at all -- so an
+    unverifiable cache is always a miss, never a silent hit.
+
+    A standalone predicate: reads the sidecar and hashes the whole pickle
+    itself, independently of any load.  Used where nothing is about to be
+    deserialised anyway (:mod:`pyCamSet.workflow.phase1`'s own identity
+    checks, the GUI's last-resort resolver, and the tests below) -- never on
+    the cache-hit path inside :func:`detect_datapoints_in_imfile` itself,
+    which reads and verifies the pickle's bytes exactly once via
+    :func:`_load_cache_if_verified` instead of paying for this function's
+    separate re-read on top of the load.
+
+    :param camset: the camera set this call is biasing detection with, when
+        there is one. A camset-bearing identity is always unconfirmable
+        (see :func:`_target_identity`), so passing any camset here always
+        makes this return False -- a camset-bearing cache is never read
+        back, whether or not one with a matching target/cam_names/n_lim
+        identity exists.
+    """
+    if not _long_path(cache_path).exists():
+        return False
+    identity = _target_identity(calibration_target, cam_names, n_lim, camset=camset)
+    if identity is None:
+        return False
+    recorded = _sidecar_record(cache_path)
+    if recorded is None:
+        return False
+    if _identity_text(recorded["identity"]) != _identity_text(identity):
+        return False
+    current_sha256 = file_sha256(cache_path)
+    return current_sha256 is not None and current_sha256 == recorded["cache_sha256"]
+
+
+def _load_cache_if_verified(cache_path: Path, calibration_target,
+                             cam_names: list[str], n_lim: int | None,
+                             camset: CameraSet | None = None):
+    """A cache hit, read exactly once.
+
+    The hot path inside :func:`detect_datapoints_in_imfile`: identity is
+    checked first (cheap -- no read of the pickle itself), then, only once
+    that confirms, the pickle's bytes are read ONE time, hashed in memory,
+    and -- only once that hash matches the sidecar's recorded digest --
+    deserialised from those SAME bytes.  No second read, no second hash, no
+    post-load re-check: the digest that confirms the bytes IS the digest of
+    the bytes handed to the unpickler, so there is no gap between "verified"
+    and "used" for a concurrent writer to land in, and nothing here costs
+    more than one read-and-hash of the file on top of the load it was always
+    going to pay for.
+
+    :return: ``(detected, cam_res)`` on a confirmed hit, or ``None`` for any
+        reason :func:`cache_matches` itself would call a miss (missing
+        cache/sidecar, an unreadable or malformed sidecar, a target/camera/
+        n_lim identity that does not match, *camset* being given at all,
+        bytes that do not pair with the recorded digest, or bytes that fail
+        to unpickle).
+    """
+    if not _long_path(cache_path).exists():
+        return None
+    identity = _target_identity(calibration_target, cam_names, n_lim, camset=camset)
+    if identity is None:
+        return None
+    recorded = _sidecar_record(cache_path)
+    if recorded is None:
+        return None
+    if _identity_text(recorded["identity"]) != _identity_text(identity):
+        return None
+    try:
+        with open(_long_path(cache_path), "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    if hashlib.sha256(raw).hexdigest() != recorded["cache_sha256"]:
+        return None
+    try:
+        import dill as pickler
+    except ImportError:
+        import pickle as pickler
+    try:
+        return pickler.loads(raw)
+    except Exception:
+        # A hash match with an unpickle failure would mean dill/pickle
+        # itself is misbehaving -- treat it the same as every other
+        # unconfirmable cache: a safe miss, never a crash.
+        return None
+
+
+def load_verified_cache(cache_path: Path, calibration_target,
+                         cam_names: list[str], n_lim: int | None,
+                         camset: CameraSet | None = None):
+    """Public entry point to :func:`_load_cache_if_verified`, for a caller
+    outside this module that needs a confirmed, single-read load of a cache
+    pickle.
+
+    Exists because that verify-then-read gap is not just this module's
+    problem: the GUI's Draw Detections (``pyCamSet.gui.phase_1_detection.
+    _draw_detections_for_run``) resolves a run's last-resort cache path
+    once (via ``phase1_workflow.matching_image_folder_cache``, which
+    confirms identity at THAT instant) and used to read it raw a moment
+    later with no re-check -- exactly the check-to-load race
+    :func:`_load_cache_if_verified`'s own docstring describes, just at a
+    different call site. Routing that read through here closes it the same
+    way: identity confirmed, bytes read once, hashed, and only then
+    deserialised from those same bytes -- see
+    ``pyCamSet.workflow.phase1.load_matching_image_folder_cache``, which
+    wraps this for that caller (not linked: the ``workflow`` API page
+    renders the package only, not its submodules, so mkdocstrings/autorefs
+    cannot resolve a cross-reference into ``phase1`` and a strict
+    ``mkdocs build`` would abort on it).
+
+    :return: ``(detected, cam_res)`` on a confirmed hit, or ``None`` -- see
+        :func:`_load_cache_if_verified` for the exact conditions.
+    """
+    return _load_cache_if_verified(
+        cache_path, calibration_target, cam_names, n_lim, camset=camset)
+
+
+def write_cache_identity(cache_path: Path, calibration_target,
+                          cam_names: list[str], n_lim: int | None,
+                          cache_sha256: str | None = None,
+                          camset: CameraSet | None = None) -> None:
+    """Write the sidecar identity beside a freshly written cache.
+
+    Always starts by discarding whatever sidecar is already there, so an
+    identity :func:`cache_matches` could never confirm (unregistered target,
+    any camset at all, or the cache itself unreadable straight after being
+    written) is left with no sidecar at all rather than a stale one -- a
+    bare cache with no sidecar is always a miss, which is the safe state.
+
+    :param camset: the camera set this call is biasing detection with, when
+        there is one. A camset-bearing identity is always unconfirmable
+        (see :func:`_target_identity`), so passing any camset here always
+        leaves *cache_path* with no sidecar -- a camset-bearing cache is
+        never given one to be read back by.
+    :param cache_sha256: the SHA-256 of the exact bytes this call's own
+        write put at *cache_path* (e.g. :func:`~pyCamSet.utils.saving.save_pickle`'s
+        return value, hashed), when the caller has them. Passing this closes
+        a write-write race between two concurrent detection passes sharing
+        one cache slot: without it, this function would re-read whatever
+        bytes happen to be at *cache_path* right now, which -- if a second
+        writer's save_pickle lands between this caller's own save_pickle and
+        this call -- are the OTHER writer's bytes, and the sidecar would then
+        pair this call's identity with that other pickle. A caller with no
+        such bytes on hand (e.g. a test that wrote the pickle directly)
+        leaves this ``None`` and the digest is read off disk, as before --
+        still correct when nothing else is racing the write.
+    """
+    sidecar = cache_identity_path(cache_path)
+    try:
+        _long_path(sidecar).unlink(missing_ok=True)
+    except OSError as exc:
+        # A transient lock/sharing failure here (a concurrent reader has the
+        # sidecar open via cache_matches()'s own open() call, antivirus/
+        # backup software briefly holding it, a read-only sidecar) must
+        # never propagate out of this call and discard the save_pickle it is
+        # meant to record: write_text() below overwrites the stale sidecar's
+        # content in place regardless of whether this unlink succeeded, so
+        # continue rather than raising past an already-successful write.
+        logger.warning(
+            "Could not remove the stale detection cache identity sidecar "
+            "%s before rewriting it: %s; continuing to write the fresh "
+            "identity over it.", sidecar, exc)
+    identity = _target_identity(calibration_target, cam_names, n_lim, camset=camset)
+    if identity is None:
+        return
+    if cache_sha256 is None:
+        cache_sha256 = file_sha256(cache_path)
+    if cache_sha256 is None:
+        return
+    payload = {"identity": identity, "cache_sha256": cache_sha256}
+    try:
+        _long_path(sidecar).write_text(_identity_text(payload), encoding="utf-8")
+    except OSError as exc:
+        # A sidecar path can exceed Windows' MAX_PATH even when the pickle
+        # beside it (7 characters shorter) fit -- and this write happens
+        # after a successful detection, so raising here would throw away
+        # good results over a bookkeeping file. Degrade to "no sidecar"
+        # instead: the next run reads that as an unconfirmable cache (a safe
+        # miss, per cache_matches), never a silently wrong hit.
+        logger.warning(
+            "Could not write the detection cache identity sidecar %s: %s; "
+            "the cache is left without one, so the next run redetects "
+            "rather than trusting an unrecorded identity.", sidecar, exc)
+
+
 def detect_datapoints_in_imfile(
     f_loc: Path,
     calibration_target: AbstractTarget,
@@ -430,6 +755,7 @@ def detect_datapoints_in_imfile(
     subfolder_string: str|None = None,
     threads=1,
     upscale_factor:int=1,
+    cam_names: list[str] | None = None,
 ) -> tuple[TargetDetection, list[tuple]]:
     """
     This function organises the detection of the image datapoints in a folder of images.
@@ -441,7 +767,18 @@ def detect_datapoints_in_imfile(
     :param draw: Should the detection be drawn
     :param n_lim: The maximum number of images to use for the detection
     :param camset: Optional, a camera set to use for the detections (for high distortion cameras)
-    :param subfolder_string: Optional, the name of an intermediate folder bewtween the camera name folder and the image data. 
+    :param subfolder_string: Optional, the name of an intermediate folder bewtween the camera name folder and the image data.
+    :param cam_names: the exact camera folder names this pass must read, when
+        the caller already knows them (phase1.py passes its own selection,
+        fixed before any staging decision and any later race window). Given
+        this, the folders read -- for the cache identity AND for a redetect
+        -- come from this list alone, never from a fresh scan of *f_loc*
+        taken here: a camera folder that appears in (or vanishes from)
+        *f_loc* after the caller made its selection can then never silently
+        join or leave this pass, whether or not staging happened to isolate
+        it. ``None`` (the default) keeps the original behaviour: both the
+        cache identity's camera names and which folders a redetect reads
+        come from *f_loc* scanned here, unfiltered.
     :return: A target detection.
     """
 
@@ -457,48 +794,150 @@ def detect_datapoints_in_imfile(
         base = cache_name.split('.')[0]
         cache_name = f"{base}_upscale{upscale_factor}x.pickle"
 
-    if not (f_loc / cache_name).exists() or not caching:
-        logger.info('Not caching, starting detection')
-        detected_sub_folders = get_subfolder_names(f_loc, return_full_path=True)
+    # Likewise the detector: a run read with ArUco 2 must never load the
+    # detections an ArUco 1 run cached in the same folder, or the reverse.
+    # ArUco 1 keeps the original name, so existing caches stay valid.
+    if detector_backend_of(calibration_target) == "aruco2":
+        base = cache_name.split('.')[0]
+        cache_name = f"{base}_aruco2.pickle"
 
-        if not detected_sub_folders:
-            raise ValueError(f'no subfolders were found in {f_loc}')
+    # Absolute before any cache/sidecar I/O below: every read goes through
+    # this module's own _long_path(), and the pickle write further down
+    # goes straight through save_pickle() -- both, in the end, through
+    # pyCamSet.utils.saving._normalise_windows_open_path(), which only adds
+    # its Windows long-path prefix to a path that is ALREADY absolute. A
+    # relative f_loc (calibrate_cameras' own docstring, and docs/how-to/
+    # calibrate.md, both use one) would otherwise stay relative all the way
+    # through, so caching silently degrades to always-redetect -- and a
+    # cache genuinely written elsewhere via an absolute path is never read
+    # back either -- once the resolved path crosses Windows' MAX_PATH.
+    # f_loc itself is left exactly as given: get_subfolder_names() below has
+    # this same, separate, already-accepted long-path limitation regardless
+    # of this fix (see tests/test_detection_cache_identity.py's own module
+    # docstring), so resolving only cache_path is the minimal change that
+    # closes the cache-specific gap without touching that one.
+    cache_path = Path(os.path.abspath(f_loc / cache_name))
+    # scan_cam_names is False exactly when the caller passed its own,
+    # already-fixed cam_names -- see this function's own :param above for
+    # why that must then also govern detected_sub_folders below, not just
+    # the identity check here.
+    scan_cam_names = cam_names is None
+    cam_names = get_subfolder_names(f_loc=f_loc) if scan_cam_names else list(cam_names)
 
-        # checking for uneven image numbers
-        sanitise_input_images(detected_sub_folders)
-
-        cam_names = get_subfolder_names(f_loc=f_loc)
-        use_cams = camset is not None
-
-        work_fn = lambda file, cam=None: \
-            calibration_target.find_in_imfolder(
-                file if subfolder_string is None else file/subfolder_string,
-                cam_names=cam_names,
-                draw=draw,
-                n_lim=n_lim,
-                camera=cam,
-                threads=threads,
-                upscale_factor=upscale_factor,
-            )
-
-        if use_cams:
-            cam_zip = [camset[f.parts[-1]] for f in detected_sub_folders]
-            detections = [work_fn(file, cam) for file, cam in zip(tqdm(detected_sub_folders), cam_zip)]
-        else:
-            detections = [work_fn(file) for file in tqdm(detected_sub_folders)]
-        detected = reduce(lambda x, y: x + y, detections)
-
-        # cam_res must reflect the upscaled coordinate frame, not native.
-        # When upscale_factor > 1, detected 2D pixel coords are in the upscaled
-        # frame, so cam_res must match. Multiply native .shape[:2] by the factor
-        # (cheaper than re-reading the image and resizing it).
-        cam_res = [tuple(int(d * upscale_factor) for d in cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2]) for cname in cam_names]
-
-        if caching:
-            save_pickle((detected, cam_res), f_loc / cache_name)
-    else:
+    # A cache hit reads and verifies cache_path's bytes exactly once -- see
+    # _load_cache_if_verified's own docstring for why that alone already
+    # closes the check-to-load race the round-3/round-4 fixes used to patch
+    # with a second, separate cache_matches() call after load_pickle(): with
+    # only one read, there is no gap between "confirmed" and "used" left for
+    # a concurrent writer to land in.
+    cache_hit = (_load_cache_if_verified(
+        cache_path, calibration_target, cam_names, n_lim, camset=camset)
+        if caching else None)
+    if cache_hit is not None:
         logger.info('loading cached detection')
-        detected, cam_res = load_pickle(f_loc / cache_name)
+        detected, cam_res = cache_hit
+        return detected, cam_res
+
+    if not caching:
+        logger.info('Not caching, starting detection')
+    elif not _long_path(cache_path).exists():
+        logger.info('No cached detection, starting detection')
+    elif not _long_path(cache_identity_path(cache_path)).exists():
+        # Distinct from an outright mismatch below: this cache was never
+        # given an identity to check at all (written before this scheme
+        # existed, or a previous write_cache_identity degraded to "no
+        # sidecar" -- see its own OSError handling) -- not that it was
+        # checked and found to disagree.
+        logger.info('Cached detection has no identity record (made by '
+                    'an earlier version, or its record could not be '
+                    'written); redetecting')
+    else:
+        logger.info('Cached detection does not match this target, camera '
+                    'selection or image cap; redetecting')
+    detected_sub_folders = (
+        get_subfolder_names(f_loc, return_full_path=True) if scan_cam_names
+        else [f_loc / name for name in cam_names])
+
+    if not detected_sub_folders:
+        raise ValueError(f'no subfolders were found in {f_loc}')
+
+    # checking for uneven image numbers
+    sanitise_input_images(detected_sub_folders)
+
+    use_cams = camset is not None
+
+    work_fn = lambda file, cam=None: \
+        calibration_target.find_in_imfolder(
+            file if subfolder_string is None else file/subfolder_string,
+            cam_names=cam_names,
+            draw=draw,
+            n_lim=n_lim,
+            camera=cam,
+            threads=threads,
+            upscale_factor=upscale_factor,
+        )
+
+    if use_cams:
+        cam_zip = [camset[f.parts[-1]] for f in detected_sub_folders]
+        detections = [work_fn(file, cam) for file, cam in zip(tqdm(detected_sub_folders), cam_zip)]
+    else:
+        detections = [work_fn(file) for file in tqdm(detected_sub_folders)]
+    detected = reduce(lambda x, y: x + y, detections)
+
+    # cam_res must reflect the upscaled coordinate frame, not native.
+    # When upscale_factor > 1, detected 2D pixel coords are in the upscaled
+    # frame, so cam_res must match. Multiply native .shape[:2] by the factor
+    # (cheaper than re-reading the image and resizing it).
+    cam_res = [tuple(int(d * upscale_factor) for d in cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2]) for cname in cam_names]
+
+    if caching:
+        # A1: pairing integrity across the write -- no sidecar can be
+        # read as matching a pickle that is mid-rewrite, and the new
+        # sidecar is only written once the new pickle is fully on disk.
+        try:
+            _long_path(cache_identity_path(cache_path)).unlink(missing_ok=True)
+        except OSError as exc:
+            # A transient lock/sharing failure on the OLD sidecar (a
+            # concurrent reader has it open via cache_matches()'s own
+            # open() call, antivirus/backup software briefly holding it, a
+            # read-only sidecar) must not discard the detection pass that
+            # has already completed by this point -- log and continue to
+            # save_pickle regardless; write_cache_identity() below still
+            # unlinks (and, on its own failure, degrades the same way)
+            # before writing the fresh sidecar.
+            logger.warning(
+                "Could not remove the stale detection cache identity "
+                "sidecar for %s: %s; continuing to write the fresh cache "
+                "anyway.", cache_path, exc)
+        try:
+            written = save_pickle((detected, cam_res), cache_path)
+        except OSError as exc:
+            # This write happens after a successful detection, so raising
+            # here would throw away good results over a caching speed-up --
+            # the same rationale write_cache_identity() and the sidecar
+            # unlink() above already apply to their own writes (e.g. a
+            # sidecar/pickle path exceeding Windows' MAX_PATH, disk-full, an
+            # AV lock, a read-only folder). There is nothing valid at
+            # cache_path to hash, so skip write_cache_identity entirely --
+            # the stale sidecar was already unlinked above, so this leaves
+            # the cache in the same safe "no sidecar means a miss" state as
+            # write_cache_identity's own degraded path -- and return the
+            # detections exactly as the caching=False path does.
+            logger.warning(
+                "Could not write the detection cache %s: %s; returning "
+                "this pass's detections without caching them.",
+                cache_path, exc)
+            return detected, cam_res
+        # Hash the exact bytes THIS call wrote, in memory -- never a
+        # re-read of cache_path, which by the time write_cache_identity
+        # ran could hold a concurrent writer's bytes instead (see that
+        # function's cache_sha256 docstring). A monkeypatched save_pickle
+        # that returns nothing (some tests replace it with a no-op) falls
+        # back to write_cache_identity's own disk read, same as before.
+        cache_sha256 = (hashlib.sha256(written).hexdigest()
+                        if isinstance(written, (bytes, bytearray)) else None)
+        write_cache_identity(cache_path, calibration_target, cam_names, n_lim,
+                             cache_sha256=cache_sha256, camset=camset)
     return detected, cam_res
 
 def validate_detections(detected: TargetDetection,

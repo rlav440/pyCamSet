@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .calibration import calibrate_cameras
     from .calibration_targets.ccube.target import Ccube
+    from .calibration_targets.ccube2.target import Ccube2
     from .calibration_targets.charuco.target import ChArUco
     from .calibration_targets.charuco2.target import ChArUco2
     from .calibration_targets.puzzleboard.target import PuzzleBoard
@@ -41,6 +42,7 @@ __all__ = [
     "ChArUco",
     "ChArUco2",
     "Ccube",
+    "Ccube2",
     "PuzzleBoard",
     "PuzzleBoardCube",
 ]
@@ -111,6 +113,17 @@ def _resolve_ccube() -> Any:
     return Ccube
 
 
+def _resolve_ccube2() -> Any:
+    try:
+        from .calibration_targets.ccube2.target import Ccube2
+    except Exception:
+        # A graphics or native import failing, as for ChArUco2.  A missing
+        # aruco2 is not one: Ccube2's faces are ChArUco2 boards, so building
+        # one without it raises the ImportError that says how to install it.
+        return None
+    return Ccube2
+
+
 def _resolve_puzzleboard() -> Any:
     try:
         from .calibration_targets.puzzleboard.target import PuzzleBoard
@@ -143,6 +156,7 @@ _LAZY_RESOLVERS: dict[str, Any] = {
     "ChArUco": _resolve_charuco,
     "ChArUco2": _resolve_charuco2,
     "Ccube": _resolve_ccube,
+    "Ccube2": _resolve_ccube2,
     "PuzzleBoard": _resolve_puzzleboard,
     "PuzzleBoardCube": _resolve_puzzleboard_cube,
 }

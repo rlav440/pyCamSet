@@ -463,6 +463,18 @@ def test_a_different_target_type_is_reported_on_its_own():
 
     assert len(differences) == 1
     assert "target type" in differences[0]
+    # Named as the interface shows them, since a person reads this.
+    assert differences[0] == ("target type: the run used ChArUco1 ccube, "
+                              "these settings say ChArUco1")
+
+
+def test_a_target_is_described_by_the_label_it_is_shown_by():
+    from pyCamSet.workflow.targets import describe_target
+
+    assert describe_target(CCUBE_12).startswith("ChArUco1 ccube(")
+    assert describe_target(
+        {"target": {"type": "Ccube2", "n_points": 5, "length": 20.0}}
+    ) == "ChArUco2 ccube(length=20.0, n_points=5)"
 
 
 def test_detection_only_settings_are_not_a_mismatch():

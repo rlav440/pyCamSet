@@ -63,6 +63,7 @@ nav:
       - ChArUco: targets/charuco.md
       - ChArUco2: targets/charuco2.md
       - Ccube: targets/ccube.md
+      - Ccube2: targets/ccube2.md
       - PuzzleBoard: targets/puzzleboard.md
       - PuzzleBoardCube: targets/puzzleboard-cube.md
   - Architecture: architecture.md

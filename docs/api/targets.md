@@ -28,3 +28,7 @@ under [Calibration Targets](../targets/index.md).
 ---
 
 ::: pyCamSet.calibration_targets.ccube.target.Ccube
+
+---
+
+::: pyCamSet.calibration_targets.ccube2.target.Ccube2

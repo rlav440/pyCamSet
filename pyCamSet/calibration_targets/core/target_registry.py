@@ -27,6 +27,7 @@ from typing import Any
 #: dependency, is only imported when one is actually asked for.
 TARGET_CLASSES: dict[str, tuple[str, str]] = {
     "Ccube": ("pyCamSet.calibration_targets.ccube.target", "Ccube"),
+    "Ccube2": ("pyCamSet.calibration_targets.ccube2.target", "Ccube2"),
     "ChArUco": ("pyCamSet.calibration_targets.charuco.target", "ChArUco"),
     "ChArUco2": ("pyCamSet.calibration_targets.charuco2.target", "ChArUco2"),
     "PuzzleBoard": (
@@ -46,6 +47,7 @@ TARGET_LABELS: dict[str, str] = {
     "ChArUco": "ChArUco1",
     "Ccube": "ChArUco1 ccube",
     "ChArUco2": "ChArUco2",
+    "Ccube2": "ChArUco2 ccube",
 }
 
 

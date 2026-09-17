@@ -567,20 +567,78 @@ def test_the_detection_form_shows_what_the_chosen_detector_takes(
 
 
 @pytest.mark.gui
+def test_a_tuned_detection_option_survives_a_backend_round_trip():
+    """Both detectors are offered side by side in the same combo now, which
+    invites tuning one, comparing the other, and coming back -- and that
+    must not silently drop the typed value back to the library default."""
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import read_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    tab = _phase1_tab()
+    try:
+        tab._target_form.set_target_type("ChArUco")
+        assert tab._target_form._backend_combo.currentData() == "aruco1"
+
+        widget = tab._detection_option_widgets["minMarkerPerimeterRate"]
+        assert read_parameter_widget(widget) == pytest.approx(0.03)
+        widget.setValue(1.03)
+
+        # Compare ArUco 2, then come back to ArUco 1.
+        tab._target_form._backend_combo.setCurrentIndex(
+            tab._target_form._backend_combo.findData("aruco2"))
+        tab._target_form._backend_combo.setCurrentIndex(
+            tab._target_form._backend_combo.findData("aruco1"))
+
+        restored = tab._detection_option_widgets["minMarkerPerimeterRate"]
+        assert restored is not widget  # rebuilt, not the same object
+        assert read_parameter_widget(restored) == pytest.approx(1.03)
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
+def test_a_tuned_detection_option_survives_a_target_type_round_trip():
+    """The same gap exists for a target-type round trip (A -> B -> A), not
+    just a backend round trip -- both go through the same rebuild."""
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.gui.shared_functions import read_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    tab = _phase1_tab()
+    try:
+        tab._target_form.set_target_type("ChArUco")
+        widget = tab._detection_option_widgets["minMarkerPerimeterRate"]
+        widget.setValue(1.03)
+
+        tab._target_form.set_target_type("Ccube")
+        tab._target_form.set_target_type("ChArUco")
+
+        restored = tab._detection_option_widgets["minMarkerPerimeterRate"]
+        assert read_parameter_widget(restored) == pytest.approx(1.03)
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
 @pytest.mark.parametrize(
     ("target_type", "offered"),
-    [("ChArUco", True), ("Ccube", True),
+    [("ChArUco", True), ("Ccube", True), ("ChArUco2", True), ("Ccube2", True),
      ("PuzzleBoard", False), ("PuzzleBoardCube", False)],
 )
 def test_only_a_target_with_a_choice_of_detector_is_asked_for_one(
         target_type, offered):
-    """The combo used to appear for a named pair of targets."""
+    """The combo used to appear for a named pair of targets.  It appears
+    for every target read with ArUco markers -- for ChArUco2 with ArUco 1
+    greyed out -- and never for one read without them."""
     from PySide6.QtWidgets import QApplication
 
     QApplication.instance() or QApplication([])
     tab = _phase1_tab()
     try:
-        tab._target_form._target_combo.setCurrentText(target_type)
+        tab._target_form.set_target_type(target_type)
         assert tab._target_form._backend_combo.isHidden() is (not offered)
     finally:
         tab.deleteLater()
@@ -625,6 +683,35 @@ def test_the_sweepable_rows_follow_the_selected_detector():
 
         tab._target_form._backend_combo.setCurrentIndex(tab._target_form._backend_combo.findData("aruco1"))
         assert set(tab._param_rows) == {p.key for p in ARUCO_OPENCV_DETECTOR.tunable()}
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
+def test_a_widened_sweep_bound_survives_a_backend_round_trip():
+    """Both detectors are offered side by side in the same combo now, which
+    invites widening a bound to search a larger space, comparing the other
+    detector, and coming back -- and that must not silently narrow it back
+    to the detection profile's own default."""
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    tab = _optimisation_tab()
+    try:
+        row = tab._param_rows["adaptiveThreshWinSizeMin"]
+        row.set_bounds(9, 45)
+        assert row.bounds() == (9, 45)
+
+        # aruco2 has no rows of its own (see the test above): the widened
+        # row is torn down entirely before it is rebuilt on the way back.
+        tab._target_form._backend_combo.setCurrentIndex(
+            tab._target_form._backend_combo.findData("aruco2"))
+        tab._target_form._backend_combo.setCurrentIndex(
+            tab._target_form._backend_combo.findData("aruco1"))
+
+        restored = tab._param_rows["adaptiveThreshWinSizeMin"]
+        assert restored is not row  # rebuilt, not the same object
+        assert restored.bounds() == (9, 45)
     finally:
         tab.deleteLater()
 

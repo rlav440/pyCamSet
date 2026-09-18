@@ -553,9 +553,9 @@ def test_a_target_builds_from_the_arguments_it_declares(name, cls):
     still collect what it needs to build one."""
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
-    if name == "ChArUco2" and not ARUCO2_AVAILABLE:
-        # ChArUco2 has no aruco1 equivalent -- it cannot be built at
-        # all without aruco2, unlike ChArUco/Ccube's aruco2 branch.
+    if name in ("ChArUco2", "Ccube2") and not ARUCO2_AVAILABLE:
+        # ChArUco2 and Ccube2 have no aruco1 equivalent -- they cannot be
+        # built at all without aruco2, unlike ChArUco/Ccube's aruco2 branch.
         pytest.skip("aruco2 is not installed")
 
     spec = {"type": name, **cls.construction_parameters().defaults()}
@@ -745,9 +745,9 @@ def test_every_target_writes_itself_as_every_format(tmp_path, name, cls):
     the target generators each carried."""
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
-    if name == "ChArUco2" and not ARUCO2_AVAILABLE:
-        # ChArUco2 has no aruco1 equivalent -- it cannot be built at
-        # all without aruco2, unlike ChArUco/Ccube's aruco2 branch.
+    if name in ("ChArUco2", "Ccube2") and not ARUCO2_AVAILABLE:
+        # ChArUco2 and Ccube2 have no aruco1 equivalent -- they cannot be
+        # built at all without aruco2, unlike ChArUco/Ccube's aruco2 branch.
         pytest.skip("aruco2 is not installed")
 
     # Small enough to draw quickly; the point is the path, not the page.
@@ -755,6 +755,7 @@ def test_every_target_writes_itself_as_every_format(tmp_path, name, cls):
         "ChArUco": {"num_squares_x": 4, "num_squares_y": 4, "square_size": 10.0},
         "ChArUco2": {"num_squares_x": 4, "num_squares_y": 4, "square_size": 10.0},
         "Ccube": {"n_points": 4, "length": 20.0},
+        "Ccube2": {"n_points": 4, "length": 20.0, "border_fraction": 0.15},
         "PuzzleBoard": {"num_squares_x": 8, "num_squares_y": 8, "square_size": 2.0},
         "PuzzleBoardCube": {"n_points": 5, "length": 100.0},
     }

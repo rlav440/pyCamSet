@@ -123,9 +123,9 @@ def dictionary_id(aruco_dict: int | str, marker_backend: str = ARUCO1_BACKEND) -
     except ImportError as exc:
         raise ImportError(
             "aruco2 is not installed and is not published on PyPI. Build it "
-            "from the third_party/aruco2 submodule to use "
-            "marker_backend='aruco2': see 'Installing the aruco2 backend' in "
-            "pyCamSet's CITATION.md."
+            "from the third_party/aruco2 submodule to use ChArUco2 or Ccube2 "
+            "targets, or marker_backend='aruco2': see 'Installing the aruco2 "
+            "backend' in pyCamSet's CITATION.md."
         ) from exc
 
 

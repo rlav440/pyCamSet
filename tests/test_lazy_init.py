@@ -69,7 +69,7 @@ def test_dir_and_all_and_star_import():
     expected = {
         "CameraSet", "Camera", "load_CameraSet", "setup_logging",
         "CalibrationReport", "calibrate_cameras",
-        "ChArUco", "Ccube", "PuzzleBoard", "PuzzleBoardCube",
+        "ChArUco", "ChArUco2", "Ccube", "Ccube2", "PuzzleBoard", "PuzzleBoardCube",
     }
     assert expected <= set(pyCamSet.__all__)
     assert expected <= set(dir(pyCamSet))
@@ -86,7 +86,7 @@ def test_optional_targets_resolve_to_class_none_or_placeholder():
     placeholders must raise ImportError only when instantiated."""
     import pyCamSet
 
-    for name in ("ChArUco", "Ccube"):
+    for name in ("ChArUco", "ChArUco2", "Ccube", "Ccube2"):
         value = getattr(pyCamSet, name)
         assert value is None or isinstance(value, type)
 

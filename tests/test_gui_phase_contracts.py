@@ -2136,6 +2136,21 @@ def test_a_failed_detection_run_is_shown_as_failed(tmp_path):
 
 
 @pytest.mark.gui
+def test_the_camera_pose_view_resolves_its_camset_like_every_other_lookup(tmp_path):
+    """The other four artifact lookups in this tab go through resolve_artifact,
+    which finds a run's file after its workspace has moved. This one read the
+    record directly and reported a camset that exists as missing."""
+    import inspect
+
+    from pyCamSet.gui import phase_3_bundle_adjustment as p3gui
+
+    src = inspect.getsource(p3gui)
+    bare = src.count('run.get("artifacts", {}).get("optimised_camset")')
+    assert bare <= 1, "a bare lookup survives only as the fallback"
+    assert 'resolve_artifact(run, "phase3"' in src
+
+
+@pytest.mark.gui
 def test_the_distortion_field_draws_for_a_lens_opencv_cannot_describe(tmp_path):
     """cv2.projectPoints takes a Brown-Conrady vector of 4, 5, 8, 12 or 14
     coefficients and nothing else. A telecentric lens carries one

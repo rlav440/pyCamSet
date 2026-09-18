@@ -690,20 +690,33 @@ def visualise_calibration(
 
 
 def _pv_polydata_to_o3d_lineset(pv_mesh):
-    """Convert a PyVista triangle mesh into an Open3D wireframe LineSet."""
+    """Convert a PyVista mesh of any face shape into an Open3D wireframe LineSet.
+
+    PyVista's flat face array prefixes each face with its vertex count, so a
+    mesh of quads reads ``[4, a, b, c, d, 4, ...]`` where one of triangles
+    reads ``[3, a, b, c, 3, ...]``.  Reading it as triangles works only for a
+    camera drawn as a frustum: a telecentric lens images a rectangular prism,
+    whose box is six quads, and the fixed stride turned that into a reshape
+    error that left the whole 3-D view blank for a telecentric rig.
+    """
     o3d = _open3d()
     verts = np.asarray(pv_mesh.points, dtype=np.float64)
     faces_arr = np.asarray(pv_mesh.faces)
+
+    faces = []
     if faces_arr.ndim == 1:
-        n_tri = len(faces_arr) // 4
-        triangles = faces_arr.reshape(n_tri, 4)[:, 1:]
+        i = 0
+        while i < len(faces_arr):
+            n = int(faces_arr[i])
+            faces.append([int(v) for v in faces_arr[i + 1:i + 1 + n]])
+            i += n + 1
     else:
-        triangles = faces_arr[:, 1:]
+        faces = [[int(v) for v in row[1:]] for row in faces_arr]
 
     edges = set()
-    for tri in triangles:
-        for i in range(3):
-            edge = tuple(sorted((int(tri[i]), int(tri[(i + 1) % 3]))))
+    for face in faces:
+        for i in range(len(face)):
+            edge = tuple(sorted((face[i], face[(i + 1) % len(face)])))
             edges.add(edge)
 
     line_set = o3d.geometry.LineSet()

@@ -159,6 +159,9 @@ def save_camset(
     cam_config['camset_module'] = cams.__class__.__module__
     cam_config['camset_name'] = cams.__class__.__name__
     cam_config['cam_name'] = cams[0].__class__.__name__
+    # The class alone cannot be imported from: written without its module, a
+    # set of anything but pinholes reads back as pinholes.
+    cam_config['cam_module'] = cams[0].__class__.__module__
 
     for cam in cams:
         temp_dict = {
@@ -167,6 +170,13 @@ def save_camset(
             'dst': cam.distortion_coefs.tolist(),
             'res': np.array(cam.res).tolist(),
         }
+        # A lens model may carry state of its own that int/ext/dst/res cannot
+        # hold: a telecentric camera's residual telecentricity is fitted by the
+        # bundle adjustment, and a file that drops it silently reloads as a
+        # perfect lens.
+        telecentricity = getattr(cam, "telecentricity", None)
+        if telecentricity is not None:
+            temp_dict['telecentricity'] = float(telecentricity)
         cam_dict[cam.name] = temp_dict
 
     optim_dict = save_dict.setdefault('optim', {})
@@ -224,6 +234,15 @@ def save_camset(
     return
 
 
+#: which module each camera class lives in, for reading a file that names the
+#: class but not its module. A class absent here is read from the pinhole
+#: module, which is where every camera lived when those files were written.
+CAMERA_MODULES = {
+    "Camera": "pyCamSet.cameras.camera",
+    "TelecentricCamera": "pyCamSet.cameras.telecentric_camera",
+}
+
+
 def load_CameraSet(f_loc: Path|str) -> CameraSet:
     """
     A function to load a CameraSet from a .json formatted file.
@@ -239,18 +258,24 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
     cam_dict = {}
     cam_config = saved_structure['cam_config']
 
-    cam_module = 'pyCamSet.cameras.camera'
-    camset_module = 'pyCamSet.cameras.camera_set'
+    # Files written before the camera's module was recorded still name the
+    # class, so the module is looked up from the name rather than assumed:
+    # those files are readable, and a telecentric set saved by one of them
+    # comes back telecentric instead of silently becoming a pinhole.
+    cam_name_cls = cam_config.get('cam_name', 'Camera')
+    cam_module = cam_config.get('cam_module') or CAMERA_MODULES.get(
+        cam_name_cls, 'pyCamSet.cameras.camera')
+    camset_module = saved_structure['cam_config'].get(
+        'camset_module', 'pyCamSet.cameras.camera_set')
 
     for cam_name, data in saved_structure['cams'].items():
-        
-
-        cam_dict[cam_name] = instance_obj(
-            cam_module,
-            'Camera',
+        kwargs = dict(
             extrinsic=np.array(data['ext']), intrinsic=np.array(data['int']),
             distortion_coefs=np.array(data['dst']), res=np.array(data['res']),
             name=cam_name)
+        if 'telecentricity' in data:
+            kwargs['telecentricity'] = float(data['telecentricity'])
+        cam_dict[cam_name] = instance_obj(cam_module, cam_name_cls, **kwargs)
     camset = instance_obj(
         camset_module,
         'CameraSet',

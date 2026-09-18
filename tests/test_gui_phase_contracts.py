@@ -2102,3 +2102,40 @@ def test_phase_2_offers_every_lens_model_and_runs_the_chosen_one(tmp_path):
         assert tab._collect_params()["lens_model"] == "pinhole"
     finally:
         tab.deleteLater()
+
+
+@pytest.mark.gui
+def test_the_distortion_field_draws_for_a_lens_opencv_cannot_describe(tmp_path):
+    """cv2.projectPoints takes a Brown-Conrady vector of 4, 5, 8, 12 or 14
+    coefficients and nothing else. A telecentric lens carries one
+    division-model coefficient, so that call raised inside refresh() and the
+    Diagnostics button silently did nothing."""
+    import numpy as np
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet import CameraSet
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+    from pyCamSet.gui.phase_2_intrinsics import Phase2DiagnosticsTab
+    from pyCamSet.utils.saving import save_camset
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    QApplication.instance() or QApplication([])
+    ws = tmp_path / "ws" / ".pycamset_workspace"
+    manager = WorkspaceManager(None)
+    manager.set_workspace_path(ws)
+    run_dir = ws / "phase2_runs" / "r1"
+    run_dir.mkdir(parents=True)
+    camset_path = run_dir / "initial_cameras.camset"
+    save_camset(CameraSet(camera_dict={"cam": TelecentricCamera(
+        intrinsic=np.array([[80.0, 0, 270.0], [0, 80.0, 360.0], [0, 0, 1.0]]),
+        res=[720, 540], distortion_coefs=np.array([0.01]), name="cam")}),
+        camset_path)
+    manager.save_run("phase2", "r1", {
+        "run_id": "r1", "params": {}, "diagnostics": {},
+        "artifacts": {"initial_camset": str(camset_path)}})
+
+    tab = Phase2DiagnosticsTab(QTabWidget(), QCheckBox(), manager)
+    try:
+        tab.refresh()   # raised before the fix, taking the whole tab with it
+    finally:
+        tab.deleteLater()

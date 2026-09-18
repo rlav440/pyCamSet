@@ -388,3 +388,73 @@ def test_numpy_dict_to_list_converts_nested_arrays():
 def test_numpy_dict_to_list_passes_through_non_dicts():
     assert numpy_dict_to_list(5) == 5
     assert numpy_dict_to_list(None) is None
+
+
+# --------------------------------------------------------------------------
+# The lens model survives a round trip
+# --------------------------------------------------------------------------
+
+
+def test_a_telecentric_camera_set_reloads_as_telecentric(tmp_path):
+    """A set saved as telecentric and read back as pinhole is worse than a
+    failure: the magnifications become focal lengths, every projection is
+    wrong, and nothing says so."""
+    import numpy as np
+
+    from pyCamSet import CameraSet
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+    from pyCamSet.utils.saving import load_CameraSet, save_camset
+
+    cam = TelecentricCamera(
+        intrinsic=np.array([[80.0, 0, 270.0], [0, 80.0, 360.0], [0, 0, 1.0]]),
+        res=[720, 540], distortion_coefs=np.array([0.0]),
+        telecentricity=0.003, name="cam")
+    path = tmp_path / "tele.camset"
+    save_camset(CameraSet(camera_dict={"cam": cam}), path)
+
+    back = load_CameraSet(path)["cam"]
+    assert isinstance(back, TelecentricCamera)
+    assert float(back.telecentricity) == pytest.approx(0.003), \
+        "a fitted telecentricity must not reload as a perfect lens"
+    assert np.allclose(np.asarray(back.intrinsic, dtype=float),
+                       np.asarray(cam.intrinsic, dtype=float))
+
+
+def test_a_file_naming_the_class_without_its_module_still_loads(tmp_path):
+    """Files written before the module was recorded name only the class, and
+    they are the ones most likely to hold a telecentric set that predates the
+    fix."""
+    import json
+
+    import numpy as np
+
+    from pyCamSet import CameraSet
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+    from pyCamSet.utils.saving import load_CameraSet, save_camset
+
+    cam = TelecentricCamera(
+        intrinsic=np.array([[80.0, 0, 270.0], [0, 80.0, 360.0], [0, 0, 1.0]]),
+        res=[720, 540], distortion_coefs=np.array([0.0]), name="cam")
+    path = tmp_path / "old.camset"
+    save_camset(CameraSet(camera_dict={"cam": cam}), path)
+
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    del saved["cam_config"]["cam_module"]          # as an older pyCamSet wrote it
+    path.write_text(json.dumps(saved), encoding="utf-8")
+
+    assert isinstance(load_CameraSet(path)["cam"], TelecentricCamera)
+
+
+def test_a_pinhole_set_is_unaffected(tmp_path):
+    import numpy as np
+
+    from pyCamSet import CameraSet
+    from pyCamSet.cameras.camera import Camera
+    from pyCamSet.utils.saving import load_CameraSet, save_camset
+
+    cam = Camera(res=[720, 540], name="cam")
+    path = tmp_path / "pin.camset"
+    save_camset(CameraSet(camera_dict={"cam": cam}), path)
+    back = load_CameraSet(path)["cam"]
+    assert type(back) is Camera
+    assert not hasattr(back, "telecentricity")

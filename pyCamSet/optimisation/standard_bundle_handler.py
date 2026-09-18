@@ -359,9 +359,17 @@ class SelfBundleHandler(TemplateBundleHandler):
         """
         Maps a set of parameters from an existing representation to the scale and transformation that best matches the provided model.
         The transformation is garunteed to preserve the calibration result.
-        The first pose also remains as the identity.
 
-        :param proj: The array describing the intrinsic + distortion of the camera. Untouched by this transform.
+        Where that gauge lands depends on what the camera's pose can hold. A
+        camera with a translation takes the whole of it, its intrinsics never
+        move, and the first pose stays as the identity. A camera without one --
+        a telecentric lens -- cannot absorb a translation, so the poses take
+        that part and the scale goes into the magnification instead; the first
+        pose then keeps its rotation but carries the gauge translation. Both
+        preserve every predicted pixel, which is the property that matters and
+        the one the tests check.
+
+        :param proj: The array describing the intrinsic + distortion of the camera. Untouched for a camera whose extrinsic carries a translation; rescaled for one whose does not.
         :param extr: The array containing the extrinsics of the camera system.
         :param poses: The array containing the extimated poses of the calibration target.
         :param point_estimate: The array containing the estimated locations of the calibration target features.
@@ -426,22 +434,81 @@ class SelfBundleHandler(TemplateBundleHandler):
         new_points = gu.h_tform(new_points, update_tform)
         #proj matricies never change: scale invariance!
 
+        # Which world frame the cameras end up in depends on what their pose
+        # can hold.  A camera with a translation absorbs the whole gauge
+        # change, so the frame is the reference one.  A camera without one --
+        # a telecentric lens, whose translation is unidentifiable -- cannot,
+        # so the frame keeps the rotation and the scale and leaves the
+        # translation to the poses, which are rigid and can carry it.
+        rotation_only = self._extr_block.params.n_params == 3
+        if rotation_only:
+            left = np.eye(4)
+            left[:3, :3] = update_tform[:3, :3]
+        else:
+            left = update_tform
+
         for i in range(len(poses)):
             ### scale change
             poses[i][3:] = poses[i][3:] * s
             ### rigid change
             pose = gu.make_4x4h_tform(poses[i][:3], poses[i][3:])
-            new_pose = update_tform @ pose @ inv_update
+            new_pose = left @ pose @ inv_update
             poses[i][:3], poses[i][3:] = gu.ext_4x4_to_rod(new_pose)
 
-        for i in range(len(extr)):
-            ### scale change
-            extr[i][3:] = extr[i][3:] * s
-            ### rigid change
-            og_tform = gu.make_4x4h_tform(extr[i][:3], extr[i][3:])
-            new_tform = og_tform @ inv_update
-            extr[i][:3], extr[i][3:] = gu.ext_4x4_to_rod(new_tform)
+        if rotation_only:
+            proj, extr = self._regauge_rotation_only(proj, extr, s, left)
+        else:
+            for i in range(len(extr)):
+                ### scale change
+                extr[i][3:] = extr[i][3:] * s
+                ### rigid change
+                og_tform = gu.make_4x4h_tform(extr[i][:3], extr[i][3:])
+                new_tform = og_tform @ inv_update
+                extr[i][:3], extr[i][3:] = gu.ext_4x4_to_rod(new_tform)
         return proj, extr, poses, new_points
+
+    def _regauge_rotation_only(self, proj, extr, s, left):
+        """
+        The gauge change for a camera whose pose carries no translation.
+
+        A pinhole camera absorbs the gauge in its extrinsic: the pixel is
+        ``K*(Y_xy/Y_z)``, unchanged by scaling the camera-frame point, so the
+        scale rides on ``t`` and the intrinsics never move.  A telecentric
+        camera has no ``t`` to put it in -- the translation is unidentifiable,
+        which is why its extrinsic block is rotation only -- and its pixel,
+        ``m*Y_x/(1 + eps*Y_z)``, is not scale invariant.  So for this model the
+        gauge lands in the intrinsics instead.
+
+        Because the poses took the translation, the world this camera sees has
+        changed by ``R_T`` and ``s`` alone.  With ``R' = R @ R_T^T`` the
+        camera-frame point becomes exactly ``s*Y``, so
+
+            m'   = m   / s
+            eps' = eps / s
+
+        and nothing else moves: ``c`` is untouched because there is no
+        in-plane shift left to absorb, and ``k`` acts on a radius built from
+        ``m*Y*w``, which is preserved.  This is exact, not a small-angle or
+        small-``eps`` argument -- see
+        ``test_the_gauge_transform_leaves_a_telecentric_projection_alone``.
+        """
+        inv_left = np.linalg.inv(left)
+        for i in range(len(extr)):
+            # No translation to scale and none to carry: the pose is the
+            # rotation alone, and stays that way.
+            og_tform = gu.make_4x4h_tform(extr[i][:3], np.zeros(3))
+            new_tform = og_tform @ inv_left
+            rod, _ = gu.ext_4x4_to_rod(new_tform)
+            extr[i][:3] = rod
+
+            if s == 0.0 or not np.isfinite(s):
+                raise ValueError(
+                    f"The gauge scale came out as {s}, so the solve has no "
+                    "usable scale to re-express the magnification against.")
+            proj[i][0] = proj[i][0] / s   # m_x
+            proj[i][2] = proj[i][2] / s   # m_y
+            proj[i][5] = proj[i][5] / s   # eps
+        return proj, extr
 
     
     def special_plots(self, x):

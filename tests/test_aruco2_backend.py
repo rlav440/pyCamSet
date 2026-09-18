@@ -73,7 +73,7 @@ def test_headless_backend_registry_checks_real_optional_import(monkeypatch):
     assert registry.marker_backend_available("aruco2") is False
     assert registry.available_marker_backends() == ("aruco1",)
     assert registry.marker_backend_availability_text("aruco2") == (
-        "aruco2: not installed - pip install aruco2"
+        "aruco2: not installed - see CITATION.md"
     )
 
 

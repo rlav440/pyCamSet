@@ -61,7 +61,7 @@ particular camera or lighting — if in doubt, try both on your own images.
 
 For accuracy, use at least 10 squares per face side (`n_points`): 5-square
 faces were 3–11x worse in rotation, translation and focal-length error in
-synthetic tests, for both Ccube and [Ccube2](ccube2.md).
+synthetic tests, for both Ccube and Ccube2.
 
 ## Calibrating with it
 

@@ -619,3 +619,48 @@ def test_an_image_with_no_detections_does_not_make_the_problem_degenerate(
 
     # and nothing else changed: the blank pose is the only one newly held
     assert np.flatnonzero(free_gapped != free_full).tolist() == [blank]
+
+
+def test_the_per_image_initial_error_is_kept_not_just_consumed():
+    """Phase 3 and phase 4 report this as the per-image initial reprojection,
+    and the diagnostics tab builds its threshold and its remove-these-images
+    control on it. Computed and dropped, all of them read an empty array and
+    drew nothing.
+
+    A real target, because estimating the poses this measures needs one.
+    """
+    from scipy.spatial.transform import Rotation
+
+    from pyCamSet.calibration_targets.core.target_registry import build_target
+    from pyCamSet.utils.general_utils import h_tform
+
+    target = build_target({"type": "Ccube", "n_points": 6, "length": 10.0})
+    cams = CameraSet(camera_dict={
+        name: make_camera(name=name, translation=pos)
+        for name, pos in (("c0", (0.0, 0.0, 120.0)),
+                          ("c1", (40.0, 0.0, 120.0)))})
+
+    n_ims = 4
+    points = np.asarray(target.point_data).reshape(6, -1, 3)
+    detection = TargetDetection(cam_names=cams.get_names())
+    for im in range(n_ims):
+        pose = make_4x4h_tform(
+            Rotation.from_euler("xyz", [0.15 * im, -0.2, 0.1]).as_rotvec(),
+            [0.0, 0.0, 0.0])
+        for face in (0, 1):
+            placed = h_tform(points[face], pose)
+            keys = np.stack([np.full(len(placed), face),
+                             np.arange(len(placed))], axis=-1)
+            for name in cams.get_names():
+                detection.add_detection(
+                    name, im,
+                    ImageDetection(keys=keys,
+                                   image_points=cams[name].project_points(placed)))
+
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    handler.get_initial_params()
+
+    per_im = np.asarray(getattr(handler, "initial_per_im_error", []), dtype=float)
+    assert per_im.size == n_ims, "one error per image, not an empty array"
+    assert np.all(np.isfinite(per_im)), "a finite error for every image"

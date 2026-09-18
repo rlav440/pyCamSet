@@ -58,6 +58,38 @@ net so the faces cannot be assembled in the wrong order.
 ```python exec="true" session="targets"
 import matplotlib.pyplot as plt
 
+from pyCamSet import ChArUco2
+
+plt.figure(figsize=(7, 7))
+ChArUco2(num_squares_x=10, num_squares_y=10, square_size=4).plot()
+```
+
+**[`ChArUco2`](charuco2.md)** — aruco2's grid board: a marker on every square,
+standard on the black ones and inverted on the white, so a smaller patch of
+board still identifies itself.
+</div>
+
+<div markdown>
+```python exec="true" session="targets"
+from pyCamSet import Ccube2
+
+scene = Ccube2(n_points=10, length=40).plot(return_scene=True)
+scene.window_size = (700, 700)
+scene.show()
+```
+
+**[`Ccube2`](ccube2.md)** — the same cube and the same net as a Ccube, with
+each face a ChArUco2 board carrying its own range of marker ids.
+</div>
+
+</div>
+
+<div class="scene-row" markdown>
+
+<div markdown>
+```python exec="true" session="targets"
+import matplotlib.pyplot as plt
+
 from pyCamSet import PuzzleBoard
 
 plt.figure(figsize=(7, 7))

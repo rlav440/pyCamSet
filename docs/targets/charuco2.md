@@ -33,12 +33,15 @@ The design is described in
 
 ## Making one
 
-```python
+```python exec="true" source="above" session="charuco2"
 from pyCamSet import ChArUco2
 
 target = ChArUco2(num_squares_x=10, num_squares_y=10, square_size=4)
 target.plot()
 ```
+
+Every square carries a marker, so a patch of board a good deal smaller than
+`ChArUco`'s needs is still enough to say which corners were seen.
 
 The arguments that decide where the corners are:
 

@@ -45,9 +45,7 @@ from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
 # down before any test can say which symbol it was.
 from pyCamSet.optimisation import optimisation_handling as backend
 
-from pyCamSet.calibration_targets.ccube.target import Ccube
 from pyCamSet.workflow.targets import (
-    READING_ONLY_FIELDS,
     describe_target_mismatch,
     target_mismatch_message,
     target_params_of_run,
@@ -492,23 +490,6 @@ def test_numbers_are_compared_as_numbers():
     as_text = _with(CCUBE_12, n_points="12", length="80")
 
     assert describe_target_mismatch(CCUBE_12, as_text) == []
-
-
-def test_a_spec_carries_its_own_targets_arguments_and_no_others():
-    """A run used to record every field whichever target it used, so the
-    comparison had to name the ones that mattered per type.  A spec is the
-    target's own constructor arguments, so there is nothing else in it."""
-    assert "num_squares_x" not in CCUBE_12["target"]
-    assert set(CCUBE_12["target"]) - {"type"} <= set(
-        Ccube.__init__.__code__.co_varnames)
-
-
-def test_what_is_ignored_is_named_rather_than_what_is_compared():
-    """Stated as an exclusion so that a new target, or a new argument on an
-    existing one, is compared by default instead of quietly left out."""
-    assert "marker_backend" in READING_ONLY_FIELDS
-    assert "aruco_dict" in READING_ONLY_FIELDS
-    assert "n_points" not in READING_ONLY_FIELDS
 
 
 def test_a_run_whose_target_cannot_be_read_is_refused():

@@ -605,6 +605,11 @@ class TemplateBundleHandler:
         cam_poses, target_poses, per_im_error = estimate_camera_relative_poses(
             detection=self.detection, cams=self.camset, calibration_target=self.target
         )
+        # Kept, not just consumed: phase 3 and phase 4 both report this as the
+        # per-image initial reprojection, and the diagnostics tab builds its
+        # threshold and its remove-these-images control on top of it. Computed
+        # and dropped, every one of those read an empty array and drew nothing.
+        self.initial_per_im_error = np.asarray(per_im_error, dtype=float)
 
         # A pose with no recoverable transform is missing whatever the
         # caller said; a pose the caller marked stays marked whatever the

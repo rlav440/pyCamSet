@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 import pickle
 
 import numpy as np
@@ -57,6 +57,7 @@ from pyCamSet.gui.shared_functions import (
     TerminalWidget,
     build_parameter_widget,
     TargetSettingsForm,
+    connect_value_changed,
     gate_continue_button,
     make_blue_button,
     make_continue_button,
@@ -66,6 +67,7 @@ from pyCamSet.gui.shared_functions import (
     make_separator,
     read_parameter_widget,
     render_predecessor_chain_section,
+    set_parameter_widget,
     show_tab,
 )
 from pyCamSet.workflow import phase1 as phase1_workflow
@@ -364,6 +366,18 @@ class Phase1Tab(QWidget):
             "Detection Options", expanded=False)
         form_root.addWidget(self._detection_opts_section)
         self._detection_option_widgets: dict[str, QWidget] = {}
+        #: Raw widget values captured just before a rebuild tears the
+        #: options section down -- but only for a key in
+        #: :attr:`_detection_option_edited`. Mirrors
+        #: :class:`TargetSettingsForm`'s own ``_retained``/``_edited``
+        #: mechanism (see its docstring): without it, tuning a detection
+        #: option and then switching the detector combo to compare and back
+        #: silently dropped the typed value back to the library default.
+        self._detection_option_retained: dict[str, Any] = {}
+        #: Keys a person has actually typed into, as opposed to a value
+        #: only ever shown because it was built as a default. Populated by
+        #: :meth:`_on_detection_option_changed`.
+        self._detection_option_edited: set[str] = set()
 
         # ── Camera selection (populated from Phase 0) ──────────────────
         form_root.addWidget(make_separator())
@@ -491,6 +505,19 @@ class Phase1Tab(QWidget):
         detector's parameters and appear for the two targets that used it,
         which left every other target's settings unreachable.
         """
+        # Remember what was typed before the rows that hold it are torn
+        # down -- but only for a key that was actually edited. Merged
+        # rather than replaced, so a key from a detector flipped away from
+        # two rebuilds ago is still here.
+        for key in self._detection_option_edited:
+            widget = self._detection_option_widgets.get(key)
+            if widget is None:
+                continue
+            try:
+                self._detection_option_retained[key] = read_parameter_widget(widget)
+            except Exception:
+                pass
+
         detector = self._current_detector_parameterisation()
         parameters = detector.settable()
         self._detection_option_widgets = {}
@@ -509,8 +536,27 @@ class Phase1Tab(QWidget):
                 heading.setStyleSheet("color: #1976d2; font-weight: bold;")
                 self._detection_opts_section.addRow(heading)
             widget = build_parameter_widget(meta)
+            if (meta.key in self._detection_option_edited
+                    and meta.key in self._detection_option_retained):
+                # A retained value can be wrong for this detector -- out of
+                # a spin box's range -- and restoring it must never be the
+                # reason a value is lost outright. Fall back to the freshly
+                # built default for this key alone.
+                try:
+                    set_parameter_widget(
+                        widget, self._detection_option_retained[meta.key])
+                except Exception:
+                    pass
+            # Connected after any restore above, so putting a retained
+            # value back does not itself count as a further edit.
+            connect_value_changed(
+                widget, lambda key=meta.key: self._on_detection_option_changed(key))
             self._detection_opts_section.addRow(f"{meta.label}:", widget)
             self._detection_option_widgets[meta.key] = widget
+
+    def _on_detection_option_changed(self, key: str) -> None:
+        """A detection-option row's typed value moved: a person's edit."""
+        self._detection_option_edited.add(key)
 
     def _on_target_changed(self) -> None:
         """The target or its detector changed, so its settings did too."""

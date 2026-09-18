@@ -17,6 +17,7 @@ Conventions
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QThread, Signal, Qt
@@ -42,7 +43,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pyCamSet.calibration_targets.core.parameters import (
+    Choice,
+    Parameter,
+    Parameterisation,
+)
 from pyCamSet.calibration_targets.markers.backend_registry import (
+    ARUCO1_BACKEND,
+    ARUCO2_BACKEND,
     MARKER_BACKEND_LABELS,
     marker_backend_availability_text,
     marker_backend_available,
@@ -505,20 +513,91 @@ def connect_value_changed(widget, slot: Callable[[], None]) -> None:
         widget.textChanged.connect(handler)
 
 
+#: How a :class:`TargetSettingsForm` treats the detector a target is read
+#: with.  Which detector reads a board is a question for the detection, not
+#: for the board: making a target asks nothing about it (``none``), the tabs
+#: that run a detection choose one (``choose``), and the phases that reuse a
+#: Phase 1 run's detections read them with that run's detector (``inherit``).
+DETECTOR_NONE = "none"
+DETECTOR_CHOOSE = "choose"
+DETECTOR_INHERIT = "inherit"
+DETECTOR_MODES = (DETECTOR_NONE, DETECTOR_CHOOSE, DETECTOR_INHERIT)
+
+#: The ArUco detectors, by the short name a sentence uses for each.
+_ARUCO_BACKEND_NAMES = {ARUCO1_BACKEND: "ArUco 1", ARUCO2_BACKEND: "ArUco 2"}
+
+
+def aruco_backends_of(target_type: str) -> tuple[str, ...]:
+    """
+    The ArUco detectors a target can be read with, in the order it lists them.
+
+    The first is the one it is read with when nobody says otherwise.
+
+    :param target_type: the target, as :data:`TARGET_NAMES` keys it
+    :raises ValueError: for an unknown target
+    """
+    from pyCamSet.calibration_targets.core.target_registry import target_class
+
+    return tuple(backend for backend in target_class(target_type).DETECTOR_BACKENDS
+                 if backend in _ARUCO_BACKEND_NAMES)
+
+
+class _WithLoadedChoices(Parameterisation):
+    """
+    A target's construction parameters, also accepting values a loaded
+    spec named that their choices do not offer.
+
+    Those values build -- a target's constructor takes any dictionary its
+    detector knows -- so a form holding one must read it back rather than
+    refuse the run it came from.
+    """
+
+    def __init__(self, base: Parameterisation, loaded: dict[str, str]) -> None:
+        self._base = base
+        self.name = base.name
+        self._parameters = tuple(
+            replace(parameter,
+                    choices=parameter.choices + (Choice(loaded[parameter.key],
+                                                        loaded[parameter.key]),))
+            if parameter.key in loaded and parameter.choices else parameter
+            for parameter in base.parameters)
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        return self._parameters
+
+    def validate(self, values: dict[str, Any]) -> list[str]:
+        return self._base.validate(values)
+
+
 class TargetSettingsForm(QWidget):
     """
     The controls a calibration target is described with.
 
-    A target combo, a detector combo for the targets that have a choice of
-    one, and a control for each argument the selected target declares --
-    rebuilt when either changes.  Which is the point: the target's own
-    arguments were a map of widget names, one copy per phase, so a target
-    none of them named had no form at all.
+    A target combo, a control for each argument the selected target
+    declares, and -- depending on ``detector_mode`` -- a detector row.
+    Which is the point: the target's own arguments were a map of widget
+    names, one copy per phase, so a target none of them named had no form
+    at all.  Rebuilt when the target changes; a detector change only moves
+    the detector row, since what a board is does not depend on what reads
+    it.
+
+    The detector is chosen where detection happens.  ``none`` (Create
+    Target) has no detector row, since a board prints the same whichever
+    detector reads it.  ``choose`` (Phase 1, Optimisation) offers ArUco 1 and
+    ArUco 2 for every target read with ArUco markers, greying out the one a
+    target cannot use.  ``inherit`` (Phases 2 and 3) offers nothing: it shows
+    the detector of the Phase 1 run :meth:`apply_spec` adopted, since those
+    phases read that run's detections.
 
     ``marker_backend`` is written here and in
     :func:`~pyCamSet.workflow.targets.detector_parameterisation_of`, and
     nowhere else outside the two targets that take one: it is what those
     constructors call the detector they are read with.
+
+    :param parent: the owning widget
+    :param targets: the target names to offer; defaults to every one
+    :param detector_mode: one of :data:`DETECTOR_MODES`
     """
 
     changed = Signal()
@@ -532,9 +611,19 @@ class TargetSettingsForm(QWidget):
     values_changed = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None,
-                 targets: Optional[list[str]] = None) -> None:
+                 targets: Optional[list[str]] = None,
+                 detector_mode: str = DETECTOR_CHOOSE) -> None:
         super().__init__(parent)
-        from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES
+        from pyCamSet.calibration_targets.core.target_registry import (
+            TARGET_NAMES,
+            target_label,
+        )
+
+        if detector_mode not in DETECTOR_MODES:
+            raise ValueError(
+                f"detector_mode must be one of {', '.join(DETECTOR_MODES)}; "
+                f"got {detector_mode!r}.")
+        self._detector_mode = detector_mode
 
         self._widgets: dict[str, QWidget] = {}
         #: Raw widget values captured at the top of :meth:`_rebuild`, keyed
@@ -559,29 +648,74 @@ class TargetSettingsForm(QWidget):
         #: True for the duration of :meth:`apply_spec`, so the writes it
         #: makes into widgets are never mistaken for a person's edit, and
         #: so :meth:`_rebuild` -- which it can trigger synchronously via
-        #: ``setCurrentText``/``setCurrentIndex`` -- captures nothing into
-        #: :attr:`_retained` from whatever was on the form a moment ago.
+        #: ``setCurrentIndex`` -- captures nothing into :attr:`_retained`
+        #: from whatever was on the form a moment ago.
         self._applying_spec = False
+        #: The detector last chosen for a target that has a choice of two
+        #: (``choose`` mode).  Kept apart from what the combo shows, because
+        #: a ChArUco2 target forces ArUco 2 onto the combo, and flipping back
+        #: to a ChArUco must not silently keep a choice nobody made.
+        self._chosen_backend = ARUCO1_BACKEND
+        #: The detector of the run :meth:`apply_spec` adopted (``inherit``
+        #: mode), or None before one is -- read as the target's default.
+        self._inherited_backend: Optional[str] = None
+        #: The target of the run :meth:`apply_spec` adopted (``inherit``
+        #: mode).  A ChArUco2 spec names no detector, so whether a run was
+        #: adopted cannot be read off :attr:`_inherited_backend` alone.
+        self._inherited_target: Optional[str] = None
+        #: The adopted run's own detector tuning (``inherit`` mode), read
+        #: back from its spec's ``detection_options`` -- there is no widget
+        #: for it, so without this a Phase 2/3 fallback redetection would
+        #: silently use each detector's built-in defaults instead of the
+        #: settings that made the adopted Phase 1 run's detection succeed.
+        self._inherited_detection_options: Optional[dict] = None
+        #: True while :meth:`_sync_detector_row` moves the combo itself, so
+        #: that move is not taken for a person's choice.
+        self._syncing_backend = False
+        #: Values :meth:`apply_spec` loaded that the row's choices do not
+        #: offer, keyed by parameter -- a saved spec naming a dictionary
+        #: since dropped from the list.  Accepted by :meth:`spec` until the
+        #: rows are rebuilt, so an adopted run reads back as it was saved
+        #: rather than being refused.
+        self._loaded_choices: dict[str, str] = {}
+
         form = QFormLayout(self)
         form.setContentsMargins(0, 0, 0, 0)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
+        # Shown by label, known by name: the registry names are what every
+        # saved spec carries, and the labels say which marker generation a
+        # board uses.
         self._target_combo = QComboBox()
-        self._target_combo.addItems(list(targets or TARGET_NAMES))
+        for name in (targets or TARGET_NAMES):
+            self._target_combo.addItem(target_label(name), name)
         self._target_combo.setToolTip(
             "The calibration target these settings describe.")
         form.addRow("Target type:", self._target_combo)
 
-        self._backend_label = QLabel("Detector:")
-        self._backend_combo = QComboBox()
-        for label, value in MARKER_BACKEND_LABELS.items():
-            self._backend_combo.addItem(label, value)
-        self._backend_combo.setToolTip(
-            "Which library reads this target's markers.")
-        form.addRow(self._backend_label, self._backend_combo)
-        self._backend_status = QLabel()
-        self._backend_status.setStyleSheet("font-size: 10px;")
-        form.addRow("", self._backend_status)
+        self._backend_label: Optional[QLabel] = None
+        self._backend_combo: Optional[QComboBox] = None
+        self._inherited_backend_label: Optional[QLabel] = None
+        self._backend_status: Optional[QLabel] = None
+        if detector_mode != DETECTOR_NONE:
+            self._backend_label = QLabel("Detector:")
+            if detector_mode == DETECTOR_CHOOSE:
+                self._backend_combo = QComboBox()
+                for label, value in MARKER_BACKEND_LABELS.items():
+                    self._backend_combo.addItem(label, value)
+                self._backend_combo.setToolTip(
+                    "Which library reads this target's markers.")
+                form.addRow(self._backend_label, self._backend_combo)
+            else:
+                self._inherited_backend_label = QLabel()
+                self._inherited_backend_label.setToolTip(
+                    "The detector the Phase 1 run whose detections this "
+                    "phase reads was run with.  Choose a detector in "
+                    "Phase 1.")
+                form.addRow(self._backend_label, self._inherited_backend_label)
+            self._backend_status = QLabel()
+            self._backend_status.setStyleSheet("font-size: 10px;")
+            form.addRow("", self._backend_status)
 
         self._rows = QWidget()
         self._rows_form = QFormLayout(self._rows)
@@ -589,19 +723,59 @@ class TargetSettingsForm(QWidget):
         self._rows_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form.addRow(self._rows)
 
-        self._target_combo.currentTextChanged.connect(self._rebuild)
-        self._backend_combo.currentIndexChanged.connect(self._rebuild)
+        self._target_combo.currentIndexChanged.connect(self._rebuild)
+        if self._backend_combo is not None:
+            self._backend_combo.currentIndexChanged.connect(self._on_backend_selected)
         self._rebuild()
 
     # -- what is selected ------------------------------------------------
 
+    def detector_mode(self) -> str:
+        """How this form treats the detector: one of :data:`DETECTOR_MODES`."""
+        return self._detector_mode
+
     def target_type(self) -> str:
-        """The selected target's name."""
-        return self._target_combo.currentText()
+        """The selected target's name, as the registry keys it."""
+        return str(self._target_combo.currentData())
+
+    def set_target_type(self, target_type: str) -> None:
+        """
+        Select a target by its name, whatever label it is shown by.
+
+        :param target_type: the target's name, as the registry keys it
+        :raises ValueError: for a target this form does not offer
+        """
+        index = self._target_combo.findData(target_type)
+        if index < 0:
+            raise ValueError(
+                f"This form does not offer a target named {target_type!r}.")
+        self._target_combo.setCurrentIndex(index)
 
     def backend(self) -> str:
-        """The selected detector, for a target that is offered a choice."""
-        return str(self._backend_combo.currentData() or "aruco1")
+        """
+        The detector the selected target will be read with.
+
+        The one chosen in ``choose`` mode, or, in ``inherit`` mode, the
+        adopted run's -- but only while the selected target is still the
+        one that run was made with; a target picked by hand afterwards
+        gets its own default, whatever the adopted run's detector was.  A
+        target read without ArUco markers never asks, and gets
+        ``"aruco1"``.
+        """
+        usable = aruco_backends_of(self.target_type())
+        if self._backend_combo is not None:
+            wanted = self._backend_combo.currentData()
+        elif (self._detector_mode == DETECTOR_INHERIT
+              and self._inherited_target == self.target_type()):
+            # Only the adopted run's own target reads with its detector; a
+            # different target picked by hand afterwards falls through to
+            # its own default below, however the two line up.
+            wanted = self._inherited_backend
+        else:
+            wanted = None
+        if wanted in usable:
+            return str(wanted)
+        return usable[0] if usable else ARUCO1_BACKEND
 
     def detector_parameterisation(self):
         """What the selected target's detection can be told."""
@@ -611,14 +785,19 @@ class TargetSettingsForm(QWidget):
         """What the selected target says it is described by."""
         from pyCamSet.calibration_targets.core.target_registry import target_class
 
-        return target_class(self.target_type()).construction_parameters(
-            self.backend() if self._backend_offered() else None)
+        return target_class(self.target_type()).construction_parameters()
 
-    def _backend_offered(self) -> bool:
-        """Whether this target has a choice of detector to be asked about."""
+    def _writes_marker_backend(self) -> bool:
+        """Whether the spec carries the detector: a detection-phase form,
+        and a target whose constructor takes one."""
+        import inspect
+
         from pyCamSet.calibration_targets.core.target_registry import target_class
 
-        return len(target_class(self.target_type()).DETECTOR_BACKENDS) > 1
+        if self._detector_mode == DETECTOR_NONE:
+            return False
+        constructor = target_class(self.target_type()).__init__
+        return "marker_backend" in inspect.signature(constructor).parameters
 
     # -- the form -------------------------------------------------------
 
@@ -636,17 +815,10 @@ class TargetSettingsForm(QWidget):
                 self._retained[key] = read_parameter_widget(widget)
             except Exception:
                 pass
+        # The rows these belonged to are about to go.
+        self._loaded_choices = {}
 
-        offered = self._backend_offered()
-        self._backend_label.setVisible(offered)
-        self._backend_combo.setVisible(offered)
-        self._backend_status.setVisible(offered)
-        if offered:
-            backend = self.backend()
-            self._backend_status.setText(marker_backend_availability_text(backend))
-            self._backend_status.setStyleSheet(
-                "font-size: 10px; color: "
-                + ("#2a7a2a;" if marker_backend_available(backend) else "#8a4a00;"))
+        self._sync_detector_row()
 
         self._widgets = {}
         while self._rows_form.rowCount():
@@ -655,7 +827,7 @@ class TargetSettingsForm(QWidget):
             widget = build_parameter_widget(parameter)
             if parameter.key in self._edited and parameter.key in self._retained:
                 # A retained value can be wrong for this target -- out of a
-                # spin box's range, a dictionary this backend does not
+                # spin box's range, a dictionary this target does not
                 # offer -- and restoring it must never be the reason a
                 # value is lost outright. Fall back to the freshly built
                 # default for this key alone.
@@ -669,6 +841,81 @@ class TargetSettingsForm(QWidget):
                 widget, lambda key=parameter.key: self._on_widget_value_changed(key))
             self._rows_form.addRow(f"{parameter.label}:", widget)
             self._widgets[parameter.key] = widget
+        self.changed.emit()
+
+    def _sync_detector_row(self) -> None:
+        """Show the detector the selected target will be read with.
+
+        In ``choose`` mode a detector the target cannot be read with stays
+        in the combo, greyed out and saying why, and the selection moves to
+        one it can -- back to the last one chosen, when that is usable
+        again.
+        """
+        from pyCamSet.calibration_targets.core.target_registry import target_label
+
+        if self._detector_mode == DETECTOR_NONE:
+            return
+        target_type = self.target_type()
+        usable = aruco_backends_of(target_type)
+        shown = bool(usable)
+        self._backend_label.setVisible(shown)
+        self._backend_status.setVisible(shown)
+
+        if self._backend_combo is not None:
+            self._backend_combo.setVisible(shown)
+            if shown:
+                why = (f"{target_label(target_type)} targets are read with "
+                       f"{' or '.join(_ARUCO_BACKEND_NAMES[b] for b in usable)} only.")
+                model = self._backend_combo.model()
+                wanted = (self._chosen_backend if self._chosen_backend in usable
+                          else usable[0])
+                self._syncing_backend = True
+                try:
+                    for index in range(self._backend_combo.count()):
+                        allowed = self._backend_combo.itemData(index) in usable
+                        # Greyed rather than removed: the other detector
+                        # exists, and this says why it is not on offer.
+                        model.item(index).setEnabled(allowed)
+                        self._backend_combo.setItemData(
+                            index, "" if allowed else why,
+                            Qt.ItemDataRole.ToolTipRole)
+                    self._backend_combo.setCurrentIndex(
+                        self._backend_combo.findData(wanted))
+                finally:
+                    self._syncing_backend = False
+        else:
+            self._inherited_backend_label.setVisible(shown)
+            if shown:
+                backend = self.backend()
+                label = next(label for label, value in MARKER_BACKEND_LABELS.items()
+                             if value == backend)
+                # The adopted run's own target is read with that run's
+                # detector; any other is shown with its default as such.
+                if (self._inherited_target != target_type
+                        and backend == usable[0]):
+                    label += " (this target's default)"
+                self._inherited_backend_label.setText(label)
+
+        if shown:
+            backend = self.backend()
+            self._backend_status.setText(marker_backend_availability_text(backend))
+            self._backend_status.setStyleSheet(
+                "font-size: 10px; color: "
+                + ("#2a7a2a;" if marker_backend_available(backend) else "#8a4a00;"))
+
+    def _on_backend_selected(self, index: int) -> None:
+        """The detector combo moved: a choice, unless the form moved it."""
+        if self._syncing_backend:
+            return
+        value = self._backend_combo.itemData(index)
+        if value in aruco_backends_of(self.target_type()):
+            self._chosen_backend = str(value)
+        # A detector this target cannot use is only reachable from code; the
+        # sync puts the selection back on one it can.  The rows are left
+        # alone: what a board is does not depend on what reads it, and
+        # rebuilding them would drop a spec apply_spec loaded back to the
+        # target's defaults.
+        self._sync_detector_row()
         self.changed.emit()
 
     def _on_widget_value_changed(self, key: str) -> None:
@@ -691,12 +938,22 @@ class TargetSettingsForm(QWidget):
         The target spec these controls describe.
 
         :param detection_options: the detector tuning, when the form
-            collecting this also collects that
+            collecting this also collects that. In ``inherit`` mode, where
+            there is no such widget, the adopted run's own tuning
+            (:meth:`apply_spec`) is used when this is left as ``None`` and
+            the selected target is still the run's own -- otherwise a
+            Phase 2/3 fallback redetection would silently drop the Phase 1
+            run's tuning and use the detector's built-in defaults instead.
+            A different target picked by hand gets no inherited tuning: the
+            run's options are for its own target and may not even apply to
+            this one.
         :raises pyCamSet.workflow.ParamError: for a value the target cannot take
         """
         from pyCamSet.calibration_targets.core.target_registry import TYPE_KEY
 
         parameters = self.construction_parameters()
+        if self._loaded_choices:
+            parameters = _WithLoadedChoices(parameters, self._loaded_choices)
         try:
             values = parameters.parse(
                 {key: read_parameter_widget(widget)
@@ -705,8 +962,14 @@ class TargetSettingsForm(QWidget):
             raise ParamError(str(exc)) from None
 
         spec: dict[str, Any] = {TYPE_KEY: self.target_type(), **values}
-        if self._backend_offered():
+        if self._writes_marker_backend():
             spec["marker_backend"] = self.backend()
+        if (detection_options is None and self._detector_mode == DETECTOR_INHERIT
+                and self._inherited_target == self.target_type()):
+            # As with backend() above: the adopted run's own tuning is only
+            # right for the target it was made with, not one swapped in by
+            # hand afterwards.
+            detection_options = self._inherited_detection_options
         if detection_options is not None:
             spec["detection_options"] = detection_options
         return spec
@@ -717,7 +980,8 @@ class TargetSettingsForm(QWidget):
 
         Phases 2 and 3 build their own target and pair it with detections
         made by an earlier run, so the default that is right almost always
-        is the one the detections were made with.
+        is the one the detections were made with -- and the detector is
+        not a default there but the run's, which they show and write back.
 
         A loaded spec wins outright: the form ends up as the spec, with
         every key it does not mention at the new target's own default --
@@ -728,6 +992,9 @@ class TargetSettingsForm(QWidget):
         from pyCamSet.calibration_targets.core.target_registry import TYPE_KEY
 
         if not spec or TYPE_KEY not in spec:
+            # A run recorded without a target spec has no detector to
+            # adopt, so the one a previous run left must not linger.
+            self.clear_inherited()
             return
         self._applying_spec = True
         try:
@@ -735,9 +1002,33 @@ class TargetSettingsForm(QWidget):
             # key the spec does not mention.
             self._retained = {}
             self._edited = set()
+            self._loaded_choices = {}
             target_type = str(spec[TYPE_KEY])
-            if self._target_combo.currentText() == target_type:
-                # setCurrentText is a no-op when the type is already
+
+            # The detector first, so the rebuild below shows it.
+            backend = spec.get("marker_backend")
+            backend = str(backend) if backend else None
+            try:
+                usable = aruco_backends_of(target_type)
+            except ValueError:
+                usable = ()
+            if self._detector_mode == DETECTOR_INHERIT:
+                self._inherited_backend = backend if backend in usable else None
+                self._inherited_target = target_type
+                self._inherited_detection_options = spec.get("detection_options")
+            elif (self._detector_mode == DETECTOR_CHOOSE
+                  and len(usable) > 1 and backend in usable):
+                # A remembered target's detector is a choice someone made.
+                self._chosen_backend = backend
+
+            index = self._target_combo.findData(target_type)
+            if index < 0:
+                # A target this form does not offer: the rows stay as they
+                # are, as they always did, but the detector row still says
+                # what the selected target will be read with.
+                self._sync_detector_row()
+            elif index == self._target_combo.currentIndex():
+                # setCurrentIndex is a no-op when the type is already
                 # selected -- Qt emits nothing and _rebuild never runs on
                 # its own -- so force it, or a value already sitting in a
                 # widget for a key the spec does not mention would survive
@@ -748,20 +1039,45 @@ class TargetSettingsForm(QWidget):
                 # This rebuilds the rows -- with _edited already emptied
                 # above, so it captures nothing from the outgoing target --
                 # so it comes before the values below.
-                self._target_combo.setCurrentText(target_type)
-            if backend := spec.get("marker_backend"):
-                if (index := self._backend_combo.findData(str(backend))) >= 0:
-                    self._backend_combo.setCurrentIndex(index)
+                self._target_combo.setCurrentIndex(index)
 
+            parameters = (self.construction_parameters() if index >= 0 else None)
             for key, widget in self._widgets.items():
                 if spec.get(key) is not None:
                     set_parameter_widget(widget, spec[key])
+                    # A choice the list no longer offers -- a dictionary
+                    # dropped from it -- is still what the run was made with.
+                    parameter = (parameters.parameter(key)
+                                 if parameters is not None and key in parameters
+                                 else None)
+                    if parameter is not None and parameter.choices and not any(
+                            spec[key] in (choice.label, choice.value)
+                            for choice in parameter.choices):
+                        self._loaded_choices[key] = str(spec[key])
         finally:
             self._applying_spec = False
             # These writes must not outlive the call as if someone had
             # typed them: the very next flip should not carry a spec's
             # value into a target the spec never named.
             self._edited = set()
+
+    def clear_inherited(self) -> None:
+        """
+        Forget the adopted run's detector (``inherit`` mode).
+
+        For when the run a phase adopted no longer applies -- another
+        workspace with no run of its own, or a run recorded without a target
+        spec -- so the selected target is read
+        with its own default again, and says so.  The target and its rows
+        are left as they are.
+        """
+        if self._detector_mode != DETECTOR_INHERIT:
+            return
+        self._inherited_backend = None
+        self._inherited_target = None
+        self._inherited_detection_options = None
+        self._sync_detector_row()
+        self.changed.emit()
 
 
 # ---------------------------------------------------------------------------

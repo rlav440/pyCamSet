@@ -78,6 +78,22 @@ def test_retuning_the_detector_does_not_make_a_new_target():
     assert remembered[0]["detection_options"] == {"adaptiveThreshWinSizeMin": 5}
 
 
+def test_reading_with_another_detector_does_not_make_a_new_target():
+    """The detector is chosen when detecting, not when the board is made:
+    the same printed board read with ArUco 2 is the same remembered target,
+    and remembering it again keeps the detector it was last read with."""
+    rt.remember_target(CCUBE)
+    rt.remember_target(CHARUCO)
+    rt.remember_target({**CCUBE, "marker_backend": "aruco2"})
+
+    remembered = rt.load_recent_targets()
+    assert [t["type"] for t in remembered] == ["Ccube", "ChArUco"]
+    assert remembered[0]["marker_backend"] == "aruco2"
+
+    rt.forget_target({**CCUBE, "marker_backend": "aruco1"})
+    assert [t["type"] for t in rt.load_recent_targets()] == ["ChArUco"]
+
+
 def test_the_list_stays_short():
     for size in range(uc.MAX_RECENT + 5):
         rt.remember_target({**CHARUCO, "num_squares_x": size})
@@ -155,11 +171,28 @@ def test_picking_a_remembered_target_fills_the_form_in(phase1_tab):
 
 
 @pytest.mark.gui
+def test_a_remembered_target_brings_back_the_detector_it_was_read_with(phase1_tab):
+    """Phase 1 is where the detector is chosen, so a remembered target
+    restores that choice along with the board."""
+    rt.remember_target({**CCUBE, "marker_backend": "aruco2"})
+    phase1_tab.refresh_recent_targets()
+
+    phase1_tab._recent_target_combo.setCurrentIndex(1)
+    phase1_tab._on_recent_target_selected(1)
+
+    form = phase1_tab._target_form
+    assert form.target_type() == "Ccube"
+    assert form._backend_combo.currentData() == "aruco2"
+    assert form.spec()["marker_backend"] == "aruco2"
+
+
+@pytest.mark.gui
 def test_the_combo_names_each_target_by_what_it_is(phase1_tab):
     rt.remember_target(CCUBE)
     phase1_tab.refresh_recent_targets()
 
-    assert "Ccube" in phase1_tab._recent_target_combo.itemText(1)
+    # By the label the Target type combo below it shows, not the registry name.
+    assert phase1_tab._recent_target_combo.itemText(1).startswith("ChArUco1 ccube(")
     assert "n_points=10" in phase1_tab._recent_target_combo.itemText(1)
 
 

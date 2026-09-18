@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 
 from pyCamSet.gui.bounded_slider import BoundedSliderRow
 from pyCamSet.gui.shared_functions import (
+    DETECTOR_CHOOSE,
     TAB_OPTIMISATION,
     TargetSettingsForm,
     WorkspaceManager,
@@ -260,7 +261,8 @@ class OptimisationTab(QWidget):
     def _build_target_section(self) -> QWidget:
         gb = QGroupBox()
         layout = QVBoxLayout(gb)
-        self._target_form = TargetSettingsForm()
+        # A study runs detections of its own, so it chooses its detector.
+        self._target_form = TargetSettingsForm(detector_mode=DETECTOR_CHOOSE)
         self._target_form.changed.connect(self._on_detector_choice_changed)
         layout.addWidget(self._target_form)
         return gb

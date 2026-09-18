@@ -83,6 +83,16 @@ params = {
 run = phase1.run(params, workspace, log=print)
 ```
 
+`marker_backend` is the detector the markers are read with, `'aruco1'` or
+`'aruco2'`, and only ChArUco and Ccube specs carry it; ChArUco2 and Ccube2 are always
+read with aruco2. It belongs to the detection rather than the target: the GUI chooses
+it in Phase 1 and the Optimisation tab, and Phases 2 and 3 take it from the
+Phase 1 run they continue. Phase 1 caches detections per detector â€” an aruco2
+run caches to `detected_datapoints_aruco2.pickle` beside the images, and an
+aruco1 run keeps `detected_datapoints.pickle` â€” so a run never reuses the other
+detector's detections. Remembered recent targets ignore it: the same board read
+with the other detector is the same target.
+
 `log` is called with each line of output; it defaults to
 `pyCamSet.workflow.discard`, so passing `print` is how a script sees progress,
 and passing a list's `append` is how the GUI captures it.

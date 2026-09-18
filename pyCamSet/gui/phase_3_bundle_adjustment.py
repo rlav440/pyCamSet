@@ -52,6 +52,7 @@ from pyCamSet.workflow.params import (
 )
 from pyCamSet.gui.shared_functions import (
     CollapsibleSection,
+    DETECTOR_INHERIT,
     IMAGE_FOLDER_SCHEMATIC,
     MatplotlibFigureCard,
     PhaseWorker,
@@ -192,7 +193,9 @@ class Phase3Tab(QWidget):
         target_sect = CollapsibleSection("Calibration Target", expanded=False)
         form_root.addWidget(target_sect)
 
-        self._target_form = TargetSettingsForm()
+        # The detector is the linked Phase 1 run's: its detections are
+        # what this phase reads.
+        self._target_form = TargetSettingsForm(detector_mode=DETECTOR_INHERIT)
         target_sect.addRow(self._target_form)
 
         # ── Bundle Adjustment Options ──────────────────────────────────
@@ -729,10 +732,12 @@ class Phase3Tab(QWidget):
         runs = self._workspace_mgr.load_runs("phase2")
         if not runs:
             self._src_lbl.setText("Inputs: auto (no Phase 2 run found)")
+            self._adopt_target_from_phase1_run(None)
             return
         run = self._load_phase2_run()
         if run is None:
             self._src_lbl.setText("Inputs: auto (no Phase 2 run found)")
+            self._adopt_target_from_phase1_run(None)
             return
         rid = run.get("run_id", "unknown")
         phase1_id = (run.get("inputs") or {}).get("phase1_run_id", "?")
@@ -751,7 +756,14 @@ class Phase3Tab(QWidget):
         target edited after choosing a run survives the next refresh.
         """
         run_id = (run or {}).get("run_id")
-        if run_id is None or run_id == self._adopted_target_run_id:
+        if run_id is None:
+            # No run applies any more (another workspace, say): its detector
+            # must not linger as if it still did.
+            if self._adopted_target_run_id is not None:
+                self._adopted_target_run_id = None
+                self._target_form.clear_inherited()
+            return
+        if run_id == self._adopted_target_run_id:
             return
         self._adopted_target_run_id = run_id
         self._target_form.apply_spec(

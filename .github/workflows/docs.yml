@@ -52,10 +52,23 @@ jobs:
       # and VTK still needs a GL context to render into.
       - uses: pyvista/setup-headless-display-action@v3
 
-      # cairo rasterises the printable exports; OpenCV's development package is
-      # what aruco2 is compiled against.
       - name: Install the native graphics libraries
-        run: sudo apt-get update && sudo apt-get install -y libcairo2 libopencv-dev
+        run: sudo apt-get update && sudo apt-get install -y libcairo2
+
+      # aruco2's sources use the universal intrinsics OpenCV added in 4.9
+      # (cv::VTraits, cv::v_eq); Ubuntu's libopencv-dev is 4.6, which cannot
+      # compile them.  conda-forge's headless build is where a new enough
+      # OpenCV comes from -- headless because nothing here opens a window.
+      # The env is created on every run, cached wheel or not: the wheel links
+      # its libraries at run time.
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: opencv
+          init-shell: none
+          condarc: |
+            channels: [conda-forge]
+          create-args: >-
+            libopencv=4.13.*=headless*
 
       # The examples on these pages run a real calibration as the site is built,
       # so unlike the sphinx-autoapi build this replaced -- which never imported
@@ -73,7 +86,7 @@ jobs:
         id: aruco2
         run: |
           echo "sha=$(git -C third_party/aruco2 rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "opencv=$(dpkg-query -W -f='${Version}' libopencv-dev)" >> "$GITHUB_OUTPUT"
+          echo "opencv=$(basename "$(ls "$HOME"/micromamba/envs/opencv/lib/libopencv_core.so.*.* | head -1)")" >> "$GITHUB_OUTPUT"
 
       - uses: actions/cache@v4
         id: aruco2-wheel
@@ -82,9 +95,16 @@ jobs:
           key: >-
             aruco2-${{ runner.os }}-py3.11-${{ steps.aruco2.outputs.opencv }}-${{ steps.aruco2.outputs.sha }}
 
+      # The wheel finds those libraries by the path they were built against,
+      # which is where the env is put on every run.
       - name: Build aruco2
         if: steps.aruco2-wheel.outputs.cache-hit != 'true'
-        run: pip wheel -v ./third_party/aruco2 -w ~/aruco2-wheel --no-deps
+        run: |
+          opencv="$HOME/micromamba/envs/opencv"
+          pip wheel -v ./third_party/aruco2 -w ~/aruco2-wheel --no-deps \
+            --config-settings=cmake.define.OpenCV_DIR="$opencv/lib/cmake/opencv4" \
+            --config-settings=cmake.define.CMAKE_INSTALL_RPATH="$opencv/lib" \
+            --config-settings=cmake.define.CMAKE_BUILD_WITH_INSTALL_RPATH=ON
 
       - run: pip install --no-index --find-links ~/aruco2-wheel aruco2
 
@@ -115,7 +135,22 @@ jobs:
       - uses: pyvista/setup-headless-display-action@v3
 
       - name: Install the native graphics libraries
-        run: sudo apt-get update && sudo apt-get install -y libcairo2 libopencv-dev
+        run: sudo apt-get update && sudo apt-get install -y libcairo2
+
+      # aruco2's sources use the universal intrinsics OpenCV added in 4.9
+      # (cv::VTraits, cv::v_eq); Ubuntu's libopencv-dev is 4.6, which cannot
+      # compile them.  conda-forge's headless build is where a new enough
+      # OpenCV comes from -- headless because nothing here opens a window.
+      # The env is created on every run, cached wheel or not: the wheel links
+      # its libraries at run time.
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: opencv
+          init-shell: none
+          condarc: |
+            channels: [conda-forge]
+          create-args: >-
+            libopencv=4.13.*=headless*
 
       # master is still the sphinx tree, and its toolchain is listed in the file
       # it has always been listed in -- except for sphinx-copybutton, which its
@@ -140,7 +175,7 @@ jobs:
         id: aruco2
         run: |
           echo "sha=$(git -C development/third_party/aruco2 rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "opencv=$(dpkg-query -W -f='${Version}' libopencv-dev)" >> "$GITHUB_OUTPUT"
+          echo "opencv=$(basename "$(ls "$HOME"/micromamba/envs/opencv/lib/libopencv_core.so.*.* | head -1)")" >> "$GITHUB_OUTPUT"
 
       - uses: actions/cache@v4
         id: aruco2-wheel
@@ -151,7 +186,12 @@ jobs:
 
       - name: Build development's aruco2 backend
         if: steps.aruco2-wheel.outputs.cache-hit != 'true'
-        run: pip wheel -v ./development/third_party/aruco2 -w ~/aruco2-wheel --no-deps
+        run: |
+          opencv="$HOME/micromamba/envs/opencv"
+          pip wheel -v ./development/third_party/aruco2 -w ~/aruco2-wheel --no-deps \
+            --config-settings=cmake.define.OpenCV_DIR="$opencv/lib/cmake/opencv4" \
+            --config-settings=cmake.define.CMAKE_INSTALL_RPATH="$opencv/lib" \
+            --config-settings=cmake.define.CMAKE_BUILD_WITH_INSTALL_RPATH=ON
 
       - run: pip install --no-index --find-links ~/aruco2-wheel aruco2
 

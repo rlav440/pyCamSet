@@ -18,6 +18,7 @@ import sys
 
 import pytest
 
+from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
 from pyCamSet.workflow import phase1, phase2, phase3
 from pyCamSet.workflow.detections import DetectionFilter
 from pyCamSet.workflow.params import (
@@ -612,8 +613,14 @@ def test_a_high_distortion_camset_wins_over_the_plain_one(tmp_path):
     [{"type": "Ccube", "n_points": 5, "length": 20.0},
      {"type": "ChArUco", "num_squares_x": 5, "num_squares_y": 7,
       "square_size": 10.0},
+     pytest.param(
+         {"type": "ChArUco2", "num_squares_x": 5, "num_squares_y": 7,
+          "square_size": 10.0},
+         marks=pytest.mark.skipif(
+             not ARUCO2_AVAILABLE, reason="aruco2 is not installed"),
+     ),
      {"type": "PuzzleBoardCube", "n_points": 8, "length": 100.0}],
-    ids=["Ccube", "ChArUco", "PuzzleBoardCube"],
+    ids=["Ccube", "ChArUco", "ChArUco2", "PuzzleBoardCube"],
 )
 def test_every_target_rebuilds_from_what_it_recorded(spec):
     """The property the registry rests on, and that a new target must keep.

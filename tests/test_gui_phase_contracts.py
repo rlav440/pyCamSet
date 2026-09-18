@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from pyCamSet.workflow.targets import describe_target_mismatch
+from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES
 
 # The Ccube target behind the reported failure, as a run records it.  The
 # backend-seam tests carry their own copy: what a form must round-trip and
@@ -833,14 +834,30 @@ def test_the_form_offers_every_target_the_registry_knows():
         offered = [form._target_combo.itemText(i)
                    for i in range(form._target_combo.count())]
         assert offered == list(TARGET_NAMES)
+    finally:
+        form.deleteLater()
 
-        for name in offered:
-            form._target_combo.setCurrentText(name)
-            spec = form.spec()
-            assert spec["type"] == name
-            # What it collects is enough to build the target it describes.
-            from pyCamSet.calibration_targets.core.target_registry import build_target
-            assert build_target(spec) is not None
+
+@pytest.mark.gui
+@pytest.mark.parametrize("name", TARGET_NAMES, ids=list(TARGET_NAMES))
+def test_the_form_can_build_every_target_it_offers(name):
+    """Each target the form offers, it also collects enough to build --
+    except ChArUco2, which has no aruco1 equivalent and cannot be built
+    at all without aruco2 installed."""
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
+    from pyCamSet.calibration_targets.core.target_registry import build_target
+
+    if name == "ChArUco2" and not ARUCO2_AVAILABLE:
+        pytest.skip("aruco2 is not installed")
+
+    QApplication.instance() or QApplication([])
+    form = _target_form(name)
+    try:
+        spec = form.spec()
+        assert spec["type"] == name
+        assert build_target(spec) is not None
     finally:
         form.deleteLater()
 

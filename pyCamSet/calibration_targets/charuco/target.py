@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 import cv2
@@ -30,6 +31,7 @@ from pyCamSet.calibration_targets.markers.aruco2 import (
     resolve_dictionary,
 )
 from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
+from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
 from pyCamSet.calibration_targets.core.target_detections import ImageDetection
 from pyCamSet.cameras import Camera
 from pyCamSet.utils.general_utils import downsample_valid
@@ -134,11 +136,18 @@ class ChArUco(AbstractTarget):
         :param a_dict: ArUco dictionary -- the marker alphabet printed on
             the board. It must have at least one marker per white square.
         :param legacy: Legacy pattern -- which of OpenCV's two marker
-            layouts the board was printed to. Detection: the wrong one
-            finds every marker and no corners. Suggested: off, unless the
-            board predates OpenCV 4.6.
-        :param marker_backend: the marker backend to use, "aruco1" (OpenCV)
-            or "aruco2" (aruco2 package). Defaults to "aruco1".
+            layouts the board was printed to; must match how the physical
+            board was printed, since detection never switches patterns
+            automatically. Detection: the wrong one finds every marker and
+            no corners (and, for a board with an even number of rows, logs
+            a warning naming the likely correct setting). Suggested: off
+            (OpenCV's current pattern, and the default), unless the board
+            predates OpenCV 4.6.
+        :param marker_backend: the detector the board is read with,
+            "aruco1" (OpenCV) or "aruco2" (the aruco2 package). Chosen in the
+            detection phase rather than when the board is made: both print
+            the offered dictionaries identically, so it says how the board
+            is read, not what it is. Defaults to "aruco1".
         :param detection_options: what the detector is told, by the keys
             :meth:`detector_parameterisation` describes.
         """
@@ -189,18 +198,59 @@ class ChArUco(AbstractTarget):
             None if marker_backend == "aruco2" else
             ARUCO_OPENCV_DETECTOR.build_detector(self.board, self.detection_options))
         self.given_legacy_warning = False
+        #: The message ``_warn_legacy_once`` fired, once it has (else None).
+        #: ``logger.warning`` alone is enough for the single-process
+        #: (``threads=1``) path and for direct calls, but a worker process
+        #: under ``find_in_imfolder``'s ``multiprocessing.Pool`` path logs
+        #: into a logger nothing reads: worker process log records do not
+        #: reach the main process (round-2 review, P1). Stashing the message
+        #: here lets ``_process_image`` read it back off the worker's own
+        #: (per-process, freshly constructed) target instance and hand it to
+        #: the main process with that image's result, where it is logged
+        #: once for the whole folder -- see ``abstract_target.py``.
+        self.legacy_warning_message: str | None = None
+        #: Guards ``given_legacy_warning``'s check-then-set in
+        #: ``_warn_legacy_once`` against genuine concurrent callers sharing
+        #: this instance (round-3 review, P2) -- without it, two threads can
+        #: both observe ``given_legacy_warning`` as False before either sets
+        #: it and each fire their own warning. Same per-instance-lock
+        #: pattern as the module-level ``_CHARUCO_DETECTOR_CACHE_LOCK`` in
+        #: markers/aruco2.py.
+        self._legacy_warning_lock = threading.Lock()
 
         self._process_data()
 
     def _warn_legacy_once(self) -> None:
-        """Warn once per target when aruco2 interpolation still disagrees."""
-        if not self.given_legacy_warning:
-            logger.warning(
-                "ChArUco (aruco2): cross-marker disagreement remains above 5px "
-                "after the legacy-pattern toggle. Verify your physical board "
-                f"matches legacy={self.board.getLegacyPattern()}."
+        """Warn once per target when a frame gives strong evidence that the
+        physical board uses the OTHER legacy pattern than the one this
+        target is configured with. Shared wording for both detectors
+        (ArUco1 and ArUco2): detection never switches patterns itself, so
+        this is a warning only -- corners are never taken from the other
+        pattern (see markers.legacy_probe.should_warn_legacy_mismatch).
+
+        Also stashes the message on ``self.legacy_warning_message``, so a
+        caller in a worker process (whose own ``logger.warning`` call above
+        never reaches the main process) can still forward it -- see
+        ``abstract_target.py``'s ``_process_image``.
+
+        The ``given_legacy_warning`` check-then-set is done under
+        ``self._legacy_warning_lock`` so concurrent callers on the same
+        instance cannot both pass the check before either sets the flag
+        (round-3 review, P2): only the first caller to acquire the lock
+        actually builds and logs a message."""
+        with self._legacy_warning_lock:
+            if self.given_legacy_warning:
+                return
+            configured = self.board.getLegacyPattern()
+            likely = not configured
+            msg = (
+                f"ChArUco: images look like a legacy={likely} board but "
+                f"this target is legacy={configured}; check the target's "
+                f"legacy setting."
             )
+            logger.warning(msg)
             self.given_legacy_warning = True
+            self.legacy_warning_message = msg
 
     def _board_size_mm(self) -> tuple[float, float]:
         n_x, n_y = self.board.getChessboardSize()
@@ -424,38 +474,46 @@ class ChArUco(AbstractTarget):
         """
         if self.marker_backend == "aruco2":
             # aruco2 branch (D4): detect markers with aruco2 and interpolate
-            # ChArUco corners; the legacy-pattern toggle runs inside the module.
+            # ChArUco corners under ONLY the board's configured legacy
+            # pattern (approved policy) -- the module warns, but never
+            # retries or mutates self.board's legacy flag.
             # D4 step 10 returns (corner_ids 1D, pts (N,2)); unpack ids first.
             c_ids, c_corners = detect_charuco_corners(
                 image,
                 self.board,
                 self._aruco_dict_int,
-                warn_legacy=self._warn_legacy_once,
+                # Once this target has already warned, withhold the
+                # callback entirely: interpolate_board_corners only pays
+                # for the opposite-pattern probe when warn_legacy is not
+                # None (P2, round-1 review), so this also stops the probe
+                # itself from being paid on every later qualifying frame.
+                warn_legacy=None if self.given_legacy_warning else self._warn_legacy_once,
             )
             if c_ids is None:
                 return ImageDetection()  # return an empty detection
             # normalise to the aruco1 shapes used below: (N,1,2) and (N,1)
             c_corners = np.asarray(c_corners, dtype=np.float32).reshape(-1, 1, 2)
             c_ids = np.asarray(c_ids, dtype=np.int32).reshape(-1, 1)
-            mloc, mid = None, None
         else:
             # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
             # _, _, mloc, mid = self.board_detectors.detectBoard(image)
             c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image)
-        if c_corners is None and mloc is not None:
-            if not self.given_legacy_warning:
-                pattern_type = "legacy" if self.board.getLegacyPattern() else "new"
-                logger.warning(f"ChArUco: Found ArUco markers but no ChArUco corners with {pattern_type} pattern. "
-                                f"If detections are consistently low, verify your physical board matches legacy={self.board.getLegacyPattern()}.")
-                self.given_legacy_warning = True
-            # Retry under the opposite pattern convention.  A board printed to
-            # the other convention detects all of its markers and none of its
-            # corners, so without this the whole image is silently dropped.
-            self.board.setLegacyPattern(not self.board.getLegacyPattern())
-            c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(
-                image, markerCorners=mloc, markerIds=mid)
-
-        od = 1
+            if c_corners is None and mloc is not None:
+                # Approved policy: detect using ONLY self.board's configured
+                # legacy pattern -- no retry under the opposite one, and
+                # self.board's own legacy flag is never touched here. A
+                # strong-evidence mismatch still gets a once-per-target
+                # warning (never corners) -- see
+                # markers.legacy_probe.should_warn_legacy_mismatch. Once
+                # already warned, skip the probe itself (P2, round-1
+                # review): it is expensive (a throwaway board + detector +
+                # a whole detectBoard call) and can never change the
+                # outcome once given_legacy_warning is True.
+                if (not self.given_legacy_warning) and should_warn_legacy_mismatch(
+                    self.board, self.detection_options, image,
+                    len(mloc), mloc, mid,
+                ):
+                    self._warn_legacy_once()
 
         if c_corners is None:
             return ImageDetection() # return an empty detection

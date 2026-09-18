@@ -47,7 +47,9 @@ CHARUCO_SPEC = {
     "marker_fraction": 0.8,
     "marker_backend": "aruco1",
     "a_dict": 3,
-    "legacy": True,
+    # The checked-in corpus is legacy=False: see tests/conftest.py's
+    # CHARUCO_ARGS, which was corrected for the same reason.
+    "legacy": False,
 }
 CHARUCO_PARAMS = {"target": CHARUCO_SPEC}
 

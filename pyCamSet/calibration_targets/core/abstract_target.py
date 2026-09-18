@@ -20,6 +20,7 @@ import signal
 from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.cameras.telecentric_calibration import calibrate_telecentric
+from pyCamSet.cameras.zhang_calibration import calibrate_zhang
 from pyCamSet.cameras.telecentric_camera import TelecentricCamera
 from pyCamSet.cameras.telecentric_calibration import pose_from_affine
 from pyCamSet.calibration_targets.core.parameters import (
@@ -62,16 +63,145 @@ def init_worker(detector_class, input_args): #: Optional['AbstractTarget']):
     global worker_detector
     worker_detector = detector_class(**input_args)
 
+def _looks_like_native_opencv_error(exc: BaseException) -> bool:
+    """
+    Whether ``exc`` carries OpenCV's own C++ exception message shape --
+    ``OpenCV(<version>) <file>:<line>: error: (<code>:<name>) <what> in
+    function '<func>'`` -- rather than a Python-level message pyCamSet or a
+    target itself wrote.
+
+    The rare, clustered OpenCV-internal failure documented in
+    ``tests/test_detection_error_isolation.py`` ("a rare, clustered
+    cv2.error ... that is not caused by aruco2 and can hit any cv2 aruco
+    call in an affected process") normally surfaces as ``cv2.error``, which
+    is isolated per-image below. aruco2's own grid-board detector
+    (``markers/aruco2_gridboard.py``) can translate the SAME class of
+    native OpenCV assertion into a Python ``ValueError`` instead -- that
+    module's ``_is_cornersubpix_edge_failure`` documents one specific such
+    message; this is the general form of that same check, used here to
+    isolate any OTHER native-OpenCV-shaped ``ValueError`` the same way a
+    ``cv2.error`` already is. A hand-written ``ValueError`` -- a malformed
+    board, a bad argument, an unsupported image dtype -- never has this
+    shape, so it is left to propagate and abort the folder/Pool: it is a
+    programming or configuration error, not a transient detection failure.
+    """
+    return str(exc).lstrip().startswith("OpenCV(")
+
+
 def _process_image(im_file:Path, cam_name:str, idx:int, draw:bool, camera:Camera, upscale_factor:int=1):
     """
     Helper function to process a single image.
+
+    ``cv2.imread`` does not raise on an unreadable or undecodable file; it
+    returns ``None``. That is checked explicitly, before anything is done
+    with the array, so a corrupt file is a per-image failure rather than an
+    ``AttributeError``/``TypeError`` out of ``resize`` or ``find_in_image``
+    (which would not be isolated and would abort the Pool). Beyond that,
+    ``cv2.error`` is caught here, matching ``find_in_imfolder``'s
+    single-process path below, and so is a ``ValueError`` that looks like a
+    native OpenCV assertion (see :func:`_looks_like_native_opencv_error`) --
+    aruco2's grid-board detector can hand the SAME rare, OpenCV-internal
+    failure (see the module docstring-adjacent note on ``find_in_imfolder``)
+    back as either exception type. Either way it must not lose the rest of
+    the Pool's ``starmap``, so the image is reported back as having no
+    detections instead of raising out of the worker. Any other exception --
+    including a ``ValueError`` that does not have that native-OpenCV shape --
+    is a programming error and is left to propagate, which aborts the Pool
+    the same way it always did. The caller does the logging, once all the
+    workers' results are in hand, rather than each worker logging on its
+    own -- worker process log records do not reach the main process.
+
+    The fifth element of the return tuple (``unreadable``) tells the caller
+    which of the two isolated failure kinds ``error`` describes: a file
+    ``cv2.imread`` could not decode at all, versus a ``cv2.error`` raised by
+    detection itself. The caller (the ``Pool`` aggregator in
+    ``find_in_imfolder``) needs this to format the same message the
+    single-process path below uses, instead of nesting a pre-formatted
+    "could not read image ..." sentence inside a second "detection failed
+    ..." wrapper.
+
+    The sixth element of the return tuple carries the same idea for a
+    target's own legacy-pattern-mismatch warning (round-2 review, P1):
+    ``worker_detector.find_in_image`` may call ``logger.warning`` on its own
+    (e.g. ChArUco's/Ccube's ``_warn_legacy_once``), but that call runs in
+    THIS worker process and its log record never reaches the main process
+    either -- there is no log-forwarding set up between them. A target that
+    supports this stashes the fired message on its own
+    ``legacy_warning_message`` attribute (None until/unless it fires); read
+    back here and handed to the main process alongside the detection, so
+    ``find_in_imfolder`` can log it once there. A target with no such
+    attribute (most targets) simply reports None, unchanged from before.
     """
     im = cv2.imread(im_file)
-    if upscale_factor > 1:
-        im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
+    if im is None:
+        return cam_name, idx, ImageDetection(), "unreadable or undecodable", True, None
     # Use the globally available detector in this worker process
-    detection = worker_detector.find_in_image(im, draw=draw, camera=camera)
-    return cam_name, idx, detection
+    try:
+        if upscale_factor > 1:
+            im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
+        detection = worker_detector.find_in_image(im, draw=draw, camera=camera)
+    except (cv2.error, ValueError) as exc:
+        if isinstance(exc, ValueError) and not _looks_like_native_opencv_error(exc):
+            raise
+        return cam_name, idx, ImageDetection(), str(exc), False, None
+    warning_message = getattr(worker_detector, "legacy_warning_message", None)
+    return cam_name, idx, detection, None, False, warning_message
+
+
+def _report_folder_detection_failures(
+    cam_name: str, folder: Path, n_unreadable: int, n_detect_error: int, n_total: int
+) -> None:
+    """
+    Logs a per-folder summary of isolated per-image detection failures, and
+    refuses to hand back a folder's worth of silently empty detections.
+
+    The two failure kinds are tracked and worded separately: an unreadable
+    or undecodable file (``cv2.imread`` returning ``None``; no exception is
+    ever raised for this) is a file-I/O problem, not an OpenCV detection
+    bug, so lumping it into "failed detection with an OpenCV error" would
+    misdirect anyone reading the log towards the detector rather than their
+    image files.
+
+    :param cam_name: the camera (folder) the images were detected for
+    :param folder: the image folder, for the error message
+    :param n_unreadable: how many images in the folder ``cv2.imread`` could
+        not read or decode (returned ``None``; no exception was raised)
+    :param n_detect_error: how many images in the folder raised
+        ``cv2.error`` during detection itself
+    :param n_total: how many images were attempted
+    :raises RuntimeError: if every image in the folder failed
+    """
+    n_failed = n_unreadable + n_detect_error
+    if n_failed == 0:
+        return
+    parts = []
+    if n_unreadable:
+        parts.append(f"{n_unreadable} of {n_total} images could not be read")
+    if n_detect_error:
+        parts.append(
+            f"{n_detect_error} of {n_total} images failed detection with an OpenCV error"
+        )
+    logger.warning(
+        f"{cam_name}: " + "; ".join(parts) + " and were recorded as having no detections."
+    )
+    if n_failed == n_total:
+        if n_detect_error == 0:
+            raise RuntimeError(
+                f"{cam_name}: every one of {n_total} images in {folder} could not "
+                f"be read; no usable detections were produced for this camera."
+            )
+        if n_unreadable == 0:
+            raise RuntimeError(
+                f"{cam_name}: every one of {n_total} images in {folder} failed "
+                f"detection with an OpenCV error; no usable detections were "
+                f"produced for this camera."
+            )
+        raise RuntimeError(
+            f"{cam_name}: every one of {n_total} images in {folder} failed "
+            f"({n_unreadable} could not be read, {n_detect_error} failed detection "
+            f"with an OpenCV error); no usable detections were produced for this "
+            f"camera."
+        )
 
 
 class AbstractTarget(ABC):
@@ -314,12 +444,48 @@ class AbstractTarget(ABC):
         # threads=1
         if threads == 1:
             detections = TargetDetection(cam_names=cam_names)
+            n_unreadable = 0
+            n_detect_error = 0
             for idx, im_file in enumerate(im_locs):
                 im = cv2.imread(im_file)
-                if upscale_factor > 1:
-                    im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
-                detection = self.find_in_image(im, draw=draw, camera=camera)
+                if im is None:
+                    # cv2.imread does not raise on an unreadable or
+                    # undecodable file, it returns None -- checked explicitly
+                    # here, before resize or find_in_image ever see it, so a
+                    # corrupt file is a per-image failure rather than an
+                    # AttributeError/TypeError that would abort the folder.
+                    logger.warning(
+                        f"{cam_name}: could not read image {im_file} "
+                        f"(unreadable or undecodable); recording it as "
+                        f"having no detections."
+                    )
+                    n_unreadable += 1
+                    detections.add_detection(cam_name, idx, ImageDetection())
+                    continue
+                # cv2.error is isolated here: a rare, OpenCV-internal
+                # failure on one frame (clustered, not caused by aruco2 --
+                # see stage A investigation) must not abort the whole folder.
+                # aruco2's grid-board detector can hand the same failure back
+                # as a ValueError instead (see
+                # _looks_like_native_opencv_error), so that is isolated too,
+                # but only when it has OpenCV's own native message shape. A
+                # programming error -- including a ValueError without that
+                # shape -- must still surface, so nothing else is caught.
+                try:
+                    if upscale_factor > 1:
+                        im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
+                    detection = self.find_in_image(im, draw=draw, camera=camera)
+                except (cv2.error, ValueError) as exc:
+                    if isinstance(exc, ValueError) and not _looks_like_native_opencv_error(exc):
+                        raise
+                    logger.warning(
+                        f"{cam_name}: detection failed for image {im_file} "
+                        f"({exc}); recording it as having no detections."
+                    )
+                    n_detect_error += 1
+                    detection = ImageDetection()
                 detections.add_detection(cam_name, idx, detection)
+            _report_folder_detection_failures(cam_name, file, n_unreadable, n_detect_error, len(im_locs))
             return detections
 
         if not multiprocessing.current_process().name == "MainProcess":
@@ -341,8 +507,65 @@ class AbstractTarget(ABC):
         with multiprocessing.Pool(processes=threads, initializer=init_worker, initargs=(self.__class__, self.input_args)) as pool:
             results = pool.starmap(_process_image, tasks)
         # add the detections from the results in the main process
-        for cam, idx, detection in results:
+        n_unreadable = 0
+        n_detect_error = 0
+        # A worker's own logger.warning calls (e.g. a legacy-pattern-mismatch
+        # warning fired inside find_in_image) never reach this process, so
+        # _process_image hands the message back with its image's result
+        # instead (see its own docstring). Deduplicated by message text
+        # rather than logged per-image: several workers can each
+        # independently fire the SAME once-per-(worker-)target warning
+        # (every worker rebuilds its own fresh target instance), and a
+        # multi-face target (Ccube) can legitimately raise more than one
+        # DISTINCT message (different faces) -- both are logged, each once.
+        warning_messages: dict[str, None] = {}
+        for cam, idx, detection, error, unreadable, warning_message in results:
             detections.add_detection(cam, idx, detection)
+            if error is not None:
+                if unreadable:
+                    # Matches the threads==1 message below verbatim: `error`
+                    # is already just "unreadable or undecodable" here, so
+                    # this is not doubling that reason inside a second,
+                    # differently-worded "detection failed" sentence.
+                    logger.warning(
+                        f"{cam}: could not read image {im_locs[idx]} "
+                        f"(unreadable or undecodable); recording it as "
+                        f"having no detections."
+                    )
+                    n_unreadable += 1
+                else:
+                    logger.warning(
+                        f"{cam}: detection failed for image {im_locs[idx]} "
+                        f"({error}); recording it as having no detections."
+                    )
+                    n_detect_error += 1
+            if warning_message is not None:
+                # A plain dict, not a set: insertion-ordered, so the
+                # messages log in the order their images were dispatched --
+                # deterministic and easier to read than set iteration order.
+                warning_messages.setdefault(warning_message, None)
+        # Deduplicated again against messages already logged by an EARLIER
+        # find_in_imfolder call on this SAME (main-process) target instance
+        # (round-4 review, P2): the real multi-camera workflow calls
+        # find_in_imfolder once per camera subfolder on one target instance
+        # (camera_calibrator.py), and every one of those calls rebuilds its
+        # own fresh Pool workers from self.input_args, so a worker can never
+        # know a previous camera folder already reported the same message.
+        # Kept as a dedicated instance attribute rather than reusing
+        # given_legacy_warning: that flag specifically means "self's OWN
+        # find_in_image call saw a mismatch", and several tests rely on it
+        # staying False on this main-process instance under threads>1 (self
+        # never runs detection itself on that path -- see
+        # test_legacy_warning_reaches_main_process_under_multiprocessing).
+        already_logged = getattr(self, "_imfolder_logged_legacy_warnings", None)
+        if already_logged is None:
+            already_logged = set()
+            self._imfolder_logged_legacy_warnings = already_logged
+        for msg in warning_messages:
+            if msg not in already_logged:
+                logger.warning(msg)
+                already_logged.add(msg)
+        _report_folder_detection_failures(cam_name, file, n_unreadable, n_detect_error, len(im_locs))
         return detections
 
     
@@ -510,6 +733,10 @@ class AbstractTarget(ABC):
         If the object has a special model of calibration associated, this can
         be overwritten.
 
+        No lens distortion is estimated: the camera is seeded as a pinhole,
+        or an affine one for a telecentric lens, and its distortion is left at
+        zero for the bundle adjustment to solve along with everything else.
+
         :param cam_name: The name of the camera being calibrated
         :param detection: A TargetDetection of only the detections of the currently
             being calibrated camera
@@ -518,7 +745,7 @@ class AbstractTarget(ABC):
         :param fixed_params: A dict containing any fixed params of the camera to calibrate
             accepted options are "ext", "int", and "dst" respectively.
         :param min_detections_per_board: Minimum number of detected corners required
-            for a board observation to contribute to the initial OpenCV calibration.
+            for a board observation to contribute to the initial calibration.
         :param model: the lens model to fit, "pinhole" or "telecentric"
         :return: A camera object.
         """
@@ -627,43 +854,36 @@ class AbstractTarget(ABC):
                 return init_cam
             return init_cam, np.stack(tele_poses).astype(float), np.asarray(tele_rms, dtype=float)
 
-        ic = cv2.calibrateCameraExtended(
-            object_points,
-            image_points,
-            tuple(res[::-1]),
-            None,
-            None,
-            # flags=(
-            #     cv2.CALIB_RATIONAL_MODEL + \
-            #     cv2.CALIB_THIN_PRISM_MODEL +\
-            #     cv2.CALIB_TILTED_MODEL
-            # ),
-            None,
+        # Zhang's closed form rather than cv2.calibrateCamera, and no
+        # distortion with it.  The bundle adjustment solves for the distortion
+        # anyway -- projection carries five Brown-Conrady parameters per camera
+        # alongside the four intrinsic ones -- so anything fit here is refit a
+        # few seconds later, and all the seed owes the solve is a starting
+        # point close enough to converge from.
+        intrinsic, board_poses, board_rms = calibrate_zhang(
+            [np.reshape(o, (-1, 3)) for o in object_points],
+            [np.reshape(i, (-1, 2)) for i in image_points],
+            res,
         )
         end = time.time()
 
+        # what the closed form leaves behind, not what the camera reaches:
+        # these poses come straight out of the homographies, and a pose solved
+        # against the pixels at these same intrinsics does several times
+        # better.  The intrinsics report measures that number; this one says
+        # how far the board views sit from a distortion free pinhole model.
         logger.info(f'{cam_name} took {end - start:.1f} seconds'
-            f', leftover error of {ic[0]:.2f} pixels')
+            f', closed form residual of {np.mean(board_rms):.2f} pixels'
+            ' with no distortion fit')
 
-        # perform an initial pose estimate on the first images
-
-        
-
-        init_cam = Camera(intrinsic=ic[1], distortion_coefs=np.array(ic[2]), res=res, name=cam_name)
-        if fixed_params is not None:
-            if "int" in fixed_param:
-                init_cam.intrinsic = fixed_param['int']
-            if 'dst' in fixed_param:
-                init_cam.distortion_coefs = fixed_param['dst']
-            if "ext" in fixed_param:
-                init_cam.set_extrinsic(fixed_param['ext'])
-                return init_cam
-        if not return_poses:
+        init_cam = Camera(intrinsic=intrinsic, distortion_coefs=np.zeros(5),
+                          res=res, name=cam_name)
+        init_cam, ext_was_fixed = self._apply_fixed_params_to(
+            init_cam, fixed_params, fixed_param)
+        if ext_was_fixed or not return_poses:
             return init_cam
-
-        poses = np.stack([make_4x4h_tform(rot, tran) for rot, tran in zip(ic[3], ic[4])]).astype(float)
-        per_im_reproj = np.asarray(ic[-1], dtype=float)
-        return init_cam, poses, per_im_reproj
+        return (init_cam, np.stack(board_poses).astype(float),
+                np.asarray(board_rms, dtype=float))
 
     def target_pose_in_cam_image(
             self, detection: TargetDetection, cam: Camera, 

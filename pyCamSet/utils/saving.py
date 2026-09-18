@@ -4,6 +4,7 @@ import logging
 import json
 import os
 import ntpath
+import re
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import blosc
@@ -15,6 +16,7 @@ import importlib
 from copy import copy
 
 from pyCamSet.utils.calibration_report import CalibrationReport
+from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_convergence_pair_scores
 
 logger = logging.getLogger(__name__)
 
@@ -611,3 +613,189 @@ def camset_to_colmap(
         output_folder / "rig_config.json",
         ref_cam_name=ref_cam_name,
     )
+
+
+# ---------------------------------------------------------------------------
+# Convert camset to APDe-MVS / ACMMP ("cams/" + pair.txt) format
+# ---------------------------------------------------------------------------
+
+# APD-MVS and APDe-MVS (github.com/whoiszzj/APD-MVS, github.com/whoiszzj/APDe-MVS)
+# both hard-code `#define MAX_IMAGES 32` and load one reference image plus every
+# candidate source image from pair.txt whose score is > 0 -- their reader has no
+# top-k cutoff of its own, and neither tool degrades gracefully past MAX_IMAGES:
+# main.cpp's per-problem image loader does `if (images.size() > MAX_IMAGES) {
+# std::cout << "Can't process so much images: " ...; exit(EXIT_FAILURE); }`.
+# camset_to_apde otherwise hands write_to_txt every other camera as a
+# candidate, unbounded, so a CameraSet with more than 32 cameras would
+# crash both tools on every single reference view. 31 leaves room for the
+# one reference image itself.
+_APDE_MVS_MAX_SRC_VIEWS = 31
+
+
+def camset_to_apde(
+    cams,
+    output_folder: Path,
+    depth_min: float = 0.1,
+    depth_max: float = 0.8,
+    depth_num: int = 192,
+    max_src_views: int = _APDE_MVS_MAX_SRC_VIEWS,
+) -> None:
+    """
+    Export a pyCamSet CameraSet to APDe-MVS format in a single call.
+
+    Produces:
+      - cams/%08d_cam.txt   (per-view extrinsic, intrinsic, depth range)
+      - cam_index_map.txt   (index -> camera name, to match against images)
+      - pair.txt            (per-view ranked list of candidate source views)
+
+    The ``cams/`` files and ``pair.txt`` are both written through
+    :meth:`~pyCamSet.cameras.camera_set.CameraSet.write_to_txt` -- the same
+    writer other MVSNet/ACMMP-format exports use -- rather than a second,
+    separate per-camera loop and pair.txt writer. Two things stay specific
+    to APDe-MVS and are handled here, around that call, rather than inside
+    ``write_to_txt`` itself:
+
+    - the pair score. ``write_to_txt`` would score this rig at its
+      convergence point anyway (its ``pair_scoring="auto"`` default picks
+      that for a rig whose cameras look at a shared point), but it would
+      also cap the list at ``r.max_n_view``, which is a reconstruction
+      quality knob rather than the downstream reader's hard limit. So this
+      computes
+      ``pyCamSet.reconstruction.acmmp_utils.calc_convergence_pair_scores``
+      explicitly and passes it as ``write_to_txt``'s ``pair_scores``
+      argument, which writes every other view, ranked by that score, capped
+      at ``max_src_views`` -- see that parameter below. The scores reaching
+      pair.txt are row-normalised, so each reference view's best candidate
+      is written as 1.
+    - ``cam_index_map.txt``, and removing a previous, larger export's stale
+      ``cams/*_cam.txt`` files before writing -- neither has a COLMAP/MVSNet
+      analogue, so both stay specific to this exporter.
+
+    Each ``cams/%08d_cam.txt`` file's extrinsic block is ``cam.extrinsic``
+    written out unchanged -- no inversion is applied. pyCamSet stores
+    ``cam.extrinsic`` world-to-camera: ``Camera._update_state`` sets
+    ``cam.cam_to_world = np.linalg.inv(cam.extrinsic)``, and
+    ``Camera._calc_projection_matrix`` forms the projection matrix as
+    ``cam.intrinsic @ cam.extrinsic[:3, :4]`` -- the standard
+    ``x = K [R|t] X_world`` form, which only holds if ``[R|t]`` is
+    world-to-camera. This is the same convention COLMAP's images.txt uses,
+    and the one this module's own :func:`export_rig_config` already relies
+    on when it takes ``cam.extrinsic`` directly as "cam-from-world" without
+    inverting it.
+
+    Distortion is NOT written: APDe-MVS consumes a pinhole model only, and
+    pyCamSet cameras may carry a 5-parameter Brown-Conrady model
+    (``cam.distortion_coefs``). If any exported camera has non-negligible
+    distortion, the resulting cams files are only valid against images that
+    have already been undistorted with that camera's model (see
+    ``Camera.undistort``). A warning is logged for every such camera rather
+    than silently dropping the distortion.
+
+    A CameraSet is a calibration and carries no scene points, so the depth
+    range cannot be derived from it. ``depth_min``, ``depth_max`` and
+    ``depth_num`` are therefore placeholders -- the defaults chosen here
+    (0.1 to 0.8, 192 steps) match this codebase's existing
+    ``pyCamSet.reconstruction.acmmp_utils.ReconParams`` defaults for the
+    same file format, but are still just a starting point: the caller is
+    expected to set values that match their actual scene, in whatever
+    world units the CameraSet's extrinsics use.
+    ``DEPTH_INTERVAL`` is computed as ``(depth_max - depth_min) / depth_num``,
+    inherited unchanged from ``Camera.to_MVSnet_txt``, which ``write_to_txt``
+    (and so this function) delegates to per camera. Whether the ACMMP/MVSNet
+    convention divides by ``depth_num`` or by ``depth_num - 1`` is not
+    settled by the evidence found: some derivative repos compute the
+    interval as ``(max - min) / num_depth`` while others document the
+    relationship as ``DEPTH_MAX = DEPTH_MIN + DEPTH_INTERVAL * (num_depth - 1)``,
+    i.e. ``/ (num_depth - 1)`` -- both conventions are in active use across the
+    MVSNet family. Left unchanged here: it matches this codebase's existing
+    ``Camera.to_MVSnet_txt`` (outside this module), which other code already
+    depends on.
+
+    :param cams: pyCamSet CameraSet object
+    :param output_folder: directory to write output files into
+    :param depth_min: nearest depth plane (placeholder default; tune per scene)
+    :param depth_max: furthest depth plane (placeholder default; tune per scene)
+    :param depth_num: number of depth planes / DEPTH_NUM (192 is the usual default)
+    :param max_src_views: cap on the number of top-scoring candidates written
+        per reference view in pair.txt (default 31, matching
+        ``_APDE_MVS_MAX_SRC_VIEWS`` above). Should not be raised without also
+        raising ``MAX_IMAGES`` in a matching build of APD-MVS/APDe-MVS.
+    :raises ValueError: if ``max_src_views`` is not a non-negative integer --
+        this parameter exists specifically to keep the export from crashing
+        the downstream tool, so a caller's own bug computing it (e.g. a
+        negative value, which ``write_to_txt`` would otherwise take via
+        Python's "drop the last few" slice semantics instead of raising)
+        should not be able to silently reintroduce that failure mode.
+    """
+    if not isinstance(max_src_views, int) or isinstance(max_src_views, bool) or max_src_views < 0:
+        raise ValueError(f"max_src_views must be a non-negative int, got {max_src_views!r}")
+
+    output_folder = Path(output_folder)                 # normalise to Path
+    cams_dir = output_folder / "cams"
+
+    # A re-export into the same output dir (the GUI's out_dir is deterministic
+    # per run) must not leave stale *_cam.txt files behind from a previous,
+    # larger export -- pair.txt and cam_index_map.txt get overwritten below to
+    # describe only the new view count, so an orphaned 00000004_cam.txt from a
+    # 5-camera export would silently survive a later 3-camera one. Only remove
+    # files matching exactly the pattern write_to_txt itself writes -- an
+    # 8-digit index followed by "_cam.txt" -- and only directly inside cams/,
+    # never recursing and never touching the directory itself or anything
+    # outside it, so any unrelated file a user placed in cams/ is left alone.
+    stale_cam_pattern = re.compile(r"^\d{8}_cam\.txt$")
+    if cams_dir.exists():
+        for stale_path in cams_dir.iterdir():
+            if stale_path.is_file() and stale_cam_pattern.match(stale_path.name):
+                stale_path.unlink()
+                logger.info("camset_to_apde: removed stale cams file %s", stale_path)
+
+    cams_dir.mkdir(parents=True, exist_ok=True)          # ensure cams/ exists; write_to_txt does not create it
+
+    cam_names = cams.get_names()                         # deterministic, dict-insertion order
+
+    # --- flag any camera whose distortion would silently invalidate the pinhole export ---
+    distorted = [
+        name for name in cam_names
+        if np.any(np.abs(np.asarray(cams[name].distortion_coefs)) > 1e-9)
+    ]
+    if distorted:
+        logger.warning(
+            "camset_to_apde: %d camera(s) carry non-negligible distortion (%s); "
+            "the exported pinhole cams files are only valid for images already "
+            "undistorted with those cameras' models.",
+            len(distorted), ", ".join(distorted),
+        )
+
+    scores, well_conditioned = calc_convergence_pair_scores(cams)
+    if not well_conditioned:
+        logger.warning(
+            "camset_to_apde: camera axes are near-parallel (the rig does not "
+            "converge to a well-defined point); falling back to a point in "
+            "front of the rig's centroid, along its mean viewing direction, "
+            "at the rig's own mean baseline scale, for pair scoring.",
+        )
+
+    n_other_views = len(cam_names) - 1
+    if n_other_views > max_src_views:
+        logger.warning(
+            "camset_to_apde: %d camera(s) exceeds the %d-source-view cap "
+            "(max_src_views); pair.txt keeps only the %d best-scoring "
+            "candidates per reference view, dropping %d.",
+            len(cam_names), max_src_views, max_src_views, n_other_views - max_src_views,
+        )
+
+    r = ReconParams(mindist=depth_min, maxdist=depth_max, steps=depth_num)
+    cams.write_to_txt(                                   # writes cams/*_cam.txt and pair.txt
+        cams_dir, r, pair_scores=scores, max_pair_candidates=max_src_views,
+    )
+
+    index_lines = [f"{idx:08d} {name}" for idx, name in enumerate(cam_names)]
+    map_path = output_folder / "cam_index_map.txt"
+    with open(map_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(index_lines) + "\n")
+
+    logger.info(
+        "camset_to_apde: wrote %d cams file(s) to %s; index-to-name map in %s",
+        len(cam_names), cams_dir, map_path,
+    )
+    print(f"Wrote {len(cam_names)} cams file(s) to {cams_dir}")

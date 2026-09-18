@@ -82,6 +82,49 @@ def show_tab():
 
     return _show_tab
 
+
+# --------------------------------------------------------------------------
+# The dead cross-tab target-sync block must not come back
+# --------------------------------------------------------------------------
+#
+# main_window.py used to wire signals to _target_combo, _npts_spin,
+# _length_edit and _marker_backend_combo directly on each phase tab -- names
+# that never existed there (the real widgets live one level down, on
+# tab._target_form). Every hasattr guard was therefore always False, so the
+# block was wired to nothing and never ran. Per Q5 it was deleted rather than
+# fixed: TargetSettingsForm.apply_spec() already covers adopting a saved
+# run's target. This pins both halves of that decision so the same phantom
+# wiring cannot silently reappear.
+
+
+@pytest.mark.gui
+def test_the_dead_cross_tab_sync_names_never_come_back(qt_app_for_tabs):
+    from PySide6.QtWidgets import QComboBox
+
+    app = qt_app_for_tabs
+    dead_names = ("_propagate_target", "_syncing_target",
+                  "_marker_backend_combo", "_npts_spin", "_length_edit")
+
+    # None of the phase tabs ever had these attributes; the block's own
+    # hasattr guards were checking for names that were never there.
+    for tab_attr in ("phase1_tab", "phase2_tab", "phase3_tab", "phase4_tab"):
+        tab = getattr(app, tab_attr)
+        for name in dead_names:
+            assert not hasattr(tab, name), f"{tab_attr}.{name} should not exist"
+
+    # Nor on the window itself -- _syncing_target was a guard flag on
+    # PyCamSetApp; _propagate_target was a nested function, never an
+    # attribute, but is asserted absent here too for symmetry.
+    assert not hasattr(app, "_propagate_target")
+    assert not hasattr(app, "_syncing_target")
+
+    # The widget path signals actually could reach, had anything wired to
+    # it: the shared form each target-bearing tab really owns.
+    for tab_attr in ("phase1_tab", "phase2_tab", "phase3_tab"):
+        tab = getattr(app, tab_attr)
+        assert isinstance(tab._target_form._backend_combo, QComboBox)
+
+
 @pytest.mark.gui
 def test_no_tab_is_ever_current_while_hidden(qt_app_for_tabs):
     """Every route in: setCurrentIndex, setCurrentWidget, the keyboard."""
@@ -326,7 +369,7 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
         tab.set_cameras(["1", "2", "3"], ["1", "2", "3"])
         tab._target_form.apply_spec(
             {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
-             "square_size": 4.0, "legacy": True})
+             "square_size": 4.0, "legacy": False})
         tab._nlim_edit.setText("4")          # four images is enough to solve
         # Caching on: the cache file is what phase 1 saves as its artifact,
         # and what phase 2 reads.  Without it a run records no detections.
@@ -344,7 +387,7 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
         tab._floc_edit.setText(str(images))
         tab._target_form.apply_spec(
             {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
-             "square_size": 4.0, "legacy": True})
+             "square_size": 4.0, "legacy": False})
         tab._run_phase2()
 
         assert not refused, refused
@@ -358,7 +401,7 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
         tab._floc_edit.setText(str(images))
         tab._target_form.apply_spec(
             {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
-             "square_size": 4.0, "legacy": True})
+             "square_size": 4.0, "legacy": False})
         tab._max_nfev_spin.setValue(10)
         tab._run_phase3()
 
@@ -605,6 +648,36 @@ def test_the_preset_selector_never_offers_another_detectors_presets():
 
 
 @pytest.mark.gui
+def test_set_parameter_widget_shows_a_combo_value_its_items_do_not_offer():
+    """``QComboBox.setCurrentText`` silently no-ops for a value that is not
+    among the combo's current items, so a saved spec naming a value the
+    combo no longer offers used to leave the combo showing whatever it
+    already held instead. ``set_parameter_widget`` must add the value
+    first, then select it -- and must not duplicate a value the combo
+    already offers.
+    """
+    from PySide6.QtWidgets import QApplication, QComboBox
+
+    from pyCamSet.gui.shared_functions import set_parameter_widget
+
+    QApplication.instance() or QApplication([])
+    combo = QComboBox()
+    combo.addItems(["alpha", "beta"])
+    try:
+        set_parameter_widget(combo, "gamma")
+        assert combo.currentText() == "gamma"
+        assert [combo.itemText(i) for i in range(combo.count())] == \
+            ["alpha", "beta", "gamma"]
+
+        set_parameter_widget(combo, "beta")
+        assert combo.currentText() == "beta"
+        assert [combo.itemText(i) for i in range(combo.count())] == \
+            ["alpha", "beta", "gamma"], "an offered value must gain no duplicate"
+    finally:
+        combo.deleteLater()
+
+
+@pytest.mark.gui
 def test_a_preset_still_sets_the_bounds_of_the_rows_it_covers():
     """The rows are rebuilt now, so the preset has to reach the new ones."""
     from PySide6.QtWidgets import QApplication
@@ -659,6 +732,25 @@ def test_adopting_a_run_sets_the_target_to_match_it():
         assert spec["n_points"] == 12
         assert spec["length"] == 80
         assert describe_target_mismatch(CCUBE_12, {"target": spec}) == []
+    finally:
+        form.deleteLater()
+
+
+@pytest.mark.gui
+def test_adopting_a_run_with_a_dictionary_no_longer_offered_shows_the_true_value():
+    """A saved run can name a dictionary this combo's current choices do not
+    offer (e.g. an AprilTag dictionary retired from Create Target). Before
+    the fix, ``QComboBox.setCurrentText`` silently no-ops for a value not
+    among its items, so the combo kept showing whatever it already held --
+    a different dictionary than the run actually used, with no warning.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("ChArUco")
+    try:
+        form.apply_spec({"type": "ChArUco", "a_dict": "DICT_APRILTAG_16h5"})
+        assert form._widgets["a_dict"].currentText() == "DICT_APRILTAG_16h5"
     finally:
         form.deleteLater()
 

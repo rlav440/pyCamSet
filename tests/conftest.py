@@ -271,8 +271,15 @@ def world_points():
 # to catch.  Nothing here survives the run.
 # ---------------------------------------------------------------------------
 
-# The board the checked-in ChArUco images were taken of.
-CHARUCO_ARGS = dict(num_squares_x=20, num_squares_y=20, square_size=4, legacy=True)
+# The board the checked-in ChArUco images were taken of. legacy=False
+# (verified directly against the corpus: legacy=True detects markers but
+# zero corners on every image; legacy=False detects normally). This was
+# legacy=True until the legacy-pattern auto-retry (removed -- detection now
+# reads only the configured pattern, see markers/legacy_probe.py) was
+# silently self-correcting the mismatch every session by toggling the
+# target's own flag on the very first image and leaving it toggled for the
+# rest of the run.
+CHARUCO_ARGS = dict(num_squares_x=20, num_squares_y=20, square_size=4, legacy=False)
 # ...and the cube for the Ccube images.
 CCUBE_ARGS = dict(n_points=10, length=40, border_fraction=0.2)
 

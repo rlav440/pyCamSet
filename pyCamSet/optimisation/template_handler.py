@@ -186,6 +186,27 @@ class TemplateBundleHandler:
         extr_unfixed = np.array(['ext' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
         intr_unfixed = np.array(['int' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
         pose_unfixed = np.ones(n_poses, dtype=bool)
+
+        # A pose that no camera detected the target in has nothing to estimate
+        # it from. Every residual that would mention it is simply absent, so
+        # its six parameters reach the jacobian as all-zero columns and the
+        # degeneracy check refuses to solve at all -- which costs the whole
+        # calibration for the sake of one frame where the target was blurred,
+        # or had left every view. Such a pose is fixed at the identity rather
+        # than left free, so the frame is what is lost, not the run.
+        seen = detection.get_data()
+        if seen is not None and len(seen):
+            unseen = np.setdiff1d(np.arange(n_poses), np.unique(seen[:, 1].astype(int)))
+            if unseen.size:
+                pose_unfixed[unseen] = False
+                poses[unseen, :] = 0
+                logger.warning(
+                    f"{unseen.size} of {n_poses} images have no detections in any "
+                    "camera, so their poses cannot be estimated and are held "
+                    f"fixed: {np.array2string(unseen, threshold=20)}. Those images "
+                    "contribute nothing to this calibration."
+                )
+
         if "fixed_pose" in self.problem_opts:
             fixed_pose = self.problem_opts["fixed_pose"]
             pose_unfixed[fixed_pose] = False

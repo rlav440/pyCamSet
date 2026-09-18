@@ -448,7 +448,7 @@ def test_the_real_stages_satisfy_the_contract_the_fakes_assume(session_data_dir)
     # a_dict=3 is DICT_4X4_1000, which a 20x20 board needs: DICT_4X4_50 is
     # exhausted by it, and OpenCV asserts rather than saying so.
     target = {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
-              "square_size": 4.0, "a_dict": 3, "legacy": True}
+              "square_size": 4.0, "a_dict": 3, "legacy": False}
     rows = [ParameterRowConfig(key=PARAMETER, fixed=0.03)]
     options = fixed_settings_only(rows, ARUCO_OPENCV_DETECTOR)
 

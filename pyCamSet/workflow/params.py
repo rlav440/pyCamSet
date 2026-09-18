@@ -12,6 +12,12 @@ import json
 import math
 from typing import Any, Optional
 
+from pyCamSet.cameras.lens_models import (
+    DEFAULT_LENS_MODEL,
+    LENS_MODEL_LABELS,
+    LENS_MODELS,
+)
+
 from pyCamSet.workflow.targets import (
     target_spec_of,
     describe_target_mismatch,
@@ -90,6 +96,31 @@ def as_outlier_mode(text: Any) -> str:
     if value in {"y", "yes", "true", "1", "on", "enabled", "ask"}:
         return "y"
     return "n"
+
+
+def as_lens_model(text: Any) -> str:
+    """
+    Read a lens model setting, as a name the calibrator accepts.
+
+    Unlike the outlier setting, an unrecognised value is refused rather than
+    read as the default: calibrating a telecentric rig as a pinhole one
+    produces a camera set that looks plausible and is wrong, so a typo must
+    not silently choose it.
+
+    :param text: the value to read, a name or a label
+    :raises ParamError: when it names no known model
+    :return: a key of :data:`~pyCamSet.cameras.lens_models.LENS_MODELS`
+    """
+    value = str(text or "").strip().lower()
+    if not value:
+        return DEFAULT_LENS_MODEL
+    if value in LENS_MODELS:
+        return value
+    for name, label in LENS_MODEL_LABELS.items():
+        if value == label.lower():
+            return name
+    offered = ", ".join(LENS_MODELS)
+    raise ParamError(f"Unknown lens model {text!r}; expected one of {offered}")
 
 
 def require_image_folder(text: Any) -> str:

@@ -19,7 +19,9 @@ from pyCamSet.optimisation.camera_models import blocks_for_camset
 from pyCamSet.optimisation.function_block_implementations import (
     telecentric_extrinsic, telecentric_intrinsic)
 from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment
-from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
+from pyCamSet.optimisation.template_handler import (
+    TemplateBundleHandler, _extrinsic_from_params)
 from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
 REF_MAGNIFICATION = np.array([30000.0, 29000.0])  # px per metre
@@ -649,3 +651,722 @@ def test_a_camera_that_only_ever_saw_one_face_says_what_to_photograph():
         target.initial_calibration(
             cam_name="cam", detection=detection, res=[720, 540],
             pose_im=0, model="telecentric", min_detections_per_board=12)
+
+
+# --------------------------------------------------------------------------
+# Reading a calibration back out
+#
+# The tests above exercise the model -- projection, rays, jacobians, the seeded
+# solve.  None of them asked the handler what it had found, which is the one
+# thing every phase after a solve does: Phase 3 saves the camset, Phase 4 reads
+# it again, and the diagnostics draw from it.  A pose row three wide breaks that
+# read-back in three separate places, and a green model suite hid all three.
+# --------------------------------------------------------------------------
+
+
+def test_gauge_transform_survives_a_pose_with_no_translation(telecentric_problem):
+    """The gauge transform composes a rigid update onto every camera's pose.
+
+    A telecentric pose carries rotation alone, so the row is three wide and the
+    code that scaled and unpacked a six-wide pose was handed an empty
+    translation -- raising on both the 4x4 construction and the write-back.
+    """
+    cams, target, detection, poses = telecentric_problem
+    # SelfBundleHandler, not TemplateBundleHandler: the gauge transform and the
+    # target read-back are defined on the former, and Phase 4 uses it while
+    # Phase 3 uses the latter.  Testing the wrong class would be vacuous.
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+
+    primitive = handler.bundlePrimitive
+    assert primitive.n_extr == 3, "this camset's poses must be the narrow ones"
+
+    # Exactly the call get_camset and get_updated_target make.  No solve is
+    # needed: the gauge transform runs after one, but the defect is in the call,
+    # not in the result.
+    params = ground_truth_params(handler, cams, poses)
+    model = handler.bundlePrimitive.return_bundle_primitives(params)
+    proj, extr, got_poses, points = handler.apply_gauge_transform(*model)
+
+    assert extr.shape == (len(cams), 3), "the pose width must survive the transform"
+    assert np.all(np.isfinite(extr))
+
+
+def test_gauge_transform_still_moves_a_pinhole_rotation(telecentric_problem):
+    """The narrow branch must not be a blanket skip.
+
+    A six-wide pose is scaled and conjugated as before, so this pins that the
+    fix is a branch rather than the removal of the transform.
+    """
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+
+    params = ground_truth_params(handler, cams, poses)
+    proj, extr, poses_out, points = handler.bundlePrimitive.return_bundle_primitives(params)
+    # A pinhole-shaped stand-in: six-wide rows carrying a real translation.
+    wide = np.hstack([extr, np.full((len(extr), 3), 0.5)])
+    proj2, extr2, _, _ = handler.apply_gauge_transform(proj, wide, poses_out, points)
+
+    assert extr2.shape == wide.shape
+    assert np.all(np.isfinite(extr2))
+    # A six-wide row is still scaled and unpacked: the translation comes back,
+    # and it is s times what went in (no rigid term on an all-equal column).
+    assert extr2[:, 3:].shape == (len(cams), 3)
+
+
+def test_get_camset_returns_a_telecentric_camset(telecentric_problem):
+    """What Phase 3 and Phase 4 call the moment a solve finishes.
+
+    The failure being guarded is not a wrong number: it is a ValueError raised
+    after the optimisation has already converged, which costs the entire run.
+    """
+    cams, target, detection, poses = telecentric_problem
+    # SelfBundleHandler, deliberately: TemplateBundleHandler.get_camset does not
+    # call the gauge transform, which is exactly why Phase 3 survives this bug.
+    # Asserting against that class would have passed before the fix too.
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+
+    params = ground_truth_params(handler, cams, poses)
+    out = handler.get_camset(params)
+
+    assert out.get_n_cams() == len(cams)
+    for name in cams.get_names():
+        assert isinstance(out[name], TelecentricCamera)
+        got = np.asarray(out[name].intrinsic, dtype=float)
+        want = np.asarray(cams[name].intrinsic, dtype=float)
+        assert got[0, 0] == pytest.approx(want[0, 0])
+        assert got[1, 1] == pytest.approx(want[1, 1])
+
+
+def test_get_updated_target_returns_the_recovered_shape(telecentric_problem):
+    """The other read-back Phase 4's diagnostics depend on."""
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+
+    params = ground_truth_params(handler, cams, poses)
+    updated = handler.get_updated_target(params)
+
+    n_points = int(np.prod(target.point_data.shape[:2]))
+    assert np.asarray(updated).shape == (n_points, 3)
+    assert np.all(np.isfinite(updated))
+
+
+def test_a_saved_telecentric_camset_reloads_with_its_handler(tmp_path, telecentric_problem):
+    """Save and reload is how Phase 4 receives Phase 3's result.
+
+    The handler class round-trips, which matters because it is the object the
+    Assess Calibration figures are drawn from.
+    """
+    from pyCamSet.utils.saving import load_CameraSet
+
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+    out = handler.get_camset(ground_truth_params(handler, cams, poses))
+
+    written = tmp_path / "telecentric.camset"
+    out.save(written)
+    reloaded = load_CameraSet(written)
+
+    assert reloaded.get_n_cams() == len(cams)
+    assert all(isinstance(reloaded[n], TelecentricCamera) for n in cams.get_names())
+
+
+def test_fix_all_cameras_packs_telecentric_widths(telecentric_problem):
+    """Holding every camera fixed takes its widths from the lens model.
+
+    The literals here were six and nine whatever the model, so a telecentric
+    set could not be held at all: the handler's broadcast refused them.
+    """
+    from pyCamSet.optimisation.find_target import fix_all_cameras
+
+    cams, _, _, _ = telecentric_problem
+    fixed = fix_all_cameras(cams)
+
+    assert set(fixed) == set(cams.get_names())
+    for name in cams.get_names():
+        assert fixed[name]["ext"].shape == (3,), "rotation only: no translation"
+        assert fixed[name]["int"].shape == (6,), "m_x, c_x, m_y, c_y, k, eps"
+
+
+def test_a_telecentric_set_can_be_held_at_its_calibration(telecentric_problem):
+    """The whole point of the widths: construct a handler that holds them fixed.
+
+    This is find_target's real path -- it photographs a known target in a known
+    rig -- so it has to work for whatever lens that rig was calibrated with.
+    """
+    from pyCamSet.optimisation.find_target import fix_all_cameras
+
+    cams, target, detection, poses = telecentric_problem
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detection,
+        fixed_params=fix_all_cameras(cams),
+        options={"verbosity": 0, "fixed_pose": []})
+
+    assert not np.any(handler.bundlePrimitive.extr_unfixed)
+    assert not np.any(handler.bundlePrimitive.intr_unfixed)
+
+# --------------------------------------------------------------------------
+# Does the gauge transform actually preserve the calibration?
+#
+# The tests above exercise the model and the read-back's shapes.  None of them
+# asked the one question the gauge transform exists to answer, and its docstring
+# asserts as a guarantee: "The transformation is garunteed to preserve the
+# calibration result."
+#
+# That is testable.  Take a parameter vector that reproduces the detections --
+# residual zero, by construction -- apply the transform, and require the
+# residual still to be zero.  It was not, and the difference is what a rig
+# reports back after a self-calibration.
+# --------------------------------------------------------------------------
+
+
+def _self_params(handler, cams, poses, target):
+    """A full SelfBundleHandler parameter vector: cameras, poses, free points.
+
+    `ground_truth_params` builds the posed block alone, which is the whole
+    vector for `TemplateBundleHandler`.  This handler carries a block of free
+    target points after it, so the posed block on its own is SHORT and every
+    slice past `pose_end` would be misaligned.
+    """
+    head = ground_truth_params(handler, cams, poses)
+    bp = handler.bundlePrimitive
+    assert len(head) == bp.pose_end, (
+        f"the posed block is {len(head)} long but pose_end is {bp.pose_end}")
+    free = np.asarray(handler.feat_unfixed, dtype=bool)
+    return np.concatenate([head, np.asarray(target.point_data, dtype=float).reshape(-1)[free]])
+
+
+def _reprojection_of(arrays, handler, cams):
+    """Mean pixel reprojection of the model the four returned arrays describe.
+
+    Measured straight from the arrays, never by repacking them into a parameter
+    vector: repacking has to know which points are free and which are held for
+    the gauge, and a mistake there is indistinguishable from a broken gauge.
+    """
+    proj, extr, poses, points = arrays
+    proj = np.asarray(proj, dtype=float)
+    extr = np.asarray(extr, dtype=float)
+    placed = np.array([
+        make_4x4h_tform(p[:3], p[3:]) for p in np.asarray(poses, dtype=float)])
+    point_data = np.asarray(points, dtype=float).reshape(-1, 3)
+
+    local = []
+    for cam in cams:
+        clone = cam.__class__.__new__(cam.__class__)
+        clone.__dict__.update(cam.__dict__)
+        local.append(clone)
+
+    flat = handler.detection.sort(["key", "global_im_num"]).get_data()
+    errors = []
+    for row in flat:
+        cam_num, im_num, key = int(row[0]), int(row[1]), int(row[2])
+        cam = local[cam_num]
+        cam.extrinsic = _extrinsic_from_params(extr[cam_num], cam.extrinsic)
+        cam.from_param_vector(proj[cam_num])
+        cam._update_state()
+        world = h_tform(point_data[key], placed[im_num])
+        uv = np.atleast_2d(cam.project_points(world, distort=True))[0]
+        errors.append(np.hypot(uv[0] - row[-2], uv[1] - row[-1]))
+    return float(np.mean(errors))
+
+
+# --------------------------------------------------------------------------
+# Does the gauge transform actually preserve the calibration?
+#
+# The tests above exercise the model and the read-back's shapes.  None of them
+# asked the one question the gauge transform exists to answer, and its docstring
+# asserts as a guarantee: "The transformation is garunteed to preserve the
+# calibration result."
+#
+# That is testable.  Take a parameter vector that reproduces the detections --
+# residual zero, by construction -- apply the transform, and require the
+# residual still to be zero.  It was not, and the difference is what a rig
+# reports back after a self-calibration.
+# --------------------------------------------------------------------------
+
+
+def _self_params(handler, cams, poses, target):
+    """A full SelfBundleHandler parameter vector: cameras, poses, free points.
+
+    `ground_truth_params` builds the posed block alone, which is the whole
+    vector for `TemplateBundleHandler`.  This handler carries a block of
+    estimated target points after it, so the posed block on its own is SHORT and
+    everything past `pose_end` would be misaligned.
+    """
+    head = ground_truth_params(handler, cams, poses)
+    bp = handler.bundlePrimitive
+    assert len(head) == bp.pose_end, (
+        f"the posed block is {len(head)} long but pose_end is {bp.pose_end}")
+    free = np.asarray(handler.feat_unfixed, dtype=bool)
+    return np.concatenate([head, np.asarray(target.point_data, dtype=float).reshape(-1)[free]])
+
+
+def _reprojection_of(arrays, handler, cams):
+    """Mean pixel reprojection of the model the four returned arrays describe.
+
+    Measured straight from the arrays, never by repacking them into a parameter
+    vector: repacking has to know which points are estimated and which are held
+    for the gauge, and a mistake there is indistinguishable from a broken gauge.
+    """
+    proj, extr, poses, points = arrays
+    proj = np.asarray(proj, dtype=float)
+    extr = np.asarray(extr, dtype=float)
+    placed = np.array([
+        make_4x4h_tform(p[:3], p[3:]) for p in np.asarray(poses, dtype=float)])
+    point_data = np.asarray(points, dtype=float).reshape(-1, 3)
+
+    local = []
+    for cam in cams:
+        clone = cam.__class__.__new__(cam.__class__)
+        clone.__dict__.update(cam.__dict__)
+        local.append(clone)
+
+    flat = handler.detection.sort(["key", "global_im_num"]).get_data()
+    errors = []
+    for row in flat:
+        cam_num, im_num, key = int(row[0]), int(row[1]), int(row[2])
+        cam = local[cam_num]
+        cam.extrinsic = _extrinsic_from_params(extr[cam_num], cam.extrinsic)
+        cam.from_param_vector(proj[cam_num])
+        cam._update_state()
+        world = h_tform(point_data[key], placed[im_num])
+        uv = np.atleast_2d(cam.project_points(world, distort=True))[0]
+        errors.append(np.hypot(uv[0] - row[-2], uv[1] - row[-1]))
+    return float(np.mean(errors))
+
+
+# --------------------------------------------------------------------------
+# Does the gauge transform actually preserve the calibration?
+#
+# The tests above exercise the model and the read-back's shapes.  None of them
+# asked the one question the gauge transform exists to answer, and its docstring
+# asserts as a guarantee: "The transformation is garunteed to preserve the
+# calibration result."
+#
+# That is testable, and it was false.  A self-calibration scales its target --
+# that is one of the freedoms the solve has -- and this rig reported its result
+# back at the wrong scale and the wrong orientation: 426 px of reprojection on a
+# real seven-camera cube, against the 0.46 px the solve had actually reached.
+# --------------------------------------------------------------------------
+
+
+def _self_params(handler, cams, poses, target):
+    """A full SelfBundleHandler parameter vector: cameras, poses, free points.
+
+    `ground_truth_params` builds the posed block alone, which is the whole
+    vector for `TemplateBundleHandler`.  This handler carries a block of
+    estimated target points after it, so the posed block on its own is SHORT and
+    everything past `pose_end` would be misaligned.
+    """
+    head = ground_truth_params(handler, cams, poses)
+    bp = handler.bundlePrimitive
+    assert len(head) == bp.pose_end, (
+        f"the posed block is {len(head)} long but pose_end is {bp.pose_end}")
+    free = np.asarray(handler.feat_unfixed, dtype=bool)
+    return np.concatenate(
+        [head, np.asarray(target.point_data, dtype=float).reshape(-1)[free]])
+
+
+def _reprojection_of(arrays, handler, cams):
+    """Mean pixel reprojection of the model the four returned arrays describe.
+
+    Measured straight from the arrays, never by repacking them into a parameter
+    vector: repacking has to know which points are estimated and which are held
+    for the gauge, and a mistake there is indistinguishable from a broken gauge.
+    """
+    proj, extr, poses, points = arrays
+    proj = np.asarray(proj, dtype=float)
+    extr = np.asarray(extr, dtype=float)
+    placed = np.array([
+        make_4x4h_tform(p[:3], p[3:]) for p in np.asarray(poses, dtype=float)])
+    point_data = np.asarray(points, dtype=float).reshape(-1, 3)
+
+    local = []
+    for cam in cams:
+        clone = cam.__class__.__new__(cam.__class__)
+        clone.__dict__.update(cam.__dict__)
+        local.append(clone)
+
+    flat = handler.detection.sort(["key", "global_im_num"]).get_data()
+    errors = []
+    for row in flat:
+        cam_num, im_num, key = int(row[0]), int(row[1]), int(row[2])
+        cam = local[cam_num]
+        cam.extrinsic = _extrinsic_from_params(extr[cam_num], cam.extrinsic)
+        cam.from_param_vector(proj[cam_num])
+        cam._update_state()
+        world = h_tform(point_data[key], placed[im_num])
+        uv = np.atleast_2d(cam.project_points(world, distort=True))[0]
+        errors.append(np.hypot(uv[0] - row[-2], uv[1] - row[-1]))
+    return float(np.mean(errors))
+
+
+# --------------------------------------------------------------------------
+# Does the gauge transform actually preserve the calibration?
+#
+# The tests above exercise the model and the read-back's shapes.  None of them
+# asked the one question the gauge transform exists to answer, and its docstring
+# asserts as a guarantee: "The transformation is garunteed to preserve the
+# calibration result."
+#
+# That is testable, and it was false.  A self-calibration scales its target --
+# that is one of the freedoms the solve has -- and this rig reported its result
+# back at the wrong scale: 426 px of reprojection on a real seven-camera cube,
+# against the 0.46 px the solve had actually reached.
+# --------------------------------------------------------------------------
+
+
+def _self_params(handler, cams, poses, target):
+    """A full SelfBundleHandler parameter vector: cameras, poses, free points.
+
+    `ground_truth_params` builds the posed block alone, which is the whole
+    vector for `TemplateBundleHandler`.  This handler carries a block of
+    estimated target points after it, so the posed block on its own is SHORT and
+    everything past `pose_end` would be misaligned.
+    """
+    head = ground_truth_params(handler, cams, poses)
+    bp = handler.bundlePrimitive
+    assert len(head) == bp.pose_end, (
+        f"the posed block is {len(head)} long but pose_end is {bp.pose_end}")
+    free = np.asarray(handler.feat_unfixed, dtype=bool)
+    return np.concatenate(
+        [head, np.asarray(target.point_data, dtype=float).reshape(-1)[free]])
+
+
+def _reprojection_of(arrays, handler, cams):
+    """Mean pixel reprojection of the model the four returned arrays describe.
+
+    Measured straight from the arrays, never by repacking them into a parameter
+    vector: repacking has to know which points are estimated and which are held
+    for the gauge, and a mistake there is indistinguishable from a broken gauge.
+    """
+    proj, extr, poses, points = arrays
+    proj = np.asarray(proj, dtype=float)
+    extr = np.asarray(extr, dtype=float)
+    placed = np.array([
+        make_4x4h_tform(p[:3], p[3:]) for p in np.asarray(poses, dtype=float)])
+    point_data = np.asarray(points, dtype=float).reshape(-1, 3)
+
+    local = []
+    for cam in cams:
+        clone = cam.__class__.__new__(cam.__class__)
+        clone.__dict__.update(cam.__dict__)
+        local.append(clone)
+
+    flat = handler.detection.sort(["key", "global_im_num"]).get_data()
+    errors = []
+    for row in flat:
+        cam_num, im_num, key = int(row[0]), int(row[1]), int(row[2])
+        cam = local[cam_num]
+        cam.extrinsic = _extrinsic_from_params(extr[cam_num], cam.extrinsic)
+        cam.from_param_vector(proj[cam_num])
+        cam._update_state()
+        world = h_tform(point_data[key], placed[im_num])
+        uv = np.atleast_2d(cam.project_points(world, distort=True))[0]
+        errors.append(np.hypot(uv[0] - row[-2], uv[1] - row[-1]))
+    return float(np.mean(errors))
+
+
+# --------------------------------------------------------------------------
+# Does the gauge transform actually preserve the calibration?
+#
+# The tests above exercise the model and the read-back's shapes.  None of them
+# asked the one question the gauge transform exists to answer, and its docstring
+# asserts as a guarantee: "The transformation is garunteed to preserve the
+# calibration result."
+#
+# That is testable, and it was false.  A self-calibration scales its target --
+# one of the freedoms the solve has -- and this rig reported its result back at
+# the wrong scale: 426 px of reprojection on a real seven-camera cube, against
+# the 0.46 px the solve had actually reached.
+# --------------------------------------------------------------------------
+
+
+def _self_params(handler, cams, poses, target):
+    """A full SelfBundleHandler parameter vector: cameras, poses, free points.
+
+    `ground_truth_params` builds the posed block alone, which is the whole
+    vector for `TemplateBundleHandler`.  This handler carries a block of
+    estimated target points after it, so the posed block on its own is SHORT and
+    everything past `pose_end` would be misaligned.
+    """
+    head = ground_truth_params(handler, cams, poses)
+    bp = handler.bundlePrimitive
+    assert len(head) == bp.pose_end, (
+        f"the posed block is {len(head)} long but pose_end is {bp.pose_end}")
+    free = np.asarray(handler.feat_unfixed, dtype=bool)
+    return np.concatenate(
+        [head, np.asarray(target.point_data, dtype=float).reshape(-1)[free]])
+
+
+def _reprojection_of(arrays, handler, cams):
+    """Mean pixel reprojection of the model the four returned arrays describe.
+
+    Measured straight from the arrays, never by repacking them into a parameter
+    vector: repacking has to know which points are estimated and which are held
+    for the gauge, and a mistake there is indistinguishable from a broken gauge.
+    """
+    proj, extr, poses, points = arrays
+    proj = np.asarray(proj, dtype=float)
+    extr = np.asarray(extr, dtype=float)
+    placed = np.array([
+        make_4x4h_tform(p[:3], p[3:]) for p in np.asarray(poses, dtype=float)])
+    point_data = np.asarray(points, dtype=float).reshape(-1, 3)
+
+    local = []
+    for cam in cams:
+        clone = cam.__class__.__new__(cam.__class__)
+        clone.__dict__.update(cam.__dict__)
+        local.append(clone)
+
+    flat = handler.detection.sort(["key", "global_im_num"]).get_data()
+    errors = []
+    for row in flat:
+        cam_num, im_num, key = int(row[0]), int(row[1]), int(row[2])
+        cam = local[cam_num]
+        cam.extrinsic = _extrinsic_from_params(extr[cam_num], cam.extrinsic)
+        cam.from_param_vector(proj[cam_num])
+        cam._update_state()
+        world = h_tform(point_data[key], placed[im_num])
+        uv = np.atleast_2d(cam.project_points(world, distort=True))[0]
+        errors.append(np.hypot(uv[0] - row[-2], uv[1] - row[-1]))
+    return float(np.mean(errors))
+
+
+# --------------------------------------------------------------------------
+# Does the gauge transform actually preserve the calibration?
+#
+# The tests above exercise the model and the read-back's shapes.  None of them
+# asked the one question the gauge transform exists to answer, and its docstring
+# asserts as a guarantee: "The transformation is garunteed to preserve the
+# calibration result."
+#
+# That is testable, and it was false.  A self-calibration scales its target --
+# one of the freedoms the solve has -- and this rig reported its result back at
+# the wrong scale: 426 px of reprojection on a real seven-camera cube, against
+# the 0.46 px the solve had actually reached.
+# --------------------------------------------------------------------------
+
+
+def _self_params(handler, cams, poses, target, point_scale=1.0):
+    """A full SelfBundleHandler parameter vector: cameras, poses, free points.
+
+    `ground_truth_params` builds the posed block alone, which is the whole
+    vector for `TemplateBundleHandler`.  This handler carries a block of
+    estimated target points after it, so the posed block on its own is SHORT and
+    everything past `pose_end` would be misaligned.
+
+    :param point_scale: carry the estimated points at this multiple of the
+        model's, which is how a self-calibration's own answer looks before the
+        gauge has been applied to it.  1.0 is the drawn model exactly.
+    """
+    head = ground_truth_params(handler, cams, poses)
+    bp = handler.bundlePrimitive
+    assert len(head) == bp.pose_end, (
+        f"the posed block is {len(head)} long but pose_end is {bp.pose_end}")
+    free = np.asarray(handler.feat_unfixed, dtype=bool)
+    points = np.asarray(target.point_data, dtype=float).reshape(-1)[free].copy()
+    if point_scale != 1.0:
+        n_pts = points.size // 3
+        block = points.reshape((n_pts, 3))
+        free_pts = np.asarray(handler.feat_unfixed, dtype=bool).reshape((n_pts, 3))
+        block = block * point_scale
+        # components held for the gauge carry no parameter, so they are not
+        # scaled with the rest
+        block[~free_pts] = (points.reshape((n_pts, 3)))[~free_pts]
+        points = block.reshape(-1)
+    return np.concatenate([head, points])
+
+
+def _reprojection_of(arrays, handler, cams):
+    """Mean pixel reprojection of the model the four returned arrays describe.
+
+    Measured straight from the arrays, never by repacking them into a parameter
+    vector: repacking has to know which points are estimated and which are held
+    for the gauge, and a mistake there is indistinguishable from a broken gauge.
+    """
+    proj, extr, poses, points = arrays
+    proj = np.asarray(proj, dtype=float)
+    extr = np.asarray(extr, dtype=float)
+    placed = np.array([
+        make_4x4h_tform(p[:3], p[3:]) for p in np.asarray(poses, dtype=float)])
+    point_data = np.asarray(points, dtype=float).reshape(-1, 3)
+
+    local = []
+    for cam in cams:
+        clone = cam.__class__.__new__(cam.__class__)
+        clone.__dict__.update(cam.__dict__)
+        local.append(clone)
+
+    flat = handler.detection.sort(["key", "global_im_num"]).get_data()
+    errors = []
+    for row in flat:
+        cam_num, im_num, key = int(row[0]), int(row[1]), int(row[2])
+        cam = local[cam_num]
+        cam.extrinsic = _extrinsic_from_params(extr[cam_num], cam.extrinsic)
+        cam.from_param_vector(proj[cam_num])
+        cam._update_state()
+        world = h_tform(point_data[key], placed[im_num])
+        uv = np.atleast_2d(cam.project_points(world, distort=True))[0]
+        errors.append(np.hypot(uv[0] - row[-2], uv[1] - row[-1]))
+    return float(np.mean(errors))
+
+# --------------------------------------------------------------------------
+# Does the gauge transform actually preserve the calibration?
+#
+# The tests above exercise the model and the read-back's shapes.  None of them
+# asked the one question the gauge transform exists to answer, and its docstring
+# asserts as a guarantee: "The transformation is garunteed to preserve the
+# calibration result."
+#
+# That is testable, and it was false.  A self-calibration scales its target --
+# one of the freedoms the solve has -- and this rig reported its result back at
+# the wrong scale: 426 px of reprojection on a real seven-camera cube, against
+# the 0.46 px the solve had actually reached.
+# --------------------------------------------------------------------------
+
+
+def _self_params(handler, cams, poses, target, point_scale=1.0):
+    """A full SelfBundleHandler parameter vector: cameras, poses, free points.
+
+    `ground_truth_params` builds the posed block alone, which is the whole
+    vector for `TemplateBundleHandler`.  This handler carries a block of
+    estimated target points after it, so the posed block on its own is SHORT and
+    everything past `pose_end` would be misaligned.
+
+    :param point_scale: carry the estimated points at this multiple of the
+        model's, which is how a self-calibration's own answer looks before the
+        gauge has been applied to it.  1.0 is the drawn model exactly.
+    """
+    head = ground_truth_params(handler, cams, poses)
+    bp = handler.bundlePrimitive
+    assert len(head) == bp.pose_end, (
+        f"the posed block is {len(head)} long but pose_end is {bp.pose_end}")
+    free = np.asarray(handler.feat_unfixed, dtype=bool)
+    # the free block is one scalar per held-free component, in flat order
+    points = np.asarray(target.point_data, dtype=float).reshape(-1)[free]
+    return np.concatenate([head, points * point_scale])
+
+
+def _reprojection_of(arrays, handler, cams):
+    """Mean pixel reprojection of the model the four returned arrays describe.
+
+    Measured straight from the arrays, never by repacking them into a parameter
+    vector: repacking has to know which points are estimated and which are held
+    for the gauge, and a mistake there is indistinguishable from a broken gauge.
+    """
+    proj, extr, poses, points = arrays
+    proj = np.asarray(proj, dtype=float)
+    extr = np.asarray(extr, dtype=float)
+    placed = np.array([
+        make_4x4h_tform(p[:3], p[3:]) for p in np.asarray(poses, dtype=float)])
+    point_data = np.asarray(points, dtype=float).reshape(-1, 3)
+
+    local = []
+    for cam in cams:
+        clone = cam.__class__.__new__(cam.__class__)
+        clone.__dict__.update(cam.__dict__)
+        local.append(clone)
+
+    flat = handler.detection.sort(["key", "global_im_num"]).get_data()
+    errors = []
+    for row in flat:
+        cam_num, im_num, key = int(row[0]), int(row[1]), int(row[2])
+        cam = local[cam_num]
+        cam.extrinsic = _extrinsic_from_params(extr[cam_num], cam.extrinsic)
+        cam.from_param_vector(proj[cam_num])
+        cam._update_state()
+        world = h_tform(point_data[key], placed[im_num])
+        uv = np.atleast_2d(cam.project_points(world, distort=True))[0]
+        errors.append(np.hypot(uv[0] - row[-2], uv[1] - row[-1]))
+    return float(np.mean(errors))
+
+
+def test_the_gauge_transform_preserves_the_reprojection(telecentric_problem):
+    """The gauge is a symmetry of the model, or it is not.
+
+    With the target sitting where the model says it is, only the rigid half of
+    the gauge has anything to do, and that half was already correct -- so this
+    passes on the code as it stood.  It is here to pin that the fix did not
+    break it.
+    """
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+    handler.missing_poses = np.zeros(len(poses), dtype=bool)
+
+    before_arrays = handler.bundlePrimitive.return_bundle_primitives(
+        _self_params(handler, cams, poses, target))
+    before = _reprojection_of(before_arrays, handler, cams)
+    after = _reprojection_of(
+        handler.apply_gauge_transform(*before_arrays), handler, cams)
+
+    assert before < 1e-6, f"the fixture itself is not exact: {before} px"
+    assert after == pytest.approx(before, abs=1e-6), (
+        f"the gauge moved the reprojection from {before} to {after} px")
+
+
+def test_the_gauge_rescales_the_lens_when_the_camera_has_no_translation(
+        telecentric_problem):
+    """Where the world's scale is absorbed, for a camera that cannot carry it.
+
+    The gauge hands the rig back re-expressed in the target's units, and the
+    world scale is one of the freedoms it removes.  A pinhole camera takes that
+    scale in its extrinsic TRANSLATION: its projection divides by z, so the
+    camera's own position is the only thing the scale can change, and the code
+    scales that field.  A telecentric extrinsic is rotation-only -- three
+    parameters, no translation at all -- so that step has nothing to act on.
+
+    The compensation has to happen in the lens instead.  A telecentric pixel is
+
+        u = m*x/(1 + eps*z) + c
+
+    and scaling the world by s is undone exactly by m -> m/s together with
+    eps -> eps/s, because (m/s)(s*x)/(1 + (eps/s)(s*z)) is the original
+    expression.
+
+    Feeding the problem a target carried at a scale of its own is what makes the
+    gauge's scale non-trivial; with the target already at the model's scale s
+    comes out at 1 and this branch does nothing.  That is exactly why the defect
+    survived: every fixture in this file has the target at the model's scale.
+    """
+    s0 = 1.37
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+    handler.missing_poses = np.zeros(len(poses), dtype=bool)
+    bp = handler.bundlePrimitive
+
+    before = bp.return_bundle_primitives(
+        _self_params(handler, cams, poses, target, point_scale=s0))
+    proj_in, extr_in = (np.asarray(a, dtype=float).copy() for a in before[:2])
+
+    proj_out, extr_out, _, _ = handler.apply_gauge_transform(*before)
+    proj_out = np.asarray(proj_out, dtype=float)
+    extr_out = np.asarray(extr_out, dtype=float)
+
+    # what the gauge must have done: divide the lens by the scale it removed.
+    # the scale itself is read back from that division, so this also fails, and
+    # with this message, on code that left the lens alone entirely -- which is
+    # the defect it is here to catch.
+    assert not np.allclose(proj_out[:, 0], proj_in[:, 0]), (
+        "the magnification did not take the world's scale. A translation-free "
+        "camera has no extrinsic to carry it, so every pixel moves by the whole "
+        "size of the correction")
+    ratios = proj_in[:, 0] / proj_out[:, 0]
+    assert not np.allclose(ratios, 1.0), (
+        "the gauge found no scale to remove; this test would be vacuous. The "
+        "target has to be carried at its own scale for the branch to do work")
+    assert np.allclose(ratios, ratios[0]), (
+        "every camera in a rig is re-expressed with the same scale")
+
+    # m_x, m_y and eps carry the scale; the principal point and k do not
+    assert np.allclose(proj_out[:, 1], proj_in[:, 1]), "c_x is not a scale"
+    assert np.allclose(proj_out[:, 3], proj_in[:, 3]), "c_y is not a scale"
+    assert np.allclose(proj_out[:, 4], proj_in[:, 4]), "k is not a scale"
+    assert np.allclose(proj_out[:, 2], proj_in[:, 2] / ratios), "m_y must follow"
+    assert np.allclose(proj_out[:, 5], proj_in[:, 5] / ratios), (
+        "the telecentricity must be divided by the same scale as the "
+        "magnification, or the depth term drifts as the world does")
+
+    # the rig itself has not turned; only the world's frame moved
+    assert np.allclose(extr_out, extr_in), (
+        "the gauge moved the camera rotations, but a world scale is not a "
+        "rotation of the rig")

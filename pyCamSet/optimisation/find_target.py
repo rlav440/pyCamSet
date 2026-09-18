@@ -15,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 from pyCamSet.calibration_targets import TargetDetection
+from pyCamSet.optimisation.camera_models import blocks_for_camset
 from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment
 from pyCamSet.optimisation.template_handler import TemplateBundleHandler
 from pyCamSet.utils.general_utils import ext_4x4_to_rod
@@ -31,23 +32,36 @@ def fix_all_cameras(cameras: CameraSet) -> dict:
 
     The handler writes these values straight into its parameter arrays, so
     they have to be in the packed layout those arrays use rather than as
-    matrices: six numbers for an extrinsic (rodrigues rotation then
-    translation) and nine for an intrinsic (fx, cx, fy, cy, then the five
-    distortion coefficients).  Distortion lives inside ``int``; there is no
-    separate key for it.
+    matrices.  Both widths follow the lens model, because they are the widths
+    of that model's own function blocks: a pinhole camera contributes six
+    numbers for an extrinsic (rodrigues rotation then translation) and nine for
+    an intrinsic (fx, cx, fy, cy, then the five distortion coefficients), while
+    a telecentric camera contributes three (rotation alone -- its translation
+    is not identifiable) and six (m_x, c_x, m_y, c_y, k, eps).  Distortion
+    lives inside ``int``; there is no separate key for it.
+
+    Taking these widths from the blocks rather than writing the numbers out is
+    what lets a set of telecentric cameras be held fixed at all: the literals
+    that used to be here were six and nine whatever the model, and the handler's
+    broadcast refused them.
 
     :param cameras: the calibrated camera set to hold fixed
     :return: a fixed_params dict, keyed by camera name
     """
+    # One kernel is compiled per calibration, so every camera in the set shares
+    # a lens model, and its extrinsic block states how wide a pose is.
+    _, extr_block = blocks_for_camset(cameras)
+    extr_width = extr_block.params.n_params
+
     fixed = {}
     for cam in cameras:
         rot, trans = ext_4x4_to_rod(cam.extrinsic)
-        k = cam.intrinsic
+        # Rotation first, then translation, truncated the way the handler packs
+        # its own extrinsics -- a model that estimates no translation simply
+        # stops after the rotation.
         fixed[cam.name] = {
-            "ext": np.concatenate([rot, trans]),
-            "int": np.concatenate(
-                [[k[0, 0], k[0, 2], k[1, 1], k[1, 2]], np.reshape(cam.distortion_coefs, -1)]
-            ),
+            "ext": np.concatenate([rot, trans])[:extr_width],
+            "int": cam.to_param_vector(),
         }
     return fixed
 

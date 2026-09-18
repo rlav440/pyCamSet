@@ -426,6 +426,37 @@ class SelfBundleHandler(TemplateBundleHandler):
         new_points = gu.h_tform(new_points, update_tform)
         #proj matricies never change: scale invariance!
 
+        # A world scale has to be absorbed somewhere, or the pixels move.
+        #
+        # A pinhole camera absorbs it in the extrinsic TRANSLATION, which the
+        # loop below does by scaling that field: its projection divides by z, so
+        # the camera's own position is the only thing the scale can change.
+        #
+        # A lens whose projection has no divide by z is different.  Its pixel
+        #
+        #     u = m*x/(1 + eps*z) + c
+        #
+        # is unchanged by scaling the world only if the lens takes the scale:
+        # (m/s)(s*x)/(1 + (eps/s)(s*z)) is the original expression.  Its
+        # extrinsic is rotation alone -- there is no translation field to carry
+        # the scale, which is why the loop below is a no-op for such a camera --
+        # so the compensation belongs in the intrinsic, and the target's own
+        # pose is re-expressed against the moved frame in one piece rather than
+        # being conjugated on both sides as a pinhole pose is.
+        #
+        # Both branches are exact: each is the identity on the reprojection.
+        if len(extr) and np.shape(extr[0])[0] < 6:
+            proj = np.asarray(proj, dtype=float).copy()
+            proj[:, 0] = proj[:, 0] / s          # m_x
+            proj[:, 2] = proj[:, 2] / s          # m_y
+            proj[:, 5] = proj[:, 5] / s          # eps
+            for i in range(len(poses)):
+                ### scale change, then the frame the target is expressed in
+                pose = gu.make_4x4h_tform(poses[i][:3], poses[i][3:] * s)
+                poses[i][:3], poses[i][3:] = gu.ext_4x4_to_rod(
+                    pose @ inv_update)
+            return proj, extr, poses, new_points
+
         for i in range(len(poses)):
             ### scale change
             poses[i][3:] = poses[i][3:] * s
@@ -472,8 +503,12 @@ class SelfBundleHandler(TemplateBundleHandler):
         # m5 = vm.copy()
 
         
+        # The gauge transform used to be computed here and then discarded one
+        # line later, so it cost a rigid-transform estimate per call and -- for
+        # a telecentric set, whose poses are three wide -- raised before the
+        # line that ignored it.  What is drawn is the recovered target against
+        # the original model, both ungauged, so the call was never the input.
         un_gauged_data = self.get_bundle_adjustment_inputs(x)
-        _,_,_, final_data = self.apply_gauge_transform(*un_gauged_data)
         _, _, _, final_data = un_gauged_data
         unfixed_points = un_gauged_data[-1].copy()
 

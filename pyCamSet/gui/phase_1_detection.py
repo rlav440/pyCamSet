@@ -987,6 +987,17 @@ class Phase1DiagnosticsTab(QWidget):
             hdr.setStyleSheet("font-weight: bold; margin-top: 8px;")
             self._summary_layout.addWidget(hdr)
 
+            # A run that failed has no detections to summarise, and every
+            # figure below reads zero for it -- which is indistinguishable
+            # from a run that searched the images and found nothing. Say
+            # which it was, and say why.
+            failure = run.get("error")
+            if failure:
+                why = QLabel(f"This run failed: {failure}")
+                why.setWordWrap(True)
+                why.setStyleSheet("color: #c0392b; margin-left: 16px;")
+                self._summary_layout.addWidget(why)
+
             # Top summary lines (same content, compact style)
             cov_vals = [float(v) for v in cov_dict.values() if np.isfinite(v)]
             summary_form = QFormLayout()

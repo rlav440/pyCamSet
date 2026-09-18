@@ -1587,7 +1587,12 @@ class Phase3DiagnosticsTab(QWidget):
             self._poses_layout.addWidget(QLabel("Select at least one Phase 3 run to view D3.13."))
             return
 
-        camset_path = run.get("artifacts", {}).get("optimised_camset")
+        # Resolved, not read straight out of the record, as every other
+        # artifact lookup in this file is: a run whose workspace moved
+        # still has its camset, and a bare lookup reports it missing.
+        ws = self._workspace_mgr.workspace_path
+        camset_path = (resolve_artifact(run, "phase3", ws) if ws is not None
+                       else run.get("artifacts", {}).get("optimised_camset"))
         if not camset_path:
             self._poses_layout.addWidget(QLabel("No optimised camset artifact in selected run."))
             return

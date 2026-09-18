@@ -22,7 +22,7 @@ from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.cameras.telecentric_calibration import calibrate_telecentric
 from pyCamSet.cameras.zhang_calibration import calibrate_zhang
 from pyCamSet.cameras.telecentric_camera import TelecentricCamera
-from pyCamSet.cameras.telecentric_calibration import pose_from_affine
+from pyCamSet.cameras.telecentric_calibration import is_planar, pose_from_affine
 from pyCamSet.calibration_targets.core.parameters import (
     NO_PARAMETERS,
     DetectorParameterisation,
@@ -555,6 +555,16 @@ class AbstractTarget(ABC):
         n_boards = 0
         dropped: list[int] = []
         sparse: list[int] = []
+        # A telecentric seed is fitted per image rather than per board. An
+        # affine camera cannot tell a plane tilted by +theta from one tilted by
+        # -theta, and a single board is a plane, so a board on its own can
+        # never seed one -- including a board of the Ccube the error for it
+        # recommends, whose every face is flat. What does carry out-of-plane
+        # extent is an image that caught more than one face, so these hold each
+        # image's detections together, in the target's own frame rather than a
+        # board's.
+        view_object_points: list[np.ndarray] = []
+        view_image_points: list[np.ndarray] = []
 
         for im_detect in detections_in_image:
 
@@ -587,6 +597,18 @@ class AbstractTarget(ABC):
                         f"detections, under the {min_detections_per_board} minimum."
                     )
 
+            kept = np.zeros(len(keys), dtype=bool)
+            for board in boards[mask]:
+                board_mask = np.squeeze(keys[:, :-1] == board)
+                if int(np.sum(board_mask)) >= min_detections_per_board:
+                    kept |= board_mask
+            if kept.any():
+                view_object_points.append(
+                    np.asarray(self.point_data[tuple(keys[kept].astype(int).T)],
+                               dtype=float).reshape(-1, 3))
+                view_image_points.append(
+                    np.asarray(data[kept, -2:], dtype=float).reshape(-1, 2))
+
         if dropped:
             logger.info(
                 f"{cam_name}: dropped {len(dropped)} of {n_boards} board "
@@ -611,9 +633,26 @@ class AbstractTarget(ABC):
             # OpenCV has no telecentric model, and the affine seed needs none:
             # with the distortion and the telecentricity error set aside the
             # projection is linear, and the bundle adjustment refines both.
+            usable = [(o, i) for o, i in zip(view_object_points, view_image_points)
+                      if not is_planar(o)]
+            flat = len(view_object_points) - len(usable)
+            if flat:
+                logger.info(
+                    f"{cam_name}: {flat} of {len(view_object_points)} images show "
+                    "the target too flat-on for an affine pose to be told apart "
+                    "from its mirror, and do not seed the telecentric fit")
+            if not usable:
+                raise ValueError(
+                    f"Camera {cam_name} has no image showing enough of the "
+                    "target's out-of-plane extent to seed a telecentric "
+                    "calibration: every view is a plane, whose tilt an affine "
+                    "camera cannot resolve. A cube target seeds one from any "
+                    "image catching two of its faces, so photograph it from "
+                    "angles that show more than one face at a time."
+                )
             magnification, principal, tele_poses, tele_rms = calibrate_telecentric(
-                [np.reshape(o, (-1, 3)) for o in object_points],
-                [np.reshape(i, (-1, 2)) for i in image_points],
+                [o for o, _ in usable],
+                [i for _, i in usable],
                 res,
             )
             logger.info(

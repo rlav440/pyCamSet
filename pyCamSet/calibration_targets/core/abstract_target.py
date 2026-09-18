@@ -20,6 +20,7 @@ import signal
 from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.cameras.telecentric_calibration import calibrate_telecentric
+from pyCamSet.cameras.lens_models import LENS_MODELS
 from pyCamSet.cameras.zhang_calibration import calibrate_zhang
 from pyCamSet.cameras.telecentric_camera import TelecentricCamera
 from pyCamSet.cameras.telecentric_calibration import pose_from_affine
@@ -749,9 +750,9 @@ class AbstractTarget(ABC):
         :param model: the lens model to fit, "pinhole" or "telecentric"
         :return: A camera object.
         """
-        if model not in ("pinhole", "telecentric"):
-            raise ValueError(
-                f"Unknown lens model {model!r}; expected 'pinhole' or 'telecentric'")
+        if model not in LENS_MODELS:
+            offered = ", ".join(repr(m) for m in LENS_MODELS)
+            raise ValueError(f"Unknown lens model {model!r}; expected {offered}")
         telecentric = model == "telecentric"
 
         detections_in_image = detection.get(cam=cam_name).get_image_list()

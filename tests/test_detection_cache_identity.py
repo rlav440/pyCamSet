@@ -107,6 +107,63 @@ def _instrumented(target):
     return calls
 
 
+def _break(monkeypatch, where):
+    """Make one step of the cache write fail, as a locked, read-only or
+    over-long destination would."""
+    from pyCamSet.calibration import camera_calibrator as calibrator
+
+    if where == "pickle_write":
+        def failing_save_pickle(*_args, **_kwargs):
+            raise OSError("simulated disk-full / MAX_PATH / AV-lock")
+
+        monkeypatch.setattr(calibrator, "save_pickle", failing_save_pickle)
+        return
+
+    attribute = "write_text" if where == "sidecar_write" else "unlink"
+    real = getattr(Path, attribute)
+
+    def failing(self, *args, **kwargs):
+        if self.name.endswith(".identity.json"):
+            raise PermissionError(f"simulated failure: {where}")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, attribute, failing)
+
+
+@pytest.fixture
+def corpus_images(session_data_dir, tmp_path):
+    """Three images per camera from the checked-in ChArUco corpus."""
+    source = session_data_dir / "calibration_charuco"
+    image_folder = tmp_path / "images"
+    image_folder.mkdir()
+    for cam_folder in sorted(p for p in source.iterdir() if p.is_dir()):
+        destination = image_folder / cam_folder.name
+        destination.mkdir()
+        for image in sorted(cam_folder.glob("*.jpg"))[:3]:
+            shutil.copy(image, destination / image.name)
+    return image_folder
+
+
+def _phase1_params(image_folder, selected_cameras=()):
+    """Phase 1's parameter dict for *image_folder*.
+
+    A proper subset in *selected_cameras* is what forces the staged
+    temporary root, and with it the cache copy-in and copy-back steps.
+    """
+    return {
+        "target": CHARUCO_SPEC,
+        "f_loc": str(image_folder),
+        "caching": True,
+        "high_distortion": False,
+        "n_lim": None,
+        "threads": 1,
+        "upscale_factor": 1,
+        "fixed_params": None,
+        "problem_options": None,
+        "selected_cameras": list(selected_cameras),
+    }
+
+
 # ---------------------------------------------------------------------------
 # staged_camera_root: staging must trigger on an unselected candidate camera
 # folder, and only on that -- never on a workspace, a cache, or its sidecar
@@ -810,170 +867,6 @@ def test_a_detection_pass_pairs_its_sidecar_with_its_own_written_bytes(
 
 
 # ---------------------------------------------------------------------------
-# A failed sidecar write (P1) must degrade to "no sidecar", never abort a
-# successful detection pass.
-# ---------------------------------------------------------------------------
-
-
-def test_write_cache_identity_survives_a_write_failure(tmp_path, monkeypatch):
-    """E.g. a sidecar path 7 characters longer than a pickle path that
-    itself just fit under Windows' MAX_PATH: write_text raises, but that
-    must never propagate out of write_cache_identity."""
-    target = build_target({"type": "ChArUco2"})
-    cache_path = tmp_path / "detected_datapoints.pickle"
-    cache_path.write_bytes(b"a valid cache")
-
-    real_write_text = Path.write_text
-
-    def raising_write_text(self, *args, **kwargs):
-        if self.name.endswith(".identity.json"):
-            raise OSError("simulated MAX_PATH failure writing the sidecar")
-        return real_write_text(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "write_text", raising_write_text)
-
-    write_cache_identity(cache_path, target, ["cam0", "cam1"], None)  # must not raise
-
-    assert not cache_identity_path(cache_path).exists()
-
-
-def test_a_detection_pass_survives_a_sidecar_write_failure(tmp_path, monkeypatch):
-    """The bug end to end: an unguarded sidecar write_text used to abort the
-    whole detection pass over a bookkeeping file, throwing away detections
-    that had already succeeded."""
-    from pyCamSet.calibration import camera_calibrator as calibrator
-
-    images = _image_folder(tmp_path)
-    target = build_target({"type": "ChArUco2"})
-    calls = _instrumented(target)
-
-    real_write_text = Path.write_text
-
-    def raising_write_text(self, *args, **kwargs):
-        if self.name.endswith(".identity.json"):
-            raise OSError("simulated MAX_PATH failure writing the sidecar")
-        return real_write_text(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "write_text", raising_write_text)
-
-    detected, cam_res = calibrator.detect_datapoints_in_imfile(
-        f_loc=images, calibration_target=target, caching=True, threads=1)
-
-    assert calls["count"] == 2, "detection itself must still have run to completion"
-    assert detected == 2
-
-    cache_path = images / "detected_datapoints_aruco2.pickle"
-    assert cache_path.exists(), "the pickle itself must still be written"
-    assert not cache_identity_path(cache_path).exists(), (
-        "a failed sidecar write must leave no sidecar, not a partial one")
-
-
-def test_a_detection_pass_survives_a_cache_pickle_write_failure(tmp_path, monkeypatch):
-    """P1 (round 6): unlike the sidecar unlink()s and write_cache_identity's
-    own write_text() around it, the cache pickle's own save_pickle() call
-    used to be completely unguarded -- exactly the write the surrounding
-    OSError handling exists to protect (e.g. a MAX_PATH image folder, a full
-    disk, an AV lock, a read-only folder). An OSError there used to abort
-    the whole detection pass over what is only a caching speed-up, even
-    though the detections themselves had already been computed."""
-    from pyCamSet.calibration import camera_calibrator as calibrator
-
-    images = _image_folder(tmp_path)
-    target = build_target({"type": "ChArUco2"})
-    calls = _instrumented(target)
-
-    def raising_save_pickle(*_args, **_kwargs):
-        raise OSError("simulated MAX_PATH / disk-full / AV-lock failure "
-                      "writing the cache pickle itself")
-
-    monkeypatch.setattr(calibrator, "save_pickle", raising_save_pickle)
-
-    detected, cam_res = calibrator.detect_datapoints_in_imfile(
-        f_loc=images, calibration_target=target, caching=True, threads=1)
-
-    assert calls["count"] == 2, "detection itself must still have run to completion"
-    assert detected == 2
-
-    cache_path = images / "detected_datapoints_aruco2.pickle"
-    assert not cache_path.exists(), (
-        "save_pickle itself raised, so no pickle bytes ever landed on disk")
-    assert not cache_identity_path(cache_path).exists(), (
-        "nothing valid to hash -- no sidecar must be written for a cache "
-        "pickle that was never actually written")
-
-
-@pytest.mark.data
-@pytest.mark.slow
-def test_a_successful_detection_survives_a_cache_pickle_write_failure(
-        session_data_dir, tmp_path, monkeypatch):
-    """The same bug end to end through phase1.run(): a run whose detection
-    pass itself succeeded must still record its artifact even when the
-    cache pickle write that follows it fails."""
-    from pyCamSet.calibration import camera_calibrator as calibrator
-    from pyCamSet.workflow import phase1
-
-    source = session_data_dir / "calibration_charuco"
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    for cam_folder in sorted(p for p in source.iterdir() if p.is_dir()):
-        target_folder = image_folder / cam_folder.name
-        target_folder.mkdir()
-        for image in sorted(cam_folder.glob("*.jpg"))[:3]:
-            shutil.copy(image, target_folder / image.name)
-
-    workspace = WorkspaceManager(workspace_path_for(image_folder))
-    params = {
-        "target": CHARUCO_SPEC,
-        "f_loc": str(image_folder),
-        "caching": True,
-        "high_distortion": False,
-        "n_lim": None,
-        "threads": 1,
-        "upscale_factor": 1,
-        "fixed_params": None,
-        "problem_options": None,
-        "selected_cameras": [],
-    }
-
-    def failing_save_pickle(*_args, **_kwargs):
-        # calibrator.save_pickle is only ever called from inside
-        # detect_datapoints_in_imfile's own cache write -- run()'s
-        # run-local artifact goes through save_detections() (workflow/
-        # detections.py), which has its own independent implementation and
-        # is untouched by this monkeypatch.
-        raise OSError("simulated MAX_PATH / disk-full / AV-lock failure "
-                      "writing the cache pickle itself")
-
-    monkeypatch.setattr(calibrator, "save_pickle", failing_save_pickle)
-
-    log: list[str] = []
-    run = phase1.run(params, workspace, log.append)
-
-    assert run["error"] is None, run["error"]
-    artifact = run.get("artifacts", {}).get("detected_datapoints_pickle")
-    assert artifact, (
-        "a successful detection must still produce an artifact even when "
-        "writing the cache pickle itself fails")
-    assert Path(artifact).is_file()
-
-    # This is meant to be "a successful detection", not merely a run that
-    # did not raise: CHARUCO_SPEC must be the corpus's own legacy setting
-    # (round-2 review, P2), or every image detects zero corners and this
-    # never exercises real detection content at all.
-    total_detections = sum(run["diagnostics"]["D1.1_total_detections"].values())
-    assert total_detections > 0, (
-        "no corners were detected at all -- CHARUCO_SPEC's 'legacy' flag "
-        "probably does not match the checked-in corpus"
-    )
-
-    # The cache write failed, so f_loc has neither a pickle nor a sidecar --
-    # a safe future miss, not a stale or half-written hit.
-    cache_path = image_folder / "detected_datapoints.pickle"
-    assert not cache_path.exists()
-    assert not cache_identity_path(cache_path).exists()
-
-
-# ---------------------------------------------------------------------------
 # TOCTOU (P2, round 5): closed structurally rather than patched. Round 3's
 # fix re-verified with a second, separate cache_matches() call after
 # load_pickle() -- itself a measured ~4-4.5x wall-time regression on every
@@ -1034,68 +927,48 @@ def test_a_cache_hit_reads_the_pickle_exactly_once_and_never_calls_cache_matches
 
 
 # ---------------------------------------------------------------------------
-# Unguarded unlink() calls (P1, round 3): both the sidecar unlink at the top
-# of write_cache_identity and the one immediately before save_pickle must
-# degrade to "no sidecar" on a transient OSError, exactly like the write_text
-# call next to them already does -- never discard an already-successful
-# detection or an already-written pickle.
+# Cache bookkeeping is best-effort.  A pickle write, a sidecar write and the
+# stale-sidecar unlink beside them can each fail on a locked, read-only or
+# over-long destination; none of them may propagate out of a detection pass
+# that has already computed its detections, and none may leave a pickle
+# paired with a sidecar that does not describe it.
 # ---------------------------------------------------------------------------
 
 
-def test_write_cache_identity_survives_an_unlink_failure(tmp_path, monkeypatch):
-    """The stale-sidecar unlink() at the top of write_cache_identity, not
-    just its own write_text() a few lines later, must also degrade rather
-    than raise -- write_text() overwrites the stale sidecar's content in
-    place regardless of whether this unlink succeeded."""
+@pytest.mark.parametrize("where", ["sidecar_write", "sidecar_unlink"])
+def test_write_cache_identity_degrades_rather_than_raising(tmp_path, monkeypatch, where):
     target = build_target({"type": "ChArUco2"})
     cache_path = tmp_path / "detected_datapoints.pickle"
     cache_path.write_bytes(b"a valid cache")
-    # A stale sidecar already on disk, so this unlink has something to
-    # remove -- missing_ok=True alone would never raise on a target that is
-    # not there.
+    # A stale sidecar, so the unlink has something to remove -- missing_ok=True
+    # alone never raises on a target that is not there.
     cache_identity_path(cache_path).write_text(
         '{"identity": {}, "cache_sha256": "stale"}', encoding="utf-8")
 
-    real_unlink = Path.unlink
-
-    def raising_unlink(self, *args, **kwargs):
-        if self.name.endswith(".identity.json"):
-            raise PermissionError("simulated lock on the sidecar")
-        return real_unlink(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "unlink", raising_unlink)
+    _break(monkeypatch, where)
 
     write_cache_identity(cache_path, target, ["cam0", "cam1"], None)  # must not raise
 
-    # The stale sidecar's unlink failed, but write_text still overwrote it
-    # with the fresh, correct identity.
-    sidecar = json.loads(cache_identity_path(cache_path).read_text(encoding="utf-8"))
-    assert sidecar["identity"]["target_spec"]["type"] == "ChArUco2"
+    if where == "sidecar_write":
+        # The stale sidecar went; nothing replaced it.  A future miss, not a
+        # sidecar that no longer describes the pickle beside it.
+        assert not cache_identity_path(cache_path).exists()
+    else:
+        # write_text overwrites the stale sidecar in place, so a failed
+        # unlink costs nothing.
+        sidecar = json.loads(cache_identity_path(cache_path).read_text(encoding="utf-8"))
+        assert sidecar["identity"]["target_spec"]["type"] == "ChArUco2"
 
 
-def test_a_detection_pass_survives_a_sidecar_unlink_failure_before_the_write(
-        tmp_path, monkeypatch):
-    """The unguarded unlink() immediately before save_pickle (A1's own
-    pairing-integrity step) used to be able to abort the whole detection
-    pass over a bookkeeping file, discarding detections that had already
-    completed and leaving no cache written at all -- reproduced here even on
-    a completely fresh folder with no pre-existing sidecar, since
-    missing_ok=True never protects against an OSError other than
-    FileNotFoundError."""
+@pytest.mark.parametrize("where", ["sidecar_write", "sidecar_unlink", "pickle_write"])
+def test_a_detection_pass_survives_a_cache_write_failure(tmp_path, monkeypatch, where):
     from pyCamSet.calibration import camera_calibrator as calibrator
 
     images = _image_folder(tmp_path)
     target = build_target({"type": "ChArUco2"})
     calls = _instrumented(target)
 
-    real_unlink = Path.unlink
-
-    def raising_unlink(self, *args, **kwargs):
-        if self.name.endswith(".identity.json"):
-            raise PermissionError("simulated lock on the sidecar")
-        return real_unlink(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "unlink", raising_unlink)
+    _break(monkeypatch, where)
 
     detected, cam_res = calibrator.detect_datapoints_in_imfile(
         f_loc=images, calibration_target=target, caching=True, threads=1)
@@ -1104,12 +977,17 @@ def test_a_detection_pass_survives_a_sidecar_unlink_failure_before_the_write(
     assert detected == 2
 
     cache_path = images / "detected_datapoints_aruco2.pickle"
-    assert cache_path.exists(), (
-        "the pickle itself must still be written despite the unlink failure")
-    # write_cache_identity's own unlink (also patched here) degrades the
-    # same way, so write_text still runs and the sidecar is still correct.
-    assert cache_identity_path(cache_path).exists()
-    assert calibrator.cache_matches(cache_path, target, ["cam0", "cam1"], None) is True
+    if where == "pickle_write":
+        # No bytes landed, so there is nothing for a sidecar to describe.
+        assert not cache_path.exists()
+        assert not cache_identity_path(cache_path).exists()
+    elif where == "sidecar_write":
+        assert cache_path.exists(), "the pickle itself must still be written"
+        assert not cache_identity_path(cache_path).exists(), (
+            "a failed sidecar write must leave no sidecar, not a partial one")
+    else:
+        assert cache_path.exists(), "the pickle itself must still be written"
+        assert calibrator.cache_matches(cache_path, target, ["cam0", "cam1"], None) is True
 
 
 # ---------------------------------------------------------------------------
@@ -1293,8 +1171,7 @@ def test_a_cache_with_no_sidecar_logs_differently_from_a_real_mismatch(
 
 @pytest.mark.data
 @pytest.mark.slow
-def test_a_second_run_hits_the_cache_with_the_workspace_nested_in_f_loc(
-        session_data_dir, tmp_path):
+def test_a_second_run_hits_the_cache_with_the_workspace_nested_in_f_loc(corpus_images):
     """Before this fix, ``.pycamset_workspace`` living inside the image
     folder -- the documented and the GUI layout, present from the very
     first run -- forced staging on every run, so caching never actually
@@ -1311,28 +1188,10 @@ def test_a_second_run_hits_the_cache_with_the_workspace_nested_in_f_loc(
     """
     from pyCamSet.workflow import phase1
 
-    source = session_data_dir / "calibration_charuco"
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    for cam_folder in sorted(p for p in source.iterdir() if p.is_dir()):
-        target_folder = image_folder / cam_folder.name
-        target_folder.mkdir()
-        for image in sorted(cam_folder.glob("*.jpg"))[:3]:
-            shutil.copy(image, target_folder / image.name)
+    image_folder = corpus_images
 
     workspace = WorkspaceManager(workspace_path_for(image_folder))
-    params = {
-        "target": CHARUCO_SPEC,
-        "f_loc": str(image_folder),
-        "caching": True,
-        "high_distortion": False,
-        "n_lim": None,
-        "threads": 1,
-        "upscale_factor": 1,
-        "fixed_params": None,
-        "problem_options": None,
-        "selected_cameras": [],
-    }
+    params = _phase1_params(image_folder)
 
     log1: list[str] = []
     run1 = phase1.run(dict(params), workspace, log1.append)
@@ -1357,8 +1216,7 @@ def test_a_second_run_hits_the_cache_with_the_workspace_nested_in_f_loc(
 
 @pytest.mark.data
 @pytest.mark.slow
-def test_a_camera_subset_reuses_the_cache_across_staged_runs(
-        session_data_dir, tmp_path):
+def test_a_camera_subset_reuses_the_cache_across_staged_runs(corpus_images):
     """``staged_camera_root`` hands a strict camera subset a fresh
     ``TemporaryDirectory`` on every single call (see its own docstring) --
     that root can never contain the cache a previous run of the SAME subset
@@ -1368,34 +1226,16 @@ def test_a_camera_subset_reuses_the_cache_across_staged_runs(
     different identity (``cam_names``) and must still redetect."""
     from pyCamSet.workflow import phase1
 
-    source = session_data_dir / "calibration_charuco"
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    all_cams = sorted(p.name for p in source.iterdir() if p.is_dir())
+    image_folder = corpus_images
+    all_cams = sorted(p.name for p in image_folder.iterdir() if p.is_dir())
     assert len(all_cams) >= 3, "need an unselected camera folder to force staging"
-    for cam_folder in sorted(p for p in source.iterdir() if p.is_dir()):
-        target_folder = image_folder / cam_folder.name
-        target_folder.mkdir()
-        for image in sorted(cam_folder.glob("*.jpg"))[:3]:
-            shutil.copy(image, target_folder / image.name)
 
     workspace = WorkspaceManager(workspace_path_for(image_folder))
     subset_1 = all_cams[:2]
     subset_2 = [all_cams[0], all_cams[2]]
 
     def run_with(subset, log):
-        params = {
-            "target": CHARUCO_SPEC,
-            "f_loc": str(image_folder),
-            "caching": True,
-            "high_distortion": False,
-            "n_lim": None,
-            "threads": 1,
-            "upscale_factor": 1,
-            "fixed_params": None,
-            "problem_options": None,
-            "selected_cameras": subset,
-        }
+        params = _phase1_params(image_folder, subset)
         return phase1.run(params, workspace, log.append)
 
     log1: list[str] = []
@@ -1429,7 +1269,7 @@ def test_a_camera_subset_reuses_the_cache_across_staged_runs(
 @pytest.mark.data
 @pytest.mark.slow
 def test_a_successful_detection_survives_a_sidecar_copy_back_failure(
-        session_data_dir, tmp_path, monkeypatch):
+        corpus_images, monkeypatch):
     """A strict camera subset routes detection through a staged
     ``TemporaryDirectory`` (``root != f_loc``), so a successful detection's
     cache pickle AND its identity sidecar are both copied back to ``f_loc``.
@@ -1440,30 +1280,12 @@ def test_a_successful_detection_survives_a_sidecar_copy_back_failure(
     cache pickle was sitting right there in ``f_loc``."""
     from pyCamSet.workflow import phase1
 
-    source = session_data_dir / "calibration_charuco"
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    all_cams = sorted(p.name for p in source.iterdir() if p.is_dir())
+    image_folder = corpus_images
+    all_cams = sorted(p.name for p in image_folder.iterdir() if p.is_dir())
     assert len(all_cams) >= 3, "need an unselected camera folder to force staging"
-    for cam_folder in sorted(p for p in source.iterdir() if p.is_dir()):
-        target_folder = image_folder / cam_folder.name
-        target_folder.mkdir()
-        for image in sorted(cam_folder.glob("*.jpg"))[:3]:
-            shutil.copy(image, target_folder / image.name)
 
     workspace = WorkspaceManager(workspace_path_for(image_folder))
-    params = {
-        "target": CHARUCO_SPEC,
-        "f_loc": str(image_folder),
-        "caching": True,
-        "high_distortion": False,
-        "n_lim": None,
-        "threads": 1,
-        "upscale_factor": 1,
-        "fixed_params": None,
-        "problem_options": None,
-        "selected_cameras": all_cams[:2],  # a proper subset -> forces staging
-    }
+    params = _phase1_params(image_folder, all_cams[:2])
 
     real_copy_file = phase1.copy_file
 
@@ -1491,73 +1313,6 @@ def test_a_successful_detection_survives_a_sidecar_copy_back_failure(
     assert not cache_identity_path(cache_path).exists()
 
 
-@pytest.mark.data
-@pytest.mark.slow
-def test_a_delete_file_failure_on_the_sidecar_copy_back_does_not_lose_the_run(
-        session_data_dir, tmp_path, monkeypatch):
-    """The other half of the same guard: when the staged root wrote no
-    sidecar at all, the copy-back path tries to *delete* a stale destination
-    sidecar instead of copying one in. If that delete_file raises (e.g. the
-    destination sidecar is not removable), the run must still keep its
-    already-successful detections_source rather than losing them."""
-    from pyCamSet.calibration import camera_calibrator as calibrator
-    from pyCamSet.workflow import phase1
-
-    source = session_data_dir / "calibration_charuco"
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    all_cams = sorted(p.name for p in source.iterdir() if p.is_dir())
-    assert len(all_cams) >= 3, "need an unselected camera folder to force staging"
-    for cam_folder in sorted(p for p in source.iterdir() if p.is_dir()):
-        target_folder = image_folder / cam_folder.name
-        target_folder.mkdir()
-        for image in sorted(cam_folder.glob("*.jpg"))[:3]:
-            shutil.copy(image, target_folder / image.name)
-
-    # A stale sidecar already sitting at the destination cache name, from an
-    # earlier, unrelated run -- exactly what the delete_file call in the
-    # copy-back path exists to remove.
-    stale_sidecar = image_folder / "detected_datapoints.identity.json"
-    stale_sidecar.write_text('{"identity": {}, "cache_sha256": "stale"}',
-                             encoding="utf-8")
-
-    # Force "the staged root wrote no sidecar for this pickle" without
-    # touching real detection, so this test isolates the delete_file
-    # failure path rather than exercising write_cache_identity itself
-    # (covered elsewhere in this file).
-    monkeypatch.setattr(calibrator, "write_cache_identity", lambda *a, **k: None)
-
-    workspace = WorkspaceManager(workspace_path_for(image_folder))
-    params = {
-        "target": CHARUCO_SPEC,
-        "f_loc": str(image_folder),
-        "caching": True,
-        "high_distortion": False,
-        "n_lim": None,
-        "threads": 1,
-        "upscale_factor": 1,
-        "fixed_params": None,
-        "problem_options": None,
-        "selected_cameras": all_cams[:2],  # a proper subset -> forces staging
-    }
-
-    def failing_delete_file(path):
-        if str(path).endswith(".identity.json"):
-            raise PermissionError("simulated undeletable stale sidecar")
-
-    monkeypatch.setattr(phase1, "delete_file", failing_delete_file)
-
-    log: list[str] = []
-    run = phase1.run(params, workspace, log.append)
-
-    assert run["error"] is None, run["error"]
-    artifact = run.get("artifacts", {}).get("detected_datapoints_pickle")
-    assert artifact, (
-        "a successful detection must still produce an artifact even when "
-        "removing a stale sidecar at the destination fails")
-    assert Path(artifact).is_file()
-
-
 # ---------------------------------------------------------------------------
 # The pre-copy-in step (P1, round 3): bringing a previous run's cache INTO
 # the fresh staged root, so a rerun of the SAME subset can still hit it, is
@@ -1571,7 +1326,7 @@ def test_a_delete_file_failure_on_the_sidecar_copy_back_does_not_lose_the_run(
 @pytest.mark.data
 @pytest.mark.slow
 def test_a_failed_cache_pre_warm_does_not_abort_a_rerun_of_the_same_subset(
-        session_data_dir, tmp_path, monkeypatch, caplog):
+        corpus_images, monkeypatch, caplog):
     """A failure copying a previous run's cache INTO the fresh staged root
     must be skipped, letting detect_datapoints_in_imfile redetect into an
     empty staged root instead -- never abort the whole run, and never leave
@@ -1579,31 +1334,13 @@ def test_a_failed_cache_pre_warm_does_not_abort_a_rerun_of_the_same_subset(
     other end."""
     from pyCamSet.workflow import phase1
 
-    source = session_data_dir / "calibration_charuco"
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    all_cams = sorted(p.name for p in source.iterdir() if p.is_dir())
+    image_folder = corpus_images
+    all_cams = sorted(p.name for p in image_folder.iterdir() if p.is_dir())
     assert len(all_cams) >= 3, "need an unselected camera folder to force staging"
-    for cam_folder in sorted(p for p in source.iterdir() if p.is_dir()):
-        target_folder = image_folder / cam_folder.name
-        target_folder.mkdir()
-        for image in sorted(cam_folder.glob("*.jpg"))[:3]:
-            shutil.copy(image, target_folder / image.name)
 
     workspace = WorkspaceManager(workspace_path_for(image_folder))
     subset = all_cams[:2]
-    params = {
-        "target": CHARUCO_SPEC,
-        "f_loc": str(image_folder),
-        "caching": True,
-        "high_distortion": False,
-        "n_lim": None,
-        "threads": 1,
-        "upscale_factor": 1,
-        "fixed_params": None,
-        "problem_options": None,
-        "selected_cameras": subset,  # a proper subset -> forces staging
-    }
+    params = _phase1_params(image_folder, subset)
 
     # Seed a valid, matching cache + sidecar at f_loc for this exact subset.
     log1: list[str] = []
@@ -1656,7 +1393,7 @@ def test_a_failed_cache_pre_warm_does_not_abort_a_rerun_of_the_same_subset(
 @pytest.mark.parametrize("caching", [True, False])
 @pytest.mark.parametrize("staged", [False, True])
 def test_the_artifact_is_always_this_runs_own_detections_never_a_different_cache(
-        session_data_dir, tmp_path, caching, staged):
+        corpus_images, caching, staged):
     """A different, unrelated cache already sitting at the shared slot --
     with no identity sidecar at all, so it could never even be confirmed --
     must have zero effect on the artifact, whether caching is True or False
@@ -1665,17 +1402,10 @@ def test_the_artifact_is_always_this_runs_own_detections_never_a_different_cache
     from pyCamSet.workflow import phase1
     from pyCamSet.workflow.detections import extract_detection_and_cam_res
 
-    source = session_data_dir / "calibration_charuco"
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    all_cams = sorted(p.name for p in source.iterdir() if p.is_dir())
+    image_folder = corpus_images
+    all_cams = sorted(p.name for p in image_folder.iterdir() if p.is_dir())
     if staged:
         assert len(all_cams) >= 3, "need an unselected camera folder to force staging"
-    for cam_folder in sorted(p for p in source.iterdir() if p.is_dir()):
-        target_folder = image_folder / cam_folder.name
-        target_folder.mkdir()
-        for image in sorted(cam_folder.glob("*.jpg"))[:3]:
-            shutil.copy(image, target_folder / image.name)
 
     # A stale, unrelated cache at the shared slot -- no sidecar, so
     # cache_matches() could never confirm it either; the point is that
@@ -1685,18 +1415,8 @@ def test_the_artifact_is_always_this_runs_own_detections_never_a_different_cache
     stale_bytes = cache_path.read_bytes()
 
     workspace = WorkspaceManager(workspace_path_for(image_folder))
-    params = {
-        "target": CHARUCO_SPEC,
-        "f_loc": str(image_folder),
-        "caching": caching,
-        "high_distortion": False,
-        "n_lim": None,
-        "threads": 1,
-        "upscale_factor": 1,
-        "fixed_params": None,
-        "problem_options": None,
-        "selected_cameras": all_cams[:2] if staged else [],
-    }
+    params = _phase1_params(image_folder, all_cams[:2] if staged else [])
+    params["caching"] = caching
 
     expected_cams = sorted(all_cams[:2]) if staged else all_cams
 
@@ -1724,7 +1444,7 @@ def test_the_artifact_is_always_this_runs_own_detections_never_a_different_cache
 @pytest.mark.data
 @pytest.mark.slow
 def test_a_concurrent_clobber_of_the_shared_cache_during_the_run_cannot_reach_the_artifact(
-        session_data_dir, tmp_path, monkeypatch):
+        corpus_images, monkeypatch):
     """The four rounds of race variants the OVERSEER decision removed
     structurally, replayed once more: a concurrent, independently correct
     phase 1 run for a DIFFERENT identity finishes and overwrites the shared
@@ -1742,29 +1462,11 @@ def test_a_concurrent_clobber_of_the_shared_cache_during_the_run_cannot_reach_th
     from pyCamSet.workflow import phase1
     from pyCamSet.workflow.detections import extract_detection_and_cam_res
 
-    source = session_data_dir / "calibration_charuco"
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    cam_names = sorted(p.name for p in source.iterdir() if p.is_dir())
-    for cam_folder in sorted(p for p in source.iterdir() if p.is_dir()):
-        target_folder = image_folder / cam_folder.name
-        target_folder.mkdir()
-        for image in sorted(cam_folder.glob("*.jpg"))[:3]:
-            shutil.copy(image, target_folder / image.name)
+    image_folder = corpus_images
+    cam_names = sorted(p.name for p in image_folder.iterdir() if p.is_dir())
 
     workspace = WorkspaceManager(workspace_path_for(image_folder))
-    params = {
-        "target": CHARUCO_SPEC,
-        "f_loc": str(image_folder),
-        "caching": True,
-        "high_distortion": False,
-        "n_lim": None,
-        "threads": 1,
-        "upscale_factor": 1,
-        "fixed_params": None,
-        "problem_options": None,
-        "selected_cameras": [],  # the whole folder -- no subset needed
-    }
+    params = _phase1_params(image_folder)
 
     cache_path = image_folder / "detected_datapoints.pickle"
     target_b = build_target(CHARUCO_SPEC)  # same type; n_lim is what differs
@@ -1855,59 +1557,3 @@ def test_matching_image_folder_cache_does_not_crash_when_the_target_class_fails_
     assert result is None
 
 
-@pytest.mark.data
-@pytest.mark.slow
-def test_a_run_with_an_unbuildable_target_and_a_stray_cache_does_not_crash(
-        session_data_dir, tmp_path, monkeypatch):
-    """The original bug's own repro, kept as a regression test after the
-    round-5 restructuring made its original mechanism moot: run() no longer
-    has any last-resort fallback that calls matching_image_folder_cache() at
-    all (see phase1.run's own docstring), so an unbuildable target's class
-    can no longer be reached from run() on a failed detection either way.
-    _detect() still fails early here for an ordinary, unrelated reason
-    (uneven image counts), and a stray pickle still sits at the fallback
-    cache path -- this now just confirms both remain harmless: an ordinary
-    error-carrying metadata dict, with no artifact."""
-    import pyCamSet.workflow.targets as targets_module
-    from pyCamSet.workflow import phase1
-
-    source = session_data_dir / "calibration_charuco"
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    cam_folders = sorted(p for p in source.iterdir() if p.is_dir())[:2]
-    # Uneven image counts: _detect() raises before it ever reaches
-    # target_of_params()/_cache_name_of() -- independent of the target-class
-    # patch below, which is now inert for run() (kept to prove it stays so).
-    for index, cam_folder in enumerate(cam_folders):
-        target_folder = image_folder / cam_folder.name
-        target_folder.mkdir()
-        n_images = 2 if index == 0 else 1
-        for image in sorted(cam_folder.glob("*.jpg"))[:n_images]:
-            shutil.copy(image, target_folder / image.name)
-
-    (image_folder / "detected_datapoints.pickle").write_bytes(
-        b"a stray leftover cache")
-
-    def raising_target_class(name):
-        raise ImportError("simulated missing optional graphics dependency")
-
-    monkeypatch.setattr(targets_module, "target_class", raising_target_class)
-
-    params = {
-        "target": CHARUCO_SPEC,
-        "f_loc": str(image_folder),
-        "caching": True,
-        "high_distortion": False,
-        "n_lim": None,
-        "threads": 1,
-        "upscale_factor": 1,
-        "fixed_params": None,
-        "problem_options": None,
-        "selected_cameras": [],
-    }
-
-    run = phase1.run(params, log=lambda _line: None)  # must not raise
-
-    assert run["error"] is not None, "the original, unrelated failure is still reported"
-    assert "equal non-zero image counts" in run["error"]
-    assert not run.get("artifacts", {}).get("detected_datapoints_pickle")

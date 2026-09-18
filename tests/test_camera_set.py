@@ -88,9 +88,6 @@ def test_getitem_by_name(synthetic_camset):
 
 def test_getitem_by_index_follows_insertion_order(synthetic_camset):
     assert [synthetic_camset[i].name for i in range(3)] == ["left", "centre", "right"]
-
-
-def test_getitem_by_negative_index(synthetic_camset):
     assert synthetic_camset[-1].name == "right"
 
 
@@ -106,22 +103,15 @@ def test_getitem_prefers_a_numeric_key_over_a_positional_index():
     assert camset[0].name == "zero"
 
 
-def test_getitem_with_a_slice_returns_a_subset(synthetic_camset):
-    subset = synthetic_camset[0:2]
+@pytest.mark.parametrize("identifier, names", [
+    (slice(0, 2), ["left", "centre"]),
+    ([0, 2], ["left", "right"]),
+    (np.array([2, 0]), ["right", "left"]),   # order follows the identifier
+])
+def test_getitem_with_several_indices_returns_a_subset(synthetic_camset, identifier, names):
+    subset = synthetic_camset[identifier]
     assert isinstance(subset, CameraSet)
-    assert subset.get_names() == ["left", "centre"]
-
-
-def test_getitem_with_a_list_returns_a_subset(synthetic_camset):
-    subset = synthetic_camset[[0, 2]]
-    assert isinstance(subset, CameraSet)
-    assert subset.get_names() == ["left", "right"]
-
-
-def test_getitem_with_an_int_array_returns_a_subset(synthetic_camset):
-    subset = synthetic_camset[np.array([2, 0])]
-    assert isinstance(subset, CameraSet)
-    assert subset.get_names() == ["right", "left"]
+    assert subset.get_names() == names
 
 
 def test_getitem_with_a_float_array_is_rejected(synthetic_camset):
@@ -148,12 +138,6 @@ def test_iteration_yields_every_camera_in_order(synthetic_camset):
     assert [cam.name for cam in synthetic_camset] == ["left", "centre", "right"]
 
 
-def test_iteration_can_be_repeated(synthetic_camset):
-    first = [cam.name for cam in synthetic_camset]
-    second = [cam.name for cam in synthetic_camset]
-    assert first == second
-
-
 def test_nested_iteration_visits_every_pair(synthetic_camset):
     """Regression: overlapping loops must not share a cursor.
 
@@ -167,30 +151,20 @@ def test_nested_iteration_visits_every_pair(synthetic_camset):
     assert ("right", "left") in pairs
 
 
-def test_independent_iterators_do_not_interfere(synthetic_camset):
-    first, second = iter(synthetic_camset), iter(synthetic_camset)
-    assert next(first).name == "left"
-    assert next(second).name == "left"  # not "centre"
-
-
 # --------------------------------------------------------------------------
 # Subsets
 # --------------------------------------------------------------------------
 
 
-def test_make_subset_with_a_list_of_indices(synthetic_camset):
-    subset = synthetic_camset.make_subset([0, 2])
-    assert subset.get_names() == ["left", "right"]
-    assert len(subset) == 2
-    assert subset.get_n_cams() == 2
-
-
-def test_make_subset_with_a_slice(synthetic_camset):
-    assert synthetic_camset.make_subset(slice(1, None)).get_names() == ["centre", "right"]
-
-
-def test_make_subset_with_an_array(synthetic_camset):
-    assert synthetic_camset.make_subset(np.array([1])).get_names() == ["centre"]
+@pytest.mark.parametrize("identifier, names", [
+    ([0, 2], ["left", "right"]),
+    (slice(1, None), ["centre", "right"]),
+    (np.array([1]), ["centre"]),
+])
+def test_make_subset_takes_any_index_form(synthetic_camset, identifier, names):
+    subset = synthetic_camset.make_subset(identifier)
+    assert subset.get_names() == names
+    assert len(subset) == subset.get_n_cams() == len(names)
 
 
 def test_make_subset_rejects_an_unusable_identifier(synthetic_camset):

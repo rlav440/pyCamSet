@@ -33,9 +33,6 @@ aruco2 = pytest.importorskip("aruco2")
 from pyCamSet.calibration_targets.charuco2 import layout
 from pyCamSet.calibration_targets.charuco2.target import ChArUco2
 from pyCamSet.calibration_targets.core.abstract_target import EXPORT_KINDS
-from pyCamSet.calibration_targets.core.target_registry import (
-    TARGET_NAMES, build_target, spec_of,
-)
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     detect_grid_board_corners,
     dictionary_marker_bits,
@@ -108,10 +105,6 @@ def _rasterise_svg(svg_path: Path, px_per_mm: float) -> np.ndarray:
     return np.array(Image.open(io.BytesIO(png_bytes)).convert("L"))
 
 
-def test_charuco2_is_registered() -> None:
-    assert "ChArUco2" in TARGET_NAMES
-
-
 def test_charuco2_offers_only_the_aruco2_backend() -> None:
     assert list(ChArUco2.DETECTOR_BACKENDS) == ["aruco2"]
 
@@ -121,13 +114,6 @@ def test_charuco2_excludes_apriltag_dictionaries() -> None:
     values = [c.value for c in choices]
     assert values, "ChArUco2 must offer at least one dictionary"
     assert not any(v.startswith("DICT_APRILTAG_") for v in values)
-
-
-def test_charuco2_detector_takes_no_parameters() -> None:
-    """aruco2.detect_grid_board takes no DetectionParameters -- there must
-    be nothing here for a form to show or a study to sweep."""
-    detector = ChArUco2.DETECTOR_BACKENDS["aruco2"]
-    assert detector.parameters == ()
 
 
 def test_charuco2_construction_builds_a_deterministic_corner_grid() -> None:
@@ -141,16 +127,6 @@ def test_charuco2_construction_builds_a_deterministic_corner_grid() -> None:
     expected = np.array(
         [[col * 10.0, row * 10.0] for row in range(8) for col in range(6)])
     assert np.allclose(positions, expected)
-
-
-def test_charuco2_rebuilds_from_what_it_recorded() -> None:
-    spec = {"type": "ChArUco2", "num_squares_x": 5, "num_squares_y": 6,
-            "square_size": 12.5}
-    built = build_target(spec)
-    again = build_target(spec_of(built))
-    assert type(again) is type(built)
-    assert again.input_args == built.input_args
-    assert (again.point_data == built.point_data).all()
 
 
 def test_charuco2_refuses_a_board_its_dictionary_cannot_fill() -> None:

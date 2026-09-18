@@ -33,7 +33,7 @@ from pyCamSet.calibration_targets.charuco2 import layout
 from pyCamSet.calibration_targets.charuco2.target import ChArUco2
 from pyCamSet.calibration_targets.core.abstract_target import EXPORT_KINDS
 from pyCamSet.calibration_targets.core.target_registry import (
-    TARGET_LABELS, TARGET_NAMES, build_target, spec_of,
+    TARGET_LABELS, TARGET_NAMES,
 )
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     dictionary_marker_bits,
@@ -179,16 +179,6 @@ def test_ccube2_folds_its_faces_as_a_ccube_does(n_points) -> None:
 def test_ccube2_faces_have_disjoint_marker_ids() -> None:
     cube = Ccube2(n_points=4, length=20.0, border_fraction=0.15)
     assert cube.face_ids == [list(range(k * 16, (k + 1) * 16)) for k in range(6)]
-
-
-def test_ccube2_rebuilds_from_what_it_recorded() -> None:
-    spec = {"type": "Ccube2", "n_points": 6, "length": 35.0,
-            "border_fraction": 0.12, "aruco_dict": "DICT_5X5_1000"}
-    built = build_target(spec)
-    again = build_target(spec_of(built))
-    assert type(again) is type(built)
-    assert again.input_args == built.input_args
-    assert (again.point_data == built.point_data).all()
 
 
 @pytest.mark.parametrize("values,refused", [

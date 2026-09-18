@@ -2105,6 +2105,33 @@ def test_phase_2_offers_every_lens_model_and_runs_the_chosen_one(tmp_path):
 
 
 @pytest.mark.gui
+def test_a_failed_detection_run_is_shown_as_failed(tmp_path):
+    """A failed run has no detections, so every figure reads zero -- which is
+    indistinguishable from a run that searched the images and found nothing."""
+    from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QTabWidget
+
+    from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    QApplication.instance() or QApplication([])
+    ws = tmp_path / "ws" / ".pycamset_workspace"
+    manager = WorkspaceManager(None)
+    manager.set_workspace_path(ws)
+    manager.save_run("phase1", "r_bad", {
+        "run_id": "r_bad", "params": {}, "diagnostics": {},
+        "error": "Camera folders must contain equal non-zero image counts."})
+
+    tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), manager)
+    try:
+        tab.refresh()
+        shown = " ".join(w.text() for w in tab.findChildren(QLabel))
+        assert "equal non-zero image counts" in shown, \
+            "the reason the run failed is what the user needs to read"
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
 def test_the_distortion_field_draws_for_a_lens_opencv_cannot_describe(tmp_path):
     """cv2.projectPoints takes a Brown-Conrady vector of 4, 5, 8, 12 or 14
     coefficients and nothing else. A telecentric lens carries one

@@ -584,3 +584,68 @@ def test_mvsnet_export_refuses_a_telecentric_camera(tmp_path):
     cam = make_telecentric_camera("cam")
     with pytest.raises(NotImplementedError, match="no representation"):
         cam.to_MVSnet_txt(tmp_path / "cam.txt", (0.1, 0.2), 4)
+
+
+# --------------------------------------------------------------------------
+# Seeding from a target with depth
+# --------------------------------------------------------------------------
+
+
+def _cube_detection(cam_name, target, cam, n_images=6, faces_per_image=2):
+    """Photograph a cube so each image catches more than one face."""
+    from pyCamSet.utils.general_utils import h_tform
+    detection = TargetDetection(cam_names=[cam_name])
+    points = np.asarray(target.point_data).reshape(6, -1, 3)
+    for im in range(n_images):
+        pose = make_4x4h_tform(
+            Rotation.from_euler("xyz", [0.2 + 0.05 * im, -0.3, 0.1]).as_rotvec(),
+            [0.0, 0.0, 200.0])
+        for face in range(faces_per_image):
+            placed = h_tform(points[face], pose)
+            keys = np.stack([np.full(len(placed), face),
+                             np.arange(len(placed))], axis=-1)
+            detection.add_detection(
+                cam_name, im,
+                ImageDetection(keys=keys, image_points=cam.project_points(placed)))
+    return detection
+
+
+def test_a_cube_seeds_a_telecentric_camera_from_images_that_show_two_faces():
+    """Every board of a cube is a flat face, so a per-board seed can never see
+    out-of-plane extent -- not even on the Ccube the refusal recommends. The
+    seed is fitted per image, where two faces together carry depth."""
+    from pyCamSet.calibration_targets.core.target_registry import build_target
+
+    target = build_target({"type": "Ccube", "n_points": 6, "length": 10.0})
+    truth = TelecentricCamera(
+        intrinsic=np.array([[80.0, 0, 270.0], [0, 80.0, 360.0], [0, 0, 1.0]]),
+        res=[720, 540], distortion_coefs=np.array([0.0]), telecentricity=0.0,
+        name="cam")
+    detection = _cube_detection("cam", target, truth)
+
+    cam = target.initial_calibration(
+        cam_name="cam", detection=detection, res=[720, 540],
+        pose_im=0, model="telecentric", min_detections_per_board=12)
+
+    assert isinstance(cam, TelecentricCamera)
+    got = np.asarray(cam.intrinsic, dtype=float)
+    assert got[0, 0] == pytest.approx(80.0, rel=0.05)
+    assert got[1, 1] == pytest.approx(80.0, rel=0.05)
+
+
+def test_a_camera_that_only_ever_saw_one_face_says_what_to_photograph():
+    """A refusal that names the fix beats one that recommends the target
+    already in use."""
+    from pyCamSet.calibration_targets.core.target_registry import build_target
+
+    target = build_target({"type": "Ccube", "n_points": 6, "length": 10.0})
+    truth = TelecentricCamera(
+        intrinsic=np.array([[80.0, 0, 270.0], [0, 80.0, 360.0], [0, 0, 1.0]]),
+        res=[720, 540], distortion_coefs=np.array([0.0]), telecentricity=0.0,
+        name="cam")
+    detection = _cube_detection("cam", target, truth, faces_per_image=1)
+
+    with pytest.raises(ValueError, match="two of its faces"):
+        target.initial_calibration(
+            cam_name="cam", detection=detection, res=[720, 540],
+            pose_im=0, model="telecentric", min_detections_per_board=12)

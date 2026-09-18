@@ -51,8 +51,49 @@ The arguments that decide where the corners are:
 | `a_dict` | `DICT_4X4_1000` | The ArUco dictionary the markers come from |
 
 Detection has nothing to tune: `aruco2.detect_grid_board` takes an image, a
-board size and a dictionary and nothing else, so there is no
-`detection_options` worth setting.
+board size, a dictionary and, optionally, the marker ids, and nothing else, so
+there is no `detection_options` worth setting.
+
+A board cut by the image edge is still read: pyCamSet pads the image with a
+white border before handing it to aruco2 (which otherwise raises on such a
+board) and takes the border off the corners it returns. A corner within 10
+pixels of the edge is left out, because its sub-pixel refinement reached past
+the edge and pulled it off its true position.
+
+aruco2's own corners are then refined and validated before they are returned
+(on by default; pass `refine=False`/`validate=False` to
+`detect_grid_board_corners` directly to skip either):
+
+- **Refinement** moves each corner to the saddle point of the image, Gaussian
+  smoothed at sigma 1.8, with a coarse-to-fine retry for a corner the fine
+  scale refuses. Unlike aruco2's own `cornerSubPix`-based refinement, a
+  saddle point does not drift with the camera's gamma, and it recovers most
+  of the accuracy a blurred or small-squared board otherwise loses (RMS
+  1.40 px to 0.21 px on a blurred, low-contrast render, in stage A task A3's
+  validation). The four outer corners of the board are not saddle points, so
+  they are typically left at aruco2's own position, not a defect. A refined
+  corner near an occluder or another non-corner feature is rejected by a
+  point-symmetry check and also keeps aruco2's position.
+- **Validation** checks every corner against its lattice neighbours (a
+  leave-one-out local homography, Tukey-reweighted so a cluster of wrong
+  neighbours cannot drag the fit) and drops it if the neighbours disagree, or
+  if it has too few of them to check. This is what catches aruco2's own
+  occasional false marker detections (see the ghost-marker warning below),
+  which otherwise silently place a corner tens of pixels off.
+
+**Pixel convention:** a returned corner is 0.5 px, on both axes, from
+aruco2's own raw position -- the same pixel-*corner* convention pyCamSet's
+OpenCV-backed `ChArUco`/`Ccube` targets use, so a calibration does not depend
+on which target read the image. See `detect_grid_board_corners`'s docstring
+for how this is checked.
+
+Two boards are handled at construction. One whose markers include a marker
+that reads the same after a half turn (with `DICT_ARUCO_ORIGINAL`, marker 1023,
+so a board of 1024 squares) is refused: aruco2 cannot tell which way round that
+marker is, and loses the board. A `DICT_4X4_1000` board of 689 squares or more
+builds, with a warning: aruco2 can read part of square 688 as marker 17, which
+at some image scales loses the whole board. A smaller board, or a larger
+dictionary such as `DICT_5X5_1000`, avoids it.
 
 ## Calibrating with it
 

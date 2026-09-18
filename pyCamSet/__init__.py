@@ -95,8 +95,9 @@ def _resolve_charuco2() -> Any:
     try:
         from .calibration_targets.charuco2.target import ChArUco2
     except Exception:
-        # ChArUco2 has no aruco1 equivalent -- it cannot be built at all
-        # without aruco2, which may not be installed in all environments.
+        # A graphics or native import failing (svgwrite, cv2, ...).  A missing
+        # aruco2 is not one: the module imports without it, and building a
+        # ChArUco2 raises the ImportError that says how to install it.
         return None
     return ChArUco2
 

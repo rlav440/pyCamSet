@@ -55,25 +55,58 @@ from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy
 # Module-level lazy aruco2 import guard (D3): the module must import cleanly
 # even when aruco2 is not installed. ARUCO2_AVAILABLE is the single source of
 # truth for availability checks in the target classes.
+#
+# ImportError means the package is not on the path at all (not installed).
+# OSError means the package *was found* -- its .pyd loaded far enough for the
+# loader to try to import it -- but pulling in its native dependencies (the
+# Microsoft Visual C++ runtime DLLs the aruco2 wheel links against, such as
+# CONCRT140.dll, MSVCP140.dll or VCRUNTIME140.dll) failed. Those are two
+# different problems with two different fixes, so the OSError text is kept
+# for _require_aruco2() to report rather than folded into the same "not
+# installed" message.
 try:
     import aruco2  # noqa: F401  (used lazily through the module reference)
     _aruco2_importable = True
-except (ImportError, OSError):  # pragma: no cover - exercised by the mocked gate check
+    _aruco2_import_oserror: OSError | None = None
+except ImportError:  # pragma: no cover - exercised by the mocked gate check
     aruco2 = None  # type: ignore[assignment]
     _aruco2_importable = False
+    _aruco2_import_oserror = None
+except OSError as _err:  # pragma: no cover - exercised by the mocked gate check
+    aruco2 = None  # type: ignore[assignment]
+    _aruco2_importable = False
+    _aruco2_import_oserror = _err
 
 ARUCO2_AVAILABLE: bool = _aruco2_importable
 
 
 def _require_aruco2() -> None:
-    """Raise an actionable ImportError when the aruco2 package is missing."""
-    if not ARUCO2_AVAILABLE:
+    """Raise an actionable ImportError when the aruco2 package is missing or
+    could not be loaded."""
+    if ARUCO2_AVAILABLE:
+        return
+    if _aruco2_import_oserror is not None:
+        # str(OSError) often already ends in a full stop (as Windows' own
+        # DLL-load messages do); strip one trailing stop so the sentence
+        # that follows does not read "...found.. This is usually...".
+        oserror_text = str(_aruco2_import_oserror).rstrip()
+        if oserror_text.endswith("."):
+            oserror_text = oserror_text[:-1]
         raise ImportError(
-            "marker_backend='aruco2' requires the 'aruco2' package, which is not "
-            "installed. It is not published on PyPI: build it from the "
-            "third_party/aruco2 submodule, as described under 'Installing the "
-            "aruco2 backend' in pyCamSet's CITATION.md."
+            "marker_backend='aruco2' requires the 'aruco2' package. It was "
+            "found, but loading its native libraries failed with: "
+            f"{oserror_text}. This is usually a missing Microsoft "
+            "Visual C++ runtime (the aruco2 wheel links against CONCRT140.dll, "
+            "MSVCP140.dll and VCRUNTIME140.dll) rather than aruco2 itself not "
+            "being installed -- install the Visual C++ Redistributable and "
+            "retry."
         )
+    raise ImportError(
+        "marker_backend='aruco2' requires the 'aruco2' package, which is not "
+        "installed. It is not published on PyPI: build it from the "
+        "third_party/aruco2 submodule, as described under 'Installing the "
+        "aruco2 backend' in pyCamSet's CITATION.md."
+    )
 
 
 def _as_uint8_image(image) -> np.ndarray:

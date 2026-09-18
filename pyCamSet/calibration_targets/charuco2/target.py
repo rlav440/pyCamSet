@@ -43,11 +43,11 @@ _MIN_SQUARES = 2
 #: dictionary that will not run out of markers on a big board).
 _DEFAULT_DICT_NAME = "DICT_4X4_1000"
 
-#: aruco2's grid board places one marker per square, so a dictionary too
-#: sparse to cover a board is a real hazard, unlike ChArUco/Ccube's sparser
-#: placement -- but AprilTag dictionaries are also excluded here for a
-#: second reason: they are OpenCV's own predefined tag families, not
-#: aruco2's, and are not validated against aruco2's grid-board detector.
+#: AprilTag dictionaries are not offered. aruco2 does have them, but its
+#: codes are OpenCV's rotated 180 degrees, so the same name would print a
+#: different board under each library -- and they are not validated against
+#: aruco2's grid-board detector. A saved spec naming one still builds, since
+#: build_target() reads a spec's raw dict rather than going through choices.
 _EXCLUDED_DICT_PREFIXES = ("DICT_APRILTAG_",)
 
 

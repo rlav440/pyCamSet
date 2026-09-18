@@ -100,6 +100,18 @@ adjustment starts from. Its diagnostics cover per-camera RMS reprojection
 (D2.1), the intrinsics and distortion themselves (D2.2, D2.3), the spread
 across views (D2.5) and per-view error (D2.6, D2.7).
 
+**Lens model** is set here, because this is the phase that builds the cameras.
+Leave it on Pinhole for a conventional lens. Choose Telecentric when the optics
+are, or the fit is badly conditioned: a telecentric lens images with parallel
+rays, so magnification does not fall off with distance, and a pinhole model has
+no way to express that except by driving the focal length towards infinity and
+absorbing the rest into the distortion coefficients. The symptom is a camera
+whose focal length is implausibly large for its sensor, whose `fx` and `fy`
+disagree despite square pixels, and whose first distortion coefficient is far
+from zero — together with a rig that will not hold still in the Phase 3
+consistency report. Phase 3 needs no setting of its own; it reads the model
+from the cameras Phase 2 produced.
+
 Phases 2 and 3 offer no detector: they read the detections of the Phase 1 run
 they continue, so the target section shows that run's detector instead.
 

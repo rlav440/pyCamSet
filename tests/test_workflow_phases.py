@@ -777,3 +777,47 @@ def test_adding_a_target_is_one_line():
         if name == "PuzzleBoard":
             pytest.importorskip("puzzle_board")
         assert isinstance(target_class(name), type)
+
+
+# --------------------------------------------------------------------------
+# Lens model
+# --------------------------------------------------------------------------
+
+
+def test_a_lens_model_is_read_by_name_or_by_label():
+    from pyCamSet.workflow.params import as_lens_model
+
+    assert as_lens_model("telecentric") == "telecentric"
+    assert as_lens_model("Telecentric") == "telecentric"
+    assert as_lens_model("pinhole") == "pinhole"
+    assert as_lens_model("") == "pinhole", "an unset field is the default"
+    assert as_lens_model(None) == "pinhole"
+
+def test_a_misspelled_lens_model_is_refused_rather_than_defaulted():
+    """Calibrating a telecentric rig as a pinhole one looks plausible and is
+    wrong, so a typo must not quietly select it."""
+    from pyCamSet.workflow.params import ParamError, as_lens_model
+
+    with pytest.raises(ParamError, match="telecentrik"):
+        as_lens_model("telecentrik")
+
+def test_phase_2_fits_the_lens_model_the_run_asked_for(monkeypatch):
+    """The choice has to reach run_initial_calibration, or it changes nothing."""
+    from pyCamSet.workflow import phase2 as phase2_workflow
+
+    seen = {}
+
+    def fake(**kwargs):
+        seen.update(kwargs)
+        return object(), None, None
+
+    monkeypatch.setattr(phase2_workflow, "run_initial_calibration", fake)
+    monkeypatch.setattr(phase2_workflow, "BACKEND_OK", True)
+
+    phase2_workflow.calibrate(
+        detections=object(), cam_res=[(4, 4)], target=object(),
+        model="telecentric")
+    assert seen["model"] == "telecentric"
+
+    phase2_workflow.calibrate(detections=object(), cam_res=[(4, 4)], target=object())
+    assert seen["model"] == "pinhole", "a run that does not say gets a pinhole"

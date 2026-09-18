@@ -2064,3 +2064,45 @@ def test_a_form_refuses_a_detector_mode_it_does_not_know():
     QApplication.instance() or QApplication([])
     with pytest.raises(ValueError, match="detector_mode"):
         TargetSettingsForm(detector_mode="sometimes")
+
+
+# Lens model
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.gui
+def test_phase_2_offers_every_lens_model_and_runs_the_chosen_one(tmp_path):
+    """A telecentric rig cannot be calibrated at all unless the phase that
+    builds the cameras is told which optics it is looking through."""
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.cameras.lens_models import LENS_MODELS, lens_model_label
+    from pyCamSet.gui.phase_2_intrinsics import Phase2Tab
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    QApplication.instance() or QApplication([])
+    manager = WorkspaceManager(None)
+    manager.set_workspace_path(tmp_path / "ws" / ".pycamset_workspace")
+    tab = Phase2Tab(QTabWidget(), QCheckBox(), QCheckBox(), manager)
+    try:
+        combo = tab._lens_combo
+        offered = [combo.itemData(i) for i in range(combo.count())]
+        assert offered == list(LENS_MODELS)
+        assert combo.itemText(offered.index("telecentric")) == \
+            lens_model_label("telecentric")
+        assert combo.currentData() == "pinhole", "the default is unchanged"
+
+        images = tmp_path / "ims" / "cam1"
+        images.mkdir(parents=True)
+        tab._floc_edit.setText(str(images.parent))
+        tab._target_form.apply_spec(
+            {"type": "ChArUco", "num_squares_x": 20, "num_squares_y": 20,
+             "square_size": 4.0, "legacy": False})
+
+        combo.setCurrentIndex(offered.index("telecentric"))
+        assert tab._collect_params()["lens_model"] == "telecentric"
+
+        combo.setCurrentIndex(offered.index("pinhole"))
+        assert tab._collect_params()["lens_model"] == "pinhole"
+    finally:
+        tab.deleteLater()

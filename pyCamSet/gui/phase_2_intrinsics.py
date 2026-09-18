@@ -58,7 +58,14 @@ from pyCamSet.gui.shared_functions import (
 )
 from pyCamSet.workflow import phase2 as phase2_workflow
 from pyCamSet.workflow.detections import DetectionFilter
+from pyCamSet.cameras.lens_models import (
+    DEFAULT_LENS_MODEL,
+    LENS_MODELS,
+    LENS_MODEL_DESCRIPTIONS,
+    lens_model_label,
+)
 from pyCamSet.workflow.params import (
+    as_lens_model,
     ParamError,
     as_json_object,
     as_optional_positive_int,
@@ -274,6 +281,19 @@ class Phase2Tab(QWidget):
         )
         opts_form.addRow(self._cache_cb)
 
+        self._lens_combo = QComboBox()
+        for name in LENS_MODELS:
+            self._lens_combo.addItem(lens_model_label(name), name)
+        self._lens_combo.setCurrentIndex(
+            max(0, self._lens_combo.findData(DEFAULT_LENS_MODEL)))
+        self._lens_combo.setToolTip("\n".join(
+            ["Concept: the lens model each camera is fitted with."]
+            + [f"{lens_model_label(n)}: {LENS_MODEL_DESCRIPTIONS[n]}"
+               for n in LENS_MODELS]
+            + [f"Default: {lens_model_label(DEFAULT_LENS_MODEL)}."]
+        ))
+        opts_form.addRow("Lens model:", self._lens_combo)
+
         self._hd_cb = QCheckBox("High Distortion Mode (2c re-detection)")
         self._hd_cb.setToolTip(
             "Concept: perform an extra detection+calibration pass using initial intrinsics.\n"
@@ -424,6 +444,7 @@ class Phase2Tab(QWidget):
             "f_loc": require_image_folder(self._floc_edit.text()),
             "caching": self._cache_cb.isChecked(),
             "high_distortion": self._hd_cb.isChecked(),
+            "lens_model": as_lens_model(self._lens_combo.currentData()),
             "n_lim": as_optional_positive_int(self._nlim_edit.text(), "n_lim"),
             "min_detections_per_board": self._min_dtct_spin.value(),
             "fixed_params": as_json_object(

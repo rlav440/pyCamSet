@@ -81,6 +81,49 @@ def show_tab():
 
     return _show_tab
 
+
+# --------------------------------------------------------------------------
+# The dead cross-tab target-sync block must not come back
+# --------------------------------------------------------------------------
+#
+# main_window.py used to wire signals to _target_combo, _npts_spin,
+# _length_edit and _marker_backend_combo directly on each phase tab -- names
+# that never existed there (the real widgets live one level down, on
+# tab._target_form). Every hasattr guard was therefore always False, so the
+# block was wired to nothing and never ran. Per Q5 it was deleted rather than
+# fixed: TargetSettingsForm.apply_spec() already covers adopting a saved
+# run's target. This pins both halves of that decision so the same phantom
+# wiring cannot silently reappear.
+
+
+@pytest.mark.gui
+def test_the_dead_cross_tab_sync_names_never_come_back(qt_app_for_tabs):
+    from PySide6.QtWidgets import QComboBox
+
+    app = qt_app_for_tabs
+    dead_names = ("_propagate_target", "_syncing_target",
+                  "_marker_backend_combo", "_npts_spin", "_length_edit")
+
+    # None of the phase tabs ever had these attributes; the block's own
+    # hasattr guards were checking for names that were never there.
+    for tab_attr in ("phase1_tab", "phase2_tab", "phase3_tab", "phase4_tab"):
+        tab = getattr(app, tab_attr)
+        for name in dead_names:
+            assert not hasattr(tab, name), f"{tab_attr}.{name} should not exist"
+
+    # Nor on the window itself -- _syncing_target was a guard flag on
+    # PyCamSetApp; _propagate_target was a nested function, never an
+    # attribute, but is asserted absent here too for symmetry.
+    assert not hasattr(app, "_propagate_target")
+    assert not hasattr(app, "_syncing_target")
+
+    # The widget path signals actually could reach, had anything wired to
+    # it: the shared form each target-bearing tab really owns.
+    for tab_attr in ("phase1_tab", "phase2_tab", "phase3_tab"):
+        tab = getattr(app, tab_attr)
+        assert isinstance(tab._target_form._backend_combo, QComboBox)
+
+
 @pytest.mark.gui
 def test_no_tab_is_ever_current_while_hidden(qt_app_for_tabs):
     """Every route in: setCurrentIndex, setCurrentWidget, the keyboard."""

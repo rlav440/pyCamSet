@@ -12,6 +12,7 @@ from typing import Optional
 
 import numpy as np
 
+from pyCamSet.cameras.lens_models import DEFAULT_LENS_MODEL
 from pyCamSet.workflow.detections import (
     DetectionFilter,
     extract_detection_and_cam_res,
@@ -170,7 +171,8 @@ def _detections_path(phase1_run: Optional[dict],
 
 def calibrate(detections, cam_res, target, *,
               fixed_params: Optional[dict] = None,
-              min_detections_per_board: int = 12):
+              min_detections_per_board: int = 12,
+              model: str = DEFAULT_LENS_MODEL):
     """
     Calibrate each camera on its own, from detections already in hand.
 
@@ -183,6 +185,8 @@ def calibrate(detections, cam_res, target, *,
     :param target: the calibration target the detections were made against
     :param fixed_params: parameters to pin rather than solve for
     :param min_detections_per_board: how much of a board a view must show
+    :param model: the lens model to fit, a name from
+        :data:`pyCamSet.cameras.lens_models.LENS_MODELS`
     :return: the calibrated camera set
     """
     if not BACKEND_OK:
@@ -196,6 +200,7 @@ def calibrate(detections, cam_res, target, *,
         fixed_params=fixed_params,
         return_poses_and_costs=True,
         min_detections_per_board=int(min_detections_per_board),
+        model=model,
     )
     return cams
 
@@ -242,7 +247,8 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
         cams = calibrate(
             detections, cam_res, target,
             fixed_params=params["fixed_params"],
-            min_detections_per_board=params.get("min_detections_per_board", 12))
+            min_detections_per_board=params.get("min_detections_per_board", 12),
+            model=params.get("lens_model", DEFAULT_LENS_MODEL))
 
         if params["high_distortion"]:
             log("2c  High-distortion mode: re-running detection with initial "
@@ -260,7 +266,8 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
                 detections, cam_res, target,
                 fixed_params=params["fixed_params"],
                 min_detections_per_board=params.get(
-                    "min_detections_per_board", 12))
+                    "min_detections_per_board", 12),
+                model=params.get("lens_model", DEFAULT_LENS_MODEL))
 
     camset_path = run_dir / (
         "initial_cameras_high_distortion.camset"
@@ -298,7 +305,8 @@ def _calibrate_pruned(params: dict, run_dir: Path,
     cams = calibrate(
         filtered, cam_res, target,
         fixed_params=params.get("fixed_params"),
-        min_detections_per_board=params.get("min_detections_per_board", 12))
+        min_detections_per_board=params.get("min_detections_per_board", 12),
+        model=params.get("lens_model", DEFAULT_LENS_MODEL))
 
     camset_path = run_dir / "initial_cameras.camset"
     cams.save(camset_path)

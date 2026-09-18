@@ -1898,3 +1898,25 @@ def test_legacy_warning_deduplicated_across_camera_folders_under_multiprocessing
         f"got {len(matches)}: {matches}")
 
 
+def test_the_detection_cache_follows_the_detector_a_real_target_is_read_with():
+    """The detector is chosen per detection run, so the cache a run reads
+    has to be named for it -- including for ChArUco2, which carries no
+    ``marker_backend`` of its own and is only ever read with aruco2."""
+    from pyCamSet.calibration.camera_calibrator import detector_backend_of
+    from pyCamSet.calibration_targets.charuco2.target import ChArUco2
+    from pyCamSet.workflow.detections import detection_cache_name
+
+    board1 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0)
+    board2 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0,
+                     marker_backend="aruco2")
+    cube2 = Ccube(n_points=4, length=20.0, marker_backend="aruco2")
+    # Only the class matters here, so no ChArUco2 is constructed.
+    grid_board = object.__new__(ChArUco2)
+
+    assert detector_backend_of(board1) == "aruco1"
+    assert detection_cache_name(1, detector_backend_of(board1)) == \
+        "detected_datapoints.pickle"
+    for target in (board2, cube2, grid_board):
+        assert detector_backend_of(target) == "aruco2"
+        assert detection_cache_name(1, detector_backend_of(target)) == \
+            "detected_datapoints_aruco2.pickle"

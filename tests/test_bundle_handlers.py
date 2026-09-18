@@ -34,6 +34,8 @@ from pyCamSet.optimisation.template_handler import (
     TemplateBundlePrimitive,
     check_feasiblity_and_update_refpose,
     check_for_target_misalignment,
+    graph_estimate_initial_pose,
+    per_image_reprojection,
 )
 from pyCamSet.utils.general_utils import make_4x4h_tform
 
@@ -478,6 +480,144 @@ def test_outlier_exclusion_does_not_read_stdin(synthetic_problem, monkeypatch):
     errors = np.ones(N_IMAGES)
     errors[1] = 1000.0
     handler.find_and_exclude_transform_outliers(errors)
+
+
+# find_and_exclude_transform_outliers reads only missing_poses and the error
+# array it is handed, so these size them for the statistic rather than for the
+# three image fixture: MAD has nothing to say about two surviving samples.
+N_MANY = 12
+
+
+def _even_errors():
+    """A believable spread of per image error, with no outlier in it."""
+    return np.linspace(0.9, 1.1, N_MANY)
+
+
+def test_outlier_exclusion_still_fires_when_an_image_has_no_error(synthetic_problem):
+    """An image with no recoverable pose has a NaN error, and a NaN used to
+    turn the whole detector off: the median went NaN, every comparison
+    against it read False, and nothing was ever removed -- not the unposed
+    image, and not the genuinely bad one beside it."""
+    cams, target, detection, _ = synthetic_problem
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "y"}
+    )
+    handler.missing_poses = np.zeros(N_MANY, dtype=bool)
+
+    errors = _even_errors()
+    errors[1] = 1000.0
+    errors[2] = np.nan
+
+    handler.find_and_exclude_transform_outliers(errors)
+
+    assert handler.missing_poses[1], "the bad image was hidden by the NaN"
+    assert handler.missing_poses[2], "the image with no error at all was kept"
+    assert int(np.sum(handler.missing_poses)) == 2
+
+
+def test_outlier_exclusion_records_what_it_removed(synthetic_problem):
+    """Phase 3 reports D3.1 and D3.2 from these two attributes.  Never set,
+    both getattr calls fell back to empty and every run reported that no
+    poses were missing and no outliers were removed."""
+    cams, target, detection, _ = synthetic_problem
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "y"}
+    )
+    handler.missing_poses = np.zeros(N_MANY, dtype=bool)
+    handler.missing_poses[0] = True  # already missing before rejection ran
+
+    errors = _even_errors()
+    errors[2] = 1000.0
+
+    handler.find_and_exclude_transform_outliers(errors)
+
+    before = handler.missing_poses_before_outlier_rejection
+    after = handler.missing_poses_after_outlier_rejection
+    assert list(np.where(before)[0]) == [0]
+    assert list(np.where(after)[0]) == [0, 2]
+    assert int(np.sum(after)) - int(np.sum(before)) == 1
+
+
+# --------------------------------------------------------------------------
+# The graph seed, and what it says about an image it could not reach
+# --------------------------------------------------------------------------
+
+
+def _cam_relative_poses(cams, poses):
+    """``Mat_ac[cam, image]``: the target pose as each camera sees it."""
+    return np.array([[cams[name].extrinsic @ pose for pose in poses]
+                     for name in cams.get_names()])
+
+
+def test_an_unreachable_image_comes_back_as_a_nan_pose(synthetic_problem):
+    """calc_initial_params decides an image is unposed with isnan(pose[0, 0]).
+
+    An image no camera could place used to come back as the identity the
+    accumulation started from -- finite, and indistinguishable from a solved
+    pose -- so that check never fired and the image entered the solve with a
+    pose that is not a pose.
+    """
+    cams, target, detection, poses = synthetic_problem
+    mat_ac = _cam_relative_poses(cams, poses)
+    cost = np.ones((len(cams.get_names()), N_IMAGES))
+    mat_ac[:, 1] = np.nan   # no camera recovered image 1
+    cost[:, 1] = np.nan
+
+    _, target_poses, per_im = graph_estimate_initial_pose(
+        mat_ac, cams, detection.get_image_list(), 0, target, detection,
+        cost_mat=cost)
+
+    unposed = np.array([np.isnan(t[0, 0]) for t in target_poses])
+    assert list(np.where(unposed)[0]) == [1]
+    assert np.isnan(per_im[1])
+    assert np.all(np.isfinite(per_im[[0, 2]]))
+
+
+def test_a_reachable_problem_leaves_every_pose_finite(synthetic_problem):
+    cams, target, detection, poses = synthetic_problem
+
+    _, target_poses, per_im = graph_estimate_initial_pose(
+        _cam_relative_poses(cams, poses), cams, detection.get_image_list(), 0,
+        target, detection, cost_mat=np.ones((len(cams.get_names()), N_IMAGES)))
+
+    assert np.all(np.isfinite(target_poses))
+    assert np.all(np.isfinite(per_im))
+
+
+def test_per_image_reprojection_is_a_mean_not_a_sum():
+    """A sum grows with how many points were detected, so a half detected
+    image scored better than a fully detected one and MAD ranked on the
+    spread of point counts rather than the spread of error."""
+    # image 0: four points at 2 px.  image 1: one point, also at 2 px.
+    detection_data = np.array([[0, 0, 0, 0, 0], [0, 0, 1, 0, 0],
+                               [0, 0, 2, 0, 0], [0, 0, 3, 0, 0],
+                               [0, 1, 0, 0, 0]], dtype=float)
+    costs = np.full(5, 2.0)
+
+    per_image = per_image_reprojection(
+        costs, detection_data, 2, np.ones(2, dtype=bool))
+
+    assert np.allclose(per_image, [2.0, 2.0])
+
+
+def test_per_image_reprojection_is_nan_where_there_is_nothing_to_average():
+    detection_data = np.array([[0, 0, 0, 0, 0]], dtype=float)
+    costs = np.array([2.0])
+
+    unreachable = per_image_reprojection(
+        costs, detection_data, 2, np.array([False, True]))
+    assert np.isnan(unreachable[0])   # viable says no
+    assert np.isnan(unreachable[1])   # viable says yes, but nothing detected
+
+
+def test_per_image_reprojection_can_pick_out_one_camera():
+    detection_data = np.array([[0, 0, 0, 0, 0], [1, 0, 0, 0, 0]], dtype=float)
+    costs = np.array([2.0, 8.0])
+    viable = np.ones(1, dtype=bool)
+
+    assert per_image_reprojection(costs, detection_data, 1, viable, 0)[0] == 2.0
+    assert per_image_reprojection(costs, detection_data, 1, viable, 1)[0] == 8.0
+    assert per_image_reprojection(costs, detection_data, 1, viable)[0] == 5.0
 
 
 # --------------------------------------------------------------------------

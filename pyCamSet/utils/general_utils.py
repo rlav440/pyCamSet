@@ -144,15 +144,41 @@ def benchmark(func, repeats=100, mode="ms", timer=time.time_ns, max_runtime=100)
 
 def mad_outlier_detection(data: np.ndarray|list, out_thresh = 3, draw=True) -> np.ndarray or None:
     """
-    Implemenents Median Absolute Deviation outlier detection.
+    Implements Median Absolute Deviation outlier detection.
+
+    Data that is not finite is an outlier by definition, and is left out of
+    the median and the deviation.  An image with no recoverable pose has no
+    error to compare and is exactly the image that should go; scored with
+    the rest it did the opposite.  One NaN made the median NaN, the
+    deviation NaN, and every ``> out_thresh`` comparison against a NaN
+    False, so a single unposed image silently turned the detector off for
+    the whole run.
+
     :param data: The data to process
-    :param out_thresh: The outlier threshold to reject
+    :param out_thresh: The outlier threshold to reject, in deviations
     :param draw: Whether to draw the results
     :return: The indices of the outliers, or None when there are none.
     """
-    n_mdn = np.median(data)
-    n_mad = np.median(np.absolute(np.array(data) - n_mdn))
-    outliers = np.abs(np.array(data) - n_mdn) / n_mad > out_thresh
+    data = np.asarray(data, dtype=float)
+    finite = np.isfinite(data)
+    outliers = ~finite
+    scores = np.zeros(data.shape)
+
+    if np.any(finite):
+        n_mdn = np.median(data[finite])
+        deviation = np.abs(data - n_mdn)
+        n_mad = np.median(deviation[finite])
+        if n_mad > 0:
+            scores[finite] = deviation[finite] / n_mad
+        else:
+            # Over half the data sits exactly on the median, so there is no
+            # scale left to divide by.  A majority that agrees exactly makes
+            # any disagreement unbounded, which is the answer out_thresh
+            # wants.  Dividing anyway gave that by accident through x/0, and
+            # gave 0/0 -> NaN -> "not an outlier" for the agreeing majority;
+            # said rather than stumbled into, it needs no errstate.
+            scores[finite] = np.where(deviation[finite] > 0, np.inf, 0.0)
+        outliers |= finite & (scores > out_thresh)
 
     if np.any(outliers):
         # [0] to unwrap np.nonzero's tuple into a plain index array.  Callers
@@ -163,10 +189,25 @@ def mad_outlier_detection(data: np.ndarray|list, out_thresh = 3, draw=True) -> n
         listout = functools.reduce(lambda x, y: x+y, [f" {w}" for w in w_out])
 
         logger.critical(f'found outliers in indicies:{listout}')
+        n_unusable = int(np.sum(~finite))
+        if n_unusable:
+            logger.critical(
+                f'{n_unusable} of these have no finite error to score: '
+                f'indicies{"".join(f" {w}" for w in np.nonzero(~finite)[0])}')
         logger.critical(f'These may prevent calibration conversion')
         if draw:
+            # Anything without a score of its own -- no finite error, or a
+            # majority so concentrated that its score is infinite -- is drawn
+            # on the threshold rather than left out, so the plot accounts for
+            # every index the function just returned.
+            on_scale = finite & np.isfinite(scores)
             fig, ax = plt.subplots(1, 1)
-            ax.plot(np.abs(np.array(data) - n_mdn) / n_mad, '.')
+            ax.plot(np.nonzero(on_scale)[0], scores[on_scale], '.')
+            if not np.all(on_scale):
+                ax.plot(np.nonzero(~on_scale)[0],
+                        np.full(np.sum(~on_scale), out_thresh), 'rx',
+                        label="unscoreable: no finite error, or no spread to score against")
+                ax.legend()
             ax.set_title("Found outliers: displaying mad outlier threshold as red line")
             ax.axhline(out_thresh, color='r')
             plt.show()

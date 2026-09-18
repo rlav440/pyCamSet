@@ -1237,8 +1237,12 @@ class Phase3DiagnosticsTab(QWidget):
         valid_mask = ~np.isnan(arr)
         valid_arr = arr[valid_mask]
 
-        # MAD threshold: same rule as TemplateBundleHandler.find_and_exclude_transform_outliers
-        # out_thresh = 20; mad_thresh = median + 20 * MAD
+        # MAD threshold: the scored half of the rule that
+        # TemplateBundleHandler.find_and_exclude_transform_outliers applies.
+        # out_thresh = 20; mad_thresh = median + 20 * MAD.  The images left
+        # out of valid_arr here are dropped by the backend too -- an image
+        # with no finite error has no pose, and is an outlier by definition --
+        # so they are absent from this plot rather than under the line.
         if valid_arr.size > 0:
             med_val = float(np.median(valid_arr))
             mad_val = float(np.median(np.abs(valid_arr - med_val)))

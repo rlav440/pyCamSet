@@ -635,8 +635,11 @@ class AbstractTarget(ABC):
         logger.info("Begining outlier detection")
         while cyclic_outlier_detection and num_loops < 10:
             ans = mad_outlier_detection([np.linalg.norm(p[:3,3] - mloc) for p in poses], out_thresh=5)
-            inds = np.arange(len(p_detected))[p_detected][ans]
             if ans is not None:
+                # Inside the check: indexing with None inserts an axis rather
+                # than raising, so this used to build a (1, n) array of every
+                # surviving pose whenever nothing was found.
+                inds = np.arange(len(p_detected))[p_detected][ans]
                 user_in = "g"
                 while not (user_in == 'y' or user_in == 'n'):
                     user_in = ask_yes_no(

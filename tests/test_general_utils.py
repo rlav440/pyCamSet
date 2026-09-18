@@ -28,6 +28,7 @@ from pyCamSet.utils.general_utils import (
     grouper,
     h_tform,
     list_dict_to_np_array,
+    mad_outlier_detection,
     make_4x4h_tform,
     plane_fit,
     px_array,
@@ -517,3 +518,68 @@ def test_adaptive_decimated_charuco_rescale_flag_scales_by_the_decimation(
 
     assert np.allclose(scaled, unscaled * decimation)
 
+
+
+# --------------------------------------------------------------------------
+# MAD outlier detection
+# --------------------------------------------------------------------------
+
+EVEN = [1.0, 1.1, 0.9, 1.05, 0.95, 1.2, 0.8]
+
+
+def test_mad_finds_an_unmistakable_outlier():
+    assert mad_outlier_detection(EVEN + [500.0], out_thresh=20, draw=False) == [7]
+
+
+def test_mad_is_not_disabled_by_a_single_nan():
+    """The bug this guards: one NaN made the median NaN, every comparison
+    against it False, and the detector silently returned "no outliers" for
+    the whole run -- including for the images that did have a finite error.
+    """
+    found = mad_outlier_detection(EVEN + [500.0, np.nan], out_thresh=20, draw=False)
+
+    assert list(found) == [7, 8]
+
+
+def test_mad_flags_images_with_no_finite_error():
+    """An image with no recoverable pose has no error to score, and is
+    exactly the image that should be dropped."""
+    assert list(mad_outlier_detection(EVEN + [np.nan], out_thresh=20, draw=False)) == [7]
+    assert list(mad_outlier_detection(EVEN + [np.inf], out_thresh=20, draw=False)) == [7]
+
+
+def test_mad_keeps_even_data():
+    assert mad_outlier_detection(EVEN, out_thresh=20, draw=False) is None
+
+
+def test_mad_flags_the_odd_one_out_when_the_deviation_is_zero():
+    """Over half the data on the median leaves no scale to divide by; a
+    majority that agrees exactly makes any disagreement unbounded."""
+    found = mad_outlier_detection([1.0] * 8 + [500.0], out_thresh=20, draw=False)
+
+    assert list(found) == [8]
+
+
+def test_mad_keeps_perfectly_uniform_data():
+    """The same zero deviation, with nothing that disagrees: 0/0 must not
+    read as an outlier, and must not warn."""
+    with np.errstate(all="raise"):
+        assert mad_outlier_detection([1.0] * 9, out_thresh=20, draw=False) is None
+
+
+def test_mad_on_data_that_is_entirely_unusable():
+    assert list(mad_outlier_detection([np.nan] * 3, out_thresh=20, draw=False)) == [0, 1, 2]
+
+
+def test_mad_on_no_data_at_all():
+    assert mad_outlier_detection([], out_thresh=20, draw=False) is None
+
+
+def test_mad_returns_indices_into_the_data_it_was_given():
+    """Callers index their own arrays with the result, so a flat index
+    array is the contract -- not the tuple np.nonzero returns."""
+    found = mad_outlier_detection([1.0, 500.0, 1.0, np.nan], out_thresh=20, draw=False)
+
+    assert isinstance(found, np.ndarray)
+    assert found.ndim == 1
+    assert list(found) == [1, 3]

@@ -524,10 +524,16 @@ class TemplateBundleHandler:
         Given a number of per image errors, finds images that may cause calibration difficulties.
         Uses MAD outlier detection. If an image/pose is found to be an outlier, it is marked as a missing pose internally.
 
-        :param per_im_error: The total reprojection error per image.
+        :param per_im_error: The mean reprojection error per image.
         """
         if self.missing_poses is None:
             raise ValueError("missing poses should be initialised before calling this function")
+        # What the solve was handed before this ran, and what it was handed
+        # after.  Phase 3 reports the difference as the number of images
+        # outlier rejection removed; unset, both getattr calls fell back to
+        # empty and the report said nothing had been removed on every run.
+        self.missing_poses_before_outlier_rejection = np.array(
+            self.missing_poses, dtype=bool)
         cyclic_outlier_detection = True
         num_loops = 0
         logger.info("Begining outlier detection")
@@ -542,9 +548,12 @@ class TemplateBundleHandler:
                 out_thresh=20,
                 draw= not user_in == 'n'
             )
-            outlier_inds = not_missing[condensed_outlier_inds]
-            
+
             if condensed_outlier_inds is not None:
+                # Inside the check: indexing with None does not raise, it
+                # inserts an axis, so this quietly built a (1, n) array of
+                # every surviving image on the iterations that found nothing.
+                outlier_inds = not_missing[condensed_outlier_inds]
                 while not (user_in == 'y' or user_in == 'n'):
                     user_in = gu.ask_yes_no(
                         f"Outliers detected in iteration {num_loops}.",
@@ -560,6 +569,8 @@ class TemplateBundleHandler:
                 logger.info(f"No outliers detected in iteration {num_loops}.")
                 cyclic_outlier_detection = False
             num_loops += 1
+        self.missing_poses_after_outlier_rejection = np.array(
+            self.missing_poses, dtype=bool)
 
     def set_initial_params(self, x: np.ndarray):
         """
@@ -771,6 +782,36 @@ def seed_reprojection_error(cams, detection_data: np.ndarray,
             posed.project_points(im_points[im_column[seen], key_column[seen]])
             - detection_data[seen, -2:])
     return residuals.reshape(-1)
+
+
+def per_image_reprojection(costs: np.ndarray, detection_data: np.ndarray,
+                           n_images: int, viable: np.ndarray,
+                           cam: int | None = None) -> np.ndarray:
+    """
+    The mean euclidean reprojection error of each image, in pixels.
+
+    Mean rather than the sum this used to take over three cameras or more:
+    a sum grows with how many points were detected, so a half detected image
+    scored better than a fully detected one and MAD, reading the spread of
+    point counts rather than the spread of error, ranked them accordingly.
+    Every consumer already calls this quantity ``px``.
+
+    :param costs: the euclidean residual of each detection
+    :param detection_data: flattened detections, ``| cam | im | key | u | v |``
+    :param n_images: how many images the detection covers
+    :param viable: whether each image's pose was recoverable
+    :param cam: restrict to one camera's detections, or all of them
+    :return: an error per image, NaN where there is nothing to average
+    """
+    seen = (detection_data[:, 0] == cam) if cam is not None else True
+    per_image = np.full(n_images, np.nan)
+    for image in range(n_images):
+        if not viable[image]:
+            continue
+        selected = (detection_data[:, 1] == image) & seen
+        if np.any(selected):
+            per_image[image] = np.mean(costs[selected])
+    return per_image
 
 
 def _extrinsic_from_params(params: np.ndarray, current: np.ndarray) -> np.ndarray:
@@ -999,38 +1040,28 @@ def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibrat
     imlocs = np.array([gu.h_tform(ps,Mt_rt) for Mt_rt in Mat_rt]) 
     costs = seed_reprojection_error(cams, dd, imlocs, Mrt_ac)
 
+    costs = np.sqrt(np.sum(costs.reshape(-1, 2) ** 2, axis=1))
+    pose_viable = viable_nodes[len(cams):]
+    init_per_im_reproj_err = per_image_reprojection(
+        costs, dd, detection.max_ims, pose_viable)
+
+    logger.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
     if cams.get_n_cams() < 3:
-        costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
-
-        mo = dd[:, 0] == 0
-        lookups =  [(dd[:,1] == i) & mo  for i in range(detection.max_ims)]
-        # n_evals = [np.sum(l) for l in lookups]
-        im_costs_0 = [np.mean(costs[l]) if v else np.nan for l,v in zip(lookups, viable_nodes[len(cams):])]
-        init_per_im_reproj_err_0 = np.array(im_costs_0)
-
-        m1 = dd[:, 0] == 1 
-        lookups_1 = [(dd[:,1] == i) & m1 for i in range(detection.max_ims)]
-        im_costs_1 = [np.mean(costs[l]) if v else np.nan for l,v in zip(lookups_1, viable_nodes[len(cams):])]
-        init_per_im_reproj_err_1 = np.array(im_costs_1)
-
-        logger.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
         logger.info("\n" + plot_to_string(
-            [init_per_im_reproj_err_0, init_per_im_reproj_err_1], height=10,
+            [per_image_reprojection(costs, dd, detection.max_ims, pose_viable, cam)
+             for cam in (0, 1)], height=10,
             title="Per image initial reproj error", color=['blue', 'red']))
-
     else:
-        lookups =  [(dd[:,1] == i) for i in range(detection.max_ims)]
-        costs = np.sqrt(np.sum(costs.reshape(-1,2)**2, axis=1))
-        im_costs = [np.sum(costs[l]) if v else np.nan for l,v in zip(lookups, viable_nodes[len(cams):])]
-
-        init_per_im_reproj_err = np.array(im_costs)
-
-        logger.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
         logger.info("\n" + plot_to_string(
             init_per_im_reproj_err, height=10,
             title="Per image initial reproj error", color=['blue', 'red']))
-    lookups = [(dd[:,1] == i) for i in range(detection.max_ims)]
-    im_costs = [np.sum(costs[l]) if v else np.nan for l,v in zip(lookups, viable_nodes[len(cams):])]
-    init_per_im_reproj_err = np.array(im_costs)
-    # raise ValueError
+
+    # An image the graph could not reach has no pose.  The caller reads that
+    # from the transform -- it checks isnan(pose[0, 0]) -- and until here
+    # every unreachable image handed it back the identity the accumulation
+    # started from, finite and indistinguishable from a solved pose.  So the
+    # check never fired, the image went into the solve with a pose that is
+    # not a pose, and the only trace it left was a NaN in the error array
+    # that MAD then choked on.
+    Mat_rt[~pose_viable] = np.nan
     return Mrt_ac, Mat_rt, init_per_im_reproj_err

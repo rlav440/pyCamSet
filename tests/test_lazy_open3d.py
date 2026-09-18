@@ -130,3 +130,26 @@ def test_bundle_adjustment_import_does_not_pull_in_open3d():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ok" in result.stdout
+
+
+def test_a_camera_drawn_as_a_box_converts_to_a_wireframe():
+    """A telecentric lens images a rectangular prism, so its mesh is six quads
+    where a pinhole frustum is triangles. Reading the face array at a fixed
+    stride of four turned that into a reshape error and left the 3-D view
+    blank for every telecentric rig."""
+    import numpy as np
+    import pytest
+
+    pytest.importorskip("pyvista")
+    pytest.importorskip("open3d")
+
+    from pyCamSet.cameras.camera import Camera
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+    from pyCamSet.utils.visualisation import _pv_polydata_to_o3d_lineset
+
+    tele = _pv_polydata_to_o3d_lineset(
+        TelecentricCamera(res=[720, 540]).get_mesh(scale=0.05))
+    assert len(np.asarray(tele.lines)) == 12, "a box has twelve edges"
+
+    pin = _pv_polydata_to_o3d_lineset(Camera(res=[720, 540]).get_mesh(scale=0.05))
+    assert len(np.asarray(pin.lines)) > 0, "the pinhole frustum still converts"

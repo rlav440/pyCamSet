@@ -1223,11 +1223,19 @@ class Phase2DiagnosticsTab(QWidget):
                 axis=1,
             ).astype(np.float32)
 
-            # Project with distortion (identity pose) → distorted pixel coordinates
-            R_eye = np.eye(3, dtype=np.float32)
-            t_zero = np.zeros(3, dtype=np.float32)
-            pts_distorted, _ = cv2.projectPoints(pts_norm, R_eye, t_zero, K, D)
-            pts_distorted = pts_distorted.reshape(-1, 2)
+            # Project with distortion through the camera's own model rather
+            # than cv2.projectPoints, which takes a Brown-Conrady vector of 4,
+            # 5, 8, 12 or 14 coefficients and nothing else. A telecentric lens
+            # carries a single division-model coefficient, so that call raised
+            # and took the whole diagnostics tab down with it. The rays are
+            # camera frame, so they go back through the extrinsic to be the
+            # world points project_points expects.
+            world = (np.linalg.inv(np.asarray(cam.extrinsic, dtype=np.float64))
+                     @ np.concatenate(
+                         [pts_norm.astype(np.float64),
+                          np.ones((len(pts_norm), 1))], axis=1).T).T[:, :3]
+            pts_distorted = np.asarray(
+                cam.project_points(world), dtype=np.float64).reshape(-1, 2)
 
             # Displacement vectors: distorted − ideal
             u = pts_distorted[:, 0] - pts_ideal[:, 0]

@@ -26,7 +26,7 @@ from pyCamSet.optimisation.numba_schur import ParamGroup, spec_from_groups
 from pyCamSet.optimisation.standard_bundle_handler import (
     SelfBundleHandler,
     StandardBundlePrimitive,
-    find_not_colinear_pts,
+    find_gauge_points,
 )
 from pyCamSet.optimisation.template_handler import (
     DEFAULT_OPTIONS,
@@ -228,30 +228,55 @@ def test_standard_primitive_fixed_points_shrink_the_vector():
 
 
 # --------------------------------------------------------------------------
-# find_not_colinear_pts: what picks the gauge
+# find_gauge_points: what picks the gauge
 # --------------------------------------------------------------------------
 
 
-def test_find_not_colinear_pts_picks_a_spanning_triple():
+def test_find_gauge_points_picks_a_spanning_triple():
     points = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [0, 1, 0]])
-    i0, i1, i2 = find_not_colinear_pts(points)
+    (i0, i1, i2), axis = find_gauge_points(points)
 
     a = points[i0] - points[i1]
     b = points[i0] - points[i2]
     assert np.linalg.norm(np.cross(a, b)) > 1e-8
 
 
-def test_find_not_colinear_pts_prefers_the_earliest_valid_pair():
-    """Index 0 is always the anchor, and the search is in combination order."""
-    points = np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
-    assert find_not_colinear_pts(points) == (0, 1, 2)
+def test_the_held_coordinate_is_the_one_a_rotation_moves():
+    """The last freedom is a rotation about AB, which carries C along the
+    normal of ABC: a coordinate in the plane of ABC would not see it."""
+    points = np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    (i0, i1, i2), axis = find_gauge_points(points)
+
+    ab = points[i1] - points[i0]
+    tangent = np.cross(ab / np.linalg.norm(ab), points[i2] - points[i0])
+    assert abs(tangent[axis]) == pytest.approx(np.linalg.norm(tangent))
 
 
-def test_find_not_colinear_pts_rejects_a_colinear_target():
-    """A degenerate target cannot fix a gauge, and must say so."""
-    points = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
+def test_find_gauge_points_fixes_only_points_it_is_offered():
+    """A point no camera saw is not a parameter, so holding it fixed removes
+    no freedom: the gauge has to be taken from the points that were seen."""
+    points = np.array(
+        [[0.0, 0, 0], [1, 0, 0], [0, 1, 0], [9, 0, 0], [9, 9, 0], [-9, 0, 0]]
+    )
+    seen = [0, 1, 2]
+
+    assert set(find_gauge_points(points, candidates=seen)[0]) <= set(seen)
+    # left to the whole target, the wider spread of the unseen points wins
+    assert set(find_gauge_points(points)[0]) - set(seen)
+
+
+def test_find_gauge_points_rejects_colinear_candidates():
+    """A degenerate choice cannot fix a gauge, and must say so -- even when
+    the target as a whole is not degenerate."""
+    points = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [0, 1, 0]])
     with pytest.raises(ValueError, match="colinear"):
-        find_not_colinear_pts(points)
+        find_gauge_points(points, candidates=[0, 1, 2])
+
+
+def test_find_gauge_points_needs_three_points():
+    points = np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    with pytest.raises(ValueError, match="three points"):
+        find_gauge_points(points, candidates=[0, 1])
 
 
 # --------------------------------------------------------------------------
@@ -638,15 +663,20 @@ def test_self_handler_fixes_seven_gauge_freedoms(self_handler):
     """Three points pin the frame: 3 + 3 + 1 coordinates held fixed.
 
     Without that the target geometry could translate, rotate and scale freely
-    and the normal equations would be singular.
+    and the normal equations would be singular.  The seven are held on top of
+    the unseen points, which are fixed for a different reason.
     """
     fixed_from_gauge = 7
-    prim = self_handler.bundlePrimitive
+    unseen_coords = 3 * int((~self_handler.visible_feature_mask).sum())
 
-    n_visible_coords = 3 * int(self_handler.visible_feature_mask.sum())
-    assert int((~self_handler.feat_unfixed).sum()) >= fixed_from_gauge
-    # every free coordinate is a visible one
-    assert prim.free_bdpt <= n_visible_coords
+    assert int((~self_handler.feat_unfixed).sum()) == unseen_coords + fixed_from_gauge
+
+
+@pytest.mark.data
+def test_the_gauge_is_fixed_on_points_that_were_seen(self_handler):
+    """Holding a point no camera saw removes nothing: it was never free."""
+    for index in self_handler.fixed_inds:
+        assert self_handler.visible_feature_mask[index]
 
 
 @pytest.mark.data

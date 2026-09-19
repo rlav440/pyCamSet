@@ -17,8 +17,6 @@ try:
 except ImportError:  # pragma: no cover - exercised in headless installs
     pv = None
     _PYVISTA_OK = False
-from itertools import combinations
-
 from typing import TYPE_CHECKING
 
 from scipy.spatial.distance import cdist
@@ -36,21 +34,54 @@ if TYPE_CHECKING:
     from pyCamSet.cameras import CameraSet, Camera
 
 
-def find_not_colinear_pts(points):
+def find_gauge_points(points, candidates=None):
     """
-    Given a set of points mxn, finds 3 points that are not co-linear.
-    :param points: The points to search for.
-    :return: The indicies of the returned points.
+    Chooses the coordinates to hold fixed to remove the seven gauge freedoms
+    of a self calibration: three translations, three rotations and the scale.
+
+    Two points, held in all three of their coordinates, remove six of them:
+    the translation, the scale, and every rotation but the one about the line
+    AB between them.  A single coordinate of a third point C removes that
+    last one.  Rotating about AB carries C along the normal of the plane ABC,
+    so the coordinate held is the axis most nearly parallel to that normal;
+    a coordinate lying in the plane of ABC is unchanged by the rotation and
+    would constrain nothing.  C is taken as far from AB as the data allows,
+    and A and B as far apart, so that each held coordinate is the one the
+    residuals respond to most strongly.
+
+    A point that no camera saw is not a parameter of the optimisation, so
+    holding it fixed removes no freedom at all; ``candidates`` is the set of
+    points that may be used, which makes the gauge choice depend on the
+    detections rather than on the target alone.
+
+    :param points: the (n, 3) geometry of the target.
+    :param candidates: indices of the points that may be held fixed. The
+        default allows all of them.
+    :return: the three point indices, and the axis of the third point.
+    :raises ValueError: if the points available cannot fix a gauge.
     """
-    ind0 = 0
-    for ind1, ind2 in combinations(np.arange(1, points.shape[0]), 2):
-        AB = points[ind0] - points[ind1]
-        AC = points[ind0] - points[ind2]
-        score = np.linalg.norm(np.cross(AB, AC))
-        if score > 1e-8:
-            return ind0, ind1, ind2
-    else:
-        raise ValueError("No set of values that were not colinear were found in the provided data.")
+    inds = np.arange(len(points)) if candidates is None else np.asarray(candidates)
+    if len(inds) < 3:
+        raise ValueError(
+            f"Fixing the gauge needs three points, and only {len(inds)} are available.")
+
+    pts = points[inds]
+    i0 = inds[np.argmax(np.linalg.norm(pts - np.mean(pts, axis=0), axis=1))]
+    span = np.linalg.norm(pts - points[i0], axis=1)
+    i1 = inds[np.argmax(span)]
+    if np.max(span) == 0:
+        raise ValueError("Every point available to fix the gauge is at the same location.")
+
+    ab = (points[i1] - points[i0]) / np.max(span)
+    normals = np.cross(ab, pts - points[i0])
+    distance = np.linalg.norm(normals, axis=1)  # each point's distance from AB
+    furthest = np.argmax(distance)
+    if distance[furthest] < 1e-6 * np.max(span):
+        raise ValueError(
+            "The points available to fix the gauge are colinear, so no rotation "
+            "about them can be constrained.")
+
+    return (int(i0), int(i1), int(inds[furthest])), int(np.argmax(np.abs(normals[furthest])))
 
 class StandardBundlePrimitive:
     """
@@ -147,42 +178,24 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         self.flat_point_data = np.copy(self.point_data.reshape((-1)))
 
+        # a feature no camera saw cannot be solved for, so it is held fixed
+        n_points = int(np.prod(self.point_data.shape[:-1]))
+        dd = self.detection.return_flattened_keys(self.target.point_data.shape[:-1]).get_data()[:, 2]
+        self.visible_feature_mask = np.isin(np.arange(n_points), dd)
+        self.feat_unfixed = np.repeat(self.visible_feature_mask, 3)
 
-        # if bundle_points_unfixed is not None:
-        #     logger.warning(
-        #         """
-        #         A list of unfixed bundle points was provided. The calibration fixes arbitrary points to break gauge symmetries. 
-        #         Unless overridden with the always_correct_gauge=True, the optimisation will no longer attempt to return the output geometry to the provided scale. 
-        #         """)
-        #     self.correct_gauge = always_correct_gauge
-        #
-        #     self.bdpt_unfixed = bundle_points_unfixed
-        # else:
-
-        #fix the gauge of the optimisation by fixing 7 params of the target
-
-        self.fixed_inds = find_not_colinear_pts(self.flat_point_data.reshape((-1,3)))
+        # fix the gauge of the optimisation by fixing 7 coordinates of the
+        # target. They are chosen from the features that were seen: a fixed
+        # coordinate of an unseen feature is not a parameter of this
+        # optimisation and so removes no freedom from it.
+        self.fixed_inds, self.gauge_axis = find_gauge_points(
+            self.flat_point_data.reshape((-1, 3)),
+            candidates=np.flatnonzero(self.visible_feature_mask),
+        )
         i0, i1, i2 = self.fixed_inds
-        self.feat_unfixed = np.ones(self.flat_point_data.shape[0], dtype=bool)
         self.feat_unfixed[3*i0:3*i0+3] = False
         self.feat_unfixed[3*i1:3*i1+3] = False
-        self.feat_unfixed[3*i2] = False
-
-        # then look wt the detection data - if a feature isn't seen, report it as unseen
-        n_points = np.prod(self.point_data.shape[:2])
-        dd = self.detection.return_flattened_keys(self.target.point_data.shape[:-1]).get_data()[:, 2]
-        # cd = np.arange(n_points)//81
-        # good_face_mask = (cd == 1) | (cd == 4) | (cd == 5)
-        # self.visible_feature_mask = np.isin(np.arange(n_points), dd) & good_face_mask
-        self.visible_feature_mask = np.isin(np.arange(n_points), dd) 
-
-
-
-
-        for idf, vf in enumerate(self.visible_feature_mask): #fix all unseen features to shrink the optimisation
-            if not vf:
-                self.feat_unfixed[3*idf:3*idf + 3] = False
-        
+        self.feat_unfixed[3*i2 + self.gauge_axis] = False
 
         superBundlePrimitive = self.bundlePrimitive
 
@@ -375,23 +388,19 @@ class SelfBundleHandler(TemplateBundleHandler):
         :param point_estimate: The array containing the estimated locations of the calibration target features.
         :return: A tuple containing updated proj, extr, poses, and point estimate.
         """
-        n_points = np.prod(self.point_data.shape[:2])
-        cd = np.arange(n_points)//(n_points//6)
-        good_face_mask = np.ones(n_points, dtype=bool) #(cd == 1) | (cd == 4) | (cd == 5)
+        # the arrays of the bundle primitive are refilled from the parameters
+        # on every call, so the transform is applied to copies: a plot or a
+        # second call for the camera set must not leave a transformed pose
+        # behind for the next one to transform again. The projection is copied
+        # for the same reason -- a rotation only camera takes the scale there.
+        poses = poses.copy()
+        extr = extr.copy()
+        proj = proj.copy()
 
         ref_points = self.target.point_data.reshape((-1,3))
         valid_map = self.target.valid_map
-        vm = self.visible_feature_mask & good_face_mask
+        vm = self.visible_feature_mask
 
-
-
-        # labels = np.arange(len(ref_points))
-        # s = pv.Plotter()
-        # s.add_point_labels(ref_points[vm], labels[vm])
-        # s.show()
-        # raise ValueError()
-
-        
         if isinstance(valid_map, bool):
             if valid_map == False:
                 raise ValueError("Target has given a valid map of False, which indicates no distance comparisons are valid.")
@@ -399,8 +408,7 @@ class SelfBundleHandler(TemplateBundleHandler):
             inds = np.triu_indices(point_estimate[vm].shape[0], k=1)
             new_map = cdist(point_estimate[vm], point_estimate[vm])[inds]
             ref_map = cdist(ref_points[vm], ref_points[vm])[inds]
-            dt = self.target.square_size 
-            # dt = 0.0045 #hard coded for today
+            dt = self.target.square_size
             mask = np.isclose(ref_map, dt)
             new_map = new_map[mask]
             ref_map = ref_map[mask]
@@ -421,8 +429,7 @@ class SelfBundleHandler(TemplateBundleHandler):
             raise ValueError("Found S as nan, indicating that the requisite mappings did not exist")
         try:
             update_tform = gu.make_4x4h_tform(*ch.n_estimate_rigid_transform(
-                new_points[self.visible_feature_mask & good_face_mask],
-                ref_points[self.visible_feature_mask & good_face_mask])
+                new_points[vm], ref_points[vm])
             ) #this mapping from used points to a reference space
         except Exception as e:
             logger.critical("Failed to find an acceptable gauge transform, returning the identity")
@@ -430,7 +437,6 @@ class SelfBundleHandler(TemplateBundleHandler):
             update_tform = np.eye(4)
 
         inv_update = np.linalg.inv(update_tform)
-        # inv_update = np.eye(4)
         new_points = gu.h_tform(new_points, update_tform)
         #proj matricies never change: scale invariance!
 
@@ -522,33 +528,10 @@ class SelfBundleHandler(TemplateBundleHandler):
                 "Install it with: pip install pyCamSet[viz]"
             )
         og_data = self.target.point_data.reshape((-1,3))
-        n_points = np.prod(self.point_data.shape[:2])
-        cd = np.arange(n_points)//(n_points//6)
+        vm = self.visible_feature_mask
 
-        t0, t1, t2 = 1, 4, 5
-        #
-        good_face_mask = (cd == t0) | (cd == t1) | (cd == t2)
-        m1 = cd == t0
-        m4 = cd == t1
-        m5 = cd == t2
-
-        vm = self.visible_feature_mask # & good_face_mask
-        # vm = np.ones_like(vm)
-        # m1 = vm.copy()
-        # m4 = vm.copy()
-        # m5 = vm.copy()
-
-        
-        un_gauged_data = self.get_bundle_adjustment_inputs(x)
-        _,_,_, final_data = self.apply_gauge_transform(*un_gauged_data)
-        _, _, _, final_data = un_gauged_data
-        unfixed_points = un_gauged_data[-1].copy()
-
+        _, _, _, final_data = self.apply_gauge_transform(*self.get_bundle_adjustment_inputs(x))
         diff = (final_data - og_data) * 1000
-
-        #xclude difs over 2 mm
-        mask = np.linalg.norm(diff, axis=1) < 2
-        # vm &= mask
 
         scale = 5
         descale = 1000//scale
@@ -557,51 +540,43 @@ class SelfBundleHandler(TemplateBundleHandler):
         s.title = "Target Self-calibration Results."
         s.add_arrows(
             (og_data*descale)[vm], diff[vm], label = f"Recovered shape change ({scale}x mag)", 
-            # (og_data*descale), diff, label = f"Recovered shape change ({scale}x mag)", 
-                # cmap='Blues',
                 cmap="Greens",
-                # cmap='Oranges',
         )
         s.remove_scalar_bar()
         s.add_scalar_bar(title="Euclidean displacement from initial model (mm).")
         s.add_mesh(pv.PolyData(og_data*descale), color='k', label = "Original Model", point_size=0.3)
-        # s.add_mesh(pv.PolyData(final_data*descale), color='g', label = "Best-scaled Model")
-        # s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[0]]*descale), color='k', label="Points used to fix gauge symmetry")
-        # s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[1]]*descale), color='k')
-        # s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[2]]*descale), color='k')
 
-        p1, np1, cp1 = pv.fit_plane_to_points(final_data[vm & m1]*descale, return_meta=True)
-        p4, np4, cp4 = pv.fit_plane_to_points(final_data[vm & m4]*descale, return_meta=True)
-        p5, np5, cp5 = pv.fit_plane_to_points(final_data[vm & m5]*descale, return_meta=True)
+        # a lattice for every face of the target: point_data's (u, ... w, n, 3)
+        # shape groups the n coplanar points of each face together, so the
+        # faces are the rows of that reshape whatever the shape of the object.
+        for face in og_data.reshape((-1, self.point_data.shape[-2], 3)):
+            lattice = pv.PolyData(face*descale, lines=make_connectivity(face))
+            s.add_mesh(lattice, style='wireframe', line_width=2, color='k', opacity=0.1)
 
-        s1 = pv.PolyData(og_data[m1]*descale, lines=make_connectivity(og_data[m1]))
-        s.add_mesh(s1, style='wireframe', line_width=2, color='k', opacity=0.1)
-        s4 = pv.PolyData(og_data[m4]*descale, lines=make_connectivity(og_data[m4]))
-        s.add_mesh(s4, style='wireframe', line_width=2, color='k', opacity=0.1)
-        s5 = pv.PolyData(og_data[m5]*descale, lines=make_connectivity(og_data[m5]))
-        s.add_mesh(s5, style='wireframe', line_width=2, color='k', opacity=0.1)
-
-        labels = np.arange(len(og_data))
-        s.add_point_labels(descale * og_data[vm], labels[vm])
-        # s.add_mesh(pv.PolyData(final_data[vm & m2]), point_size=6)
-        # s.add_mesh(p1, color='lightblue', opacity=0.7)
-        # s.add_mesh(p4, color='lightblue', opacity=0.7)
-        # s.add_mesh(p5, color='lightblue', opacity=0.7)
         s.add_legend(bcolor='w', border=True)
 
+        # the direction the target is viewed from is a choice; the distance is
+        # not, and a fixed one draws a small target as a speck. reset_camera
+        # keeps the direction and fits the distance to what is being drawn.
         camera = s.camera
         camera.position = (-60, -60, -36)
         camera.focal_point = (0,0,0)
         camera.up = (0,0,-1)
-        # camera.angle = 0.02
+        s.reset_camera()
 
         s.show()
 
 
 def make_connectivity(pts):
+    """
+    The lines of the lattice a face's points sit on, as pyvista reads them.
+
+    :param pts: the (n, 3) points of one face, in the row major order a board
+        numbers its corners in.
+    :return: a flat list of (2, start, end) line entries.
+    """
     n_pts = pts.shape[0]
-    n_points_per_line = int(np.sqrt(pts.shape[0]))
-    #take the input points
+    n_points_per_line = row_length(pts)
     connectivity = []
     for idp, _ in enumerate(pts):
         if (idp + n_points_per_line < n_pts):
@@ -609,6 +584,28 @@ def make_connectivity(pts):
         if not ((idp +1) % n_points_per_line == 0):
             connectivity.extend([2, idp, idp + 1])
     return connectivity
+
+
+def row_length(pts):
+    """
+    How many of a face's points lie on one row of its lattice.
+
+    The points of a face are numbered row major, so the first step that turns
+    away from the direction of the first one has left the first row. A square
+    face gives the square root; a rectangular board gives its own width, which
+    assuming the square root would have drawn a lattice at a diagonal to.
+
+    :param pts: the (n, 3) points of one face.
+    :return: the number of points in a row.
+    """
+    step = pts[1] - pts[0]
+    step = step / np.linalg.norm(step)
+    for idp in range(2, len(pts)):
+        next_step = pts[idp] - pts[idp - 1]
+        next_step = next_step / np.linalg.norm(next_step)
+        if np.linalg.norm(np.cross(step, next_step)) > 1e-6:
+            return idp
+    return len(pts)
 
 
 

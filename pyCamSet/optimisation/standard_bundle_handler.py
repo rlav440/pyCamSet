@@ -423,7 +423,28 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         inv_update = np.linalg.inv(update_tform)
         # inv_update = np.eye(4)
-        new_points = gu.h_tform(new_points, update_tform)
+        gauged_points = gu.h_tform(s * point_estimate, update_tform)
+        # Only the points nothing observed are left where they are.
+        #
+        # This handler holds a few scalars at their model coordinates to pin the
+        # gauge, so those scalars carry no parameter and the solve never moves
+        # them.  Where such a point was also never seen, it has no residual row
+        # at all: the gauge can leave it exactly where the model put it -- which
+        # is where the gauge is putting everything else -- and no pixel cares,
+        # because nothing images it.
+        #
+        # Carrying it through the gauge anyway moves it by the whole size of the
+        # correction: on a real seven-camera cube, ~20 mm off a 10 mm target, and
+        # it is those points, not the cube, that then set the cloud's bounding
+        # size.  That run reported a 30.04 mm cloud for a 17.32 mm cube.
+        #
+        # A point that WAS seen is a different matter.  Its pinned scalars are
+        # not free, but its pixel still ties it to the rest of the cloud, so it
+        # has to move with the world like every other imaged point -- this rig
+        # has one such point, seen in every image, with a single held component.
+        # Leaving that one behind moves its pixel.
+        unobserved = ~np.asarray(self.visible_feature_mask, dtype=bool)
+        new_points = np.where(unobserved[:, None], point_estimate, gauged_points)
         #proj matricies never change: scale invariance!
 
         # A world scale has to be absorbed somewhere, or the pixels move.

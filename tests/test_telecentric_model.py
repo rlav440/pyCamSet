@@ -1370,3 +1370,98 @@ def test_the_gauge_rescales_the_lens_when_the_camera_has_no_translation(
     assert np.allclose(extr_out, extr_in), (
         "the gauge moved the camera rotations, but a world scale is not a "
         "rotation of the rig")
+
+
+
+def test_the_gauge_leaves_every_scalar_the_solve_did_not_estimate(
+        telecentric_problem):
+    """A point nothing observes, and nothing solves for, must come back unmoved.
+
+    This handler holds a few scalars at their model coordinates to pin the gauge
+    (see ``find_not_colinear_pts``), so those scalars carry no parameter and the
+    solve never writes to them.  Where such a point was also never seen, it has
+    no residual row at all: the gauge may leave it exactly where the caller left
+    it, which is where the gauge is putting everything else, and no pixel cares
+    because nothing images it.
+
+    Carrying it through the gauge anyway moves it by the whole size of the
+    correction -- 20 mm off a 10 mm target on a real seven-camera cube, and it is
+    those points, not the cube, that then set the cloud's bounding size.  That
+    run reported a 30.04 mm cloud for a 17.32 mm cube.
+
+    The distinction this test draws is between UNOBSERVED and merely pinned, and
+    it is not a detail.  The real run's twenty-sixth point is held in one
+    component and seen in every image; its pixel still ties it to the rest of
+    the cloud, so it has to move with the world like any other imaged point.
+    Leaving it behind instead costs 0.02 px of reprojection (0.4566 -> 0.4790 on
+    that run).  So the condition the gauge keys on is visibility, not whether a
+    component happens to be a free parameter.
+
+    The pinned points are therefore made UNSEEN here, by dropping every other
+    key from the detections' shape.  A point a camera observes cannot be both
+    pinned and free to be re-framed, so with it in view the assertion below
+    would be measuring the construction rather than the gauge.
+    """
+    cams, target, detection, poses = telecentric_problem
+    model = np.asarray(target.point_data, dtype=float).reshape(-1, 3)
+
+    probe = SelfBundleHandler(camset=cams, target=target, detection=detection)
+    pinned_points = np.logical_not(np.logical_or.reduce(
+        np.asarray(probe.feat_unfixed, dtype=bool).reshape(-1, 3), axis=1))
+    assert pinned_points.any(), "this fixture must hold some points for the gauge"
+
+    # Leave the pinned points in view but drop every OTHER key from the
+    # detections' target shape, so that what the handler ends up holding is a
+    # set of points nothing observes.  That is the case the real run is in: 13
+    # of its 15 pinned points were never seen by any camera.
+    keep = set(np.flatnonzero(np.logical_not(pinned_points)).tolist())
+    rows = detection.get_data()
+    trimmed = TargetDetection(
+        cam_names=cams.get_names(),
+        data=rows[[int(r[2]) in keep for r in rows]])
+    unobserved = np.logical_not(np.asarray(
+        SelfBundleHandler(
+            camset=cams, target=target, detection=trimmed
+        ).visible_feature_mask, dtype=bool))
+    assert unobserved.any(), "the pinned points must end up unobserved here"
+
+    handler = SelfBundleHandler(camset=cams, target=target, detection=trimmed)
+    handler.missing_poses = np.zeros(len(poses), dtype=bool)
+    bp = handler.bundlePrimitive
+    estimated = np.asarray(handler.feat_unfixed, dtype=bool)
+    assert estimated.size == model.size
+
+    base = bp.return_bundle_primitives(
+        np.concatenate([ground_truth_params(handler, cams, poses),
+                        model.reshape(-1)[estimated]]))
+    proj, extr, target_poses, _ = (np.asarray(a, dtype=float).copy() for a in base)
+
+    # A state a solve can produce: the estimated scalars at a scale of their own,
+    # with the lens and target poses carried along so the pixels are unchanged.
+    s0 = 1.37
+    proj[:, 0] /= s0          # m_x
+    proj[:, 2] /= s0          # m_y
+    proj[:, 5] /= s0          # eps
+    target_poses[:, 3:] = target_poses[:, 3:] * s0
+
+    given = np.where(estimated, model.reshape(-1) * s0, model.reshape(-1))
+    # the pinned scalars are nudged off where the model put them, so that a
+    # gauge which quietly moves them cannot pass by accident
+    offset = np.flatnonzero(np.logical_not(estimated))
+    given[offset] = given[offset] + 0.0011
+
+    state = (proj, extr, target_poses, given.reshape(-1, 3))
+    after = np.asarray(
+        handler.apply_gauge_transform(*state)[3], dtype=float).reshape(-1, 3)
+    before_pts = given.reshape(-1, 3)
+
+    # the gauge must actually have done something, or this proves nothing
+    assert not np.allclose(after, before_pts), (
+        "the gauge was a no-op here, so this test cannot see the defect")
+
+    moved = np.linalg.norm(after[unobserved] - before_pts[unobserved], axis=1)
+    assert np.allclose(moved, 0.0, atol=1e-15), (
+        f"the gauge moved {int((moved > 1e-15).sum())} of {int(unobserved.sum())} "
+        f"points that no camera observed and no parameter covers, by up to "
+        f"{moved.max() * 1000:.4f} mm. Nothing images them and nothing solves for "
+        "them, so the gauge has no business moving them")

@@ -100,6 +100,7 @@ class PyCamSetApp(QMainWindow):
     def _build_ui(self) -> None:
         # Deferred imports so module is importable without a display server
         from pyCamSet.gui.export_calibration_tab import ExportCalibrationTab
+        from pyCamSet.gui.detection_cost_tab import DetectionCostTab, TAB_DETECTION_COST
         from pyCamSet.gui.phase_0_input import Phase0Tab
         from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab, Phase1Tab
         from pyCamSet.gui.phase_2_intrinsics import Phase2DiagnosticsTab, Phase2Tab
@@ -226,6 +227,16 @@ class PyCamSetApp(QMainWindow):
             workspace_mgr=ws,
         )
         self._notebook.addTab(self.optimisation_tab, TAB_OPTIMISATION)
+
+        # Detection Cost: a measurement of this machine and this target, run on
+        # demand. It reads a folder of finished frames, so it needs no cameras
+        # and no workspace -- it is not a phase and nothing depends on it.
+        self.detection_cost_tab = DetectionCostTab(
+            notebook=self._notebook,
+            info_cb=self._info_cb,
+            terminal_cb=self._terminal_cb,
+        )
+        self._notebook.addTab(self.detection_cost_tab, TAB_DETECTION_COST)
 
         # Cross-tab wiring
         self.phase1_tab.set_diagnostics_tab(self.phase1_diag_tab)

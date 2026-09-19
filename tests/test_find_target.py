@@ -28,11 +28,16 @@ from pyCamSet.optimisation.find_target import (
 )
 from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
+from scipy.spatial.transform import Rotation
+
+from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+
 from conftest import make_camera
 
 # The pose solver needs at least 8 points in a view, so the grid is 5x5.
 GRID = 5
 SPACING = 0.02
+REF_MAGNIFICATION = 30000.0  # px per metre
 
 
 class StubTarget(AbstractTarget):
@@ -126,6 +131,99 @@ def test_fix_all_cameras_carries_distortion_inside_int(rig):
 
     assert set(entry) == {"ext", "int"}
     assert np.allclose(entry["int"][4:], [-0.2, 0.05, 1e-3, -1e-3, 0.01])
+
+
+def make_telecentric_camera(name, rotation):
+    """A telecentric camera turned by *rotation* radians, sitting at no place.
+
+    The translation is left at zero because a telecentric camera has no
+    identifiable one: a rig that set it would be describing something this lens
+    model cannot represent.
+    """
+    extrinsic = np.eye(4)
+    extrinsic[:3, :3] = Rotation.from_rotvec(np.asarray(rotation)).as_matrix()
+    return TelecentricCamera(
+        extrinsic=extrinsic, intrinsic=np.array([
+            [REF_MAGNIFICATION, 0.0, 640.0],
+            [0.0, REF_MAGNIFICATION, 480.0],
+            [0.0, 0.0, 1.0],
+        ]), res=[1280, 960], distortion_coefs=np.array([0.1]),
+        telecentricity=0.4, name=name)
+
+
+@pytest.fixture
+def telecentric_rig():
+    """Three telecentric cameras at different orientations.
+
+    Their translation is not identifiable, so the offsets a pinhole rig sets
+    are not something this model can hold -- only the turns differ.
+    """
+    return CameraSet(
+        camera_dict={
+            name: make_telecentric_camera(name, rot)
+            for name, rot in [
+                ("left", (0.0, 0.0, 0.0)),
+                ("centre", (0.0, 0.45, 0.0)),
+                ("right", (-0.40, 0.0, 0.25)),
+            ]
+        }
+    )
+
+
+def test_fix_all_cameras_packs_a_telecentric_lens_widths(telecentric_rig):
+    """A telecentric set has narrower poses and a different intrinsic layout.
+
+    Three numbers for a pose -- rotation alone -- and six for the lens:
+    m_x, c_x, m_y, c_y, k, eps.  The eps is the point that a width change alone
+    would not have saved: the pinhole packing stops after the intrinsic's first
+    four entries and the distortion, so a telecentric camera handed that way
+    comes back to the solve as a perfect lens.
+    """
+    fixed = fix_all_cameras(telecentric_rig)
+
+    assert set(fixed) == set(telecentric_rig.get_names())
+    for name in telecentric_rig.get_names():
+        entry = fixed[name]
+        assert entry["ext"].shape == (3,), "rotation only: no translation"
+        assert entry["int"].shape == (6,), "m_x, c_x, m_y, c_y, k, eps"
+        assert np.allclose(entry["int"], telecentric_rig[name].to_param_vector())
+
+
+class SolidStubTarget(StubTarget):
+    """StubTarget with a little out-of-plane depth.
+
+    A planar target under a telecentric lens has a two-fold out-of-plane tilt
+    ambiguity -- a property of an affine view, not of this implementation -- so
+    a flat grid cannot seed a pose and the estimate comes back undefined.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        flat = self.point_data.reshape(-1, 3)
+        x, y = flat[:, 0], flat[:, 1]
+        extent = np.abs(x).max()
+        flat[:, 2] = 0.4 * SPACING * np.cos(3.0 * x / extent) * np.sin(2.0 * y / extent)
+        self._process_data()
+
+
+@pytest.mark.slow
+def test_a_target_pose_is_found_with_a_telecentric_rig(telecentric_rig):
+    """The whole point of the widths: a telecentric set can find a target pose.
+
+    This is the module's real entry point, and it could not complete before the
+    widths came from the lens model -- six numbers cannot be written into a
+    three-wide pose row, and the intrinsic came back as a perfect lens because
+    its ``eps`` was not carried at all.
+    """
+    target = SolidStubTarget()
+    images = {name: _frame() for name in telecentric_rig.get_names()}
+
+    got = find_target_pose_at_timestep(images, target, telecentric_rig)
+
+    assert got.shape == (4, 4)
+    # the detections are exact and the target sits at the world origin, so a rig
+    # that was genuinely held at its calibration returns that pose back
+    assert np.allclose(got, np.eye(4), atol=1e-6)
 
 
 # --------------------------------------------------------------------------

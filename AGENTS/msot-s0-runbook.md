@@ -232,6 +232,34 @@ From this PC, `experiment_001`, 320 frames (40 per camera), Ccube2 6 pts / 10 mm
 | worker threads @ 2 fps/camera (16 frames/s) | 1 median, 2 p95 |
 | worker threads @ 10 fps/camera (80 frames/s) | 4 median, 6 p95 |
 
+### Read the verdicts, not the milliseconds
+
+**The absolute times are not reproducible to better than roughly 10-15% on one
+machine run-to-run**, depending on what else that machine is doing, so a
+difference below that between MSOT and this PC is not meaningful. Measured, over
+5 identical repeats of one configuration here (200 frames each, same folder and
+target):
+
+| | across 5 runs |
+|---|---|
+| end-to-end median | 48.0 - 52.7 ms (9.8% spread) |
+| `worker_threads_if_serial_median` | **1 every run** |
+| `worker_threads_if_serial_p95` | **2 every run** |
+| `worker_threads_if_single_thread_cost` | **1 every run** |
+| `internal_parallel_speedup` | 1.067 - 1.235 |
+
+So the outputs that actually decide anything — the **thread verdict** and the
+order of magnitude of the cost — are stable, and the ratio `internal_parallel_speedup`
+is the noisiest number on the page: do not compare it to two decimal places
+between machines. The verdict that matters for the plan is that a detection call
+uses ~1 core, not 4, and that held on every run.
+
+**What MSOT is really being asked to confirm:** that one detection call on
+MSOT's CPU still needs ~50-60 ms and still parallelises ~1.1-1.2x, so the Tier 1
+pool stays small at 2 fps. If MSOT's verdict is materially different from the
+table above (say 4+ workers at 2 fps/camera), that is a real finding about that
+machine and worth stopping for; a median 10% higher is not.
+
 MSOT's numbers will differ — different CPU, possibly different OpenCV build.
 That is expected and is exactly why the run exists on that machine: what has to
 match is the **module sha256**, not the commits, so the two machines are

@@ -1385,17 +1385,21 @@ def test_the_gauge_leaves_every_scalar_the_solve_did_not_estimate(
     because nothing images it.
 
     Carrying it through the gauge anyway moves it by the whole size of the
-    correction -- 20 mm off a 10 mm target on a real seven-camera cube, and it is
-    those points, not the cube, that then set the cloud's bounding size.  That
-    run reported a 30.04 mm cloud for a 17.32 mm cube.
+    correction.  On ccube2/5_corners/experiment_001 -- 294 target points, of
+    which 279 were detected by one of the seven cameras -- the 15 that no camera
+    ever saw came back a mean 19.68 mm and up to 26.41 mm from the printed
+    model, against a target whose largest point separation is 16.19 mm.  Those
+    points, not the cube, then set the cloud's bounding size: the same run's
+    cloud measured 30.04 mm across where the printed model measures 16.19 mm.
 
     The distinction this test draws is between UNOBSERVED and merely pinned, and
-    it is not a detail.  The real run's twenty-sixth point is held in one
-    component and seen in every image; its pixel still ties it to the rest of
-    the cloud, so it has to move with the world like any other imaged point.
-    Leaving it behind instead costs 0.02 px of reprojection (0.4566 -> 0.4790 on
-    that run).  So the condition the gauge keys on is visibility, not whether a
-    component happens to be a free parameter.
+    it is not a detail.  Point 1 of that run is pinned and seen; point 7 is
+    pinned in one component and seen too -- in 75 of the 98 images, across all
+    seven cameras -- and the gauge moves it 1.19 mm.  Its pixel still ties it to
+    the rest of the cloud, so it has to move with the world like any other
+    imaged point.  Only point 0 is both pinned and unobserved.  So the condition
+    the gauge keys on is visibility, not whether a component happens to be a
+    free parameter.
 
     The pinned points are therefore made UNSEEN here, by dropping every other
     key from the detections' shape.  A point a camera observes cannot be both
@@ -1412,8 +1416,8 @@ def test_the_gauge_leaves_every_scalar_the_solve_did_not_estimate(
 
     # Leave the pinned points in view but drop every OTHER key from the
     # detections' target shape, so that what the handler ends up holding is a
-    # set of points nothing observes.  That is the case the real run is in: 13
-    # of its 15 pinned points were never seen by any camera.
+    # set of points nothing observes.  That is the case the real run is in: of
+    # its 15 never-seen points, one is a pinned gauge point.
     keep = set(np.flatnonzero(np.logical_not(pinned_points)).tolist())
     rows = detection.get_data()
     trimmed = TargetDetection(

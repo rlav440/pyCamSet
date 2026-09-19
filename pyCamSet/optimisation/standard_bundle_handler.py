@@ -434,15 +434,18 @@ class SelfBundleHandler(TemplateBundleHandler):
         # because nothing images it.
         #
         # Carrying it through the gauge anyway moves it by the whole size of the
-        # correction: on a real seven-camera cube, ~20 mm off a 10 mm target, and
-        # it is those points, not the cube, that then set the cloud's bounding
-        # size.  That run reported a 30.04 mm cloud for a 17.32 mm cube.
+        # correction.  On a real seven-camera cube the 15 points no camera saw
+        # came back a mean 19.68 mm, and up to 26.41 mm, from the printed model
+        # whose largest point separation is 16.19 mm -- and it is those points,
+        # not the cube, that then set the cloud's bounding size: the same run's
+        # cloud measured 30.04 mm across.
         #
         # A point that WAS seen is a different matter.  Its pinned scalars are
         # not free, but its pixel still ties it to the rest of the cloud, so it
-        # has to move with the world like every other imaged point -- this rig
-        # has one such point, seen in every image, with a single held component.
-        # Leaving that one behind moves its pixel.
+        # has to move with the world like every other imaged point -- a rig with
+        # one held component on a point several cameras see is the case that
+        # separates this rule from one keyed on the parameter mask.
+        # Leaving such a point behind moves its pixel.
         unobserved = ~np.asarray(self.visible_feature_mask, dtype=bool)
         new_points = np.where(unobserved[:, None], point_estimate, gauged_points)
         #proj matricies never change: scale invariance!

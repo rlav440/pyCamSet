@@ -101,42 +101,80 @@ python -c "import pyCamSet, cv2, numpy, tifffile, aruco2; print('pyCamSet', pyCa
 If `aruco2` is missing, neither ArUco 2 target can be built and the measurement
 cannot run — that is the one hard prerequisite.
 
-### If `aruco2` is missing: install the prebuilt wheel
+### If `aruco2` is missing: build it from a download
 
-**Do not try to build it from the submodule in this environment** — it cannot
-work. The submodule's `CMakeLists.txt` needs `OpenCVConfig.cmake`, and this
-environment's OpenCV comes from pip (`opencv-python`), which ships **no CMake
-config files at all**, so there is nothing for `OpenCV_DIR` to point at. The
+**Do not try to build it from the submodule *inside* this environment's activated
+shell** — as a *build* it cannot work there. The submodule's `CMakeLists.txt`
+needs `OpenCVConfig.cmake`, and this environment's OpenCV comes from pip
+(`opencv-python`), which ships **no CMake config files at all**, so there is
+nothing for `OpenCV_DIR` to point at. The
 `$CONDA_PREFIX/Library/cmake/x64/vc16/lib` path quoted in earlier versions of this
 runbook exists only in an environment with conda-forge's OpenCV *development*
 package, which is not the one you are in.
 
-Install the wheel instead. It is self-contained — it bundles its own
-`opencv_world4110.dll`, so it needs no OpenCV package and no `OpenCV_DIR`:
+That does **not** mean a build is impossible — it means the OpenCV it compiles
+against must come from the official release, downloaded, rather than from this
+environment. The result is a **self-contained wheel**: it bundles its own
+`opencv_world4110.dll`, so the environment you install it into needs no OpenCV
+package and no `OpenCV_DIR`.
 
-```
-aruco2-0.1.1-cp312-cp312-win_amd64.whl
-sha256 0d2d8f03fd83f952edbd363a3c9c37e249ecdcea61ebb9a7685b127e9f92acf6   (23.8 MB)
-```
+**No file transfer is needed.** Two downloads, then one script.
+
+**1. Download the official OpenCV Windows release and self-extract it:**
 
 ```bash
-python -m pip install /path/to/aruco2-0.1.1-cp312-cp312-win_amd64.whl
+curl -L -o "$LOCALAPPDATA/Temp/opencv-4.11.0-windows.exe" \
+  https://github.com/opencv/opencv/releases/download/4.11.0/opencv-4.11.0-windows.exe
+```
+
+That is **185.1 MB**. Run it, let it extract (say to `C:\opencv`), then confirm
+the two files that matter — both must exist, and note `vc16`, **not** `vc17`:
+
+```bash
+ls /c/opencv/build/x64/vc16/lib/OpenCVConfig.cmake
+ls /c/opencv/build/x64/vc16/bin/opencv_world4110.dll
+```
+
+**2. Build the wheel** with the script in the control repo,
+`tools/build_aruco2.bat`. Set its three paths at the top (`PY_CAMSET` = the
+pyCamSet checkout, `TARGET_PYTHON` = this env's `python.exe`, `OUTPUT_DIR` = any
+empty directory), then from **git-bash**:
+
+```bash
+MSYS_NO_PATHCONV=1 cmd.exe /c "$(cygpath -w tools/build_aruco2.bat)"
+```
+
+`MSYS_NO_PATHCONV=1` is required: without it MSYS rewrites the path and the run
+dies with `The system cannot find the path specified` before CMake starts. The
+script finds MSVC itself — do not hardcode a `vcvars64.bat` path into it, because
+the Visual Studio folder name varies by machine. Full reasoning, including the
+two other traps (forward slashes, and `lib` not `build`), is in the control
+repo's `docs/ENVIRONMENT_SETUP.md`.
+
+**3. Install and verify:**
+
+```bash
+python -m pip install <OUTPUT_DIR>/aruco2-0.1.1-cp312-cp312-win_amd64.whl
 python -c "import aruco2; print(aruco2.__file__)"
 python -c "import aruco2; print([n for n in ['get_predefined_dictionary','detect_fiducial_markers','detect_grid_board','get_solve_pnp_points','get_grid_board_image'] if hasattr(aruco2,n)])"
 ```
 
-Verify the sha256 after copying it, and check the tag is `cp312-win_amd64`
-(MSOT's Python). The second command must print all five API names.
+The second command must print all five API names. **The import plus the five
+APIs is the check — not a hash.** A locally built wheel is not byte-reproducible:
+three builds from this same source on one machine produced three different
+sha256 values. If you were instead *handed* a wheel, its hash is meaningful
+(`aruco2-0.1.1-cp312-cp312-win_amd64.whl`,
+`0d2d8f03fd83f952edbd363a3c9c37e249ecdcea61ebb9a7685b127e9f92acf6`, 23.8 MB,
+tag `cp312-win_amd64` for this env's Python) — but on this route there is nothing
+to compare it against, and no transfer to make.
 
-### Why this is the documented route and not the source build
+### Why build rather than take a wheel
 
 A wheel is a snapshot of the submodule at build time, so it can lag the checkout.
-That is the one trade-off, and it is the right one here: the same wheel produced
-every S0 number on the other machine, against the same pyCamSet commit. If you
-need the submodule's exact current commit, the source build is still possible —
-but in an environment that has an OpenCV *development* package (conda-forge
-`opencv=4.9.0`), not in `panoramic-control-refactored`. Details in the control
-repo's `docs/ENVIRONMENT_SETUP.md`.
+Building here removes the transfer and keeps the wheel in step with the submodule
+you have. The one thing it gives up is bit-identical wheels between machines —
+which is why the acceptance check is the import and the five APIs, not a hash.
+Details in the control repo's `docs/ENVIRONMENT_SETUP.md`.
 
 Check that pyCamSet's target API is where this software expects it:
 

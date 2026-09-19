@@ -11,34 +11,49 @@ connected: the measurement reads a folder of already-acquired frames.
 | Thing | Where |
 |---|---|
 | Control software branch | **`main`** (the owner's channel; updated via PyCharm, not `git pull`) |
-| Control software commit | **`4e602f3d`** (or later on `main`) |
-| pyCamSet branch/commit | `development` @ **`b79bb76`** (unchanged) |
-| Reference measurement folder | `E:\M_Nebula\1 Data\1 Data\pyCamSet_paper\ccube2\5_corners\experiment_001` |
+| Control software commit | **`4e602f3d`** or later on `main` |
+| pyCamSet branch | `development` — **any commit that contains this runbook** |
+| Reference measurement folder | a real acquisition folder **on MSOT** (see the note below) |
 
-**`main`, not the feature branch.** The work is on `main` on both remotes, so
-that is what MSOT should be on: `git ls-remote origin refs/heads/main` should
-read `4e602f3d`. The owner updates the checkout through PyCharm to keep local
-machine-specific changes (mock mode), so `main` is the channel that works for
-them — do not send them to a branch or a Bash `git pull`.
+**Any pyCamSet commit that has this runbook in it is new enough — do not go
+looking for a specific SHA.** The runbook, the plan and the handoff were
+committed for the first time in `cc08bd3`, and everything after that touches
+`AGENTS/` only: `git diff --name-only b79bb76..development` outside `AGENTS/` is
+empty. So pyCamSet's *code* is still `b79bb76` wherever you are, and its commit
+needs no particular value. What decides comparability is the module hash below.
+
+(This line deliberately does not name its own commit: a document cannot contain
+the SHA of the commit that adds it, which is the same self-reference problem the
+commit-based comparability check was removed for. Check the criterion, not a
+number: `git log --oneline -1 -- AGENTS/msot-s0-runbook.md` should print
+something.)
+
+**`main`, not a feature branch.** The control-software work is on `main` on both
+remotes, so that is what MSOT should be on: `git ls-remote origin refs/heads/main`
+should read `4e602f3d`. The owner updates the checkout through PyCharm to keep
+local machine-specific changes (mock mode), so `main` is the channel that works
+for them — do not send them to a branch or a Bash `git pull`.
 
 **Do not run `d6e2c6da`.** That commit contains four defects the measurement has
 since fixed — most importantly, it silently reports no thread answer on any real
 folder.
 
 **Comparability is checked by hash, not by commit.** The measurement module
-hashes *its own source*, line endings normalised, and the summary prints it:
+hashes *its own source*, line endings normalised, and the summary prints it. On
+this revision it reads:
 
 ```
 module sha256   : 5cbef7d76e77f7bc9e900eaf18c05b76b83a6901c8777c74a15a8e1e0aa7bb42
 ```
 
-That is the value this revision prints. Compare it against MSOT's summary; it
-should read the same there.
+Compare that against MSOT's summary; it should read the same there. **This is the
+one value that must match.** It is a property of the measurement code, so it will
+change whenever that code changes — re-read it from the summary rather than
+trusting this line if the control-software `main` has moved past `4e602f3d`.
 
-The two machines measured the same code iff these match. The commit pair appears
-in the summary too, as a record of provenance, and deliberately produces **no**
-warning when it differs — a commit SHA cannot name the commit it lives in, so it
-cannot be the check.
+The commit pair appears in the summary too, as a record of provenance, and
+deliberately produces **no** warning when it differs — a commit SHA cannot name
+the commit it lives in, so it cannot be the check.
 
 **Line endings are normalised before hashing, and that is load-bearing.** Git's
 `core.autocrlf=true` (the Windows default) writes CRLF on checkout, so raw bytes

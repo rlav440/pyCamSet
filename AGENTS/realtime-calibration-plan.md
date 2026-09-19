@@ -123,7 +123,9 @@ Source: `coldsnit/control_software/software-panoramic-refactored`, `main` HEAD
 `measurement_module_sha256` in the report, not by a commit pair — see §10.1 for
 why a commit SHA cannot be that check (the tool's former
 `expected_for_comparability` constant and its mismatch warning have both been
-removed). pyCamSet stays `b79bb76`.
+removed). pyCamSet's **code** is still `b79bb76`; its tip has since advanced by
+documentation-only commits under `AGENTS/` (`cc08bd3` onward), which change no
+code and therefore nothing about comparability — see the runbook.
 `services/camera_service.py` / `services/experiment_service.py`
 `[VERIFIED-BY-READING]`:
 

@@ -99,10 +99,44 @@ python -c "import pyCamSet, cv2, numpy, tifffile, aruco2; print('pyCamSet', pyCa
 ```
 
 If `aruco2` is missing, neither ArUco 2 target can be built and the measurement
-cannot run — that is the one hard prerequisite. `docs/ENVIRONMENT_SETUP.md` in
-the control repo has the build (conda-forge `opencv=4.9.0` + `OpenCV_DIR`
-pointed at `$CONDA_PREFIX/Library/cmake/x64/vc16/lib`; pointing it at the parent
-`Library/cmake/` fails).
+cannot run — that is the one hard prerequisite.
+
+### If `aruco2` is missing: install the prebuilt wheel
+
+**Do not try to build it from the submodule in this environment** — it cannot
+work. The submodule's `CMakeLists.txt` needs `OpenCVConfig.cmake`, and this
+environment's OpenCV comes from pip (`opencv-python`), which ships **no CMake
+config files at all**, so there is nothing for `OpenCV_DIR` to point at. The
+`$CONDA_PREFIX/Library/cmake/x64/vc16/lib` path quoted in earlier versions of this
+runbook exists only in an environment with conda-forge's OpenCV *development*
+package, which is not the one you are in.
+
+Install the wheel instead. It is self-contained — it bundles its own
+`opencv_world4110.dll`, so it needs no OpenCV package and no `OpenCV_DIR`:
+
+```
+aruco2-0.1.1-cp312-cp312-win_amd64.whl
+sha256 0d2d8f03fd83f952edbd363a3c9c37e249ecdcea61ebb9a7685b127e9f92acf6   (23.8 MB)
+```
+
+```bash
+python -m pip install /path/to/aruco2-0.1.1-cp312-cp312-win_amd64.whl
+python -c "import aruco2; print(aruco2.__file__)"
+python -c "import aruco2; print([n for n in ['get_predefined_dictionary','detect_fiducial_markers','detect_grid_board','get_solve_pnp_points','get_grid_board_image'] if hasattr(aruco2,n)])"
+```
+
+Verify the sha256 after copying it, and check the tag is `cp312-win_amd64`
+(MSOT's Python). The second command must print all five API names.
+
+### Why this is the documented route and not the source build
+
+A wheel is a snapshot of the submodule at build time, so it can lag the checkout.
+That is the one trade-off, and it is the right one here: the same wheel produced
+every S0 number on the other machine, against the same pyCamSet commit. If you
+need the submodule's exact current commit, the source build is still possible —
+but in an environment that has an OpenCV *development* package (conda-forge
+`opencv=4.9.0`), not in `panoramic-control-refactored`. Details in the control
+repo's `docs/ENVIRONMENT_SETUP.md`.
 
 Check that pyCamSet's target API is where this software expects it:
 

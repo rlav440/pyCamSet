@@ -365,10 +365,33 @@ pulls the cloud well below the diagonal — the features are now reproduced far
 more tightly than they sit from where they were drawn, which is the signature of
 a target that was genuinely printed and folded out of shape.
 
-The world-space view, cameras and all, is
-[`reconstruction_scene`][pyCamSet.utils.visualisation.reconstruction_scene]; all
-five plots at once, and written to PNGs given a `save_dir`, are
-`cams.visualise_calibration()`.
+### Where the target moved
+
+The handler that solved the free target draws how the recovered points moved via
+[`special_plots`][pyCamSet.optimisation.standard_bundle_handler.SelfBundleHandler.special_plots],
+a diagnosis plot for self optimising cameras.
+
+```python exec="true" source="above" session="calibrate"
+free_cams.calibration_handler.special_plots(free_cams.calibration_params)
+```
+
+The lattice is formed from the original locations of each feature. Each arrow runs
+from a feature's drawn position to where the free solve put it, magnified five
+times for visibility.
+Unseen features can't be optimised, so aren't drawn.
+
+pyCamSet fixes seven points when optimising the target to remove "gauge freedoms", essentially 
+scaling, rotation, and translation of the whole system expressed through bulk motion of the target points.
+For use and visualisation, the cameras and target are mapped back to the closest scale and rotation of the target.
+
+This leaves the arrows to represent pure shape variation.
+A face bowing away from its plane, or a fold that did not come to a right angle, moves a whole face's worth of features the
+same way. This is pretty common for a folded net target!
+In a standard calibration, this fabrication error gets blamed on the cameras.
+
+Some arrows disagree with their neighbours: these can be the solve pushing noise
+into the geometry instead.
+Here, it's likely a few points with limited visibility, but if this plot overall looks worse, this is a case for keeping the fixed-target result.
 
 ## Saving
 

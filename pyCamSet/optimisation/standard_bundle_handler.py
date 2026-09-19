@@ -549,9 +549,13 @@ class SelfBundleHandler(TemplateBundleHandler):
         # a lattice for every face of the target: point_data's (u, ... w, n, 3)
         # shape groups the n coplanar points of each face together, so the
         # faces are the rows of that reshape whatever the shape of the object.
+        # It is drawn grey rather than black held faint by opacity: the lattice
+        # is the ground the arrows are read against, and a renderer that blends
+        # the overlapping lines of the far side differently -- the docs' vtk.js
+        # viewer does -- turns faint black into solid black and buries them.
         for face in og_data.reshape((-1, self.point_data.shape[-2], 3)):
             lattice = pv.PolyData(face*descale, lines=make_connectivity(face))
-            s.add_mesh(lattice, style='wireframe', line_width=2, color='k', opacity=0.1)
+            s.add_mesh(lattice, style='wireframe', line_width=2, color='lightgrey')
 
         s.add_legend(bcolor='w', border=True)
 

@@ -131,6 +131,13 @@ are on. If it is not 1366, say which commit you are on when you report it.
 
 ## Step 4 — run the measurement
 
+> **Close everything heavy first.** Run this on an otherwise-idle machine — not
+> while PyCharm is indexing the repo you just pulled, not during a backup, not
+> with a browser chewing CPU. The thread verdict is not robust to contention:
+> the median crosses the 1-to-2 boundary at 62.5 ms and a quiet-machine median is
+> ~50 ms, so only ~25% of headroom stands between a correct `1` and a loaded `2`.
+> Full evidence in "Read the verdicts, not the milliseconds" below.
+
 ### Through the GUI
 
 1. `python main.py` (mock mode is fine — cameras are not used).
@@ -232,33 +239,38 @@ From this PC, `experiment_001`, 320 frames (40 per camera), Ccube2 6 pts / 10 mm
 | worker threads @ 2 fps/camera (16 frames/s) | 1 median, 2 p95 |
 | worker threads @ 10 fps/camera (80 frames/s) | 4 median, 6 p95 |
 
-### Read the verdicts, not the milliseconds
+### Read the verdicts, not the milliseconds — and run it on an idle machine
 
-**The absolute times are not reproducible to better than roughly 10-15% on one
-machine run-to-run**, depending on what else that machine is doing, so a
-difference below that between MSOT and this PC is not meaningful. Measured, over
-5 identical repeats of one configuration here (200 frames each, same folder and
-target):
+**The thread verdict is not robust to CPU contention, so this measurement must be
+run on an otherwise-idle machine.** This first appeared as run-to-run "noise",
+and the noise was not random: it is the machine, and it moves the verdict rather
+than only the milliseconds.
 
-| | across 5 runs |
-|---|---|
-| end-to-end median | 48.0 - 52.7 ms (9.8% spread) |
-| `worker_threads_if_serial_median` | **1 every run** |
-| `worker_threads_if_serial_p95` | **2 every run** |
-| `worker_threads_if_single_thread_cost` | **1 every run** |
-| `internal_parallel_speedup` | 1.067 - 1.235 |
+The boundary is arithmetic, not a tolerance band. ``worker_threads_if_serial_*``
+is `ceil(fps / (1000 / ms))`, so at 16 frames/s a median above **62.5 ms** tips
+the count from 1 to 2. A quiet-machine median of ~50 ms therefore has only
+**~25% headroom** — and contention eats all of it. Measured here, same folder,
+same target, 320 frames:
 
-So the outputs that actually decide anything — the **thread verdict** and the
-order of magnitude of the cost — are stable, and the ratio `internal_parallel_speedup`
-is the noisiest number on the page: do not compare it to two decimal places
-between machines. The verdict that matters for the plan is that a detection call
-uses ~1 core, not 4, and that held on every run.
+| condition | median | `worker_threads_if_serial_median` | `..._single_thread_cost` |
+|---|---|---|---|
+| idle (2 runs) | 50.10, 50.17 ms | **1** | **1** |
+| 8 CPU-burning processes (2 runs) | 79.66, 79.97 ms | **2** | **2** |
 
-**What MSOT is really being asked to confirm:** that one detection call on
-MSOT's CPU still needs ~50-60 ms and still parallelises ~1.1-1.2x, so the Tier 1
-pool stays small at 2 fps. If MSOT's verdict is materially different from the
-table above (say 4+ workers at 2 fps/camera), that is a real finding about that
-machine and worth stopping for; a median 10% higher is not.
+So contention alone turns a **1 into a 2** on a machine that is perfectly fine,
+and it moves the single-thread-cost verdict as well — not just the median.
+
+**If `worker_threads_if_serial_median` reads 2, before reporting it:** confirm
+nothing else is loading the CPU (PyCharm indexing after a pull, a browser, a
+backup, another measurement) and re-run on an idle machine. **Idle 2 is a finding
+about MSOT's CPU; loaded 2 is the machine.** The same applies to
+`worker_threads_if_single_thread_cost`, which is the tighter of the two.
+
+Everything else holds: `internal_parallel_speedup` is the noisiest number on the
+page (1.07–1.24 across all runs, idle and loaded) and must not be compared to two
+decimal places between machines. What MSOT is really being asked to confirm is
+that one detection call still needs ~50-60 ms and still parallelises ~1.1-1.2x,
+so the Tier 1 pool stays small at 2 fps.
 
 MSOT's numbers will differ — different CPU, possibly different OpenCV build.
 That is expected and is exactly why the run exists on that machine: what has to

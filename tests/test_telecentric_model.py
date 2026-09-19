@@ -649,3 +649,85 @@ def test_a_camera_that_only_ever_saw_one_face_says_what_to_photograph():
         target.initial_calibration(
             cam_name="cam", detection=detection, res=[720, 540],
             pose_im=0, model="telecentric", min_detections_per_board=12)
+
+
+# ----------------------------------------------------------------------
+# the self-calibration gauge
+# ----------------------------------------------------------------------
+
+
+def _telecentric_pixels(proj, extr, poses, points):
+    """Every (camera, pose, point) pixel, straight from the block's formula."""
+    from pyCamSet.utils.general_utils import make_4x4h_tform
+
+    out = []
+    for ci in range(len(proj)):
+        m_x, c_x, m_y, c_y, k, eps = (float(v) for v in proj[ci][:6])
+        cam_t = make_4x4h_tform(
+            np.asarray(extr[ci][:3], dtype=float),
+            np.asarray(extr[ci][3:6], dtype=float)
+            if len(extr[ci]) >= 6 else np.zeros(3))
+        for pi in range(len(poses)):
+            pose_t = make_4x4h_tform(np.asarray(poses[pi][:3], dtype=float),
+                                     np.asarray(poses[pi][3:6], dtype=float))
+            y = h_tform(h_tform(points, pose_t), cam_t)
+            w = 1.0 / (1.0 + eps * y[:, 2])
+            xs, ys = m_x * y[:, 0] * w, m_y * y[:, 1] * w
+            r2 = (xs * xs + ys * ys) * 1e-6
+            den = 1.0 / (1.0 + k * r2)
+            out.append(np.stack([xs * den + c_x, ys * den + c_y], axis=-1))
+    return np.concatenate(out, axis=0)
+
+
+def test_the_gauge_transform_leaves_a_telecentric_projection_alone(
+        telecentric_problem):
+    """The gauge transform re-expresses a solve in the reference frame. It is
+    allowed to move every parameter; it is not allowed to move a pixel.
+
+    A telecentric camera's extrinsic is rotation only, so it cannot absorb the
+    gauge the way a pinhole's translation does. The poses take the translation
+    and the magnification takes the scale. If any part of that bookkeeping is
+    wrong the calibration silently changes, which is worse than the crash this
+    replaced -- so the check is on the pixels, not on the parameters.
+
+    The points are pushed off the reference deliberately. Left where they are
+    the gauge is the identity and this would pass without testing anything.
+    """
+    from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
+    from pyCamSet.utils.general_utils import ext_4x4_to_rod
+
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection,
+                                options={"outliers": "n"})
+
+    proj = np.array([cam.to_param_vector() for cam in cams], dtype=float)
+    extr = np.array([np.asarray(ext_4x4_to_rod(cam.extrinsic)[0], dtype=float)
+                     for cam in cams], dtype=float)
+    assert extr.shape[1] == 3, "a telecentric extrinsic is rotation only"
+
+    pose_block = np.array(
+        [np.concatenate(ext_4x4_to_rod(p)) for p in poses], dtype=float)
+
+    # A solve that has drifted: the points come back scaled, turned and moved.
+    drift = make_4x4h_tform(
+        Rotation.from_euler("xyz", [0.03, -0.02, 0.05]).as_rotvec(),
+        [0.0004, -0.0007, 0.0011])
+    points = h_tform(target.point_data.reshape(-1, 3) * 1.037, drift)
+
+    before = _telecentric_pixels(proj, extr, pose_block, points)
+    new_proj, new_extr, new_poses, new_points = handler.apply_gauge_transform(
+        proj.copy(), extr.copy(), pose_block.copy(), points.copy())
+    after = _telecentric_pixels(np.asarray(new_proj), np.asarray(new_extr),
+                               np.asarray(new_poses), np.asarray(new_points))
+
+    assert np.isfinite(before).all() and np.isfinite(after).all()
+    moved = np.linalg.norm(after - before, axis=1)
+    assert np.nanmax(moved) < 1e-6, (
+        f"the gauge transform moved a pixel by {np.nanmax(moved):.3e} px")
+
+    # and it did do something: the scale left the extrinsic, which has nowhere
+    # to put it, and landed in the magnification.
+    assert not np.allclose(np.asarray(new_proj)[:, 0], proj[:, 0]), \
+        "magnification should carry the gauge scale for a telecentric lens"
+    assert np.allclose(np.asarray(new_proj)[:, 1], proj[:, 1]), \
+        "there is no in-plane shift left for the principal point to absorb"

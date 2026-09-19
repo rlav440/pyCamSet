@@ -105,9 +105,14 @@ where the symbol moved to, and that is the line to send back.
 QT_QPA_PLATFORM=offscreen python -m pytest tests/ -q
 ```
 
-Expect **1362 passed, 1 skipped**. A different count means the environment
+Expect **1366 passed, 1 skipped**. A different count means the environment
 differs from the one this was developed and measured in, and the measurement
 numbers would not be comparable either.
+
+The count moves with the commit — `1366` is `4e602f3d`, `1364` was the revision
+before the line-ending fix, `1362` before that — so treat **`1 skipped` and zero
+failures** as the invariant, and read the pass count against whatever `main` you
+are on. If it is not 1366, say which commit you are on when you report it.
 
 ## Step 4 — run the measurement
 

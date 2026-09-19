@@ -146,6 +146,18 @@ print(open(rep['written']['summary'], encoding='utf-8').read())
 
 Run it from the control-software checkout so `services` resolves.
 
+**The two paths in that example are this PC's — change both on MSOT.** The
+folder above is a copy of the rig's own acquisition kept on the machine that
+wrote this runbook, and the output path is likewise local. MSOT will not have
+either. Point `folder=` at any finished acquisition folder *on MSOT*, and
+`out_dir=` at a writable directory there; nothing else in the command is
+machine-specific. If MSOT has no acquisition folder to hand, the run is not
+possible there yet — say so rather than substituting a folder of a different
+geometry, since the numbers describe whatever frames are actually measured.
+
+The report does not need the folder to be the one above. What has to match
+between the two machines is `measurement_module_sha256`, not the input.
+
 ## Step 5 — what to check in the output
 
 Send back the summary file. The lines that matter:

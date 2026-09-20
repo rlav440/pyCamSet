@@ -29,10 +29,13 @@ __all__ = [
     "FaceToShape",
     "Ccube",
     "Ccube2",
+    "CIco",
+    "CIco2",
     "ChArUco",
     "ChArUco2",
     "PuzzleBoard",
     "PuzzleBoardCube",
+    "PuzzleBoardIco",
 ]
 
 

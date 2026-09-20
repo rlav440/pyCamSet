@@ -7,7 +7,7 @@ draw itself in a 3D plot, and how to produce a printable surface at controlled
 dimensions — for a 3D target, that surface is a *net* to be folded over some
 underlying geometry.
 
-pyCamSet ships six:
+pyCamSet ships nine:
 
 | Target | Shape | Needs | |
 |---|---|---|---|
@@ -17,9 +17,13 @@ pyCamSet ships six:
 | [`Ccube2`](ccube2.md) | cube, six ChArUco2 faces | `aruco2` | Ccube geometry, every square marked |
 | [`PuzzleBoard`](puzzleboard.md) | planar board | `puzzle_board` | Dense corners, decoded from a periodic code |
 | [`PuzzleBoardCube`](puzzleboard-cube.md) | cube, six PuzzleBoard faces | `puzzle_board` | PuzzleBoard density on Ccube geometry |
+| [`CIco`](cico.md) | icosahedron, twenty ChArUco faces | — | Ten faces visible at once, against a cube's three |
+| [`CIco2`](cico2.md) | icosahedron, twenty ChArUco2 faces | `aruco2` | Every square marked, which keeps a clipped face's edge corners |
+| [`PuzzleBoardIco`](puzzleboard-ico.md) | icosahedron, twenty PuzzleBoard faces | `puzzle_board` | The densest of them: no markers to run out of |
 
-Each of them draws itself, which is the quickest way to tell them apart. The
-cubes below turn.
+Each of them draws itself, which is the quickest way to tell them apart. A row
+is one pattern; the columns are the shapes it is printed on, flat, on a cube,
+and on an icosahedron. The solids below turn.
 
 <div class="scene-row" markdown>
 
@@ -50,6 +54,19 @@ scene.show()
 net so the faces cannot be assembled in the wrong order.
 </div>
 
+<div markdown>
+```python exec="true" session="targets"
+from pyCamSet import CIco
+
+scene = CIco(n_points=10, length=100).plot(return_scene=True)
+scene.window_size = (700, 700)
+scene.show()
+```
+
+**[`CIco`](cico.md)** — twenty triangular ChArUco faces, each a square board
+clipped to its triangle. Ten of them face any viewpoint, against a cube's three.
+</div>
+
 </div>
 
 <div class="scene-row" markdown>
@@ -73,13 +90,26 @@ board still identifies itself.
 ```python exec="true" session="targets"
 from pyCamSet import Ccube2
 
-scene = Ccube2(n_points=10, length=40).plot(return_scene=True)
+scene = Ccube2(n_points=12, length=40).plot(return_scene=True)
 scene.window_size = (700, 700)
 scene.show()
 ```
 
 **[`Ccube2`](ccube2.md)** — the same cube and the same net as a Ccube, with
 each face a ChArUco2 board carrying its own range of marker ids.
+</div>
+
+<div markdown>
+```python exec="true" session="targets"
+from pyCamSet import CIco2
+
+scene = CIco2(n_points=12, length=100).plot(return_scene=True)
+scene.window_size = (700, 700)
+scene.show()
+```
+
+**[`CIco2`](cico2.md)** — the same icosahedron as a CIco. A marker on every
+square is what keeps the corners along a clipped face's ragged edge.
 </div>
 
 </div>
@@ -118,6 +148,19 @@ scene.show()
 
 **[`PuzzleBoardCube`](puzzleboard-cube.md)** — six disjoint windows of that same
 code, one per cube face, on Ccube geometry.
+</div>
+
+<div markdown>
+```python exec="true" session="targets"
+from pyCamSet import PuzzleBoardIco
+
+scene = PuzzleBoardIco(n_points=16, length=100.0).plot(return_scene=True)
+scene.window_size = (700, 700)
+scene.show()
+```
+
+**[`PuzzleBoardIco`](puzzleboard-ico.md)** — twenty disjoint windows of the same
+code. With no markers to run out of, it is the densest of the nine.
 </div>
 
 </div>

@@ -66,6 +66,9 @@ nav:
       - Ccube2: targets/ccube2.md
       - PuzzleBoard: targets/puzzleboard.md
       - PuzzleBoardCube: targets/puzzleboard-cube.md
+      - CIco: targets/cico.md
+      - CIco2: targets/cico2.md
+      - PuzzleBoardIco: targets/puzzleboard-ico.md
   - Architecture: architecture.md
   - Extending pyCamSet:
       - What is extensible: extending/index.md

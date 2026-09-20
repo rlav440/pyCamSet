@@ -32,3 +32,7 @@ under [Calibration Targets](../targets/index.md).
 ---
 
 ::: pyCamSet.calibration_targets.ccube2.Ccube2
+
+::: pyCamSet.calibration_targets.cico.CIco
+
+::: pyCamSet.calibration_targets.cico2.CIco2

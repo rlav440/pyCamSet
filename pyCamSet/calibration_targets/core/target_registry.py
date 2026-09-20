@@ -28,12 +28,16 @@ from typing import Any
 TARGET_CLASSES: dict[str, tuple[str, str]] = {
     "Ccube": ("pyCamSet.calibration_targets.ccube", "Ccube"),
     "Ccube2": ("pyCamSet.calibration_targets.ccube2", "Ccube2"),
+    "CIco": ("pyCamSet.calibration_targets.cico", "CIco"),
+    "CIco2": ("pyCamSet.calibration_targets.cico2", "CIco2"),
     "ChArUco": ("pyCamSet.calibration_targets.charuco", "ChArUco"),
     "ChArUco2": ("pyCamSet.calibration_targets.charuco2", "ChArUco2"),
     "PuzzleBoard": (
         "pyCamSet.calibration_targets.puzzleboard", "PuzzleBoard"),
     "PuzzleBoardCube": (
         "pyCamSet.calibration_targets.puzzleboard_cube", "PuzzleBoardCube"),
+    "PuzzleBoardIco": (
+        "pyCamSet.calibration_targets.puzzleboard_ico", "PuzzleBoardIco"),
 }
 
 #: The target names, in the order an interface should offer them.
@@ -48,6 +52,9 @@ TARGET_LABELS: dict[str, str] = {
     "Ccube": "ChArUco1 ccube",
     "ChArUco2": "ChArUco2",
     "Ccube2": "ChArUco2 ccube",
+    "CIco": "ChArUco1 icosahedron",
+    "CIco2": "ChArUco2 icosahedron",
+    "PuzzleBoardIco": "PuzzleBoard icosahedron",
 }
 
 

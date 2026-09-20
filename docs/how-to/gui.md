@@ -185,14 +185,15 @@ rather than embedding them.
 ![The Create Target dialog.](../assets/gui/create-target-light.png#only-light)
 ![The Create Target dialog.](../assets/gui/create-target-dark.png#only-dark)
 
-**Create Target…** generates a printable ChArUco1, ChArUco1 ccube, ChArUco2,
-ChArUco2 ccube, PuzzleBoard or PuzzleBoardCube. Both halves of the form are
+**Create Target…** generates a printable ChArUco1, ChArUco1 ccube, ChArUco1
+icosahedron, ChArUco2, ChArUco2 ccube, ChArUco2 icosahedron, PuzzleBoard,
+PuzzleBoardCube or PuzzleBoard icosahedron. Both halves of the form are
 built from what the selected target declares about itself — the arguments that
 decide what it is, and the options that decide how it is drawn — so the form and
 the validation follow the target rather than being written out per target.
 
-The dialog asks for no detector: a ChArUco1 or ChArUco1 ccube prints identically
-for ArUco 1 and ArUco 2, so the same printed board can be read with either, and
+The dialog asks for no detector: a ChArUco1 board, ccube or icosahedron prints
+identically for ArUco 1 and ArUco 2, so the same printed board can be read with either, and
 the other targets have only one detector. The detector is chosen in Phase 1
 instead. The screenshot above predates this:
 it still shows a Detector row, and "Ccube" where the dialog now says
@@ -200,7 +201,8 @@ it still shows a Detector row, and "Ccube" where the dialog now says
 
 The labels are the names the GUI shows; saved settings and scripts use the class
 names, which are unchanged: ChArUco1 is `ChArUco`, ChArUco1 ccube is `Ccube`,
-ChArUco2 is `ChArUco2`, and ChArUco2 ccube is `Ccube2`.
+ChArUco1 icosahedron is `CIco`, ChArUco2 is `ChArUco2`, ChArUco2 ccube is
+`Ccube2`, and ChArUco2 icosahedron is `CIco2`.
 
 **Visualise Target** opens the target in a window of its own, so it can be
 compared against the form that drew it. **Save Target** writes the SVG or PDF.

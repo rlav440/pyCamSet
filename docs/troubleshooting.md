@@ -2,8 +2,8 @@
 
 ## A target class is `None`
 
-`ChArUco`, `Ccube`, `ChArUco2`, `Ccube2`, `PuzzleBoard` and `PuzzleBoardCube`
-are imported behind a guard, because they need graphics libraries that a
+`ChArUco`, `Ccube`, `ChArUco2`, `Ccube2`, `PuzzleBoard`, `PuzzleBoardCube`,
+`CIco`, `CIco2` and `PuzzleBoardIco` are imported behind a guard, because they need graphics libraries that a
 reconstruction-only install does not. When one of those imports fails, the name
 is bound to `None` rather than raising, so the failure surfaces later and
 somewhere else:

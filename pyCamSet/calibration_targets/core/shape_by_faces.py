@@ -128,11 +128,12 @@ class FaceToShape:
             new_mesh.scale(1/self.sf, inplace=True)
             new_mesh.transform(face_transform, inplace=True)
             new_mesh.scale(self.sf, inplace=True)
-            #todo make this generic.
+            origin, point_u, point_v = self._texture_frame(
+                face_corner, face_transform, new_mesh)
             new_mesh.texture_map_to_plane(
-                origin=new_mesh.points[0],
-                point_u=new_mesh.points[1],
-                point_v=new_mesh.points[3], inplace=True)
+                origin=origin,
+                point_u=point_u,
+                point_v=point_v, inplace=True)
             meshes.append(new_mesh)
          
         refuse_window_inside_qt("Drawing a target with pyvista")
@@ -146,6 +147,39 @@ class FaceToShape:
             return scene
         scene.add_axes()
         scene.show()
+
+    def _texture_frame(self, face_corner, face_transform, mesh):
+        """
+        Return the rectangle a face's texture is stretched over.
+
+        ``texture_map_to_plane`` parameterises a *rectangle*, given as an
+        origin and a point along each of its two axes.  A quad face is its own
+        rectangle, so its corners are used directly and it keeps the mapping it
+        has always had.  Any other face is not, and three of its corners would
+        span a parallelogram that is not the image it was drawn into -- a
+        triangle has no fourth corner to reach for at all.  Such a face is
+        mapped over its own bounding rectangle instead, which is what a face
+        drawn to an image occupies, in the same corner order a quad uses:
+        origin at the top left, u to the right and v down.
+
+        :param face_corner: the face's corners, in its own coordinates
+        :param face_transform: the transform placing that face on the shape
+        :param mesh: the already placed face
+        :return: the origin, the point along u, and the point along v
+        """
+        if len(face_corner) == 4:
+            return mesh.points[0], mesh.points[1], mesh.points[3]
+
+        corners = np.asarray(face_corner, dtype=float)
+        low = corners[:, :2].min(axis=0)
+        high = corners[:, :2].max(axis=0)
+        z = float(corners[0, 2]) if corners.shape[1] > 2 else 0.0
+        box = np.array([
+            [low[0], high[1], z],   # origin, top left
+            [high[0], high[1], z],  # along u, to the right
+            [low[0], low[1], z],    # along v, downwards
+        ])
+        return h_tform(box / self.sf, face_transform) * self.sf
 
     def draw_net(self, net_images, net_transforms):
         """

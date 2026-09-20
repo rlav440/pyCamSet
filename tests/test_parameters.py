@@ -553,7 +553,7 @@ def test_a_target_builds_from_the_arguments_it_declares(name, cls):
     still collect what it needs to build one."""
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
-    if name in ("ChArUco2", "Ccube2") and not ARUCO2_AVAILABLE:
+    if name in ("ChArUco2", "Ccube2", "CIco2") and not ARUCO2_AVAILABLE:
         # ChArUco2 and Ccube2 have no aruco1 equivalent -- they cannot be
         # built at all without aruco2, unlike ChArUco/Ccube's aruco2 branch.
         pytest.skip("aruco2 is not installed")
@@ -745,7 +745,7 @@ def test_every_target_writes_itself_as_every_format(tmp_path, name, cls):
     the target generators each carried."""
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
-    if name in ("ChArUco2", "Ccube2") and not ARUCO2_AVAILABLE:
+    if name in ("ChArUco2", "Ccube2", "CIco2") and not ARUCO2_AVAILABLE:
         # ChArUco2 and Ccube2 have no aruco1 equivalent -- they cannot be
         # built at all without aruco2, unlike ChArUco/Ccube's aruco2 branch.
         pytest.skip("aruco2 is not installed")
@@ -758,6 +758,9 @@ def test_every_target_writes_itself_as_every_format(tmp_path, name, cls):
         "Ccube2": {"n_points": 4, "length": 20.0, "border_fraction": 0.15},
         "PuzzleBoard": {"num_squares_x": 8, "num_squares_y": 8, "square_size": 2.0},
         "PuzzleBoardCube": {"n_points": 5, "length": 100.0},
+        "CIco": {"n_points": 8, "length": 50.0},
+        "CIco2": {"n_points": 7, "length": 50.0, "border_fraction": 0.15},
+        "PuzzleBoardIco": {"n_points": 8, "length": 50.0},
     }
     target = build_target({"type": name, **small[name]})
     options = cls.export_parameters().defaults()

@@ -19,16 +19,16 @@ under [Calibration Targets](../targets/index.md).
 
 ---
 
-::: pyCamSet.calibration_targets.charuco.target.ChArUco
+::: pyCamSet.calibration_targets.charuco.ChArUco
 
 ---
 
-::: pyCamSet.calibration_targets.charuco2.target.ChArUco2
+::: pyCamSet.calibration_targets.charuco2.ChArUco2
 
 ---
 
-::: pyCamSet.calibration_targets.ccube.target.Ccube
+::: pyCamSet.calibration_targets.ccube.Ccube
 
 ---
 
-::: pyCamSet.calibration_targets.ccube2.target.Ccube2
+::: pyCamSet.calibration_targets.ccube2.Ccube2

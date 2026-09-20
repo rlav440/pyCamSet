@@ -7,7 +7,6 @@ from copy import copy
 import cv2
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
-from scipy.stats import multivariate_normal
 import numpy as np
 try:
     import pyvista as pv
@@ -73,7 +72,7 @@ def _target_mean_distance(target) -> float:
         nsy = int(getattr(target, "num_squares_y", 148))
         start_x = int(getattr(target, "start_x", 0))
         start_y = int(getattr(target, "start_y", 0))
-        from pyCamSet.calibration_targets.puzzleboard.target import _CODE_SIZE
+        from pyCamSet.calibration_targets.puzzleboard import _CODE_SIZE
         # Gather only the printed-window point coordinates from point_data.
         pts = []
         for row in range(start_y, start_y + nsy):
@@ -201,61 +200,33 @@ def finalise_plotter(plotter, name: str, show: bool = True,
         return None
 
 
-def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
-                 s_per=None, save=None):
+def cluster_plot(data_list, ranges=None, titles=None, save=None):
     """
-    Takes an input list of data, and plots it as a cluster plot.
-    for clarity, it also plots the 1, 2, and 3 sigma contours of the data.
+    Plots each set of x, y errors as a density map under its sigma contours.
 
-    :param data_list: the input data (can be a list of arrays, which will plot both methods)
-    :param ranges: the ranges to plot the data over (can be a list of ranges)
-    :param titles: the titles for each plot (can be a list of titles)
-    :param alphas: the alpha values for each plot (can be a list of alphas)
-    :param s_per: the percentage of points to plot (can be a list of percentages)
-    :param save: the file to save the plot to.
+    :param data_list: the error sets, each interleaved x, y
+    :param ranges: the range to plot each set over, or None to fit it
+    :param titles: a title for each set
+    :param save: the file to save the plot to
     """
-
     n = len(data_list)
     if ranges is None:
         ranges = [None] * n
     if titles is None:
         titles = [None] * n
-    if alphas is None:
-        alphas = [None] * n
-    if s_per is None:
-        s_per = [1] * n
 
     fig, axs = plt.subplots(1, n, layout="constrained")
-
     r_ax = axs.ravel() if n > 1 else [axs]
 
-    for datum, ax, rang, title, alp, s in zip(data_list, r_ax, ranges, titles,
-                                           alphas, s_per
-                                           ):
-
-        # split into x,y based on ordering
-
-        # d = datum.reshape((-1, 2))
-
+    for datum, ax, rang, title in zip(data_list, r_ax, ranges, titles):
         x, y = datum[::2], datum[1::2]
-        # breakpoint()
         m_1 = np.mean((x**2 + y**2)**(1/2))
-        if alp is None:
-            pass
-        alp = 0.01
 
-        cov = np.cov(x,y)
-        eigenvalues, _ = np.linalg.eigh(cov)
-        width, height = np.sqrt(eigenvalues)
-        # print(np.sqrt(eigenvalues))
-        # raise ValueError
-        sd = max(width, height)
-
-        ranges = list(ax.get_ylim()) + list(ax.get_xlim())
-        # ax.scatter(x, y, s=0.1, alpha=alp)
+        # Three sigma of the cloud, which is where the outermost contour lands.
+        sd = max(np.sqrt(np.linalg.eigh(np.cov(x, y))[0]))
         _, _, _, img = ax.hist2d(x=x, y=y, bins=np.linspace(-3*sd, 3*sd, 100), norm=LogNorm(vmin=0.0001, vmax=1), cmap=blues_with_white, density=True, rasterized=True)
-        clm = plt.colorbar(img, label="Density")
-        sd = fancy_confidence_contours(x, y, ax=ax, ranges=ranges)
+        plt.colorbar(img, label="Density")
+        fancy_confidence_contours(x, y, ax=ax)
         ax.set_aspect('equal')
 
         if rang is not None:
@@ -290,72 +261,29 @@ def cluster_plot(data_list, ranges = None, titles=None, alphas=None,
     return fig
 
 
-def fancy_confidence_contours(x,y, ax, ranges):
+def fancy_confidence_contours(x, y, ax):
     """
-    Plots the 1, 2, and 3 sigma contours of the data.
+    Draws the 1, 2 and 3 sigma covariance ellipses of the data.
 
     :param x: x locations
     :param y: y locations
-    :param ax: the axis object to plot too
-    :param ranges: the ranges to use.
+    :param ax: the axis object to plot to
+    :return: half the larger ellipse axis, as a scale for the view
     """
-    cov = np.cov(x,y)
-    # var = multivariate_normal(cov=np.cov(x,y))
-    xx, yy = np.meshgrid(
-        np.linspace(ranges[0], ranges[1], 100),
-        np.linspace(ranges[2], ranges[3], 100)
-    )
-    # pos = np.dstack((xx,yy))
-    # res = var.pdf(pos)
-
-    lbs = [r'$3\sigma$', r'$2\sigma$', r'$1\sigma$']
-
-    # dist = np.sqrt(var.cov[1, 1])
-
-    #so we have the covariance matrix of the data.
-
-    #if we see little covariance, we need to address this in the plot
-
-
-    # levels = [var.pdf([0,3*dist]), var.pdf([0,2*dist]), var.pdf([0,dist])]
-    # cset = ax.contour(xx,
-    #             yy,
-    #             res,
-    #             levels = levels,
-    #             colors='firebrick')
-    # Eigenvalues and eigenvectors
-    eigenvalues, eigenvectors = np.linalg.eigh(cov)
-
-    # Calculate the angle of the ellipse
+    eigenvalues, eigenvectors = np.linalg.eigh(np.cov(x, y))
     angle = np.degrees(np.arctan2(*eigenvectors[:, 0][::-1]))
     width, height = 2 * np.sqrt(eigenvalues)
 
-    # Create a figure and axis
-    # Plot the covariance ellipse
-    ellipse = Ellipse((0,0), width, height, angle=angle, edgecolor='firebrick', facecolor='none', lw=1)
-    ax.add_patch(ellipse)
-    ellipse = Ellipse((0,0), 2*width, 2*height, angle=angle, edgecolor='firebrick', facecolor='none', lw=1)
-    ax.add_patch(ellipse)
-    ellipse = Ellipse((0,0), 3*width, 3*height, angle=angle, edgecolor='firebrick', facecolor='none', lw=1)
-    ax.add_patch(ellipse)
-
     phi = np.radians(angle)
-    x_text = 0 + width/2 * np.cos(0) * np.cos(phi) - height/2 * np.sin(0) * np.sin(phi)
-    y_text = 0 + width/2 * np.cos(0) * np.sin(phi) + height/2 * np.sin(0) * np.cos(phi) 
+    x_text, y_text = width / 2 * np.cos(phi), width / 2 * np.sin(phi)
+    for sigma, label in ((1, r'$\sigma$'), (2, r'$2\sigma$'), (3, r'$3\sigma$')):
+        ax.add_patch(Ellipse((0, 0), sigma * width, sigma * height, angle=angle,
+                             edgecolor='firebrick', facecolor='none', lw=1))
+        ax.text((sigma + 0.3) * x_text, (sigma + 0.3) * y_text, label,
+                fontsize=12, color='firebrick', ha='center', va='center')
+    return max(height, width) / 2
 
-    ax.text(1.3*x_text, 1.3*y_text, r'$\sigma$', fontsize=12, color='firebrick', rotation=0, ha='center', va = 'center') 
-    ax.text(2.3*x_text, 2.3*y_text, r'$2\sigma$', fontsize=12, color='firebrick', rotation=0, ha='center', va = 'center') 
-    ax.text(3.3*x_text, 3.3*y_text, r'$3\sigma$', fontsize=12, color='firebrick', rotation=0, ha='center', va = 'center') 
 
-    # locations = [(0,-1*height),(0,-2*height),(0,-3*height)]
-    # fmt = {}
-    # for l,s in zip(cset.levels, lbs):
-    #     fmt[l] = s
-    # plt.clabel(cset, inline=True, fmt=fmt, fontsize=12, manual=locations)
-    return max(height, width)/2
-
- 
-#from pyCamera.optimisers.base_optimiser import AbstractParamHandler
 @dataclass
 class CalibrationDiagnostics:
     """
@@ -657,7 +585,7 @@ def visualise_calibration(
 
     written: list[Path | None] = []
     figures = [
-        (cluster_plot([diagnostics.residuals], alphas=[0.1]), "error_distribution"),
+        (cluster_plot([diagnostics.residuals]), "error_distribution"),
         (per_camera_coverage(diagnostics), "per_camera_coverage"),
         (accuracy_precision_plot(diagnostics), "accuracy_precision"),
     ]
@@ -1245,7 +1173,6 @@ def render_calibration_pyvista_png(
         mean_dist = _target_mean_distance(param_handler.target)
         inv = np.sort(np.unique(reconstructed_subset[:, 1:-2], axis=0, return_index=True)[1])
         im_nums = reconstructed_subset[inv, 1]
-        keys = reconstructed_subset[inv, 2:-2]
 
         raw_obj_points: list[np.ndarray] = []
         errors_scene: list[float] = []

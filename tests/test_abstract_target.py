@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 
+import cv2
 import numpy as np
 import pytest
 
@@ -23,7 +24,7 @@ from pyCamSet.calibration_targets import AbstractTarget, ImageDetection, TargetD
 from pyCamSet.calibration_targets.core.abstract_target import get_keys
 from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
-from conftest import make_camera
+from conftest import UndrawableTarget, make_camera
 
 GRID = 5
 SPACING = 0.02
@@ -38,7 +39,7 @@ DEFAULT_POSE = np.array(
 )
 
 
-class PlanarTarget(AbstractTarget):
+class PlanarTarget(UndrawableTarget, AbstractTarget):
     """A flat grid whose detector reports exact projections of its own points."""
 
     def __init__(self, grid=GRID, spacing=SPACING, pose=None):
@@ -138,7 +139,7 @@ def test_original_points_are_kept(target):
 def test_make_local_needs_point_data():
     """A target that forgot to set point_data must say so clearly."""
 
-    class Forgetful(AbstractTarget):
+    class Forgetful(UndrawableTarget, AbstractTarget):
         def __init__(self):
             super().__init__(inputs=locals())
 
@@ -190,6 +191,69 @@ def test_pose_estimation_can_return_its_error(camera, target):
     assert got.shape == (4, 4)
     assert np.isfinite(error)
     assert error >= 0
+
+
+IN_FRONT_RVEC = np.array([[0.05], [-0.03], [0.02]])
+IN_FRONT_TVEC = np.array([[-0.01], [0.02], [0.9]])
+
+
+def _solutions(*specs):
+    """A solvePnPGeneric result from ``(in_front, error)`` pairs, in order.
+
+    solvePnPGeneric returns several solutions for a planar target, and the
+    one behind the camera is not always last or worst.
+    """
+    rvecs, tvecs, errors = [], [], []
+    for in_front, error in specs:
+        rvecs.append(IN_FRONT_RVEC if in_front else np.zeros((3, 1)))
+        tvecs.append(IN_FRONT_TVEC if in_front
+                     else np.array([[0.0], [0.0], [-1.0]]))
+        errors.append(np.array([[error]]))
+    return len(specs), rvecs, tvecs, errors
+
+
+def test_dropping_a_solution_does_not_shift_the_index_of_the_rest(
+        camera, target, monkeypatch):
+    """The surviving solutions must be indexed by their own positions.
+
+    The errors were indexed unfiltered while the poses were indexed
+    filtered, so a solution dropped from before the best one shifted every
+    later index: the wrong pose came back, or the index ran off the end.
+    Here the behind-camera solution has the lower error, so the unfiltered
+    argmin points past the one surviving pose.
+    """
+    monkeypatch.setattr(cv2, "solvePnPGeneric",
+                        lambda *a, **k: _solutions((True, 0.5), (False, 0.1)))
+
+    got = target.target_pose_in_cam_image(_detection_of(target, camera), camera)
+
+    assert np.allclose(got, make_4x4h_tform(IN_FRONT_RVEC.ravel(),
+                                            IN_FRONT_TVEC.ravel()), atol=1e-9)
+
+
+def test_a_rejected_solution_cannot_fail_the_detection(camera, target, monkeypatch):
+    """A solution behind the camera is not chosen, so it is not judged.
+
+    The 20 px cutoff ran over every solution, so a large error on one
+    already rejected for sitting behind the camera failed the detection.
+    """
+    monkeypatch.setattr(cv2, "solvePnPGeneric",
+                        lambda *a, **k: _solutions((True, 0.5), (False, 500.0)))
+
+    got, error = target.target_pose_in_cam_image(
+        _detection_of(target, camera), camera, give_error=True)
+
+    assert np.all(np.isfinite(got))
+    assert error == pytest.approx(0.5)
+
+
+def test_every_solution_behind_the_camera_is_still_a_failure(
+        camera, target, monkeypatch):
+    monkeypatch.setattr(cv2, "solvePnPGeneric",
+                        lambda *a, **k: _solutions((False, 0.1), (False, 0.5)))
+
+    with pytest.raises(ValueError, match="non-negative pose"):
+        target.target_pose_in_cam_image(_detection_of(target, camera), camera)
 
 
 def test_an_empty_detection_raises_by_default(camera, target):

@@ -67,7 +67,7 @@ detections, camera_res = detect_datapoints_in_imfile(
 )
 ```
 
-The result is cached beside the images as `detected_datapoints.pickle`, which is
+The result is cached beside the images as `detected_datapoints.npz`, which is
 what makes re-running a calibration cheap — the run above loads that cache
 rather than re-detecting, but only when the cache was made for the same
 target, cameras and image cap; otherwise it redetects and overwrites the
@@ -91,8 +91,8 @@ saw the target in no image cannot be calibrated, and a board seen in only a
 handful of images constrains almost nothing.
 
 ```python exec="true" source="above" session="calibrate"
-from pyCamSet.calibration.camera_calibrator import (
-    images_per_camera, validate_detections)
+from pyCamSet.calibration.camera_calibrator import images_per_camera
+from pyCamSet.utils.setup_reports import validate_detections
 
 validate_detections(
     detections, target, image_counts=images_per_camera(f_loc))
@@ -113,8 +113,8 @@ Each camera is calibrated on its own, by OpenCV, from the board observations it
 made.
 
 ```python exec="true" source="above" session="calibrate"
-from pyCamSet.calibration.camera_calibrator import (
-    report_initial_calibration, run_initial_calibration)
+from pyCamSet.calibration.camera_calibrator import run_initial_calibration
+from pyCamSet.utils.intrinsics_report import report_initial_calibration
 
 initial_cams = run_initial_calibration(
     detections, target, camera_res, save=False)

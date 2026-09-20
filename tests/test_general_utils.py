@@ -583,3 +583,46 @@ def test_mad_returns_indices_into_the_data_it_was_given():
     assert isinstance(found, np.ndarray)
     assert found.ndim == 1
     assert list(found) == [1, 3]
+
+
+# --------------------------------------------------------------------------
+# Drawing the outliers, when there is somebody to look
+# --------------------------------------------------------------------------
+
+
+def test_the_outlier_plot_is_not_drawn_when_nobody_is_watching(monkeypatch):
+    """plt.show() enters the backend's main loop and returns when the window
+    is closed. Under Agg that is a no-op, but a Qt backend -- which anything
+    that has already built a QApplication leaves active -- blocks until
+    somebody closes a window nobody can see, which stops an unattended run
+    dead and cannot be interrupted from Python.
+    """
+    import pyCamSet.utils.general_utils as gu
+
+    shown = []
+    monkeypatch.setattr(gu.plt, "show", lambda *a, **k: shown.append(1))
+    monkeypatch.setattr(gu, "someone_is_watching", lambda: False)
+
+    found = gu.mad_outlier_detection(EVEN + [500.0], out_thresh=20, draw=True)
+
+    assert list(found) == [7]
+    assert shown == []
+
+
+def test_the_outlier_plot_is_drawn_for_somebody_who_can_close_it(monkeypatch):
+    import pyCamSet.utils.general_utils as gu
+
+    shown = []
+    monkeypatch.setattr(gu.plt, "show", lambda *a, **k: shown.append(1))
+    monkeypatch.setattr(gu, "someone_is_watching", lambda: True)
+
+    gu.mad_outlier_detection(EVEN + [500.0], out_thresh=20, draw=True)
+
+    assert shown == [1]
+
+
+def test_nobody_is_watching_a_replaced_stdin(monkeypatch):
+    import pyCamSet.utils.general_utils as gu
+
+    monkeypatch.setattr(gu.sys, "stdin", None)
+    assert gu.someone_is_watching() is False

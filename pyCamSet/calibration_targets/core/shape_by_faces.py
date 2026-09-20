@@ -23,10 +23,6 @@ def make_shape(shape_name, size=None):
         return pv.Icosahedron(radius=size)
     raise ValueError(f"Unknown shape: {shape_name}")
 
-def bound_pts(face, res):
-    max_bounds = np.max(face, axis=0)
-    return face/max_bounds * res
-
 def print_formatted_transforms(tforms):
     """
     formats ain input array of (rotation, translation tuples) as printed strings
@@ -146,9 +142,6 @@ class FaceToShape:
                            texture = pv.numpy_to_texture(texture.astype(np.uint8))
                            )
         scene.add_mesh(pv.PolyData(self.point_data.reshape((-1,3))), color='r')
-        # a = self.point_data.reshape((-1, 3))
-        # ls = [str(i) for i in range(a.shape[0])]
-        # scene.add_point_labels(a, ls)
         if return_scene:
             return scene
         scene.add_axes()

@@ -3,9 +3,8 @@ The things a camera set is calibrated against.
 
 :mod:`core` holds what every target is made of -- the contract, the
 detections, the parameters, the registry -- and :mod:`markers` the detectors
-that read fiducials out of an image.  Each remaining subpackage is one
-target: the class itself in ``target``, and the script that draws one to
-paper in ``generate``.
+that read fiducials out of an image, plus the geometry they are drawn from.
+Each remaining module is one target.
 
 The core names are imported here.  A target class is fetched on first use
 instead, through :mod:`core.target_registry`, so that asking for a ChArUco

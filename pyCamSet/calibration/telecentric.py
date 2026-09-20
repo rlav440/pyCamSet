@@ -144,11 +144,8 @@ def calibrate_telecentric(object_points: list[np.ndarray],
         magnifications.append(np.linalg.norm(A, axis=1))
     magnification = np.median(np.stack(magnifications), axis=0)
 
-    # TODO res reaches initial_calibration as (height, width), so this reads
-    # the two the wrong way round and only agrees with itself on a square
-    # sensor. Fixing it means auditing every caller: Camera.res is (width,
-    # height) once set_resolutions_from_file has run, so the two orders are
-    # live in the same codebase.
+    # TODO res arrives here as (height, width) but Camera.res is (width,
+    # height), so this is swapped on any non-square sensor.
     principal_point = np.asarray(res, dtype=float) / 2
     poses, errors = [], []
     for P, uv in zip(object_points, image_points):

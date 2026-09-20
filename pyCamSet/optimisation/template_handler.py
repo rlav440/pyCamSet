@@ -1,6 +1,5 @@
 from __future__ import annotations
 from tqdm import tqdm
-from scipy.sparse import csgraph
 import logging
 
 logger = logging.getLogger(__name__)
@@ -33,6 +32,7 @@ from pyCamSet.cameras import CameraSet, Camera
 
 from pyCamSet.calibration_targets import TargetDetection
 from pyCamSet.utils.setup_reports import RigConsistencyReport
+from pyCamSet.optimisation.region_growing import estimate_rig
 
 try:
     import pyvista as pv
@@ -53,10 +53,7 @@ DEFAULT_OPTIONS = {
     'ref_pose':0,
     'outliers':'ask',
     'max_nfev':100,
-    # 'schur' eliminates the block diagonal parameter group and solves the
-    # reduced camera system with Levenberg-Marquardt; 'trf' is scipy's
-    # trust region solver, kept as an escape hatch and for bounded problems.
-    'solver': 'schur',
+    'solver': 'schur', #can be trf to use scipy
 }
 class TemplateBundlePrimitive:
     """
@@ -86,12 +83,6 @@ class TemplateBundlePrimitive:
         self.free_extr = np.sum(self.extr_unfixed)
         self.free_intr = np.sum(self.intr_unfixed)
 
-        # Widths come from the arrays, which the handler sizes from its own
-        # function blocks.  They used to be the literals 9 and 6 here and in
-        # the two sibling primitives, independent of param_type.n_params on the
-        # blocks, so a model with a different parameter count could disagree
-        # with its own kernel -- and the only symptom is can_use_schur finding
-        # a length mismatch and silently dropping to trf.
         self.intr_end = self.n_intr * self.free_intr
         self.extr_end = self.n_extr * self.free_extr + self.intr_end
         self.pose_end = 6 * self.free_poses + self.extr_end
@@ -163,9 +154,6 @@ class TemplateBundleHandler:
         self.point_data = deepcopy(target.point_data)
         self.target_point_shape = np.array(target.point_data.shape)
         self.initial_params = None
-        # reprojection residuals only, two per observation; set in
-        # make_loss_fun.  Lockbox priors are appended after them, so anything
-        # reshaping residuals into (x, y) pairs must stop at this count.
         self._base_residual_count = 0
         self.lockbox_config = lockbox_config or CameraLockboxConfig(enabled=False)
         self.lockbox_source_camset = lockbox_source_camset
@@ -175,9 +163,6 @@ class TemplateBundleHandler:
         n_poses = detection.max_ims
         n_cams = camset.get_n_cams()
 
-        # The lens model decides how wide a camera's parameters are, and the
-        # primitives read the width off these arrays, so the blocks are chosen
-        # before anything is sized from them.
         self._intr_block, self._extr_block = blocks_for_camset(camset)
         intr = np.zeros((n_cams, self._intr_block.params.n_params))
         extr = np.zeros((n_cams, self._extr_block.params.n_params))
@@ -187,13 +172,6 @@ class TemplateBundleHandler:
         intr_unfixed = np.array(['int' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
         pose_unfixed = np.ones(n_poses, dtype=bool)
 
-        # A pose that no camera detected the target in has nothing to estimate
-        # it from. Every residual that would mention it is simply absent, so
-        # its six parameters reach the jacobian as all-zero columns and the
-        # degeneracy check refuses to solve at all -- which costs the whole
-        # calibration for the sake of one frame where the target was blurred,
-        # or had left every view. Such a pose is fixed at the identity rather
-        # than left free, so the frame is what is lost, not the run.
         seen = detection.get_data()
         if seen is not None and len(seen):
             unseen = np.setdiff1d(np.arange(n_poses), np.unique(seen[:, 1].astype(int)))
@@ -254,13 +232,10 @@ class TemplateBundleHandler:
             source_extrinsics.append(np.concatenate((rot_vec, trans_vec), axis=0))
         source_extrinsics = np.asarray(source_extrinsics, dtype=float)
 
-        # A rig whose every extrinsic is still the identity has not been
-        # solved for pose -- run_initial_calibration returns exactly that,
-        # since it fits intrinsics only.  Locking onto it would pin every
-        # camera to the origin, and with the warm start on it also
-        # overwrites the estimated extrinsics this solve was going to
-        # start from; the result is a NaN residual and a scipy complaint
-        # about the initial point.
+        # Every extrinsic still the identity means the rig has not been
+        # solved for pose -- run_initial_calibration fits intrinsics only.
+        # Locking onto that pins every camera to the origin and, with the
+        # warm start, overwrites the extrinsics this solve would start from.
         if len(self.cam_names) > 1 and not np.any(source_extrinsics):
             raise ValueError(
                 "The camera lockbox source has no extrinsics: every camera "
@@ -528,10 +503,8 @@ class TemplateBundleHandler:
         """
         if self.missing_poses is None:
             raise ValueError("missing poses should be initialised before calling this function")
-        # What the solve was handed before this ran, and what it was handed
-        # after.  Phase 3 reports the difference as the number of images
-        # outlier rejection removed; unset, both getattr calls fell back to
-        # empty and the report said nothing had been removed on every run.
+        # What the solve was handed before this ran, and after: phase 3
+        # reports the difference as the images outlier rejection removed.
         self.missing_poses_before_outlier_rejection = np.array(
             self.missing_poses, dtype=bool)
         cyclic_outlier_detection = True
@@ -591,11 +564,9 @@ class TemplateBundleHandler:
 
         if self.initial_params is not None:
             return self.initial_params
-        # cached, as both subclasses already do: calc_initial_params runs the
-        # whole graph pose estimate, the misalignment check and the
-        # interactive outlier prompt, and run_bundle_adjustment asks for the
-        # params twice -- once to build the loss and once to size the schur
-        # groups -- so without this all of that happened twice per run.
+        # Cached: calc_initial_params runs the whole graph pose estimate,
+        # the misalignment check and the outlier prompt, and
+        # run_bundle_adjustment asks for the params twice.
         self.initial_params = self.calc_initial_params()
         return self.initial_params
 
@@ -616,16 +587,8 @@ class TemplateBundleHandler:
         cam_poses, target_poses, per_im_error = estimate_camera_relative_poses(
             detection=self.detection, cams=self.camset, calibration_target=self.target
         )
-        # Kept, not just consumed: phase 3 and phase 4 both report this as the
-        # per-image initial reprojection, and the diagnostics tab builds its
-        # threshold and its remove-these-images control on top of it. Computed
-        # and dropped, every one of those read an empty array and drew nothing.
         self.initial_per_im_error = np.asarray(per_im_error, dtype=float)
 
-        # A pose with no recoverable transform is missing whatever the
-        # caller said; a pose the caller marked stays marked whatever the
-        # scan found.  Assigning the scan straight over the top, as this
-        # did, silently discarded everything passed to the constructor.
         unposed = np.array([np.isnan(t[0, 0]) for t in target_poses])
         if self.missing_poses is None:
             self.missing_poses = unposed
@@ -638,11 +601,6 @@ class TemplateBundleHandler:
             self.missing_poses = marked | unposed
         self.find_and_exclude_transform_outliers(per_im_error)
 
-        # Excluding a pose's observations leaves its six pose parameters
-        # with nothing to constrain them: every jacobian column for them is
-        # zero, which the degeneracy check rejects and the Schur
-        # elimination would divide by.  A pose the solve cannot see is not
-        # a pose the solve can solve for, so it stops being free.
         if np.any(self.missing_poses):
             self.bundlePrimitive.poses_unfixed = (
                 self.bundlePrimitive.poses_unfixed
@@ -868,200 +826,87 @@ def check_feasiblity_and_update_refpose(Mat_ac, ref_pose: int) -> tuple[int, boo
         ref_pose = f_index
     return ref_pose, False
 
+
+
+
 def estimate_camera_relative_poses(
         calibration_target: AbstractTarget, detection: TargetDetection,
-        cams:CameraSet, ref_cam: int = 0, ref_pose: int = 0,
-        max_bad_cams_iter = 10,
+        cams: CameraSet, ref_cam: int = 0, ref_pose: int = 0,
+        max_bad_cams_iter=10,
         prior_poses_and_costs: Optional[tuple[np.ndarray, np.ndarray]] = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Given camera estimates, performs a single camera centric pose estimate.
-    This reference camera is used to generate initial estimates of all other camera poses.  If the reference pose does not have full visibility, it will pick a new reference pose. This is explicitely not a graph based solver, and will throw an error if no fully shared target is visible.
-    As it assesses the cost function to pick sane defaults, it also returns an initial evaluation of the per im error of the cost function.
+    Estimate where every camera and every target pose is, before the solve.
 
-    :param detection: the detection data that the average estimates should be extracted from
-    :param cams: the list of cameras with no yet known average transformation
+    :param calibration_target: the target, for its point geometry
+    :param detection: the detections the estimate is drawn from
+    :param cams: the cameras, whose relative poses are not yet known
+    :param ref_cam: the camera the rig consistency check measures against
+    :param ref_pose: the image to anchor the world frame on
+    :return: world to camera per camera, target to world per image, and the
+        mean reprojection error the estimate leaves in each image
     """
-
-    # a indicates that there is a full array allong a dimension p3
-
     img_detections = detection.get_image_list()
-    Mat_ac = []
-    Mat_ac_cost = []
-    for cam in cams:
-        pose_per_img=[]
-        cost_per_img=[]
-        for id in img_detections:
-            res = calibration_target.target_pose_in_cam_image(id, cam, mode="nan", give_error=True)
-            pose_per_img.append(res[0])
-            cost_per_img.append(res[1])
-        Mat_ac.append(pose_per_img)
-        Mat_ac_cost.append(cost_per_img)
-    Mat_ac = np.array(Mat_ac)
-    Mat_ac_cost = np.array(Mat_ac_cost)
+    target_in_camera = np.array([
+        [calibration_target.target_pose_in_cam_image(image, cam, mode="nan")
+         for image in img_detections]
+        for cam in cams])
 
-    check_for_target_misalignment(Mat_ac, ref_cam, cams.get_names())
-    # try_graph was unconditionally overwritten to True immediately below
-    # this call, so the direct (non graph) estimate that followed had been
-    # unreachable; it is gone.  The flag is still returned because the
-    # function logs why it wants the graph method, but the graph method is
-    # what runs either way.
-    ref_pose, _ = check_feasiblity_and_update_refpose(Mat_ac, ref_pose)
-    return graph_estimate_initial_pose(
-        Mat_ac, cams, img_detections, ref_pose, calibration_target, detection,
-        cost_mat=Mat_ac_cost,
-    )
+    check_for_target_misalignment(target_in_camera, ref_cam, cams.get_names())
+    ref_pose, _ = check_feasiblity_and_update_refpose(target_in_camera, ref_pose)
+    return estimate_initial_rig(
+        target_in_camera, cams, ref_pose, calibration_target, detection)
 
 
-def graph_estimate_initial_pose(Mat_ac, cams, img_detections, ref_pose, calibration_target, detection, cost_mat=None):
+def target_radius(calibration_target: AbstractTarget) -> float:
+    """
+    How far the target's furthest point sits from its own centre.
 
-    valid_pose = ~np.isnan(Mat_ac[:,:,0,0]) 
+    :param calibration_target: the target
+    :return: the radius, in the target's units
+    """
+    points = calibration_target.point_data.reshape((-1, 3))
+    return float(np.max(np.linalg.norm(points - np.mean(points, axis=0), axis=1)))
 
 
-    dist_test = Mat_ac[0, :, :-1, -1]  - Mat_ac[1, :, :-1, -1]
-    # relative_tform =  np.linalg.inv(Mat_ac[0]) @ (Mat_ac[1])
+def estimate_initial_rig(target_in_camera: np.ndarray, cams: CameraSet,
+                         ref_pose: int, calibration_target: AbstractTarget,
+                         detection: TargetDetection,
+                         ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Grow the rig from its most agreed links, and score what that leaves.
 
-    ####### A series of debug plots.
-    # base_cam_dict = {}
-    # base_cams = CameraSet(camera_dict={'cam0':cams[0]})
-    # s = pv.Plotter()
-    # cmap = plt.get_cmap('tab20')
-    # cols = [cmap(i) for i in np.linspace(0,1, cams.get_n_cams())]
-    #
-    # for i in range(cams.get_n_cams()):
-    #     relative_tform =  (Mat_ac[0]) @ np.linalg.inv(Mat_ac[i])
-    #     alt_dict = {f'cam{i}_{e}':Camera(
-    #         intrinsic=cams[i].intrinsic.copy(), 
-    #         extrinsic=f, res=cams[i].res.copy(), name=f"cam{i}_{e}",
-    #         distortion_coefs=cams[i].distortion_coefs) for e, f in enumerate(relative_tform)}
-    #     base_cam_dict.update(alt_dict)
-    #     data = np.array([c.position for c in alt_dict.values()])
-    #     data_dif = np.linalg.norm(np.diff(data, axis=0), axis=-1)
-    #     uniplot.plot(data_dif)
-    #     s.add_mesh(data, color=cols[i], render_points_as_spheres=True, point_size=15)
-    #
-    # s.show()
-    # alt_ests = CameraSet(camera_dict=base_cam_dict)
-    # alt_ests.plot(scale_factor=0.01, cam_labels=False)
-    dists = np.linalg.norm(dist_test, axis=-1)
-    # plt.hist(dists, bins=20)
-    # plt.xlabel("Estimated distance between cameras (m)")
-    # plt.ylabel("Frequency")
-    # plt.show()
-    # raise ValueError
-    # breakpoint()
-    # plt.imshow(valid_pose); plt.show()
-    # if cost_mat is not None:
-    #     plt.imshow(cost_mat); plt.show()
-    true_locs_cam, true_locs_pose_original = np.where(valid_pose) # true_locs_pose_orig is 0-indexed for poses
-    true_locs_pose_shifted = true_locs_pose_original + len(cams) 
-    num_nodes = len(cams) + len(img_detections)
-    dist_mat = np.ones([num_nodes, num_nodes]) * np.inf
+    :param target_in_camera: (c, p, 4, 4) target pose as each camera saw it
+    :param cams: the cameras, in the order they index target_in_camera
+    :param ref_pose: the image to anchor the world frame on
+    :param calibration_target: the target, for its point geometry
+    :param detection: the detections, for scoring the estimate
+    :return: world to camera per camera, target to world per image, and the
+        mean reprojection error the estimate leaves in each image
+    """
+    extrinsics, poses = estimate_rig(
+        target_in_camera, target_radius(calibration_target),
+        reference_image=ref_pose, cam_names=cams.get_names())
 
-    if cost_mat is None:
-        dist_mat[(true_locs_cam, true_locs_pose_shifted)] = 1 
-        dist_mat *= 1 + (np.random.random(dist_mat.shape) - 0.5)/100 #random sauce to help dodge bad points
-    else:
-        dist_mat[(true_locs_cam, true_locs_pose_shifted)] = cost_mat[valid_pose]
-        iter_mat = np.zeros([num_nodes, num_nodes])
-        iter_mat[(true_locs_cam, true_locs_pose_shifted)] = 1 
+    solved = np.isfinite(poses[:, 0, 0])
+    flat_detections = detection.return_flattened_keys(
+        calibration_target.point_data.shape[:-1]).get_data()
+    points = calibration_target.point_data.reshape((-1, 3))
+    placed = np.array([gu.h_tform(points, np.where(np.isnan(pose), np.eye(4), pose))
+                       for pose in poses])
 
-    dist_vec, predecessors_mat = csgraph.shortest_path(dist_mat, 
-                                                       return_predecessors=True,
-                                                       # unweighted=True,
-                                                       directed=False, # Connectivity is undirected
-                                                       #indices= len(cams)
-                                                    )
+    residuals = seed_reprojection_error(
+        cams, flat_detections, placed, extrinsics)
+    euclidean = np.sqrt(np.sum(residuals.reshape(-1, 2) ** 2, axis=1))
+    per_image_error = per_image_reprojection(
+        euclidean, flat_detections, detection.max_ims, solved)
 
-    #Use the distance vector to pick the starting point that reaches the maximum set of nodes with the minimum number of steps
-    unreachable = np.isinf(dist_vec)
-    # plt.imshow(unreachable);plt.show()
-    dist_vec[unreachable] = 1000_000 #penalise poses that can't reach other cameras.
-    temp_d = dist_vec.copy()
-    # dist_sums = np.sum(dist_vec[:, len(cams):], axis=1) #could this be around the wrong way.
-    dist_sums = np.sum(dist_vec[len(cams):, :], axis=1) # distance matrix is symmetric
-    # pick pose as the pose with the lowest total distance to all neighbours.
-    starting_seed = int(np.nanargmin(dist_sums) + len(cams)) #the pose with the lowest distance score
-    logger.debug(f"graph pose seed: {starting_seed}")
-    # starting_seed=50
-    #use this to index the starting point
-    # dist_vec = np.round(dist_vec[:, starting_seed], 0)
-    viable_nodes = ~unreachable[:, starting_seed]
-    # breakpoint()
-    dist_vec[unreachable[:, starting_seed]] = -1
-    
-    max_iters = np.max(dist_vec)
-    destination = np.arange(num_nodes).astype(int)
-    current_loc = (np.ones(num_nodes) * starting_seed).astype(int)
-    goal_loc = np.arange(num_nodes)
-    accumulated_tforms = np.array([np.eye(4) for _ in range(num_nodes)])
-
-    # for _ in tqdm(range(np.ceil(max_iters/2).astype(int)), desc="Pathfinding graph"):
-    logger.info("Pathfinding Graph")
-    while True:
-        # cam step
-        do_step = (current_loc != goal_loc) & viable_nodes
-        if not np.any(do_step):
-            break
-
-        # plt.plot(do_step);plt.show()
-        cam_to_step_too = predecessors_mat[(destination[do_step], current_loc[do_step])]
-        # print(cam_to_step_too)
-        tforms = Mat_ac[(cam_to_step_too, current_loc[do_step] - len(cams))]
-        accumulated_tforms[do_step] = tforms @ accumulated_tforms[do_step]
-        
-        current_loc[do_step] = cam_to_step_too
-        # transform step
-        do_step = (current_loc != goal_loc) & viable_nodes
-        if not np.any(do_step):
-            break
-         
-        # plt.plot(do_step);plt.show()
-        
-        pose_to_step_too = predecessors_mat[(destination[do_step], current_loc[do_step])]
-
-        tforms = np.linalg.inv(Mat_ac[(current_loc[do_step], pose_to_step_too - len(cams))])
-        accumulated_tforms[do_step] = tforms @ accumulated_tforms[do_step]
-
-        current_loc[do_step] = pose_to_step_too
-    
-    ref_form_make = np.linalg.inv((accumulated_tforms[len(cams)]))
-
-    accumulated_tforms = accumulated_tforms @ ref_form_make
-
-    Mrt_ac = accumulated_tforms[:len(cams)]
-    Mat_rt = np.linalg.inv(accumulated_tforms[len(cams):])
-    
-    #################################################################### a quick code snippet to run a bundle adjustment cost function to check for outliers.
-    # run a bundle adjustment over the possible target positions.
-    ps = calibration_target.point_data.reshape((-1, 3)) #could the flattening be failing for things that aren't flat
-    target_shape = calibration_target.point_data.shape
-    dd = detection.return_flattened_keys(target_shape[:-1]).get_data() #maybe this isn't in order.
-    imlocs = np.array([gu.h_tform(ps,Mt_rt) for Mt_rt in Mat_rt]) 
-    costs = seed_reprojection_error(cams, dd, imlocs, Mrt_ac)
-
-    costs = np.sqrt(np.sum(costs.reshape(-1, 2) ** 2, axis=1))
-    pose_viable = viable_nodes[len(cams):]
-    init_per_im_reproj_err = per_image_reprojection(
-        costs, dd, detection.max_ims, pose_viable)
-
-    logger.info(f"Mean euclidean of estimate: {np.mean(costs):.2f}")
-    if cams.get_n_cams() < 3:
-        logger.info("\n" + plot_to_string(
-            [per_image_reprojection(costs, dd, detection.max_ims, pose_viable, cam)
-             for cam in (0, 1)], height=10,
-            title="Per image initial reproj error", color=['blue', 'red']))
-    else:
-        logger.info("\n" + plot_to_string(
-            init_per_im_reproj_err, height=10,
-            title="Per image initial reproj error", color=['blue', 'red']))
-
-    # An image the graph could not reach has no pose.  The caller reads that
-    # from the transform -- it checks isnan(pose[0, 0]) -- and until here
-    # every unreachable image handed it back the identity the accumulation
-    # started from, finite and indistinguishable from a solved pose.  So the
-    # check never fired, the image went into the solve with a pose that is
-    # not a pose, and the only trace it left was a NaN in the error array
-    # that MAD then choked on.
-    Mat_rt[~pose_viable] = np.nan
-    return Mrt_ac, Mat_rt, init_per_im_reproj_err
+    logger.info(f"Mean euclidean of estimate: {np.mean(euclidean):.2f}")
+    logger.info("\n" + plot_to_string(
+        [per_image_reprojection(euclidean, flat_detections, detection.max_ims,
+                                solved, cam)
+         for cam in range(cams.get_n_cams())]
+        if cams.get_n_cams() < 3 else per_image_error,
+        height=10, title="Per image initial reproj error",
+        color=['blue', 'red']))
+    return extrinsics, poses, per_image_error

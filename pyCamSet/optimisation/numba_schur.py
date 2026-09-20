@@ -444,6 +444,9 @@ def levenberg_marquardt(
     cost = _cost(r)
     lam = lam0
     nfev, njev, nit, status, message = 1, 0, 0, 2, "ftol reached"
+    # Bound before the loop: a non-finite jacobian on the first evaluation
+    # breaks out before a gradient exists, and the result still has to say so.
+    g_free = np.zeros(0)
 
     for nit in range(1, max_iter + 1):
         blocks = jac_blocks(x)
@@ -482,10 +485,8 @@ def levenberg_marquardt(
                 lam = max(lam * max(1.0 / 3.0, 1.0 - (2.0 * rho - 1.0) ** 3), lam_min)
                 accepted = True
                 if verbose:
-                    # debug, not info: the progress bar carries this for a
-                    # person watching and the summary carries the outcome, so
-                    # the raw trace is for diagnosis. Ask for it with the
-                    # 'verbosity' option at 3.
+                    # debug, not info: the progress bar and the summary
+                    # already carry this. Ask for the trace with verbosity 3.
                     logger.debug(
                         f"    it {nit:3d} cost {cost:.9e} "
                         f"lam {lam:.2e} rho {rho:.3f}")
@@ -511,7 +512,8 @@ def levenberg_marquardt(
     return OptimizeResult(
         x=x, fun=r, cost=cost, jac=jac_csr(x) if jac_csr is not None else None,
         nfev=nfev, njev=njev, nit=nit, status=status, message=message,
-        success=status in (0, 2, 3), optimality=float(np.max(np.abs(g_free))),
+        success=status in (0, 2, 3),
+        optimality=float(np.max(np.abs(g_free))) if g_free.size else np.inf,
     )
 
 

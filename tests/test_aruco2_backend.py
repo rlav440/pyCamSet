@@ -30,8 +30,8 @@ from pyCamSet.calibration_targets.markers.backend_registry import (
     marker_backend_available,
     validate_marker_backend,
 )
-from pyCamSet.calibration_targets.charuco.target import ChArUco
-from pyCamSet.calibration_targets.ccube.target import Ccube
+from pyCamSet.calibration_targets.charuco import ChArUco
+from pyCamSet.calibration_targets.ccube import Ccube
 from pyCamSet.calibration_targets.markers.aruco_opencv import (
     ARUCO_OPENCV_DETECTOR,
 )
@@ -562,7 +562,7 @@ def test_ccube_legacy_warning_names_the_actual_face_flag(caplog):
         cube = Ccube(n_points=6, length=20.0, legacy=False, marker_backend=backend)
 
         with caplog.at_level(logging.WARNING,
-                             logger="pyCamSet.calibration_targets.ccube.target"):
+                             logger="pyCamSet.calibration_targets.ccube"):
             det = cube.find_in_image(tex)
 
         n = 0 if det.keys is None else len(det.keys)
@@ -610,7 +610,7 @@ def test_legacy_warn_probe_paid_once_per_target_not_every_frame(monkeypatch):
     every qualifying frame for the rest of the target's life repeated the
     full probe cost even though given_legacy_warning was already True and
     no further warning could ever fire."""
-    import pyCamSet.calibration_targets.charuco.target as charuco_mod
+    import pyCamSet.calibration_targets.charuco as charuco_mod
     import pyCamSet.calibration_targets.markers.aruco2 as aruco2_mod
 
     # aruco1's probe is called from charuco.target; aruco2's is called from
@@ -1313,8 +1313,8 @@ def test_the_detection_cache_follows_the_detector_a_real_target_is_read_with():
     """The detector is chosen per detection run, so the cache a run reads
     has to be named for it -- including for ChArUco2, which carries no
     ``marker_backend`` of its own and is only ever read with aruco2."""
-    from pyCamSet.calibration.camera_calibrator import detector_backend_of
-    from pyCamSet.calibration_targets.charuco2.target import ChArUco2
+    from pyCamSet.calibration.detection_cache import detector_backend_of
+    from pyCamSet.calibration_targets.charuco2 import ChArUco2
     from pyCamSet.workflow.detections import detection_cache_name
 
     board1 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0)
@@ -1326,8 +1326,8 @@ def test_the_detection_cache_follows_the_detector_a_real_target_is_read_with():
 
     assert detector_backend_of(board1) == "aruco1"
     assert detection_cache_name(1, detector_backend_of(board1)) == \
-        "detected_datapoints.pickle"
+        "detected_datapoints.npz"
     for target in (board2, cube2, grid_board):
         assert detector_backend_of(target) == "aruco2"
         assert detection_cache_name(1, detector_backend_of(target)) == \
-            "detected_datapoints_aruco2.pickle"
+            "detected_datapoints_aruco2.npz"

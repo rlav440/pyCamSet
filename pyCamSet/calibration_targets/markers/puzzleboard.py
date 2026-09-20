@@ -1,7 +1,7 @@
-from __future__ import annotations  # Keep annotations consistent with pyCamSet targets.
+from __future__ import annotations
 
-import cv2  # Convert pyCamSet's OpenCV images to the detector's expected colour order.
-import numpy as np  # Type and shape normalisation for detector inputs.
+import cv2
+import numpy as np
 
 from pyCamSet.calibration_targets.core.parameters import (
     Parameter,
@@ -11,14 +11,14 @@ from pyCamSet.calibration_targets.core.parameters import (
 
 def prepare_puzzleboard_image(image: np.ndarray) -> np.ndarray:
     """Convert a pyCamSet image to the RGB format expected by PuzzleBoard."""
-    image = np.asarray(image)  # Accept array-like image inputs without copying unnecessarily.
-    if image.ndim == 2:  # The detector accepts a three-channel image after this conversion.
-        return cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)  # Expand grayscale input to RGB.
-    if image.ndim != 3 or image.shape[2] not in (3, 4):  # Reject unsupported image layouts early.
+    image = np.asarray(image)
+    if image.ndim == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    if image.ndim != 3 or image.shape[2] not in (3, 4):
         raise ValueError("PuzzleBoard images must be grayscale, BGR, RGB, BGRA, or RGBA arrays.")
-    if image.shape[2] == 4:  # OpenCV images may include an alpha channel.
-        image = image[:, :, :3]  # Discard alpha before changing colour order.
-    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # pyCamSet loads images in BGR order.
+    if image.shape[2] == 4:
+        image = image[:, :, :3]
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 
 def detect_puzzleboard_image(
@@ -26,23 +26,20 @@ def detect_puzzleboard_image(
     min_width: int = 4,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """Detect PuzzleBoard grid points from a pyCamSet/OpenCV image."""
-    # Imported here rather than at module scope: puzzle_board is an optional
-    # extra, and a module-level import makes it a hard requirement of every
-    # import that reaches this file -- the GUI among them.
-    from puzzle_board.puzzle_board_detector import detect_puzzleboard  # Upstream PuzzleBoard repository.
+    # puzzle_board is an optional extra: a module-level import would make
+    # it a hard requirement of everything that reaches this file.
+    from puzzle_board.puzzle_board_detector import detect_puzzleboard
 
-    detector_image = prepare_puzzleboard_image(image)  # Normalise the image before external detection.
-    return detect_puzzleboard(detector_image, min_width=int(min_width))  # Preserve the original detector output.
+    detector_image = prepare_puzzleboard_image(image)
+    return detect_puzzleboard(detector_image, min_width=int(min_width))
 
 
 class PuzzleBoardDetector(DetectorParameterisation):
     """
     The PuzzleBoard repository's detector.
 
-    ``min_width`` was a constructor argument of both PuzzleBoard targets,
-    which made it look like part of their geometry: a target detected at a
-    different ``min_width`` was refused as a different target, though the
-    printed board and the meaning of every key it returns are identical.
+    ``min_width`` belongs here rather than to a target's geometry: the same
+    printed board read at a different ``min_width`` is the same target.
     """
 
     name = "puzzle_board"

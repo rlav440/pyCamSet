@@ -16,13 +16,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# The squared radius fed to the division model is scaled by this, which puts k
-# in units of (1000 px)**-2.  Without it r2 carries the target's length unit and
-# k lands anywhere between 1e-6 and 10 depending on whether the target was
-# measured in millimetres or metres.  The compiled block
-# ``telecentric_intrinsic`` writes the same number as a literal, because a
-# generated kernel cannot import it; ``test_block_matches_the_camera_model``
-# holds the two together.
+# Scales the squared radius so k is in (1000 px)**-2 rather than carrying the
+# target's length unit. The compiled telecentric_intrinsic block repeats the
+# number as a literal, since a generated kernel cannot import it, and
+# test_block_matches_the_camera_model holds the two together.
 R2_SCALE = 1e-6
 
 #: fractional magnification error that bounds the drawn working volume
@@ -103,9 +100,7 @@ class TelecentricCamera(Camera):
             name=name, minimal=minimal,
         )
 
-    # ------------------------------------------------------------------
     # the model itself
-    # ------------------------------------------------------------------
 
     @property
     def magnification(self) -> np.ndarray:
@@ -267,9 +262,7 @@ class TelecentricCamera(Camera):
             image, (xs + c_x).astype(np.float32), (ys + c_y).astype(np.float32),
             cv2.INTER_LINEAR)
 
-    # ------------------------------------------------------------------
     # rays and sensor maps
-    # ------------------------------------------------------------------
 
     def _make_sensormap(self, mode='linear', distort=True):
         """
@@ -345,9 +338,7 @@ class TelecentricCamera(Camera):
         cam_pts = self._pixels_to_cam_frame(uv, depth=depth)
         return h_tform(cam_pts, self.cam_to_world)
 
-    # ------------------------------------------------------------------
     # geometry for display
-    # ------------------------------------------------------------------
 
     def depth_for_magnification_error(self, tolerance: float = 1e-3) -> float:
         """
@@ -453,9 +444,7 @@ class TelecentricCamera(Camera):
             faces = np.hstack([[4, *q] for q in quads])
         return pv.PolyData(verts, faces)
 
-    # ------------------------------------------------------------------
     # resizing
-    # ------------------------------------------------------------------
 
     def scale_self_2n(self, down_scale_factor=1):
         """
@@ -479,9 +468,7 @@ class TelecentricCamera(Camera):
             "telecentric projection has no representation in it."
         )
 
-    # ------------------------------------------------------------------
     # parameter packing
-    # ------------------------------------------------------------------
 
     def to_param_vector(self) -> np.ndarray:
         """

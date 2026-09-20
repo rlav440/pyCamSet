@@ -1004,6 +1004,19 @@ def test_a_marking_of_the_wrong_length_is_refused(charuco_problem):
 # -- detections of the other detector, reported as its own.
 
 
+def _stub_detection(rows, cam_names=("cam0", "cam1")):
+    """A detection of *rows* points, for a stubbed detection pass."""
+    from pyCamSet.calibration_targets import TargetDetection
+
+    data = np.array([[0, 0, 0, 1.0, 2.0]] * rows)
+    return TargetDetection(cam_names=list(cam_names), data=data)
+
+
+def _rows(detected) -> int:
+    data = detected.get_data()
+    return 0 if data is None else data.shape[0]
+
+
 class _CountingTarget:
     """Stands in for a target: every camera folder is one detection."""
 
@@ -1013,9 +1026,9 @@ class _CountingTarget:
         self.marker_backend = marker_backend
         self.folders_read = 0
 
-    def find_in_imfolder(self, *_args, **_kwargs):
+    def find_in_imfolder(self, *_args, cam_names=("cam0", "cam1"), **_kwargs):
         self.folders_read += 1
-        return 1
+        return _stub_detection(1, cam_names)
 
 
 def _image_folder(root):
@@ -1029,12 +1042,12 @@ def _image_folder(root):
 
 
 @pytest.mark.parametrize(("upscale", "marker_backend", "expected"), [
-    (1, None, "detected_datapoints.pickle"),
-    (1, "aruco1", "detected_datapoints.pickle"),
-    (1, "puzzle_board", "detected_datapoints.pickle"),
-    (1, "aruco2", "detected_datapoints_aruco2.pickle"),
-    (3, "aruco1", "detected_datapoints_upscale3x.pickle"),
-    (3, "aruco2", "detected_datapoints_upscale3x_aruco2.pickle"),
+    (1, None, "detected_datapoints.npz"),
+    (1, "aruco1", "detected_datapoints.npz"),
+    (1, "puzzle_board", "detected_datapoints.npz"),
+    (1, "aruco2", "detected_datapoints_aruco2.npz"),
+    (3, "aruco1", "detected_datapoints_upscale3x.npz"),
+    (3, "aruco2", "detected_datapoints_upscale3x_aruco2.npz"),
 ])
 def test_the_cache_is_named_for_its_detector_and_aruco1_keeps_the_old_name(
         upscale, marker_backend, expected):
@@ -1050,18 +1063,23 @@ def test_the_detection_pass_writes_the_name_phase_1_looks_for(
     """Two statements of one name: the pass that writes it, and the phase
     that copies it into the run."""
     from pyCamSet.calibration import camera_calibrator as calibrator
+    from pyCamSet.calibration import detection_cache
     from pyCamSet.workflow.phase1 import _cache_name_of
 
-    written = []
-    monkeypatch.setattr(calibrator, "save_pickle",
-                        lambda _data, path: written.append(path.name))
+    # A stub target has no registered spec, and so no identity a cache could
+    # ever be confirmed by; stand one in, so the write this test is about
+    # actually happens.
+    monkeypatch.setattr(detection_cache, "_target_identity",
+                        lambda *_a, **_k: {"stub": True})
+
+    images = _image_folder(tmp_path / "images")
     calibrator.detect_datapoints_in_imfile(
-        _image_folder(tmp_path / "images"), _CountingTarget(marker_backend),
+        images, _CountingTarget(marker_backend),
         caching=True, upscale_factor=upscale)
 
     params = {"target": {"type": "Ccube", "marker_backend": marker_backend},
               "upscale_factor": upscale}
-    assert written == [_cache_name_of(params)]
+    assert [path.name for path in images.glob("*.npz")] == [_cache_name_of(params)]
 
 
 def _registered_counting_target(spec, per_folder):
@@ -1077,9 +1095,9 @@ def _registered_counting_target(spec, per_folder):
     target = build_target(spec)
     target.folders_read = 0
 
-    def find_in_imfolder(*_args, **_kwargs):
+    def find_in_imfolder(*_args, cam_names=("cam0", "cam1"), **_kwargs):
         target.folders_read += 1
-        return per_folder
+        return _stub_detection(per_folder, cam_names)
 
     target.find_in_imfolder = find_in_imfolder
     return target
@@ -1099,21 +1117,21 @@ def test_an_aruco2_run_never_loads_an_aruco1_runs_cache(tmp_path):
 
     aruco1 = _registered_counting_target(aruco1_spec, per_folder=1)
     detected, _ = calibrator.detect_datapoints_in_imfile(images, aruco1, caching=True)
-    assert (detected, aruco1.folders_read) == (2, 2)
-    aruco1_cache = images / "detected_datapoints.pickle"
+    assert (_rows(detected), aruco1.folders_read) == (2, 2)
+    aruco1_cache = images / "detected_datapoints.npz"
     aruco1_bytes = aruco1_cache.read_bytes()
 
     aruco2 = _registered_counting_target(aruco2_spec, per_folder=10)
     detected, _ = calibrator.detect_datapoints_in_imfile(images, aruco2, caching=True)
     assert aruco2.folders_read == 2, "detected afresh"
-    assert detected == 20, "loaded another detector's cache"
-    assert (images / "detected_datapoints_aruco2.pickle").exists()
+    assert _rows(detected) == 20, "loaded another detector's cache"
+    assert (images / "detected_datapoints_aruco2.npz").exists()
     assert aruco1_cache.read_bytes() == aruco1_bytes, \
         "the ArUco 2 run wrote over the ArUco 1 run's cache"
 
     again = _registered_counting_target(aruco1_spec, per_folder=1)
     detected, _ = calibrator.detect_datapoints_in_imfile(images, again, caching=True)
-    assert (detected, again.folders_read) == (2, 0), \
+    assert (_rows(detected), again.folders_read) == (2, 0), \
         "the ArUco 1 run lost its own cache"
 
 
@@ -1135,7 +1153,7 @@ def test_a_failed_phase_1_run_records_its_error_and_no_artifact_even_with_a_matc
     even when a cache that WOULD have matched this run's own identity (by
     the cache's identity sidecar, not just its filename) is sitting right
     there -- there is no longer any code path in run() that looks at it."""
-    from pyCamSet.calibration.camera_calibrator import write_cache_identity
+    from pyCamSet.calibration.detection_cache import cache_matches, save_to_cache
     from pyCamSet.calibration_targets.core.target_registry import build_target
     from pyCamSet.workflow import phase1
     from pyCamSet.workflow.workspace import WorkspaceManager
@@ -1144,8 +1162,11 @@ def test_a_failed_phase_1_run_records_its_error_and_no_artifact_even_with_a_matc
     cam_names = ["cam0", "cam1"]
 
     matching_cache = images / phase1._cache_name_of({"target": target})
-    matching_cache.write_bytes(b"a cache that matches this run's own identity")
-    write_cache_identity(matching_cache, build_target(target), cam_names, None)
+    built = build_target(target)
+    save_to_cache(_stub_detection(2), [(8, 12), (8, 12)], matching_cache,
+                  built, cam_names, None)
+    assert cache_matches(matching_cache, built, cam_names, None)
+    seeded_bytes = matching_cache.read_bytes()
 
     def failing_detect(*_args):
         raise RuntimeError("detection failed")
@@ -1158,7 +1179,7 @@ def test_a_failed_phase_1_run_records_its_error_and_no_artifact_even_with_a_matc
     assert "detected_datapoints_pickle" not in metadata.get("artifacts", {})
     # The matching cache is untouched -- proves this is not adopted, not
     # merely that some OTHER file was adopted instead.
-    assert matching_cache.read_bytes() == b"a cache that matches this run's own identity"
+    assert matching_cache.read_bytes() == seeded_bytes
 
 
 @pytest.mark.skipif(not ARUCO2_AVAILABLE,
@@ -1183,21 +1204,21 @@ def test_a_phase_1_run_adopts_only_its_own_detectors_cache(tmp_path, monkeypatch
     the version this replaces could not have caught the regression even
     had it reached the cache-name code at all.
     """
-    from pyCamSet.calibration.camera_calibrator import cache_identity_path, cache_matches
+    from pyCamSet.calibration.detection_cache import cache_matches
     from pyCamSet.calibration_targets.core.target_registry import build_target
     from pyCamSet.workflow import phase1
     from pyCamSet.workflow.workspace import WorkspaceManager
 
     images = _image_folder(tmp_path / "images")
-    (images / "detected_datapoints.pickle").write_bytes(b"ArUco 1's detections")
+    (images / "detected_datapoints.npz").write_bytes(b"ArUco 1's detections")
 
     target_spec = {"type": "Ccube", "marker_backend": "aruco2"}
     real_target = build_target(target_spec)
     folders_read = {"count": 0}
 
-    def fake_find_in_imfolder(*_args, **_kwargs):
+    def fake_find_in_imfolder(*_args, cam_names=("cam0", "cam1"), **_kwargs):
         folders_read["count"] += 1
-        return 1
+        return _stub_detection(1, cam_names)
 
     real_target.find_in_imfolder = fake_find_in_imfolder
     monkeypatch.setattr(phase1, "target_of_params", lambda _params: real_target)
@@ -1225,21 +1246,20 @@ def test_a_phase_1_run_adopts_only_its_own_detectors_cache(tmp_path, monkeypatch
     # The ArUco 1 cache sitting in the same folder must never have been read
     # as this ArUco 2 run's own result -- proven by the fact it is still
     # exactly the (invalid) bytes seeded above.
-    assert (images / "detected_datapoints.pickle").read_bytes() == b"ArUco 1's detections"
+    assert (images / "detected_datapoints.npz").read_bytes() == b"ArUco 1's detections"
 
     # And this run's own cache lands under its own, detector-specific name,
     # with an identity that genuinely confirms it -- the guarantee itself:
     # two detectors sharing an image folder never share a cache slot.
-    aruco2_cache = images / "detected_datapoints_aruco2.pickle"
+    aruco2_cache = images / "detected_datapoints_aruco2.npz"
     assert aruco2_cache.exists()
-    assert cache_identity_path(aruco2_cache).exists()
     assert cache_matches(aruco2_cache, real_target, ["cam0", "cam1"], None)
 
 
 def test_a_target_without_a_choice_is_named_for_its_only_detector():
     """ChArUco2 has no ``marker_backend`` attribute: it is only ever read
     with ArUco 2, and its cache must say so."""
-    from pyCamSet.calibration.camera_calibrator import detector_backend_of
+    from pyCamSet.calibration.detection_cache import detector_backend_of
     from pyCamSet.workflow.targets import detector_backend_of_spec
 
     class OnlyAruco2:

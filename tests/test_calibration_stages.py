@@ -24,11 +24,10 @@ from pyCamSet import CameraSet
 from pyCamSet.utils import report_format as fmt
 from pyCamSet.calibration.camera_calibrator import (
     detect_datapoints_in_imfile,
-    outlier_rejection,
     run_initial_calibration,
     sanitise_input_images,
-    validate_detections,
 )
+from pyCamSet.utils.setup_reports import validate_detections
 from pyCamSet.calibration_targets import ImageDetection, TargetDetection
 
 # --------------------------------------------------------------------------
@@ -109,7 +108,7 @@ def test_detection_caches_and_reloads(tmp_path, session_data_dir, charuco_target
     first, res_first = detect_datapoints_in_imfile(
         f_loc=corpus, calibration_target=charuco_target, caching=True, threads=1
     )
-    assert (corpus / "detected_datapoints.pickle").is_file()
+    assert (corpus / "detected_datapoints.npz").is_file()
 
     second, res_second = detect_datapoints_in_imfile(
         f_loc=corpus, calibration_target=charuco_target, caching=True, threads=1
@@ -376,75 +375,6 @@ def test_initial_calibration_saves_and_reloads(
     )
 
     assert second == first
-
-
-# --------------------------------------------------------------------------
-# outlier_rejection
-# --------------------------------------------------------------------------
-
-
-class _StubHandler:
-    """Just the two attributes outlier_rejection reaches for."""
-
-    def __init__(self, detection):
-        self.detection = detection
-
-    def get_detection_data(self):
-        return self.detection.get_data()
-
-
-def _even_error_problem(n_images=8, per_image=5):
-    detection = TargetDetection(cam_names=["a"])
-    for im_num in range(n_images):
-        detection.add_detection(
-            "a",
-            im_num,
-            ImageDetection(
-                keys=np.arange(per_image),
-                image_points=np.tile([10.0, 20.0], (per_image, 1)),
-            ),
-        )
-    return detection, n_images * per_image
-
-
-def test_outlier_rejection_finds_nothing_in_even_errors():
-    detection, n_rows = _even_error_problem()
-    residuals = np.ones(n_rows)
-
-    data, found = outlier_rejection(residuals, _StubHandler(detection), draw=False)
-
-    assert data is None
-    assert found is False
-
-
-def test_outlier_rejection_removes_a_bad_image():
-    """One image with a wild error must be dropped, and only that one."""
-    detection, n_rows = _even_error_problem(n_images=8, per_image=5)
-    residuals = np.ones(n_rows)
-    residuals[10:15] = 500.0  # image 2
-
-    data, found = outlier_rejection(residuals, _StubHandler(detection), draw=False)
-
-    assert found is True
-    assert 2 not in np.unique(data.get_data()[:, 1])
-    assert len(data.get_data()) == n_rows - 5
-
-
-def test_outlier_rejection_does_not_draw_when_asked_not_to(monkeypatch):
-    """Regression: both branches called plt.show() unconditionally.
-
-    That made the function unusable from an unattended run, and is why it had
-    no coverage at all.
-    """
-    import matplotlib.pyplot as plt
-
-    def explode(*args, **kwargs):
-        raise AssertionError("plt.show() was called with draw=False")
-
-    monkeypatch.setattr(plt, "show", explode)
-
-    detection, n_rows = _even_error_problem()
-    outlier_rejection(np.ones(n_rows), _StubHandler(detection), draw=False)
 
 
 # --------------------------------------------------------------------------

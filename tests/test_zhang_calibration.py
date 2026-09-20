@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import pytest
 
-from pyCamSet.cameras.zhang_calibration import (
+from pyCamSet.calibration.zhang import (
     MIN_VIEWS,
     calibrate_zhang,
     focals_at_principal,

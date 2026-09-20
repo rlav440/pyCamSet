@@ -81,3 +81,25 @@ def ensure_cairo_dll_available() -> bool:
 # Run once at import time so any module that imports this helper (or is
 # imported after it) gets a working cairosvg without an explicit call.
 ensure_cairo_dll_available()
+
+
+def cairosvg_or_explain():
+    """The ``cairosvg`` module, or an OSError saying how to install cairo.
+
+    Imported here rather than at module scope so that only a target actually
+    being drawn pays for it.
+    """
+    try:
+        import cairosvg
+    except OSError as err:
+        raise OSError(
+            f"{err}\n\n"
+            "pyCamSet's target drawing requires the native 'cairo' library, "
+            "which cairosvg needs but pip cannot install on its own.\n"
+            "Install it for your platform, then re-import pyCamSet:\n"
+            "  - conda (Windows/Linux/macOS):  conda install -c conda-forge cairo\n"
+            "  - Debian/Ubuntu:                 apt install libcairo2\n"
+            "  - macOS (Homebrew):              brew install cairo\n"
+            "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
+        ) from err
+    return cairosvg

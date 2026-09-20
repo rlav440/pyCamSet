@@ -21,9 +21,9 @@ import pytest
 
 aruco2 = pytest.importorskip("aruco2")
 
-from pyCamSet.calibration_targets.charuco2 import layout
-from pyCamSet.calibration_targets.charuco2.target import ChArUco2
-from pyCamSet.calibration_targets.ccube2.target import Ccube2
+from pyCamSet.calibration_targets.markers import gridboard_layout as layout
+from pyCamSet.calibration_targets.charuco2 import ChArUco2
+from pyCamSet.calibration_targets.ccube2 import Ccube2
 from pyCamSet.calibration_targets.markers import aruco2_gridboard
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     detect_grid_board_corners,

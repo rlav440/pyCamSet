@@ -7,8 +7,7 @@ pyCamSet.egg-info/
 .codegraph/
 tests/test_data/**/*.camset
 tests/test_data/*.camset
-tests/test_data/**/detected_datapoints*.pickle
-tests/test_data/**/detected_datapoints*.identity.json
+tests/test_data/**/detected_datapoints*
 tests/test_data/cam_test_cache.pkl
 bin/
 dump/

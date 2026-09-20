@@ -3,7 +3,6 @@ import base64
 import logging
 import json
 import os
-import ntpath
 import re
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -16,6 +15,7 @@ import importlib
 from copy import copy
 
 from pyCamSet.utils.calibration_report import CalibrationReport
+from pyCamSet.utils.paths import long_path
 from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_convergence_pair_scores
 
 logger = logging.getLogger(__name__)
@@ -26,37 +26,19 @@ if TYPE_CHECKING:
     from pyCamSet.cameras import CameraSet
 
 
-def _normalise_windows_open_path(path: Path | str) -> str:
-    """
-    Return a path string suitable for open() on Windows long paths.
-    """
-    p_str = os.fspath(path)
-    if os.name != "nt" or not ntpath.isabs(p_str) or p_str.startswith("\\\\?\\"):
-        return p_str
-
-    # Python can open >260 char paths when prefixed with \\?\ on Windows.
-    if len(p_str) >= 248:
-        if p_str.startswith("\\\\"):
-            return "\\\\?\\UNC\\" + p_str[2:]
-        return "\\\\?\\" + p_str
-    return p_str
-
 def save_pickle(dic, filename):
     """
     Saves an object to a pickle file
 
-    Serialises to bytes in memory first, then writes those bytes, rather than
-    streaming straight from ``dill.dump`` -- a caller that needs to know
-    exactly what was written (e.g. to hash it for a cache identity sidecar,
-    without a second, racy read of the file back off disk) gets those same
-    bytes back as the return value.
+    Serialises to bytes in memory first, then writes those bytes, so a
+    caller that needs to know exactly what was written gets them back.
 
     :param dic: object to save
     :param filename: filename to save to
     :return: the bytes written
     """
     data = dill.dumps(dic)
-    with open(_normalise_windows_open_path(filename), 'wb') as f:
+    with open(long_path(filename), 'wb') as f:
         f.write(data)
     return data
 
@@ -68,7 +50,7 @@ def load_pickle(filename):
     :return: object
     """
 
-    with open(_normalise_windows_open_path(filename), 'rb') as f:
+    with open(long_path(filename), 'rb') as f:
         object_n = dill.load(f)
     return object_n
 
@@ -228,7 +210,7 @@ def save_camset(
 
     save_path = Path(f_name)
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(_normalise_windows_open_path(save_path), 'w', encoding="utf-8", newline="\n") as f:
+    with open(long_path(save_path), 'w', encoding="utf-8", newline="\n") as f:
         json.dump(save_dict, fp=f, indent=4)
 
     return
@@ -251,7 +233,7 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
     :return: A camera set object.
     """
 
-    with open(_normalise_windows_open_path(f_loc), encoding="utf-8") as f:
+    with open(long_path(f_loc), encoding="utf-8") as f:
         saved_structure = json.load(fp=f)
 
     # make the camerasets
@@ -426,7 +408,6 @@ def decompress(save_dict, prealloc_arr=None):
         arr=np.frombuffer(prealloc_arr.data, dtype=dtype, count=arr_size)
 
     for i in range(num_chunks):
-        size=save_dict['sizes'][i]
         c=save_dict['data'][i]
         blosc.decompress_ptr(base64.b64decode(c),
                              arr[max_num*i:].__array_interface__['data'][0])

@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.utils.paths import long_path
 from pyCamSet.gui.shared_functions import (
     CollapsibleSection,
     DETECTOR_INHERIT,
@@ -80,7 +81,6 @@ from pyCamSet.workflow.targets import (
 )
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
-    as_io_path,
     path_exists,
     resolve_artifact,
 )
@@ -1131,7 +1131,7 @@ class Phase2DiagnosticsTab(QWidget):
             for h in root_logger.handlers:
                 h.addFilter(filt)
             try:
-                cams = load_CameraSet(as_io_path(camset_path))
+                cams = load_CameraSet(long_path(camset_path))
             finally:
                 for h in root_logger.handlers:
                     h.removeFilter(filt)

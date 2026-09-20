@@ -1,6 +1,6 @@
-"""The detection cache's identity sidecar.
+"""The detection cache: when a Phase 1 cache may be trusted.
 
-Two bugs, both about a Phase 1 cache being trusted when it should not be:
+Two bugs, both about a cache being trusted when it should not be:
 
 * **Staging.**  ``staged_camera_root`` used to trigger on *any* extra entry
   in the image folder -- a ``.pycamset_workspace`` directory included, which
@@ -12,17 +12,12 @@ Two bugs, both about a Phase 1 cache being trusted when it should not be:
   with ArUco 2 compute the *same* cache name, so one would silently load the
   other's detections.
 
-Both are closed by pairing a cache pickle with an identity sidecar
-(``cache_identity_path``, ``cache_matches``, ``write_cache_identity`` in
-:mod:`pyCamSet.calibration.camera_calibrator`) that records the target's own
-spec, the camera selection and the image cap, plus a SHA-256 of the pickle's
-bytes so a sidecar can only ever be trusted alongside the exact pickle it was
-written for (never a same-named file it was hand-copied beside, and never a
-pickle rewritten after a crash left the old sidecar in place).
+Both are closed by writing the target's spec, the camera selection and the
+image cap into the cache file itself, and reading them back before its
+detections (:mod:`pyCamSet.calibration.detection_cache`).
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -40,12 +35,14 @@ import pytest
 # ``test_aruco2_backend.py`` and ``test_charuco2_target.py`` do.
 pytest.importorskip("aruco2")
 
-from pyCamSet.calibration.camera_calibrator import (
-    cache_identity_path,
+from pyCamSet.calibration.camera_calibrator import detect_datapoints_in_imfile
+from pyCamSet.calibration.detection_cache import (
+    FORMAT_VERSION,
     cache_matches,
-    detect_datapoints_in_imfile,
-    write_cache_identity,
+    load_verified_cache,
+    save_to_cache,
 )
+from pyCamSet.calibration_targets import TargetDetection
 from pyCamSet.calibration_targets.core.target_registry import build_target
 from pyCamSet.workflow.detections import staged_camera_root
 from pyCamSet.workflow.workspace import (
@@ -95,39 +92,48 @@ def _instrumented(target):
     Real marker detection is not what this file tests -- the cache layer
     does not care whether a call found anything, only whether a call
     happened at all, i.e. whether a redetection actually ran rather than a
-    wrong cache being read silently.  Returns the dict the count lives in.
+    wrong cache being read silently.  It does have to be a real detection,
+    because that is what the cache takes apart and writes.  Returns the
+    dict the count lives in.
     """
     calls = {"count": 0}
 
-    def fake(*_args, **_kwargs):
+    def fake(_folder, cam_names=("cam0", "cam1"), **_kwargs):
         calls["count"] += 1
-        return 1
+        row = np.array([[calls["count"] - 1, 0, 0, 1.0, 2.0]])
+        return TargetDetection(cam_names=list(cam_names), data=row)
 
     target.find_in_imfolder = fake
     return calls
 
 
-def _break(monkeypatch, where):
-    """Make one step of the cache write fail, as a locked, read-only or
+def _a_detection(cam_names=("cam0", "cam1")) -> TargetDetection:
+    """One detected point, enough for a cache to have something to hold."""
+    return TargetDetection(cam_names=list(cam_names),
+                           data=np.array([[0, 0, 0, 1.0, 2.0]]))
+
+
+def _identity_of(cache_path) -> dict:
+    """The identity a written cache carries, read back off disk."""
+    with np.load(cache_path, allow_pickle=False) as archive:
+        return json.loads(str(archive["identity"]))
+
+
+def _rows(detected) -> int:
+    """How many detection rows came back -- one per _instrumented call."""
+    data = detected.get_data()
+    return 0 if data is None else data.shape[0]
+
+
+def _break_the_cache_write(monkeypatch):
+    """Make the cache write fail, as a locked, read-only, full or
     over-long destination would."""
-    from pyCamSet.calibration import camera_calibrator as calibrator
+    from pyCamSet.calibration import detection_cache
 
-    if where == "pickle_write":
-        def failing_save_pickle(*_args, **_kwargs):
-            raise OSError("simulated disk-full / MAX_PATH / AV-lock")
+    def failing_savez(*_args, **_kwargs):
+        raise OSError("simulated disk-full / MAX_PATH / AV-lock")
 
-        monkeypatch.setattr(calibrator, "save_pickle", failing_save_pickle)
-        return
-
-    attribute = "write_text" if where == "sidecar_write" else "unlink"
-    real = getattr(Path, attribute)
-
-    def failing(self, *args, **kwargs):
-        if self.name.endswith(".identity.json"):
-            raise PermissionError(f"simulated failure: {where}")
-        return real(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, attribute, failing)
+    monkeypatch.setattr(detection_cache.np, "savez", failing_savez)
 
 
 @pytest.fixture
@@ -173,12 +179,11 @@ def _phase1_params(image_folder, selected_cameras=()):
 def test_a_workspace_and_a_stray_cache_do_not_force_staging(tmp_path):
     """The staging bug itself: a ``.pycamset_workspace`` directory (which
     exists inside the image folder from the very first run) and a leftover
-    cache plus its sidecar must not force staging -- that used to be what
+    cache must not force staging -- that used to be what
     made caching look permanently off from the second run onward."""
     root = _image_folder(tmp_path)
     (root / ".pycamset_workspace" / "phase1_runs").mkdir(parents=True)
-    (root / "detected_datapoints.pickle").write_bytes(b"stale cache")
-    (root / "detected_datapoints.identity.json").write_text("{}", encoding="utf-8")
+    (root / "detected_datapoints.npz").write_bytes(b"stale cache")
     (root / "initial_cameras.camset").write_bytes(b"not really a camset")
 
     cam_folders = get_camera_subfolders(root)
@@ -462,9 +467,8 @@ def test_a_different_target_type_sharing_the_cache_name_is_not_adopted(tmp_path)
 
     assert ccube_calls["count"] == 2, "must redetect, not adopt ChArUco2's cache"
 
-    cache_path = images / "detected_datapoints_aruco2.pickle"
-    sidecar = json.loads(cache_identity_path(cache_path).read_text(encoding="utf-8"))
-    assert sidecar["identity"]["target_spec"]["type"] == "Ccube"
+    cache_path = images / "detected_datapoints_aruco2.npz"
+    assert _identity_of(cache_path)["target_spec"]["type"] == "Ccube"
 
     # And the cache now reads back as Ccube's own, not ChArUco2's.
     assert cache_matches(cache_path, ccube_aruco2, ["cam0", "cam1"], None)
@@ -517,10 +521,9 @@ def test_toggling_n_lim_always_redetects_the_shared_slot(tmp_path):
         f_loc=images, calibration_target=target, caching=True, n_lim=None, threads=1)
     assert calls["count"] == 6, "switching back must redetect, not reuse call 1's cache"
 
-    # And the identity sidecar reflects whichever n_lim ran last.
-    cache_path = images / "detected_datapoints_aruco2.pickle"
-    sidecar = json.loads(cache_identity_path(cache_path).read_text(encoding="utf-8"))
-    assert sidecar["identity"]["n_lim"] is None
+    # And the cache's own identity reflects whichever n_lim ran last.
+    cache_path = images / "detected_datapoints_aruco2.npz"
+    assert _identity_of(cache_path)["n_lim"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -603,31 +606,30 @@ def test_a_camset_call_always_redetects_even_with_the_identical_camset(tmp_path)
         camset=camset_b)
     assert calls["count"] == 6, "a different camset must redetect too"
 
-    # And no identity sidecar is ever left for a camset-bearing cache.
-    cache_path = images / "detected_datapoints_with_calib_aruco2.pickle"
-    assert not cache_identity_path(cache_path).exists()
+    # And a camset-bearing pass never leaves a cache behind at all.
+    assert not (images / "detected_datapoints_with_calib_aruco2.npz").exists()
 
 
 def test_a_camset_call_never_loads_a_cache_with_a_matching_target_identity(tmp_path):
-    """A cache/sidecar written WITHOUT a camset, whose target/cam_names/
-    n_lim identity matches exactly, must still never be adopted by a call
-    that passes a camset -- the camset makes the identity unconfirmable
+    """A cache written WITHOUT a camset, whose target/cam_names/n_lim
+    identity matches exactly, must still never be adopted by a call that
+    passes a camset -- the camset makes the identity unconfirmable
     regardless of what else lines up."""
     images = _image_folder(tmp_path)
     target = build_target({"type": "ChArUco2"})
     calls = _instrumented(target)
 
-    # A plain (no-camset) run seeds a real, matching cache + sidecar.
+    # A plain (no-camset) run seeds a real, matching cache.
     detect_datapoints_in_imfile(
         f_loc=images, calibration_target=target, caching=True, threads=1)
     assert calls["count"] == 2
-    plain_cache_path = images / "detected_datapoints_aruco2.pickle"
-    assert cache_identity_path(plain_cache_path).exists()
+    plain_cache_path = images / "detected_datapoints_aruco2.npz"
+    assert plain_cache_path.exists()
 
     # A camset call against the SAME target/images must still redetect --
     # it does not even share the plain call's cache filename (it gets its
-    # own "_with_calib" slot), and cache_matches on that slot must also
-    # report a miss regardless of what the plain cache/sidecar hold.
+    # own "_with_calib" slot), and cache_matches on the plain slot must
+    # report a miss too, regardless of what that cache holds.
     camset = _fake_camset(1.0)
     detect_datapoints_in_imfile(
         f_loc=images, calibration_target=target, caching=True, threads=1,
@@ -639,21 +641,19 @@ def test_a_camset_call_never_loads_a_cache_with_a_matching_target_identity(tmp_p
 
 
 def test_cache_matches_never_confirms_a_camset_bearing_identity(tmp_path):
-    """The identity/cache_matches layer in isolation, without going through
-    a real detection pass: passing any camset at all -- regardless of camera
-    model, or whether it matches the camset a sidecar was written with --
-    always reads as a miss, and ``write_cache_identity`` leaves no sidecar
-    for it in the first place."""
+    """The identity layer in isolation, without going through a real
+    detection pass: passing any camset at all -- regardless of camera model,
+    or whether it matches the camset the cache was written with -- always
+    reads as a miss, and a camset-bearing write leaves no cache to read."""
     target = build_target({"type": "ChArUco2"})
-    cache_path = tmp_path / "detected_datapoints_with_calib_aruco2.pickle"
-    cache_path.write_bytes(b"cached detections")
+    cache_path = tmp_path / "detected_datapoints_with_calib_aruco2.npz"
     camset_a = _fake_camset(1.0)
     camset_b = _fake_camset(2.0)
 
-    write_cache_identity(cache_path, target, ["cam0", "cam1"], None,
-                         camset=camset_a)
-    assert not cache_identity_path(cache_path).exists(), (
-        "a camset-bearing write must never leave an identity sidecar")
+    save_to_cache(_a_detection(), [(8, 12), (8, 12)], cache_path, target,
+                  ["cam0", "cam1"], None, camset=camset_a)
+    assert not cache_path.exists(), (
+        "a camset-bearing write must never leave a cache")
 
     assert cache_matches(cache_path, target, ["cam0", "cam1"], None,
                          camset=camset_a) is False, (
@@ -670,8 +670,7 @@ def test_a_telecentric_camset_never_confirms_a_cache_regardless_of_telecentricit
     to cover it: neither camset's cache is ever read back, independent of
     ``telecentricity``."""
     target = build_target({"type": "ChArUco2"})
-    cache_path = tmp_path / "detected_datapoints_with_calib_aruco2.pickle"
-    cache_path.write_bytes(b"cached detections")
+    cache_path = tmp_path / "detected_datapoints_with_calib_aruco2.npz"
     camset_a = _fake_telecentric_camset(0.0)
     camset_b = _fake_telecentric_camset(0.05)
 
@@ -680,9 +679,9 @@ def test_a_telecentric_camset_never_confirms_a_cache_regardless_of_telecentricit
     # since neither ever gets fingerprinted at all.
     assert camset_a["cam0"] != camset_b["cam0"]
 
-    write_cache_identity(cache_path, target, ["cam0", "cam1"], None,
-                         camset=camset_a)
-    assert not cache_identity_path(cache_path).exists()
+    save_to_cache(_a_detection(), [(8, 12), (8, 12)], cache_path, target,
+                  ["cam0", "cam1"], None, camset=camset_a)
+    assert not cache_path.exists()
 
     assert cache_matches(cache_path, target, ["cam0", "cam1"], None,
                          camset=camset_a) is False
@@ -691,202 +690,159 @@ def test_a_telecentric_camset_never_confirms_a_cache_regardless_of_telecentricit
 
 
 # ---------------------------------------------------------------------------
-# Pairing integrity (A1): identity alone is not enough -- the sidecar must
-# also pair with the pickle's *current* bytes, and be readable JSON
+# Integrity: the identity travels inside the file it describes, so the only
+# question left is whether this file reads back as this call's own detection
 # ---------------------------------------------------------------------------
 
 
 def _seeded_cache(tmp_path, target_spec, cam_names=("cam0", "cam1"), n_lim=None,
-                   content=b"cached detections", name="detected_datapoints.pickle"):
-    """A cache pickle and a correctly matching sidecar, written the same way
-    the production code writes them."""
+                   name="detected_datapoints.npz"):
+    """A cache written exactly the way a detection pass writes one."""
     target = build_target(target_spec)
     cache_path = tmp_path / name
-    cache_path.write_bytes(content)
-    write_cache_identity(cache_path, target, list(cam_names), n_lim)
+    detected = TargetDetection(cam_names=list(cam_names),
+                               data=np.array([[0, 0, 0, 1.0, 2.0]]))
+    save_to_cache(detected, [(8, 12)] * len(cam_names), cache_path, target,
+                  list(cam_names), n_lim)
     return target, cache_path
 
 
-def test_a_matching_cache_and_sidecar_are_a_hit(tmp_path):
+def test_a_cache_written_by_a_pass_reads_back_as_a_hit(tmp_path):
     target, cache_path = _seeded_cache(tmp_path, {"type": "ChArUco2"})
     assert cache_matches(cache_path, target, ["cam0", "cam1"], None) is True
 
-
-def test_a_tampered_pickle_is_a_miss(tmp_path):
-    """The pickle's bytes changed after the sidecar was written -- a crash
-    mid-rewrite, or a hand-edit -- so the recorded digest no longer matches."""
-    target, cache_path = _seeded_cache(tmp_path, {"type": "ChArUco2"})
-    cache_path.write_bytes(b"different bytes entirely")
-    assert cache_matches(cache_path, target, ["cam0", "cam1"], None) is False
+    detected, cam_res = load_verified_cache(
+        cache_path, target, ["cam0", "cam1"], None)
+    assert _rows(detected) == 1
+    assert detected.cam_names == ["cam0", "cam1"]
+    assert cam_res == [(8, 12), (8, 12)]
 
 
-def test_a_sidecar_from_a_different_target_is_a_miss(tmp_path):
-    """A sidecar whose digest pairs correctly with the pickle's bytes, but
-    was written for a different target -- e.g. a hand-copy that carried the
-    sidecar across without the pickle it actually describes."""
+def test_a_cache_for_a_different_target_is_a_miss(tmp_path):
     _, cache_path = _seeded_cache(tmp_path, {"type": "ChArUco2"})
     other_target = build_target({"type": "Ccube", "marker_backend": "aruco2"})
     assert cache_matches(cache_path, other_target, ["cam0", "cam1"], None) is False
 
 
-def test_a_stale_sidecar_surviving_a_simulated_crash_is_a_miss(tmp_path):
-    """Simulates a crash between writing a new pickle and writing its
-    sidecar: an *old* sidecar (matching the old pickle's bytes) is left
-    beside a *new* pickle.  Its digest cannot pair with the new bytes, so it
-    must read as a miss rather than being trusted for the wrong content."""
-    target, cache_path = _seeded_cache(
-        tmp_path, {"type": "ChArUco2"}, content=b"first pickle")
-    old_sidecar_text = cache_identity_path(cache_path).read_text(encoding="utf-8")
-
-    # The "crash": a new pickle is written; the old sidecar happens to
-    # survive it (this is exactly what production code's delete-before-write
-    # ordering prevents -- this test proves the digest check on its own is
-    # also sufficient).
-    cache_path.write_bytes(b"second pickle, different content")
-    cache_identity_path(cache_path).write_text(old_sidecar_text, encoding="utf-8")
-
-    assert cache_matches(cache_path, target, ["cam0", "cam1"], None) is False
-
-
-def test_an_unreadable_sidecar_is_a_miss(tmp_path):
+def test_an_overwritten_cache_is_a_miss(tmp_path):
+    """Whatever replaced it -- a hand-edit, a half-written file, another
+    program's output under the same name -- is not an npz this call wrote,
+    so it cannot pass the identity read that guards the detection."""
     target, cache_path = _seeded_cache(tmp_path, {"type": "ChArUco2"})
-    cache_identity_path(cache_path).write_text("not valid json{{{", encoding="utf-8")
+    cache_path.write_bytes(b"different bytes entirely")
     assert cache_matches(cache_path, target, ["cam0", "cam1"], None) is False
+    assert load_verified_cache(cache_path, target, ["cam0", "cam1"], None) is None
 
 
-def test_a_sidecar_with_no_cache_sha256_is_a_miss(tmp_path):
-    """A hand-built or older-format sidecar missing the digest field must
-    fail closed rather than being read as an unconditional identity match."""
+def test_a_truncated_cache_is_a_miss(tmp_path):
+    """A write interrupted partway leaves an unreadable archive, not a
+    readable one describing something else."""
     target, cache_path = _seeded_cache(tmp_path, {"type": "ChArUco2"})
-    identity = json.loads(cache_identity_path(cache_path).read_text(encoding="utf-8"))
-    del identity["cache_sha256"]
-    cache_identity_path(cache_path).write_text(json.dumps(identity), encoding="utf-8")
-
+    whole = cache_path.read_bytes()
+    cache_path.write_bytes(whole[:len(whole) // 2])
     assert cache_matches(cache_path, target, ["cam0", "cam1"], None) is False
 
 
-def test_a_missing_sidecar_is_a_miss_not_a_crash(tmp_path):
-    """Every cache written before this fix has no sidecar at all -- the
-    self-healing case: read as a miss, then written correctly next time."""
+def test_a_cache_from_the_previous_pickle_format_is_a_miss(tmp_path):
+    """Every cache written before this format is a bare pickle: read as a
+    miss, then written correctly next time."""
     target = build_target({"type": "ChArUco2"})
-    cache_path = tmp_path / "detected_datapoints.pickle"
-    cache_path.write_bytes(b"a pre-fix cache with no sidecar")
+    cache_path = tmp_path / "detected_datapoints.npz"
+    cache_path.write_bytes(b"\x80\x04\x95 a pickle from an older build")
     assert cache_matches(cache_path, target, ["cam0", "cam1"], None) is False
 
 
-def test_write_cache_identity_leaves_no_sidecar_for_an_unregistered_target(tmp_path):
-    """A target :func:`cache_matches` could never confirm (unregistered, or
-    a hand-built test double) must be left with no sidecar at all -- never a
-    stale one that happens to still be sitting there."""
+def test_a_cache_from_an_unknown_format_version_is_a_miss(tmp_path):
+    """The version is what a future change to the members below announces
+    itself with: an unrecognised one redetects rather than misreading."""
+    target, cache_path = _seeded_cache(tmp_path, {"type": "ChArUco2"})
+    with np.load(cache_path, allow_pickle=False) as archive:
+        members = {name: archive[name] for name in archive.files}
+    meta = json.loads(str(members["meta"]))
+    meta["format_version"] = FORMAT_VERSION + 1
+    members["meta"] = np.array(json.dumps(meta))
+    np.savez(cache_path, **members)
+
+    assert cache_matches(cache_path, target, ["cam0", "cam1"], None) is False
+
+
+def test_an_unregistered_target_writes_no_cache_at_all(tmp_path):
+    """A target nothing could confirm (unregistered, or a hand-built test
+    double) writes nothing rather than a file that can never be read back --
+    and must not leave an older, confirmable cache in its place either."""
 
     class _Unregistered:
         pass
 
-    cache_path = tmp_path / "detected_datapoints.pickle"
-    cache_path.write_bytes(b"cache")
-    cache_identity_path(cache_path).write_text(
-        '{"identity": {}, "cache_sha256": "not-a-real-digest"}', encoding="utf-8")
+    cache_path = tmp_path / "detected_datapoints.npz"
+    detected = TargetDetection(cam_names=["cam0"],
+                               data=np.array([[0, 0, 0, 1.0, 2.0]]))
 
-    write_cache_identity(cache_path, _Unregistered(), ["cam0"], None)
+    save_to_cache(detected, [(8, 12)], cache_path, _Unregistered(),
+                  ["cam0"], None)
 
-    assert not cache_identity_path(cache_path).exists()
+    assert not cache_path.exists()
+    assert not list(tmp_path.glob("*.partial")), "no staging file left behind"
 
 
 # ---------------------------------------------------------------------------
-# TOCTOU (P1): write_cache_identity must pair with the bytes THIS call wrote,
-# never a re-read of whatever happens to be on disk by the time it runs --
-# otherwise a concurrent writer's overwrite can end up confirmed as a hit
-# under someone else's identity.
+# Concurrency: two passes sharing one cache slot. The file is written beside
+# the slot and moved onto it, so a reader sees the whole of one version or
+# the whole of another -- never one pass's detections under another's name.
 # ---------------------------------------------------------------------------
 
 
-def test_interleaved_writers_can_only_produce_a_miss_never_a_false_hit(tmp_path):
-    """Replays the exact interleaving the race is built from: A writes its
-    pickle bytes, B overwrites them with its own and writes its own
-    (correct) sidecar, then A's sidecar write lands last. Before the fix,
-    write_cache_identity re-hashed whatever was *currently on disk* (B's
-    bytes) and paired that digest with IDENTITY A, so cache_matches(..., A)
-    would come back True for a cache that was actually B's. Passing the
-    digest of the bytes A itself wrote (computed once, in memory, the way
-    the real call site now does via save_pickle's return value) closes that:
-    the interleaving can only ever yield a miss."""
+def test_interleaved_writers_leave_one_whole_cache_never_a_mixture(tmp_path):
+    """Two passes write the same slot in an interleaved order. Whichever
+    lands last is on disk in full, and is a hit for its own identity only --
+    the other's identity must not confirm the file it did not write."""
     target_a = build_target({"type": "ChArUco2"})
     target_b = build_target({"type": "Ccube", "marker_backend": "aruco2"})
-    cache_path = tmp_path / "detected_datapoints_aruco2.pickle"
+    cache_path = tmp_path / "detected_datapoints_aruco2.npz"
     cam_names = ["cam0", "cam1"]
 
-    bytes_a = b"A's detections"
-    bytes_b = b"B's detections"
-    hash_a = hashlib.sha256(bytes_a).hexdigest()
+    def write(target, key):
+        save_to_cache(
+            TargetDetection(cam_names=cam_names,
+                            data=np.array([[key, 0, 0, 1.0, 2.0]])),
+            [(8, 12), (8, 12)], cache_path, target, cam_names, None)
 
-    cache_path.write_bytes(bytes_a)  # A's save_pickle
-    cache_path.write_bytes(bytes_b)  # B's save_pickle clobbers A's bytes
-    write_cache_identity(cache_path, target_b, cam_names, None)  # B's own, correct, sidecar
-
-    # A's write_cache_identity runs last, carrying the hash of the bytes it
-    # itself wrote -- captured before B's overwrite, never re-read from disk.
-    write_cache_identity(cache_path, target_a, cam_names, None, cache_sha256=hash_a)
+    write(target_a, 0)
+    write(target_b, 1)
 
     assert cache_matches(cache_path, target_a, cam_names, None) is False, (
-        "must never confirm identity A against bytes that are actually B's")
-    assert cache_matches(cache_path, target_b, cam_names, None) is False, (
-        "A's late sidecar overwrote B's -- B's cache is now unconfirmable "
-        "too, which is a safe miss, not a false hit either way")
+        "A's identity must not confirm the file B wrote")
+    assert cache_matches(cache_path, target_b, cam_names, None) is True
+    detected, _ = load_verified_cache(cache_path, target_b, cam_names, None)
+    assert detected.get_data()[0, 0] == 1, "B's cache must hold B's detections"
 
 
-def test_a_detection_pass_pairs_its_sidecar_with_its_own_written_bytes(
+def test_a_pass_whose_cache_is_clobbered_afterwards_reads_back_as_a_miss(
         tmp_path, monkeypatch):
-    """The same race, but through the real call site: a concurrent writer
-    clobbers the pickle in the gap between this pass's own save_pickle and
-    its write_cache_identity. The sidecar must still describe the bytes THIS
-    pass wrote, so the clobbered file on disk -- which is not what this pass
-    detected -- must never read back as a confirmed hit."""
+    """A second writer replaces this pass's file after it lands. The next
+    run must not read that as this pass's cache -- this run's own returned
+    detections are unaffected either way."""
     from pyCamSet.calibration import camera_calibrator as calibrator
 
     images = _image_folder(tmp_path)
     target = build_target({"type": "ChArUco2"})
     _instrumented(target)
 
-    real_save_pickle = calibrator.save_pickle
-
-    def racing_save_pickle(data, path):
-        written = real_save_pickle(data, path)
-        # A second writer finishes in the gap before write_cache_identity
-        # runs, clobbering the pickle this call just wrote.
-        Path(path).write_bytes(b"a concurrent writer's bytes")
-        return written
-
-    monkeypatch.setattr(calibrator, "save_pickle", racing_save_pickle)
-
-    calibrator.detect_datapoints_in_imfile(
+    detected, _ = calibrator.detect_datapoints_in_imfile(
         f_loc=images, calibration_target=target, caching=True, threads=1)
+    assert _rows(detected) == 2, "the pass's own detections are what it returns"
 
-    cache_path = images / "detected_datapoints_aruco2.pickle"
-    assert cache_path.read_bytes() == b"a concurrent writer's bytes"
-    assert calibrator.cache_matches(cache_path, target, ["cam0", "cam1"], None) is False
-
-
-# ---------------------------------------------------------------------------
-# TOCTOU (P2, round 5): closed structurally rather than patched. Round 3's
-# fix re-verified with a second, separate cache_matches() call after
-# load_pickle() -- itself a measured ~4-4.5x wall-time regression on every
-# ordinary cache hit, since cache_matches() re-hashes the whole pickle from
-# disk. detect_datapoints_in_imfile's cache-hit path now reads and hashes
-# the pickle's bytes exactly ONCE (_load_cache_if_verified), and deserialises
-# those SAME bytes -- so there is no separate "check" step and no gap after
-# it left for a concurrent writer to land in, and only one read-and-hash
-# instead of three (cache_matches, load_pickle, cache_matches again).
-# ---------------------------------------------------------------------------
+    cache_path = images / "detected_datapoints_aruco2.npz"
+    cache_path.write_bytes(b"a concurrent writer's bytes")
+    assert cache_matches(cache_path, target, ["cam0", "cam1"], None) is False
 
 
-def test_a_cache_hit_reads_the_pickle_exactly_once_and_never_calls_cache_matches(
+def test_a_cache_hit_opens_the_file_once_and_never_calls_cache_matches(
         tmp_path, monkeypatch):
-    """The structural replacement for the old round-3 TOCTOU fix: a cache hit
-    must read cache_path's bytes exactly once (no separate pre-check read, no
-    post-load re-check read), and must not call the standalone
-    cache_matches() predicate at all -- proving there is no longer a
-    check-then-load gap of the kind the round-3/round-4 fixes had to patch
-    after the fact, because there is only ever one read to begin with."""
+    """A hit reads the identity and the detection from one open of one file,
+    and does not go through the standalone cache_matches() predicate -- so
+    there is no gap between confirming a cache and reading it for another
+    writer to land in."""
     from pyCamSet.calibration import camera_calibrator as calibrator
 
     images = _image_folder(tmp_path)
@@ -895,16 +851,18 @@ def test_a_cache_hit_reads_the_pickle_exactly_once_and_never_calls_cache_matches
 
     calibrator.detect_datapoints_in_imfile(
         f_loc=images, calibration_target=target, caching=True, threads=1)
-    cache_path = images / "detected_datapoints_aruco2.pickle"
+    cache_path = images / "detected_datapoints_aruco2.npz"
     assert cache_path.exists()
 
     def failing_cache_matches(*_args, **_kwargs):
         pytest.fail(
             "the cache-hit path must not call the standalone cache_matches() "
-            "predicate at all -- it verifies (and deserialises) the bytes "
-            "it reads itself, via _load_cache_if_verified()")
+            "predicate -- it reads the identity from the same open as the "
+            "detection it guards, via load_verified_cache()")
 
-    monkeypatch.setattr(calibrator, "cache_matches", failing_cache_matches)
+    from pyCamSet.calibration import detection_cache
+
+    monkeypatch.setattr(detection_cache, "cache_matches", failing_cache_matches)
 
     real_open = open
     open_counts: dict[str, int] = {}
@@ -920,93 +878,70 @@ def test_a_cache_hit_reads_the_pickle_exactly_once_and_never_calls_cache_matches
         f_loc=images, calibration_target=target, caching=True, threads=1)
 
     assert open_counts.get("n") == 1, (
-        f"the cache pickle was opened {open_counts.get('n')} time(s) on a "
-        "hit; must be read exactly once")
+        f"the cache was opened {open_counts.get('n')} time(s) on a hit; "
+        "must be read from a single open")
     assert calls["count"] == 2, "must still be a cache hit -- no redetect"
-    assert detected == 2
+    assert _rows(detected) == 2
 
 
 # ---------------------------------------------------------------------------
-# Cache bookkeeping is best-effort.  A pickle write, a sidecar write and the
-# stale-sidecar unlink beside them can each fail on a locked, read-only or
-# over-long destination; none of them may propagate out of a detection pass
-# that has already computed its detections, and none may leave a pickle
-# paired with a sidecar that does not describe it.
+# Caching is best-effort.  The write can fail on a locked, read-only, full or
+# over-long destination; it must never propagate out of a detection pass that
+# has already computed its detections, and must leave nothing half-written
+# behind.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("where", ["sidecar_write", "sidecar_unlink"])
-def test_write_cache_identity_degrades_rather_than_raising(tmp_path, monkeypatch, where):
-    target = build_target({"type": "ChArUco2"})
-    cache_path = tmp_path / "detected_datapoints.pickle"
-    cache_path.write_bytes(b"a valid cache")
-    # A stale sidecar, so the unlink has something to remove -- missing_ok=True
-    # alone never raises on a target that is not there.
-    cache_identity_path(cache_path).write_text(
-        '{"identity": {}, "cache_sha256": "stale"}', encoding="utf-8")
-
-    _break(monkeypatch, where)
-
-    write_cache_identity(cache_path, target, ["cam0", "cam1"], None)  # must not raise
-
-    if where == "sidecar_write":
-        # The stale sidecar went; nothing replaced it.  A future miss, not a
-        # sidecar that no longer describes the pickle beside it.
-        assert not cache_identity_path(cache_path).exists()
-    else:
-        # write_text overwrites the stale sidecar in place, so a failed
-        # unlink costs nothing.
-        sidecar = json.loads(cache_identity_path(cache_path).read_text(encoding="utf-8"))
-        assert sidecar["identity"]["target_spec"]["type"] == "ChArUco2"
-
-
-@pytest.mark.parametrize("where", ["sidecar_write", "sidecar_unlink", "pickle_write"])
-def test_a_detection_pass_survives_a_cache_write_failure(tmp_path, monkeypatch, where):
+def test_a_detection_pass_survives_a_cache_write_failure(tmp_path, monkeypatch):
     from pyCamSet.calibration import camera_calibrator as calibrator
 
     images = _image_folder(tmp_path)
     target = build_target({"type": "ChArUco2"})
     calls = _instrumented(target)
 
-    _break(monkeypatch, where)
+    _break_the_cache_write(monkeypatch)
 
     detected, cam_res = calibrator.detect_datapoints_in_imfile(
         f_loc=images, calibration_target=target, caching=True, threads=1)
 
     assert calls["count"] == 2, "detection itself must still have run to completion"
-    assert detected == 2
+    assert _rows(detected) == 2, "and its detections must still come back"
+    assert cam_res == [(8, 12), (8, 12)]
 
-    cache_path = images / "detected_datapoints_aruco2.pickle"
-    if where == "pickle_write":
-        # No bytes landed, so there is nothing for a sidecar to describe.
-        assert not cache_path.exists()
-        assert not cache_identity_path(cache_path).exists()
-    elif where == "sidecar_write":
-        assert cache_path.exists(), "the pickle itself must still be written"
-        assert not cache_identity_path(cache_path).exists(), (
-            "a failed sidecar write must leave no sidecar, not a partial one")
-    else:
-        assert cache_path.exists(), "the pickle itself must still be written"
-        assert calibrator.cache_matches(cache_path, target, ["cam0", "cam1"], None) is True
+    assert not (images / "detected_datapoints_aruco2.npz").exists()
+    assert not list(images.glob("*.partial")), (
+        "a failed write must not leave its staging file behind")
+
+
+def test_a_failed_write_leaves_the_previous_cache_readable(tmp_path, monkeypatch):
+    """The new cache is written beside the slot and moved onto it, so a
+    write that fails cannot damage the cache already there."""
+    target, cache_path = _seeded_cache(tmp_path, {"type": "ChArUco2"})
+    assert cache_matches(cache_path, target, ["cam0", "cam1"], None) is True
+
+    _break_the_cache_write(monkeypatch)
+    save_to_cache(
+        TargetDetection(cam_names=["cam0", "cam1"],
+                        data=np.array([[1, 0, 0, 3.0, 4.0]])),
+        [(8, 12), (8, 12)], cache_path, target, ["cam0", "cam1"], None)
+
+    assert cache_matches(cache_path, target, ["cam0", "cam1"], None) is True
+    detected, _ = load_verified_cache(cache_path, target, ["cam0", "cam1"], None)
+    assert detected.get_data()[0, 3] == 1.0, "the original cache is untouched"
 
 
 # ---------------------------------------------------------------------------
-# P1 (round 8): Windows long-path safety. save_pickle/load_pickle
-# (pyCamSet.utils.saving) and the identity sidecar's own open()/.exists()/
-# write_text()/unlink() calls (this module) used to go through a raw,
-# unprefixed path. Windows caps that at 260 characters unless given in
-# extended-length ("\\?\") form -- exactly what workspace.py's own
-# _extended()/path_exists() already do for every OTHER file this feature
-# touches (phase1.py's copy_file()/delete_file() calls a few lines away, in
-# the same PR). Once an image folder's own path -- plus a cache filename
-# that can grow to "detected_datapoints_upscale2x_with_calib_aruco2.pickle",
-# plus the ".identity.json" sidecar -- crossed that length, caching used to
-# silently and permanently degrade to "always redetect": the write half
-# failed closed (an OSError, caught and logged), and even on the rare
-# occasion a write DID land, the very next run's own cache_path.exists()/
-# sidecar.exists() gate -- reading that same unprefixed path -- reported
-# "not there" for a file that plainly was, so a cache slot at this depth
-# could never be read back as a hit at all.
+# P1 (round 8): Windows long-path safety. The cache's own open()/.exists()/
+# os.replace() calls used to go through a raw, unprefixed path. Windows caps
+# that at 260 characters unless given in extended-length ("\\?\\") form --
+# exactly what workspace.py's own _extended()/path_exists() already do for
+# every OTHER file this feature touches. Once an image folder's own path --
+# plus a cache filename that can grow to
+# "detected_datapoints_with_calib_upscale2x_aruco2.npz" -- crossed that
+# length, caching silently and permanently degraded to "always redetect":
+# the write failed closed (an OSError, caught and logged), and even when a
+# write DID land, the next run's own exists() gate -- reading that same
+# unprefixed path -- reported "not there" for a file that plainly was.
 # ---------------------------------------------------------------------------
 
 
@@ -1033,79 +968,67 @@ def _deep_dir(tmp_path, min_len=235):
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH is Windows-specific")
 def test_a_deep_cache_path_is_written_and_read_back_as_a_hit(tmp_path):
-    """The P1 itself, isolated to the cache/identity layer under test here --
-    real image detection is deliberately not exercised, since cv2.imread/
-    imwrite have their own, separate, already-accepted long-path limitation
-    (this file's own accepted, documented limitations) that has nothing to
-    do with this fix and would otherwise mask it.
+    """The P1 itself, isolated to the cache layer under test here -- real
+    image detection is deliberately not exercised, since cv2.imread/imwrite
+    have their own, separate, already-accepted long-path limitation that has
+    nothing to do with this fix and would otherwise mask it.
 
-    ``save_pickle``/``load_pickle`` and ``write_cache_identity`` (falling
-    back to ``file_sha256`` internally, since ``cache_sha256`` is
-    deliberately left unpassed below) must actually land bytes at a cache
-    path past MAX_PATH, and the very next ``cache_matches()``/
-    ``_load_cache_if_verified()`` call -- the hot detection-hit path itself --
-    must read them back as a genuine hit, not silently and permanently
-    "unconfirmable", which was the actual bug: every run redetecting from
-    scratch, forever, with only a WARNING logged.
+    A write must actually land at a cache path past MAX_PATH, and the very
+    next read -- the hot detection-hit path itself -- must read it back as a
+    genuine hit, not silently and permanently "unconfirmable", which was the
+    actual bug: every run redetecting from scratch, forever, with only a
+    WARNING logged.
     """
-    from pyCamSet.calibration.camera_calibrator import _load_cache_if_verified
-    from pyCamSet.utils.saving import save_pickle, load_pickle
-
     deep = _deep_dir(tmp_path)
-    cache_path = deep / "detected_datapoints_aruco2.pickle"
+    cache_path = deep / "detected_datapoints_aruco2.npz"
     assert len(str(cache_path)) > 260, "the repro must actually exceed MAX_PATH"
 
     target = build_target({"type": "ChArUco2"})
-    save_pickle((1, 2, 3), cache_path)
-    assert path_exists(cache_path), "save_pickle must actually write at this path length"
-
-    write_cache_identity(cache_path, target, ["cam0", "cam1"], None)
-    assert path_exists(cache_identity_path(cache_path)), (
-        "write_cache_identity must actually write its sidecar at this path length")
+    detected = TargetDetection(cam_names=["cam0", "cam1"],
+                               data=np.array([[0, 0, 0, 1.0, 2.0]]))
+    save_to_cache(detected, [(8, 12), (8, 12)], cache_path, target,
+                  ["cam0", "cam1"], None)
+    assert path_exists(cache_path), "the cache must actually be written at this path length"
 
     assert cache_matches(cache_path, target, ["cam0", "cam1"], None) is True, (
-        "a cache genuinely written at a long path must read back as a hit "
-        "via cache_matches(), not silently as unconfirmable forever")
-    assert _load_cache_if_verified(cache_path, target, ["cam0", "cam1"], None) == (1, 2, 3), (
-        "the same must hold for the hot detection-hit path itself")
-    assert load_pickle(cache_path) == (1, 2, 3)
+        "a cache genuinely written at a long path must read back as a hit, "
+        "not silently as unconfirmable forever")
+    hit = load_verified_cache(cache_path, target, ["cam0", "cam1"], None)
+    assert hit is not None, "the same must hold for the hot detection-hit path"
+    assert _rows(hit[0]) == 1 and hit[1] == [(8, 12), (8, 12)]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH is Windows-specific")
 def test_a_deep_relative_f_loc_still_reads_its_own_cache_as_a_hit(tmp_path, monkeypatch):
     """Round-10 review, P1: the deep-path test above only ever exercised an
-    ALREADY-absolute cache path. ``_normalise_windows_open_path`` only adds
-    its Windows long-path prefix to a path that is already ``ntpath.isabs``
-    -- a RELATIVE ``f_loc`` (``calibrate_cameras``'s own docstring, and
-    ``docs/how-to/calibrate.md``, both use one) stayed relative all the way
-    to ``cache_path`` and was never prefixed at all, no matter how long the
-    resolved path was, so caching silently degraded to always-redetect --
+    ALREADY-absolute cache path. The Windows long-path prefix applies only
+    to an absolute path -- a RELATIVE ``f_loc`` (``calibrate_cameras``'s own
+    docstring, and ``docs/how-to/calibrate.md``, both use one) stayed
+    relative all the way to ``cache_path`` and was never prefixed at all, no
+    matter how long the resolved path was, so caching silently degraded to
+    always-redetect --
     and a cache genuinely written elsewhere via an absolute path (the case
     covered directly here) was never read back either.
 
     ``get_subfolder_names`` is monkeypatched to a canned answer -- its own
     directory-listing long-path behaviour is the separate, already accepted
     limitation this file's module docstring and ``_deep_dir`` describe; this
-    test is only about the cache/sidecar I/O ``detect_datapoints_in_imfile``
-    itself resolves before touching.
+    test is only about the cache I/O ``detect_datapoints_in_imfile`` itself
+    resolves before touching.
     """
     import pyCamSet.calibration.camera_calibrator as calibrator
-    from pyCamSet.utils.saving import save_pickle
 
     deep = _deep_dir(tmp_path)
-    cache_path = deep / "detected_datapoints_aruco2.pickle"
+    cache_path = deep / "detected_datapoints_aruco2.npz"
     assert len(str(cache_path)) > 260, "the repro must actually exceed MAX_PATH"
 
     target = build_target({"type": "ChArUco2"})
     # A cache genuinely written earlier via an absolute path -- exactly the
     # finding's own "rare occasion a cache genuinely exists" case.
-    # detect_datapoints_in_imfile() unpacks a hit as (detected, cam_res),
-    # unlike the lower-level _load_cache_if_verified() test above, which
-    # returns whatever tuple it is handed unpacked.
-    save_pickle((1, [(2, 3)]), cache_path)
-    write_cache_identity(cache_path, target, ["cam0", "cam1"], None)
+    save_to_cache(TargetDetection(cam_names=["cam0", "cam1"],
+                                  data=np.array([[0, 0, 0, 1.0, 2.0]])),
+                  [(2, 3), (2, 3)], cache_path, target, ["cam0", "cam1"], None)
     assert path_exists(cache_path)
-    assert path_exists(cache_identity_path(cache_path))
 
     def fake_get_subfolder_names(f_loc, return_full_path=False, **_kwargs):
         # A hit never reaches the return_full_path=True call at all -- this
@@ -1124,43 +1047,44 @@ def test_a_deep_relative_f_loc_still_reads_its_own_cache_as_a_hit(tmp_path, monk
     detected, cam_res = detect_datapoints_in_imfile(
         f_loc=rel_f_loc, calibration_target=target, caching=True, threads=1)
 
-    assert (detected, cam_res) == (1, [(2, 3)]), (
+    assert (_rows(detected), cam_res) == (1, [(2, 3), (2, 3)]), (
         "a cache genuinely written at this deep path must be read back as "
         "a hit even when f_loc is given as a relative path")
     assert calls["count"] == 0, "a hit must never call find_in_imfolder at all"
 
 
 # ---------------------------------------------------------------------------
-# P3: the log should say WHY a cache was not trusted -- no identity record
-# at all is a different situation from a sidecar that actively disagrees.
+# P3: the log should say why a cache was not trusted, rather than going
+# quiet and redetecting for no stated reason.
 # ---------------------------------------------------------------------------
 
 
-def test_a_cache_with_no_sidecar_logs_differently_from_a_real_mismatch(
-        tmp_path, caplog):
+def test_an_unusable_cache_says_why_it_is_redetecting(tmp_path, caplog):
     images = _image_folder(tmp_path)
     target = build_target({"type": "ChArUco2"})
     logger_name = "pyCamSet.calibration.camera_calibrator"
+    cache_path = images / "detected_datapoints_aruco2.npz"
 
-    # No sidecar at all: e.g. a cache written before this scheme existed.
-    (images / "detected_datapoints_aruco2.pickle").write_bytes(b"pre-fix cache")
+    # A cache from before this format, i.e. a bare pickle.
+    cache_path.write_bytes(b"\x80\x04\x95 a cache from an older build")
     _instrumented(target)
     with caplog.at_level(logging.INFO, logger=logger_name):
         detect_datapoints_in_imfile(
             f_loc=images, calibration_target=target, caching=True, threads=1)
-    assert any("no identity record" in r.message for r in caplog.records)
-    assert not any("does not match this target" in r.message for r in caplog.records)
+    assert any("redetecting" in r.message for r in caplog.records)
 
     caplog.clear()
 
-    # A real mismatch: sidecar present, but recorded for a different n_lim.
-    write_cache_identity(images / "detected_datapoints_aruco2.pickle", target,
-                         ["cam0", "cam1"], n_lim=99)
+    # A real mismatch: a cache written for a different n_lim.
+    save_to_cache(TargetDetection(cam_names=["cam0", "cam1"],
+                                  data=np.array([[0, 0, 0, 1.0, 2.0]])),
+                  [(8, 12), (8, 12)], cache_path, target, ["cam0", "cam1"],
+                  n_lim=99)
     with caplog.at_level(logging.INFO, logger=logger_name):
         detect_datapoints_in_imfile(
-            f_loc=images, calibration_target=target, caching=True, threads=1, n_lim=None)
+            f_loc=images, calibration_target=target, caching=True, threads=1,
+            n_lim=None)
     assert any("does not match this target" in r.message for r in caplog.records)
-    assert not any("no identity record" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -1198,20 +1122,17 @@ def test_a_second_run_hits_the_cache_with_the_workspace_nested_in_f_loc(corpus_i
     assert run1["error"] is None, run1["error"]
     assert not any("loading cached detection" in line for line in log1)
 
-    cache_path = image_folder / "detected_datapoints.pickle"
-    sidecar_path = cache_identity_path(cache_path)
-    assert cache_path.is_file() and sidecar_path.is_file()
-    pickle_bytes = cache_path.read_bytes()
-    sidecar_bytes = sidecar_path.read_bytes()
+    cache_path = image_folder / "detected_datapoints.npz"
+    assert cache_path.is_file()
+    cache_bytes = cache_path.read_bytes()
 
     log2: list[str] = []
     run2 = phase1.run(dict(params), workspace, log2.append)
     assert run2["error"] is None, run2["error"]
     assert any("loading cached detection" in line for line in log2)
 
-    # Untouched by the second run: it loaded them rather than rewriting them.
-    assert cache_path.read_bytes() == pickle_bytes
-    assert sidecar_path.read_bytes() == sidecar_bytes
+    # Untouched by the second run: it loaded it rather than rewriting it.
+    assert cache_path.read_bytes() == cache_bytes
 
 
 @pytest.mark.data
@@ -1259,25 +1180,24 @@ def test_a_camera_subset_reuses_the_cache_across_staged_runs(corpus_images):
 
 
 # ---------------------------------------------------------------------------
-# The sidecar copy-back (P1): a strict subset stages through a TemporaryDirectory,
-# so a successful detection's identity sidecar -- not just its pickle -- has
-# to be copied back to f_loc. That copy (or the delete_file fallback) must
-# never discard an already-successful detection.
+# The cache copy-back (P1): a strict subset stages through a
+# TemporaryDirectory, so a successful detection's cache has to be copied
+# back to f_loc. That copy must never discard an already-successful
+# detection.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.data
 @pytest.mark.slow
-def test_a_successful_detection_survives_a_sidecar_copy_back_failure(
+def test_a_successful_detection_survives_a_cache_copy_back_failure(
         corpus_images, monkeypatch):
     """A strict camera subset routes detection through a staged
     ``TemporaryDirectory`` (``root != f_loc``), so a successful detection's
-    cache pickle AND its identity sidecar are both copied back to ``f_loc``.
-    Before the fix, an OSError copying the sidecar back -- e.g. a read-only
-    or otherwise unwritable image folder -- propagated out of ``_detect()``
-    uncaught, discarding an already-successful, fully computed detection:
-    the run reported an error and saved no artifact, even though a valid
-    cache pickle was sitting right there in ``f_loc``."""
+    cache is copied back to ``f_loc``. Before the fix, an OSError on that
+    copy -- e.g. a read-only or otherwise unwritable image folder --
+    propagated out of ``_detect()`` uncaught, discarding an already
+    successful, fully computed detection: the run reported an error and
+    saved no artifact."""
     from pyCamSet.workflow import phase1
 
     image_folder = corpus_images
@@ -1290,7 +1210,7 @@ def test_a_successful_detection_survives_a_sidecar_copy_back_failure(
     real_copy_file = phase1.copy_file
 
     def failing_copy_file(src, dst):
-        if str(dst).endswith(".identity.json"):
+        if str(dst).endswith(".npz"):
             raise PermissionError("simulated read-only image folder")
         return real_copy_file(src, dst)
 
@@ -1303,14 +1223,12 @@ def test_a_successful_detection_survives_a_sidecar_copy_back_failure(
     artifact = run.get("artifacts", {}).get("detected_datapoints_pickle")
     assert artifact, (
         "a successful detection must still produce an artifact even when "
-        "copying its identity sidecar back fails")
+        "copying its cache back fails")
     assert Path(artifact).is_file()
 
-    # The pickle made it back; the sidecar copy is what failed, so f_loc is
-    # left without a trustworthy one -- a safe future miss, not a stale hit.
-    cache_path = image_folder / "detected_datapoints.pickle"
-    assert cache_path.is_file()
-    assert not cache_identity_path(cache_path).exists()
+    # The copy is what failed, so f_loc is left with no cache at all -- a
+    # safe future miss, not a stale hit.
+    assert not (image_folder / "detected_datapoints.npz").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1342,23 +1260,22 @@ def test_a_failed_cache_pre_warm_does_not_abort_a_rerun_of_the_same_subset(
     subset = all_cams[:2]
     params = _phase1_params(image_folder, subset)
 
-    # Seed a valid, matching cache + sidecar at f_loc for this exact subset.
+    # Seed a valid, matching cache at f_loc for this exact subset.
     log1: list[str] = []
     run1 = phase1.run(dict(params), workspace, log1.append)
     assert run1["error"] is None, run1["error"]
-    cache_path = image_folder / "detected_datapoints.pickle"
+    cache_path = image_folder / "detected_datapoints.npz"
     assert cache_path.is_file()
-    assert cache_identity_path(cache_path).is_file()
 
     real_copy_file = phase1.copy_file
 
     def failing_pre_copy_in(src, dst):
-        # Only the pre-copy-in step's identity-sidecar destination, INSIDE
-        # the fresh staged temp root -- never the already-guarded copy-back
-        # step a few lines later, whose destination is under image_folder.
-        if (str(dst).endswith(".identity.json")
+        # Only the pre-copy-in step's destination, INSIDE the fresh staged
+        # temp root -- never the already-guarded copy-back step a few lines
+        # later, whose destination is under image_folder.
+        if (str(dst).endswith(".npz")
                 and not str(dst).startswith(str(image_folder))):
-            raise PermissionError("simulated race on the source sidecar")
+            raise PermissionError("simulated race on the source cache")
         return real_copy_file(src, dst)
 
     monkeypatch.setattr(phase1, "copy_file", failing_pre_copy_in)
@@ -1407,10 +1324,10 @@ def test_the_artifact_is_always_this_runs_own_detections_never_a_different_cache
     if staged:
         assert len(all_cams) >= 3, "need an unselected camera folder to force staging"
 
-    # A stale, unrelated cache at the shared slot -- no sidecar, so
+    # A stale, unrelated cache at the shared slot -- unreadable, so
     # cache_matches() could never confirm it either; the point is that
     # run() must never even ask.
-    cache_path = image_folder / "detected_datapoints.pickle"
+    cache_path = image_folder / "detected_datapoints.npz"
     save_pickle(("STALE_UNRELATED_CACHE", [(1, 1)]), cache_path)
     stale_bytes = cache_path.read_bytes()
 
@@ -1456,9 +1373,9 @@ def test_a_concurrent_clobber_of_the_shared_cache_during_the_run_cannot_reach_th
     save_detections(saved, detections, cam_res), which never touches the
     image folder's cache file -- so the clobber cannot reach the artifact by
     construction, with no race-detection logic needed to catch it."""
-    from pyCamSet.calibration.camera_calibrator import write_cache_identity
+    from pyCamSet.calibration.detection_cache import save_to_cache
     from pyCamSet.calibration_targets.core.target_registry import build_target
-    from pyCamSet.utils.saving import save_pickle, load_pickle
+    from pyCamSet.utils.saving import load_pickle
     from pyCamSet.workflow import phase1
     from pyCamSet.workflow.detections import extract_detection_and_cam_res
 
@@ -1468,7 +1385,7 @@ def test_a_concurrent_clobber_of_the_shared_cache_during_the_run_cannot_reach_th
     workspace = WorkspaceManager(workspace_path_for(image_folder))
     params = _phase1_params(image_folder)
 
-    cache_path = image_folder / "detected_datapoints.pickle"
+    cache_path = image_folder / "detected_datapoints.npz"
     target_b = build_target(CHARUCO_SPEC)  # same type; n_lim is what differs
 
     real_save_run = WorkspaceManager.save_run
@@ -1478,8 +1395,8 @@ def test_a_concurrent_clobber_of_the_shared_cache_during_the_run_cannot_reach_th
         result = real_save_run(self, phase, run_id, metadata)
         if phase == "phase1" and not raced["done"]:
             raced["done"] = True
-            save_pickle(("SENTINEL_IDENTITY_B", [(9, 9), (9, 9)]), cache_path)
-            write_cache_identity(cache_path, target_b, cam_names, n_lim=999)
+            save_to_cache(_a_detection(cam_names), [(9, 9)] * len(cam_names),
+                          cache_path, target_b, cam_names, n_lim=999)
         return result
 
     monkeypatch.setattr(WorkspaceManager, "save_run", racing_save_run)
@@ -1501,7 +1418,7 @@ def test_a_concurrent_clobber_of_the_shared_cache_during_the_run_cannot_reach_th
 
     # The shared cache slot really was clobbered -- proves the artifact's
     # correctness is not an accident of the clobber never having happened.
-    assert load_pickle(cache_path)[0] == "SENTINEL_IDENTITY_B"
+    assert _identity_of(cache_path)["n_lim"] == 999
 
 
 # ---------------------------------------------------------------------------
@@ -1528,7 +1445,7 @@ def test_cache_name_of_does_not_crash_when_the_target_class_fails_to_import(
     monkeypatch.setattr(targets_module, "target_class", raising_target_class)
 
     name = phase1._cache_name_of({"target": CHARUCO_SPEC})  # must not raise
-    assert name == "detected_datapoints.pickle"
+    assert name == "detected_datapoints.npz"
 
 
 def test_matching_image_folder_cache_does_not_crash_when_the_target_class_fails_to_import(
@@ -1541,10 +1458,10 @@ def test_matching_image_folder_cache_does_not_crash_when_the_target_class_fails_
     from pyCamSet.workflow import phase1
 
     images = _image_folder(tmp_path)
-    # A stray pre-existing pickle at the fallback cache path, as in the
-    # review finding's own scenario (an earlier, successful run's leftover,
-    # before an environment change made the target's class unbuildable).
-    (images / "detected_datapoints.pickle").write_bytes(b"a stray leftover cache")
+    # A stray pre-existing cache at the fallback path, as in the review
+    # finding's own scenario (an earlier, successful run's leftover, before
+    # an environment change made the target's class unbuildable).
+    (images / "detected_datapoints.npz").write_bytes(b"a stray leftover cache")
 
     def raising_target_class(name):
         raise ImportError("simulated missing optional graphics dependency")

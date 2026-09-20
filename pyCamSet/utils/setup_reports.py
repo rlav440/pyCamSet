@@ -388,3 +388,20 @@ class RigConsistencyReport:
 
     def __str__(self) -> str:
         return self.summary()
+
+
+def validate_detections(detected, target, image_counts: dict[str, int] | None = None,
+                        n_lim: int | None = None) -> DetectionReport:
+    """
+    Reports how well each camera saw the target, before anything is solved.
+
+    :param detected: the detections to describe
+    :param target: the calibration target they were found with
+    :param image_counts: how many images each camera's folder holds
+    :param n_lim: the per camera image cap the detection ran under
+    :return: the report, which is also logged
+    """
+    report = DetectionReport.from_detection(
+        detected, target, image_counts=image_counts, n_lim=n_lim)
+    logger.info("\n" + report.summary())
+    return report

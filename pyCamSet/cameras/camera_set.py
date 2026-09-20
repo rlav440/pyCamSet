@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 import numbers
 from typing import overload
 import cv2
+from itertools import cycle
 import numpy as np
 from numpy.linalg import norm
 try:
@@ -26,7 +27,7 @@ from pyCamSet.utils.visualisation import (
     _target_mean_distance)
 from pyCamSet.utils.gui_safety import refuse_window_inside_qt
 from pyCamSet.utils.general_utils import get_subfolder_names
-from pyCamSet.utils.general_utils import get_close_square_tuple, glob_ims_local
+from pyCamSet.utils.general_utils import get_close_square_tuple, glob_ims
 
 
 from pyCamSet.optimisation.compiled_helpers import nb_triangulate_full
@@ -200,9 +201,6 @@ class CameraSet:
 
             cam_dict = {key: cam for key, cam in zip(cam_names, cam_list)}
             new_camset._cam_dict = cam_dict
-            # _update, not __update: the double underscore mangles to
-            # _CameraSet__update, which does not exist, so every cam_key
-            # subset raised AttributeError.
             new_camset._update()
             return new_camset
     
@@ -228,11 +226,8 @@ class CameraSet:
         self.n_cams = self.get_n_cams()
 
     def __iter__(self):
-        # A fresh iterator per call, rather than `self`.  Returning self made
-        # the set its own iterator with a single shared cursor, so two
-        # overlapping loops -- `for a in cams: for b in cams:`, the natural way
-        # to walk camera pairs in a rig -- shared `ind` and silently visited
-        # len(cams) pairs instead of len(cams)**2.
+        # A fresh iterator per call: returning self gives nested loops one
+        # shared cursor, and walking camera pairs is exactly a nested loop.
         return iter(self._cam_list)
 
     def __next__(self) -> Camera:
@@ -260,42 +255,35 @@ class CameraSet:
             return False
         return True
 
-    def write_to_txt(self, loc: Path, r: ReconParams, ims:list[np.ndarray]|None = None, mode='MVSnet', crop=None, use_closest_cams=True, only_crop_cams=False, pair_scores: np.ndarray|None = None, max_pair_candidates: int|None = None, pair_scoring: str = 'auto'):
+    def write_to_txt(self, loc: Path, r: ReconParams,
+                     ims: list[np.ndarray] | None = None,
+                     mode='MVSnet', crop=None,
+                     use_closest_cams=True, only_crop_cams=False,
+                     pair_scores: np.ndarray | None = None,
+                     max_pair_candidates: int | None = None,
+                     pair_scoring: str = 'auto'):
         """
         Writes an entire camera set to some form of defined camera structure.
         Currently only MVSnet is defined.
 
         :param loc: the file location to write to
         :param r: the reconstruction parameters to follow
-        :param pair_scoring: which angle pair.txt's candidate scores are
-            computed from -- ``"auto"`` (the default), ``"view_angle"`` or
-            ``"convergence"``; see
+        :param pair_scoring: which angle a pair is scored by -- ``"auto"``,
+            ``"view_angle"`` or ``"convergence"``; see
             ``pyCamSet.reconstruction.acmmp_utils.calc_pair_scores``.
-            ``"auto"`` scores a rig that converges on a shared target by the
-            angle subtended there, and anything else by the angle between
-            view vectors, windowed by ``r.minangle``/``r.maxangle``. Ignored
-            when ``pair_scores`` is given.
-        :param pair_scores: an optional (N, N) matrix of per-pair scores, in
-            this set's ``get_names()``/iteration order, used instead of
-            scoring this set here. Every other view is then a candidate --
-            no angle window and no ``r.max_n_view`` cap, only
-            ``max_pair_candidates`` below.
-        :param max_pair_candidates: keeps at most this many candidates per
-            view. ``None`` (the default) leaves the cap to ``r.max_n_view``
-            when the scores are computed here, and uncapped when
-            ``pair_scores`` is given. The two are deliberately separate:
-            ``r.max_n_view`` picks how many candidates are *useful* for
-            reconstruction quality, while ``max_pair_candidates`` is a hard
-            ceiling a specific downstream reader cannot exceed without
-            crashing -- e.g.
-            :func:`pyCamSet.utils.saving.camset_to_apde` sets it from
-            APD-MVS's own ``MAX_IMAGES``. When both apply, the smaller wins.
-        :raises ValueError: if ``max_pair_candidates`` is given but is not a
-            non-negative integer -- a negative value would not raise on its
-            own (Python slicing silently reinterprets it as "drop the last
-            few", the opposite of a cap), and this parameter exists
-            specifically to prevent the unbounded/crash-triggering output a
-            silent misuse would reintroduce.
+            Ignored when *pair_scores* is given.
+        :param pair_scores: an (N, N) matrix of per-pair scores, in this
+            set's iteration order, used instead of scoring here. Every other
+            view is then a candidate, capped only by
+            *max_pair_candidates*.
+        :param max_pair_candidates: a hard ceiling on candidates per view,
+            for a reader that cannot take more -- ``camset_to_apde`` sets it
+            from APD-MVS's MAX_IMAGES. Separate from ``r.max_n_view``, which
+            asks how many are useful rather than how many fit; the smaller
+            wins.
+        :raises ValueError: for a *max_pair_candidates* that is not a
+            non-negative integer, since a negative one would slice as "drop
+            the last few" rather than raising.
         """
         if not mode == 'MVSnet':
             raise NotImplementedError
@@ -329,10 +317,8 @@ class CameraSet:
                     ]
                 cv2.imwrite(str(im_loc/f"{idx:08}.jpg"), im_temp,  [cv2.IMWRITE_JPEG_QUALITY, 100])
 
-        # One pairing path: score every pair, drop what the mask excludes,
-        # rank, cap, write. Supplying pair_scores replaces the scoring step
-        # only -- the caller has already decided what a good pair is, so no
-        # window applies and the cap is whatever it asked for.
+        # Score every pair, drop what the mask excludes, rank, cap, write.
+        # Supplying pair_scores replaces the scoring step only.
         if pair_scores is None:
             scoring = calc_pair_scores(self, r, scoring=pair_scoring)
             scores, mask = scoring.scores, scoring.mask
@@ -415,6 +401,25 @@ class CameraSet:
 
         return projection_dictionary_list
 
+    def _as_detection_array(self, to_reconstruct) -> np.ndarray:
+        """
+        Whatever a caller offered, as a detection's own row layout.
+
+        :param to_reconstruct: ``{cam name: (x, y)}``, a list of those, or
+            an array already in ``TargetDetection.get_data``'s layout
+        :return: rows of ``[cam index, 0, point index, x, y]``
+        """
+        if isinstance(to_reconstruct, dict):
+            to_reconstruct = [to_reconstruct]
+        if not isinstance(to_reconstruct, list):
+            return to_reconstruct
+        names = self.get_names()
+        return np.concatenate([
+            [[names.index(cam_name), 0, idx, datum[0], datum[1]]
+             for cam_name, datum in reconstructlet.items()]
+            for idx, reconstructlet in enumerate(to_reconstruct)
+        ], axis=0)
+
     def multi_cam_triangulate(self, to_reconstruct: list[dict] or dict or np.ndarray,
                               return_used = False, distort=True):
         """
@@ -427,23 +432,7 @@ class CameraSet:
         :return: world projected point or array of points
 
         """
-        names = self.get_names()
-        if isinstance(to_reconstruct, dict):
-            to_reconstruct = [to_reconstruct]
-        if isinstance(to_reconstruct, list):
-            #make it like the internal data structure of a detection
-            data = []
-            for idx, reconstructlet in enumerate(to_reconstruct):
-                bulklet = []
-                for  cam_name, datum in reconstructlet.items():
-                    cam_ind = names.index(cam_name)
-                    array = [cam_ind, 0, idx, datum[0], datum[1]]
-                    bulklet.append(array)
-                data.append(bulklet)
-            data = np.concatenate(data, axis=0)
-
-        else:
-            data = to_reconstruct
+        data = self._as_detection_array(to_reconstruct)
         _, inv, count = np.unique(
             data[:, 1:-2], axis=0, return_inverse=True, return_counts=True
         )
@@ -456,11 +445,9 @@ class CameraSet:
         #build the projection matricies
         proj = np.array([cam.proj for cam in self])
 
-        # Undistortion happens here rather than inside the kernel because it is
-        # the one step that depends on the lens model, and each camera already
-        # knows how to invert its own.  What is left -- the DLT in
-        # nb_triangulate_nviews -- is projective, so it needs no special case
-        # for the affine projection matrix of a telecentric camera.
+        # Undistorted here, not in the kernel: it is the one lens-dependent
+        # step, and what is left is projective, so the kernel needs no case
+        # for a telecentric camera's affine projection.
         if distort:
             reconstructable_data = reconstructable_data.copy()
             cam_column = reconstructable_data[:, 0].astype(int)
@@ -499,9 +486,8 @@ class CameraSet:
         :param target: the calibration target to locate
         :return: the target's pose as a 4x4 homogenous transform
         """
-        # Imported here rather than at module scope: find_target reaches the
-        # optimisation handlers, which import this module.  Deferring to call
-        # time breaks the cycle without the caller needing to know.
+        # Deferred: find_target reaches the optimisation handlers, which
+        # import this module.
         from pyCamSet.optimisation.find_target import find_target_pose_at_timestep
 
         return find_target_pose_at_timestep(images, target, self)
@@ -606,7 +592,14 @@ class CameraSet:
 
         return scene
 
-    def plot(self, 
+    def _origin_triad(self, length=0.05) -> list[tuple[pv.PolyData, str]]:
+        """The world origin's axes, each as a coloured line."""
+        return [
+            (pv.Line((0, 0, 0), tuple(length * axis)), colour)
+            for axis, colour in zip(np.eye(3), ("red", "green", "blue"))
+        ]
+
+    def plot(self,
              additional_mesh: pv.PolyData|list[pv.PolyData]|None=None,
              scale_factor=None,
              view_cones=False,
@@ -622,9 +615,6 @@ class CameraSet:
 
         _require_pyvista()
         cam_meshes, v_cones = self.get_camera_meshes(viewcone=0.15, scale=scale_factor)
-        positions = np.array([cam.position for cam in self])
-        # view_vectors = np.array([cam.view for cam in self.cam_list])
-        # view_pos = view_vectors * scale_factor # + positions
 
         pv.set_plot_theme('Document')
         scene = pv.Plotter()
@@ -634,79 +624,38 @@ class CameraSet:
         if view_cones:
             for v_con in v_cones:
                 scene.add_mesh(v_con, opacity=0.05, color='g')
-        
         if cam_labels:
+            positions = np.array([cam.position for cam in self])
             scene.add_point_labels(positions, list(self._cam_dict.keys()))
-        # scene.add_arrows(cent=positions, direction=view_pos)
 
-        # also visualise the origin of the coordinate system
-        p0 = np.array([0, 0, 0])
-        px = np.array([0.05, 0, 0])
-        py = np.array([0, 0.05, 0])
-        pz = np.array([0, 0, 0.05])
-
-        connect = np.hstack(([2, 0, 1],
-                             [2, 1, 2]))
-
-        lx = np.vstack((p0, px))
-        ly = np.vstack((p0, py))
-        lz = np.vstack((p0, pz))
-
-        polyx = pv.PolyData(lx)
-        polyx.lines = connect
-
-        polyy = pv.PolyData(ly)
-        polyy.lines = connect
-
-        polyz = pv.PolyData(lz)
-        polyz.lines = connect
-
-        cols = ['red', 'green', 'blue']
-
-        for mesh, col in zip([polyx, polyy, polyz], cols):
-            scene.add_mesh(mesh, color=col)
+        for axis, colour in self._origin_triad():
+            scene.add_mesh(axis, color=colour)
 
         if additional_mesh is not None:
             if not isinstance(additional_mesh, list):
                 additional_mesh = [additional_mesh]
-
-            #create a colourscheme for the additional meshes.
-            cls = len(additional_mesh)
-            #colours = colourmap_to_colour_list(cls, plt.get_cmap('Set1'))
-            colours = ['r', 'g', 'b', 'r', 'g', 'b', 'r', 'g', 'b'] + ['b'] * 100
-            colours = colours[:cls]
-            for idc, (mesh, col) in enumerate(zip(additional_mesh, colours)):
-                if not isinstance(mesh, CameraSet):
-                    if isinstance(mesh, np.ndarray):
-                        mesh = pv.PolyData(mesh)
-                    # if mesh has no colour
-                    if isinstance(mesh, np.ndarray):
-                        if mesh.ndim == 2 | mesh.shape[1] != 3:
-                            raise ValueError(f"The provided array at {idc} was not the right shape. The shpae should be [n,3], but was instead {mesh.shape}")
-                        mesh = pv.PolyData(mesh)
-                    if mesh.active_scalars is None:
-                        scene.add_mesh(mesh, col, opacity=0.1)
-                    else:
-                        scene.add_mesh(mesh,
-                                       render_lines_as_tubes=True,
-                                       line_width=4,
-                                       point_size=0.7,
-                                       rgb=True)
-                else:
-                    cams = mesh.get_camera_meshes()
-                    for mini_mesh in cams:
-                        scene.add_mesh(mini_mesh,
-                                       style='wireframe',
-                                       line_width=2,
-                                       color=col)
+            colours = cycle(('r', 'g', 'b'))
+            for mesh, col in zip(additional_mesh, colours):
+                if isinstance(mesh, CameraSet):
+                    for mini_mesh in mesh.get_camera_meshes():
+                        scene.add_mesh(mini_mesh, style='wireframe',
+                                       line_width=2, color=col)
                     if view_cones:
                         for v_con in v_cones:
-                            scene.add_mesh(v_con,
-                                           opacity=0.05,
-                                           color=col)
+                            scene.add_mesh(v_con, opacity=0.05, color=col)
+                    continue
+                if isinstance(mesh, np.ndarray):
+                    mesh = pv.PolyData(mesh)
+                if mesh.active_scalars is None:
+                    scene.add_mesh(mesh, col, opacity=0.1)
+                else:
+                    scene.add_mesh(mesh,
+                                   render_lines_as_tubes=True,
+                                   line_width=4,
+                                   point_size=0.7,
+                                   rgb=True)
 
         scene.show()
-
     def draw_camera_distortions(self, show: bool = True,
                                 save_dir: Path | str | None = None):
         """
@@ -767,7 +716,7 @@ class CameraSet:
                              f'current camera names')
 
         for cam_name in cam_names:
-            im_locs = glob_ims_local(floc/cam_name)
+            im_locs = glob_ims(floc/cam_name, recursive=False)
             temp_im = cv2.imread(str(im_locs[0]))
             self[cam_name].res = np.array((temp_im.shape[1], temp_im.shape[0])) #CV2 ordering
 

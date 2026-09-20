@@ -30,8 +30,8 @@ import pytest
 
 aruco2 = pytest.importorskip("aruco2")
 
-from pyCamSet.calibration_targets.charuco2 import layout
-from pyCamSet.calibration_targets.charuco2.target import ChArUco2
+from pyCamSet.calibration_targets.markers import gridboard_layout as layout
+from pyCamSet.calibration_targets.charuco2 import ChArUco2
 from pyCamSet.calibration_targets.core.abstract_target import EXPORT_KINDS
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     detect_grid_board_corners,
@@ -209,7 +209,7 @@ def test_layout_imports_without_aruco2() -> None:
     probe = (
         "import sys\n"
         "sys.modules['aruco2'] = None\n"
-        "from pyCamSet.calibration_targets.charuco2 import layout\n"
+        "from pyCamSet.calibration_targets.markers import gridboard_layout as layout\n"
         "import numpy as np\n"
         "bits = np.zeros((4, 4, 4), bool)\n"
         "rects = layout.grid_board_rectangles((2, 2), 1.0, bits, origin=(3, 4))\n"
@@ -478,24 +478,13 @@ def test_grid_board_marker_bits_refuses_an_id_the_dictionary_lacks() -> None:
         grid_board_marker_bits((2, 2), int(aruco2.DICT_4X4_50), [0, 1, 2, 50])
 
 
-def test_generate_charuco2_target_builds_and_returns_saved_path(tmp_path: Path) -> None:
-    from pyCamSet.calibration_targets.charuco2.generate import (
-        build_charuco2, default_output_name, generate_charuco2_target,
-    )
-
-    target = build_charuco2(num_squares_x=5, num_squares_y=7, square_size=4)
+def test_a_charuco2_board_names_itself_and_writes_itself(tmp_path: Path) -> None:
+    spec = {"num_squares_x": 5, "num_squares_y": 7, "square_size": 4}
+    target = ChArUco2(**spec)
     assert target.point_data.shape == (1, 6 * 8, 3)
-    assert default_output_name(5, 7, 4, "pdf_vector") == "charuco2_5x7_4mm.pdf"
+    assert ChArUco2.printable_name(spec, "pdf_vector") == "charuco2_5x7_4mm.pdf"
 
-    board, saved = generate_charuco2_target(
-        num_squares_x=5,
-        num_squares_y=7,
-        square_size=4,
-        output_dir=tmp_path,
-        file_name="nested/charuco2.txt",
-        export_kind="svg",
-    )
-    assert isinstance(board, ChArUco2)
+    saved = target.save_printable(tmp_path / "nested/charuco2.txt", "svg")
     assert saved == (tmp_path / "nested/charuco2.svg").resolve()
     assert saved.exists()
     assert saved.stat().st_size > 0

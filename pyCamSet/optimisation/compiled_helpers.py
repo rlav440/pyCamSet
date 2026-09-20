@@ -804,10 +804,7 @@ def n_estimate_rigid_transform(v0:np.ndarray, v1:np.ndarray) -> tuple[np.ndarray
     inp = np.eye(ndim)
     inp[-1,-1] = np.linalg.det(matR)
     matR = vh.T @ inp @ u.T
-    # the process described here is a transformation from 
     t = - matR @ t0 + t1
 
-    # error = np.mean(np.linalg.norm((matR @ v0.T).T + t - v1, axis=-1))
-    # print(f"rms error after fit = {error}")
     
     return matR, t

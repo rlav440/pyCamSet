@@ -14,12 +14,14 @@ from matplotlib import pyplot as plt
 logger = logging.getLogger(__name__)
 
 from pyCamSet.calibration_targets.core.abstract_target import AbstractTarget
+from pyCamSet.calibration_targets.markers.aruco_opencv import marker_bit_grid
 from pyCamSet.calibration_targets.markers.backend_registry import (
     ARUCO1_BACKEND,
     dict_names_for_backend,
     dictionary_id,
 )
-from pyCamSet.calibration_targets.core.abstract_target import EXPORT_SUFFIXES
+from pyCamSet.calibration_targets.core.abstract_target import (
+    EXPORT_SUFFIXES, export_path)
 from pyCamSet.calibration_targets.core.parameters import (
     DocumentedParameters,
     Parameterisation,
@@ -272,40 +274,15 @@ class ChArUco(AbstractTarget):
 
     def save_to_pdf(
             self,
-            f_out: Path | str | None = None,
+            f_out: Path | str,
             data_format: str = "raster",
             dpi: int = 300,
     ) -> Path:
-        if f_out is None:
-            f_out = Path(
-                f"charuco_{self.board.getChessboardSize()[0]}x{self.board.getChessboardSize()[1]}_"
-                f"square_{self.square_size * 1000:.2f}mm.pdf"
-            )
-        else:
-            f_out = Path(f_out)
-
-        f_out = f_out.expanduser().with_suffix(".pdf").resolve()
-        f_out.parent.mkdir(parents=True, exist_ok=True)
+        f_out = export_path(f_out, ".pdf")
 
         if data_format == "vector":
-            try:
-                # Register the native Cairo DLL location before cairosvg needs it.
-                # This used to run eagerly in pyCamSet/__init__.py, forcing every
-                # pyCamSet import to pay for it even when cairo was never touched;
-                # it now runs only on this lazily-reached export path.
-                import pyCamSet.utils.cairo_dll_helper  # noqa: F401
-                import cairosvg
-            except OSError as _cairo_err:
-                raise OSError(
-                    f"{_cairo_err}\n\n"
-                    "pyCamSet's ChArUco/Ccube target code requires the native 'cairo' "
-                    "library, which cairosvg requires but pip cannot install on its own.\n"
-                    "Install the native cairo library for your platform, then re-import pyCamSet:\n"
-                    "  - conda (Windows/Linux/macOS):  conda install -c conda-forge cairo\n"
-                    "  - Debian/Ubuntu:                 apt install libcairo2\n"
-                    "  - macOS (Homebrew):              brew install cairo\n"
-                    "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
-                ) from _cairo_err
+            from pyCamSet.utils.cairo_dll_helper import cairosvg_or_explain
+            cairosvg = cairosvg_or_explain()
             svg_out = f_out.with_suffix(".svg")
             self.save_to_svg(svg_out, suppress_svg_log=True)
             cairosvg.svg2pdf(url=str(svg_out), write_to=str(f_out))
@@ -331,24 +308,6 @@ class ChArUco(AbstractTarget):
         p01 = q[3]
         return (1 - u) * (1 - v) * p00 + u * (1 - v) * p10 + u * v * p11 + (1 - u) * v * p01
 
-    @staticmethod
-    def aruco_marker_grid_for_id(dictionary: cv2.aruco.Dictionary, marker_id: int) -> np.ndarray:
-        """Returns full marker grid (payload + one-cell border), with 1=black and 0=white."""
-        marker_size = int(dictionary.markerSize)
-        n_cells = marker_size + 2
-        cell_px = 24
-        side = n_cells * cell_px
-
-        marker_img = np.zeros((side, side), dtype=np.uint8)
-        cv2.aruco.generateImageMarker(dictionary, int(marker_id), side, marker_img, 1)
-
-        grid = np.zeros((n_cells, n_cells), dtype=np.uint8)
-        for r in range(n_cells):
-            for c in range(n_cells):
-                block = marker_img[r * cell_px:(r + 1) * cell_px, c * cell_px:(c + 1) * cell_px]
-                grid[r, c] = 1 if float(block.mean()) < 127.5 else 0
-        return grid
-
     def iter_marker_slots(self):
         ids = np.asarray(self.board.getIds()).reshape(-1).astype(int)
         obj_points = self.board.getObjPoints()
@@ -368,20 +327,11 @@ class ChArUco(AbstractTarget):
 
     def save_to_svg(
             self,
-            f_out: Path | str | None = None,
+            f_out: Path | str,
             border_width: float = 10,
             suppress_svg_log: bool = False,
     ) -> Path:
-        if f_out is None:
-            n_x, n_y = self.board.getChessboardSize()
-            f_out = Path(
-                f"charuco_{n_x}x{n_y}_square_{self.square_size * 1000:.2f}mm_true_vector.svg"
-            )
-        else:
-            f_out = Path(f_out)
-
-        f_out = f_out.expanduser().with_suffix(".svg").resolve()
-        f_out.parent.mkdir(parents=True, exist_ok=True)
+        f_out = export_path(f_out, ".svg")
 
         n_cols, n_rows = self.board.getChessboardSize()
         n_cols = int(n_cols)
@@ -405,7 +355,7 @@ class ChArUco(AbstractTarget):
 
         dct = self.board.getDictionary()
         for marker_id, q in self.iter_marker_slots():
-            grid = self.aruco_marker_grid_for_id(dct, marker_id)
+            grid = marker_bit_grid(dct, marker_id)
             g_rows, g_cols = grid.shape
 
             for r in range(g_rows):
@@ -561,8 +511,3 @@ class ChArUco(AbstractTarget):
         plt.axis("off")  # the raster's pixel indices say nothing about the board
         plt.show()
 
-
-if __name__ == '__main__':
-    test = ChArUco(num_squares_x=7, num_squares_y=7, square_size=4)
-    test.plot()
-    # test.get_printable_texture()

@@ -4,7 +4,7 @@ from pyCamSet import calibrate_cameras, Ccube, load_CameraSet
 from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
 from pyCamSet.calibration.camera_calibrator import run_bundle_adjustment
 
-target = Ccube(n_points=12, length=80)
+target = Ccube(n_points=12, length=80, legacy=True)
 loc="bin/calib_images_process"
 cams = calibrate_cameras(loc, target, 
                   # draw=True,
@@ -19,5 +19,5 @@ op, final_cams = run_bundle_adjustment(
     param_handler=param_handler,
     threads = cpu_count(),
 )
-
-final_cams.visualise_calibration()
+final_cams.plot()
+# final_cams.visualise_calibration()

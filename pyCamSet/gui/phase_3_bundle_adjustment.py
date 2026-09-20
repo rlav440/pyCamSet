@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.utils.paths import long_path
 from pyCamSet.workflow import phase3 as phase3_workflow
 from pyCamSet.workflow.params import (
     ParamError,
@@ -80,7 +81,6 @@ from pyCamSet.workflow.targets import (
     target_params_of_run,
 )
 from pyCamSet.workflow.workspace import (
-    as_io_path,
     path_exists,
     resolve_artifact,
 )
@@ -486,7 +486,7 @@ class Phase3Tab(QWidget):
             QMessageBox.critical(self, "Original source camset", f"Source camset does not exist: {source_path}")
             return
         try:
-            cams = load_CameraSet(as_io_path(source_path))
+            cams = load_CameraSet(long_path(source_path))
             names = cams.get_names()
         except Exception as exc:
             QMessageBox.critical(self, "Original source camset", f"Could not load source camset:\n{exc}")
@@ -518,7 +518,7 @@ class Phase3Tab(QWidget):
             camset_path = resolve_artifact(phase2_run, "phase2", self._workspace_mgr.workspace_path)
             if camset_path is not None and path_exists(str(camset_path)):
                 try:
-                    active_names = list(load_CameraSet(as_io_path(str(camset_path))).get_names())
+                    active_names = list(load_CameraSet(long_path(str(camset_path))).get_names())
                 except Exception:
                     active_names = []
         try:

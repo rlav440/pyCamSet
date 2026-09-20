@@ -3,7 +3,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 import time
-from copy import copy
 from typing import Callable
 
 import matplotlib.pyplot as plt
@@ -12,8 +11,6 @@ from scipy.optimize import least_squares, approx_fprime, OptimizeResult
 
 from typing import TYPE_CHECKING
 
-import pyCamSet.utils.general_utils as gu
-import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.template_handler as th
 from pyCamSet.optimisation.numba_schur import (
     SchurSolver, levenberg_marquardt, spec_from_groups)
@@ -43,15 +40,13 @@ def make_optimisation_function(
     #
     logger.info("getting initial params")
     init_params = param_handler.get_initial_params()
-    base_data = param_handler.get_detection_data(flatten=True)
     logger.info("Compiling the loss function")
     bundle_loss_fun = param_handler.make_loss_fun(threads)
 
     if param_handler.can_make_jac():
         logger.info(
             "Compiling the jacobian. The generated source is cached under "
-            "optimisation/template_functions, so this is slow only the first "
-            "time a problem of this shape is solved.")
+        )
         bundle_loss_jac = param_handler.make_loss_jac(threads)
         check_jacobian_is_not_degenerate(bundle_loss_jac, init_params)
     else: 
@@ -63,17 +58,6 @@ def make_optimisation_function(
 def check_jacobian_is_not_degenerate(bundle_loss_jac: Callable, init_params: np.ndarray):
     """
     Raises when the analytic jacobian cannot move some of the parameters.
-
-    The jacobian is generated Python source cached on disk, so a bad one is
-    reused silently: the optimiser converges to a worse answer with no error.
-    On macos-14 this cost the Ccube calibration 3.5 px of reprojection error
-    (6.17 px against 2.62 px on x86_64) and was only found by comparing against
-    a numeric jacobian.
-
-    matmul_map.check_all_params_reach_the_output catches this when the template
-    is generated. This second check runs on the jacobian actually in use, so it
-    also catches a template cached by an older version of pyCamSet or generated
-    on a different machine sharing the install.
 
     :param bundle_loss_jac: the compiled jacobian callable
     :param init_params: the parameters to evaluate it at
@@ -253,7 +237,7 @@ def _stat_int(value) -> int:
 
 
 def _solve_bundle_adjustment(
-        param_handler: TemplateBundleHandler,
+        param_handler: th.TemplateBundleHandler,
         threads: int = 1,
 ) -> tuple[OptimizeResult, CameraSet, dict]:
     """
@@ -273,23 +257,12 @@ def _solve_bundle_adjustment(
     )
 
     init_err = loss_fn(init_params)
-    # split before measuring: with a lockbox the residual vector carries
-    # prior terms after the reprojections, and averaging over both reports
-    # an initial error that is neither one nor the other.
     init_reprojection, _ = reprojection_residuals(init_err, param_handler)
     init_euclid = np.mean(np.linalg.norm(
         np.reshape(init_reprojection, (-1, 2)), axis=1))
     logger.info(f'found {len(init_params)} parameters')
     logger.info(f'found {len(init_reprojection) // 2} control points')
     logger.info(f'Initial Euclidean error: {init_euclid:.2f} px')
-
-    # raise ValueError
-    # test = lambda : loss_fn(init_params)
-    # gu.benchmark(test, repeats=100)
-
-    # bundle_jac(init_params)
-    # test = lambda : bundle_jac(init_params)
-    # gu.benchmark(test, repeats=100)
 
     if (init_euclid > HIGH_INITIAL_ERROR_PX) or np.isnan(init_euclid):
         logger.warning(
@@ -310,9 +283,6 @@ def _solve_bundle_adjustment(
         if bundle_jac is not None and param_handler.problem_opts.get(
                 "solver", "schur") == "schur":
             logger.warning(f"Falling back to the trust region solver: {reason}")
-        # A lockbox constrains parameters by bounding them, so the bounds
-        # have to reach the solver: without them the priors pull, but
-        # nothing holds.
         bounds = (-np.inf, np.inf)
         if hasattr(param_handler, "get_lockbox_bounds"):
             bounds = param_handler.get_lockbox_bounds(len(init_params))
@@ -332,9 +302,6 @@ def _solve_bundle_adjustment(
         optimisation, param_handler,
         initial_error_px=init_euclid, duration_s=end - start, solver=solver,
     )
-    # the summary carries the final error, the timing and any concern that
-    # would otherwise be a line of its own, so it is the whole report of the
-    # solve rather than a footer under one.
     logger.info("\n" + report.summary())
 
     camset = param_handler.get_camset(optimisation.x)
@@ -347,7 +314,7 @@ def _solve_bundle_adjustment(
     return optimisation, camset, stats
 
 
-def run_bundle_adjustment(param_handler: TemplateBundleHandler,
+def run_bundle_adjustment(param_handler: th.TemplateBundleHandler,
                           threads: int = 1) -> tuple[OptimizeResult, CameraSet]:
     """
     A function that takes an abstract parameter handler, turns it into a cost function, and returns the
@@ -362,7 +329,7 @@ def run_bundle_adjustment(param_handler: TemplateBundleHandler,
 
 
 def run_bundle_adjustment_with_stats(
-        param_handler: TemplateBundleHandler,
+        param_handler: th.TemplateBundleHandler,
         threads: int = 1,
 ) -> tuple[OptimizeResult, CameraSet, dict]:
     """

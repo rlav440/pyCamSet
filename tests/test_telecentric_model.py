@@ -464,7 +464,7 @@ def test_triangulation_reconstructs_through_affine_cameras(telecentric_problem):
 
 def test_affine_fit_recovers_a_known_camera(telecentric_problem):
     """The seed is a linear fit, because the model is linear once eps and k are set aside."""
-    from pyCamSet.cameras.telecentric_calibration import calibrate_telecentric
+    from pyCamSet.calibration.telecentric import calibrate_telecentric
 
     cams, target, _, poses = telecentric_problem
     cam = make_telecentric_camera("cam", k=0.0, eps=0.0, rotation=(0.1, -0.2, 0.05))
@@ -494,7 +494,7 @@ def test_a_planar_target_is_refused_with_a_reason():
     This is a property of the geometry, not of the implementation: +theta and
     -theta produce the same image.
     """
-    from pyCamSet.cameras.telecentric_calibration import fit_affine_camera, is_planar
+    from pyCamSet.calibration.telecentric import fit_affine_camera, is_planar
 
     flat = np.stack(np.meshgrid(np.linspace(-0.01, 0.01, 4),
                                 np.linspace(-0.01, 0.01, 4)), axis=-1).reshape(-1, 2)
@@ -512,7 +512,7 @@ def test_seeded_bundle_adjustment_converges(telecentric_problem):
     It ignores distortion and telecentricity error by construction, so this is
     the test that those are small enough to be refined rather than guessed.
     """
-    from pyCamSet.cameras.telecentric_calibration import calibrate_telecentric
+    from pyCamSet.calibration.telecentric import calibrate_telecentric
 
     cams, target, detection, poses = telecentric_problem
     points = target.point_data.reshape(-1, 3)

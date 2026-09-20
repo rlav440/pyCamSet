@@ -482,7 +482,7 @@ def test_detect_grid_board_corners_drops_a_non_finite_corner(monkeypatch, caplog
     ``detect_grid_board_corners`` must drop it -- explicitly, at debug level
     -- rather than crash or (silently) rely on it happening to fail a later
     comparison."""
-    from pyCamSet.calibration_targets.charuco2.target import ChArUco2
+    from pyCamSet.calibration_targets.charuco2 import ChArUco2
     target = ChArUco2(num_squares_x=5, num_squares_y=5, square_size=10.0)
     image, _ = target._render(150)
 

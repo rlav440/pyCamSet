@@ -27,20 +27,13 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-#: how far out of its own plane a board may sit, relative to its extent, before
-#: it is not a plane and a homography does not describe it
+# What the method needs of its input: a board flat enough for a homography to
+# describe, views that tilt enough to constrain the conic to one null vector,
+# and enough of them to trust. Tilt is what AMBIGUITY_TOLERANCE really
+# measures -- a well tilted set conditions at 0.07, a 0.1 radian tilt at 4e-3,
+# and views that barely tilt at 2e-4, which is no seed at all.
 FLATNESS_TOLERANCE = 1e-3
-
-#: how small the conic system's second smallest singular value may get,
-#: against its largest, before its null space is wider than the one vector a
-#: single intrinsic matrix needs it to be.  Measured on synthetic board views:
-#: 0.07 for a well tilted set, and unmoved by noise or distortion; 4e-3 at a
-#: 0.1 radian tilt, which is a poor seed but a seed; 2e-4 at 0.02 radians and
-#: for views that do not tilt at all, which are not.
 AMBIGUITY_TOLERANCE = 1e-3
-
-#: the fewest board views Zhang's method is solved from.  Two suffice with the
-#: skew pinned, but the third is what makes the system worth trusting.
 MIN_VIEWS = 3
 
 
@@ -183,12 +176,10 @@ def intrinsics_from_homographies(homographies: list[np.ndarray]) -> np.ndarray:
     rows.append(np.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0]))  # zero skew
 
     _, singular, right = np.linalg.svd(np.asarray(rows, dtype=float))
-    # the conic is the system's null vector, so it is one answer only while the
-    # null space is one dimensional.  Views that repeat a constraint rather than
-    # adding one leave the second smallest singular value at zero too, and then
-    # every vector in that space is an equally good conic -- which is not a
-    # near miss to be reported as a ratio between the two smallest, because
-    # both are zero and their ratio is noise.
+    # The conic is the null vector, so it is one answer only while the null
+    # space is one dimensional. Views that repeat a constraint rather than
+    # adding one leave the second smallest singular value at zero as well,
+    # and every vector in that space is then an equally good conic.
     conditioning = singular[-2] / singular[0]
     logger.debug("absolute conic solved at a conditioning of %.3g", conditioning)
     if conditioning < AMBIGUITY_TOLERANCE:
@@ -342,10 +333,9 @@ def calibrate_zhang(object_points: list[np.ndarray],
     intrinsic = np.linalg.inv(to_sensor) @ intrinsics_from_homographies(normalised)
     intrinsic /= intrinsic[2, 2]
 
-    # the principal point is what the closed form estimates worst, and a wild
-    # one is worse than no estimate: the pose bootstrap that consumes this
-    # camera drops any image it cannot solve to 20 pixels, and those
-    # observations never reach the bundle adjustment to be recovered.
+    # The principal point is what the closed form estimates worst, and a wild
+    # one is worse than none: the pose bootstrap drops any image it cannot
+    # solve to 20 pixels, and those observations never reach the solve.
     if not (0 <= intrinsic[0, 2] <= res[1] and 0 <= intrinsic[1, 2] <= res[0]):
         logger.warning(
             "Zhang's closed form put the principal point at "

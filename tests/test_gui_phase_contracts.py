@@ -1291,14 +1291,15 @@ def test_phase_1_greys_out_aruco1_for_charuco2_and_gives_charuco_its_choice_back
                     reason="reads a target that only ArUco 2 detects")
 def test_drawing_a_run_without_an_artifact_reads_its_own_detectors_cache(tmp_path):
     """The last resort is the image folder's cache, named per detector and
-    upscale -- but only trusted once its identity sidecar confirms it was
+    upscale -- but only trusted once the identity it carries confirms it was
     made for this run's own target, cameras and image cap.  An ArUco 2 run
     must not draw ArUco 1's, and ChArUco2 and Ccube(aruco2) -- which compute
     the *same* cache name -- must not draw each other's either."""
     import cv2
     from PySide6.QtWidgets import QCheckBox, QTabWidget
 
-    from pyCamSet.calibration.camera_calibrator import write_cache_identity
+    from pyCamSet.calibration.detection_cache import save_to_cache
+    from pyCamSet.calibration_targets import TargetDetection
     from pyCamSet.calibration_targets.core.target_registry import build_target
     from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
     from pyCamSet.workflow.workspace import WorkspaceManager
@@ -1310,11 +1311,13 @@ def test_drawing_a_run_without_an_artifact_reads_its_own_detectors_cache(tmp_pat
                     np.zeros((8, 12, 3), dtype=np.uint8))
 
     def seed(name, target_spec):
-        """Write a (fake) cache and the sidecar that pairs it with
-        *target_spec*, and return the path written."""
+        """Write a cache carrying *target_spec*'s identity, and return the
+        path written."""
         path = tmp_path / name
-        path.write_bytes(f"detections for {target_spec}".encode())
-        write_cache_identity(path, build_target(target_spec), cam_names, None)
+        detected = TargetDetection(cam_names=cam_names,
+                                   data=np.array([[0, 0, 0, 1.0, 2.0]]))
+        save_to_cache(detected, [(8, 12), (8, 12)], path,
+                      build_target(target_spec), cam_names, None)
         return path
 
     tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))
@@ -1324,28 +1327,28 @@ def test_drawing_a_run_without_an_artifact_reads_its_own_detectors_cache(tmp_pat
 
     resolve = tab._resolve_pickle_path_for_run
 
-    aruco1 = seed("detected_datapoints.pickle",
+    aruco1 = seed("detected_datapoints.npz",
                   {"type": "ChArUco", "marker_backend": "aruco1"})
     assert resolve(run(type="ChArUco", marker_backend="aruco1")) == aruco1
 
-    aruco2 = seed("detected_datapoints_aruco2.pickle",
+    aruco2 = seed("detected_datapoints_aruco2.npz",
                   {"type": "ChArUco", "marker_backend": "aruco2"})
     assert resolve(run(type="ChArUco", marker_backend="aruco2")) == aruco2
 
-    upscaled = seed("detected_datapoints_upscale2x_aruco2.pickle",
+    upscaled = seed("detected_datapoints_upscale2x_aruco2.npz",
                     {"type": "Ccube", "marker_backend": "aruco2"})
     upscaled_run = run(type="Ccube", marker_backend="aruco2")
     upscaled_run["params"]["upscale_factor"] = 2
     assert resolve(upscaled_run) == upscaled
 
-    # detected_datapoints_aruco2.pickle above was seeded for
+    # detected_datapoints_aruco2.npz above was seeded for
     # ChArUco(aruco2), not ChArUco2 -- same filename, different
     # identity, so the unverified collision the two used to share is
     # now refused rather than silently adopted.
     assert resolve(run(type="ChArUco2")) is None
 
     # Seeded for ChArUco2 itself, the same filename now resolves for it.
-    charuco2 = seed("detected_datapoints_aruco2.pickle", {"type": "ChArUco2"})
+    charuco2 = seed("detected_datapoints_aruco2.npz", {"type": "ChArUco2"})
     assert resolve(run(type="ChArUco2")) == charuco2
     # ...and no longer for ChArUco(aruco2), which just lost the slot.
     assert resolve(run(type="ChArUco", marker_backend="aruco2")) is None
@@ -1390,10 +1393,10 @@ def test_draw_detections_never_shows_another_runs_overwritten_cache(tmp_path):
 
     from PySide6.QtWidgets import QCheckBox, QTabWidget
 
-    from pyCamSet.calibration.camera_calibrator import write_cache_identity
+    from pyCamSet.calibration.detection_cache import save_to_cache
+    from pyCamSet.calibration_targets import TargetDetection
     from pyCamSet.calibration_targets.core.target_registry import build_target
     from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
-    from pyCamSet.workflow.detections import save_detections
     from pyCamSet.workflow.workspace import WorkspaceManager
 
     cam_names = ["cam0", "cam1"]
@@ -1403,14 +1406,14 @@ def test_draw_detections_never_shows_another_runs_overwritten_cache(tmp_path):
                     np.zeros((8, 12, 3), dtype=np.uint8))
 
     target_spec = {"type": "ChArUco", "marker_backend": "aruco1"}
-    cache_path = tmp_path / "detected_datapoints.pickle"
+    cache_path = tmp_path / "detected_datapoints.npz"
 
     def seed(marker_xy, n_lim):
-        data0 = np.array([[0.0, 0.0, marker_xy, marker_xy]])
-        data1 = np.array([[1.0, 0.0, marker_xy, marker_xy]])
-        payload = _FakeDetections(cam_names, {"cam0": data0, "cam1": data1})
-        save_detections(cache_path, payload)
-        write_cache_identity(cache_path, build_target(target_spec), cam_names, n_lim)
+        detected = TargetDetection(cam_names=cam_names, data=np.array([
+            [0.0, 0.0, 0.0, marker_xy, marker_xy],
+            [1.0, 0.0, 0.0, marker_xy, marker_xy]]))
+        save_to_cache(detected, [(8, 12), (8, 12)], cache_path,
+                      build_target(target_spec), cam_names, n_lim)
 
     # Run A's own detections: n_lim=None, marker at (1.0, 1.0).
     seed(1.0, n_lim=None)
@@ -1425,8 +1428,8 @@ def test_draw_detections_never_shows_another_runs_overwritten_cache(tmp_path):
     assert tab._resolve_pickle_path_for_run(run_a) == cache_path
 
     # A concurrent Phase 1 run against the same folder, with a
-    # DIFFERENT n_lim, overwrites the identical cache filename and
-    # sidecar before the draw actually reads it.
+    # DIFFERENT n_lim, overwrites the identical cache filename before
+    # the draw actually reads it.
     seed(9.0, n_lim=7)
 
     tab._draw_detections_for_run(run_a, show_errors=False)

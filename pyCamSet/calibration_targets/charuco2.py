@@ -11,6 +11,7 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 from pyCamSet.calibration_targets.core.abstract_target import (
+    export_path,
     AbstractTarget, EXPORT_SUFFIXES,
 )
 from pyCamSet.calibration_targets.core.parameters import (
@@ -31,7 +32,7 @@ from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     refuse_rotation_ambiguous_markers,
     warn_known_false_detections,
 )
-from pyCamSet.calibration_targets.charuco2.layout import (
+from pyCamSet.calibration_targets.markers.gridboard_layout import (
     grid_board_bounds,
     grid_board_corners,
     grid_board_rectangles,
@@ -62,7 +63,7 @@ class ChArUco2(AbstractTarget):
     """
     A planar ChArUco2 board: aruco2's ``GridBoard`` design.
 
-    Unlike :class:`~pyCamSet.calibration_targets.charuco.target.ChArUco`,
+    Unlike :class:`~pyCamSet.calibration_targets.charuco.ChArUco`,
     which places a sparse marker only on every other square, ChArUco2 places
     an ArUco marker on *every* square -- a standard marker on a black
     square, an inverted one on a white square. The design is described in
@@ -78,12 +79,13 @@ class ChArUco2(AbstractTarget):
     and, optionally, the marker ids, and nothing else -- there is no
     ``DetectionParameters``-style control for a form to show or a study to
     sweep, unlike
-    :class:`ChArUco`/:class:`~pyCamSet.calibration_targets.ccube.target
+    :class:`ChArUco`/:class:`~pyCamSet.calibration_targets.ccube
     .Ccube`'s OpenCV-backed detection.
 
     **Printing is true vector.** Every output draws from the one geometric
-    layout in :mod:`pyCamSet.calibration_targets.charuco2.layout`, which is
-    checked pixel for pixel against aruco2's own ``get_grid_board_image``.
+    layout in :mod:`pyCamSet.calibration_targets.markers.gridboard_layout`,
+    which is checked pixel for pixel against aruco2's own
+    ``get_grid_board_image``.
 
     **ChArUco2 has not been validated on a real printed and photographed
     board.** Every check behind it -- the corner-id mapping, occlusion,
@@ -310,7 +312,7 @@ class ChArUco2(AbstractTarget):
 
     def save_to_svg(
             self,
-            f_out: Path | str | None = None,
+            f_out: Path | str,
             border_width: float = 10.0,
             dpi: float = 300.0,
             suppress_svg_log: bool = False,
@@ -329,15 +331,7 @@ class ChArUco2(AbstractTarget):
             existing callers that pass it still work.
         :param suppress_svg_log: skip the "Saved" log line.
         """
-        if f_out is None:
-            f_out = Path(
-                f"charuco2_{self.num_squares_x}x{self.num_squares_y}_"
-                f"square_{self.square_size * 1000:.2f}mm.svg"
-            )
-        else:
-            f_out = Path(f_out)
-        f_out = f_out.expanduser().with_suffix(".svg").resolve()
-        f_out.parent.mkdir(parents=True, exist_ok=True)
+        f_out = export_path(f_out, ".svg")
 
         # Metres throughout, as ChArUco's and Ccube's SVGs are: the viewBox is
         # in metres and width/height carry the physical size in mm.
@@ -376,38 +370,16 @@ class ChArUco2(AbstractTarget):
 
     def save_to_pdf(
             self,
-            f_out: Path | str | None = None,
+            f_out: Path | str,
             data_format: str = "raster",
             border_width: float = 10.0,
             dpi: float = 300.0,
     ) -> Path:
-        if f_out is None:
-            f_out = Path(
-                f"charuco2_{self.num_squares_x}x{self.num_squares_y}_"
-                f"square_{self.square_size * 1000:.2f}mm.pdf"
-            )
-        else:
-            f_out = Path(f_out)
-        f_out = f_out.expanduser().with_suffix(".pdf").resolve()
-        f_out.parent.mkdir(parents=True, exist_ok=True)
+        f_out = export_path(f_out, ".pdf")
 
         if data_format == "vector":
-            try:
-                import pyCamSet.utils.cairo_dll_helper  # noqa: F401
-                import cairosvg
-            except OSError as _cairo_err:
-                raise OSError(
-                    f"{_cairo_err}\n\n"
-                    "pyCamSet's ChArUco2 target code requires the native "
-                    "'cairo' library, which cairosvg requires but pip "
-                    "cannot install on its own.\n"
-                    "Install the native cairo library for your platform, "
-                    "then re-import pyCamSet:\n"
-                    "  - conda (Windows/Linux/macOS):  conda install -c conda-forge cairo\n"
-                    "  - Debian/Ubuntu:                 apt install libcairo2\n"
-                    "  - macOS (Homebrew):              brew install cairo\n"
-                    "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
-                ) from _cairo_err
+            from pyCamSet.utils.cairo_dll_helper import cairosvg_or_explain
+            cairosvg = cairosvg_or_explain()
             svg_out = f_out.with_suffix(".svg")
             self.save_to_svg(svg_out, border_width=border_width,
                               suppress_svg_log=True)

@@ -41,15 +41,28 @@ class FreePointTarget(AbstractTarget):
         self._process_data()
 
     def find_in_image(self, image, draw=False, camera: Camera=None, wait_len = 1) -> ImageDetection:
-        """
-        Notes: Detects the calibration target in an image
+        """Free points are given, not found: this target is never detected."""
+        raise NotImplementedError("Free points are supplied, not detected.")
 
-        :param image: a mxn or mxnx3 image input
-        :param draw: whether to draw the target
-        :param camera: A camera object for use in camera aware detections
-        :return: An ImageDetection object, containing the detected data
-        """
-        raise NotImplementedError
+    # Free points have no printed form. AbstractTarget requires a target to
+    # declare how it is drawn, and this is that declaration: it is not.
+    _NOT_DRAWN = "A free point target has no printed form."
+
+    @classmethod
+    def printable_name(cls, values: dict, kind: str = "svg") -> str:
+        raise NotImplementedError(cls._NOT_DRAWN)
+
+    def save_printable(self, path, kind: str = "svg", **options):
+        raise NotImplementedError(self._NOT_DRAWN)
+
+    def save_to_svg(self, f_out, **options):
+        raise NotImplementedError(self._NOT_DRAWN)
+
+    def save_to_pdf(self, f_out, data_format: str = "raster", **options):
+        raise NotImplementedError(self._NOT_DRAWN)
+
+    def plot(self):
+        raise NotImplementedError(self._NOT_DRAWN)
 
 class FreePointPrimitive:
     """
@@ -116,15 +129,6 @@ class FreePointBundleHandler(TemplateBundleHandler):
     Given these, it will return a function that takes a parameter array and returns data structures ready for
     evaluation with the bundle adjustment cost function.
     The implementation given in the free point optimisation purely optimises the positions of points in the calibration space.
-
-    Two functions provide the ability to add extra parameters and functionality to the optimisation.
-    - add_extra_params: this can be overriden to add initial estimates of additional parameters.
-    - parse_extra_params_and_setup: this can be overriden to parse additional parameters given to the optimisation.
-    Manipulations of the object data/state can be done here, and will be reflected in the cost function.
-    As an example: if a higher level structure for camera poses is defined, self.extr_unfixed can be set to all
-    false. The parameters can then be parsed, translated into specific extrinsics for each camera, written
-    to self.extr, and the cost function will use these extrinsics to define the camera.
-
     """
 
     def __init__(self,
@@ -233,10 +237,8 @@ class FreePointBundleHandler(TemplateBundleHandler):
         The previous system must have used a TemplateBundleHandler.
         :param prev_cams: The calibrated camseet to use.
         """
-        # extr_end, not bdpt_end: bdpt_end is the length of the whole vector,
-        # so slicing to it consumed every slot and left the points with an
-        # empty slice to write into.  The camera parameters occupy
-        # [:extr_end] and the free points the remainder.
+        # The camera parameters occupy [:extr_end] and the free points the
+        # remainder; bdpt_end is the length of the whole vector.
         self.initial_params = np.empty(self.bundlePrimitive.bdpt_end)
         self.initial_params[:self.bundlePrimitive.extr_end] = prev_cams.calibration_params.copy()
         self.initial_params[
@@ -275,8 +277,6 @@ class FreePointBundleHandler(TemplateBundleHandler):
         :param x: the optimisation parameters.
         :return: the points, as (n, 3)
         """
-        # Was `def get_updated_points():` -- no self, and a free `x` -- so it
-        # raised TypeError before it could reach the undefined name.
         _, _, ps = self.bundlePrimitive.return_bundle_primitives(x)
         return ps
 
@@ -290,10 +290,6 @@ class FreePointBundleHandler(TemplateBundleHandler):
             to return; use get_updated_points to read the solved geometry.
         :return: A CameraSet
         """
-        # The parameter is declared so that code written against
-        # TemplateBundleHandler.get_camset can call this without a TypeError,
-        # but returning the points here would hand such a caller point
-        # geometry where it expects (n_images, 4, 4) target poses.
         if return_pose:
             raise NotImplementedError(
                 "A free point optimisation solves for point geometry, not "

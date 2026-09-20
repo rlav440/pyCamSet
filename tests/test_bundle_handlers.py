@@ -34,7 +34,7 @@ from pyCamSet.optimisation.template_handler import (
     TemplateBundlePrimitive,
     check_feasiblity_and_update_refpose,
     check_for_target_misalignment,
-    graph_estimate_initial_pose,
+    estimate_initial_rig,
     per_image_reprojection,
 )
 from pyCamSet.utils.general_utils import make_4x4h_tform
@@ -564,33 +564,29 @@ def test_outlier_exclusion_records_what_it_removed(synthetic_problem):
 
 
 # --------------------------------------------------------------------------
-# The graph seed, and what it says about an image it could not reach
+# The initial rig estimate, and what it says about an image it could not place
 # --------------------------------------------------------------------------
 
 
 def _cam_relative_poses(cams, poses):
-    """``Mat_ac[cam, image]``: the target pose as each camera sees it."""
+    """``target_in_camera[cam, image]``: the target pose as each camera sees it."""
     return np.array([[cams[name].extrinsic @ pose for pose in poses]
                      for name in cams.get_names()])
 
 
-def test_an_unreachable_image_comes_back_as_a_nan_pose(synthetic_problem):
+def test_an_unplaced_image_comes_back_as_a_nan_pose(synthetic_problem):
     """calc_initial_params decides an image is unposed with isnan(pose[0, 0]).
 
-    An image no camera could place used to come back as the identity the
-    accumulation started from -- finite, and indistinguishable from a solved
-    pose -- so that check never fired and the image entered the solve with a
-    pose that is not a pose.
+    An image no camera could place must not come back as a finite pose, or
+    that check never fires and the image enters the solve with a pose that is
+    not a pose.
     """
     cams, target, detection, poses = synthetic_problem
-    mat_ac = _cam_relative_poses(cams, poses)
-    cost = np.ones((len(cams.get_names()), N_IMAGES))
-    mat_ac[:, 1] = np.nan   # no camera recovered image 1
-    cost[:, 1] = np.nan
+    target_in_camera = _cam_relative_poses(cams, poses)
+    target_in_camera[:, 1] = np.nan   # no camera placed image 1
 
-    _, target_poses, per_im = graph_estimate_initial_pose(
-        mat_ac, cams, detection.get_image_list(), 0, target, detection,
-        cost_mat=cost)
+    _, target_poses, per_im = estimate_initial_rig(
+        target_in_camera, cams, 0, target, detection)
 
     unposed = np.array([np.isnan(t[0, 0]) for t in target_poses])
     assert list(np.where(unposed)[0]) == [1]
@@ -598,15 +594,39 @@ def test_an_unreachable_image_comes_back_as_a_nan_pose(synthetic_problem):
     assert np.all(np.isfinite(per_im[[0, 2]]))
 
 
-def test_a_reachable_problem_leaves_every_pose_finite(synthetic_problem):
+def test_a_fully_observed_problem_leaves_every_pose_finite(synthetic_problem):
     cams, target, detection, poses = synthetic_problem
 
-    _, target_poses, per_im = graph_estimate_initial_pose(
-        _cam_relative_poses(cams, poses), cams, detection.get_image_list(), 0,
-        target, detection, cost_mat=np.ones((len(cams.get_names()), N_IMAGES)))
+    _, target_poses, per_im = estimate_initial_rig(
+        _cam_relative_poses(cams, poses), cams, 0, target, detection)
 
     assert np.all(np.isfinite(target_poses))
     assert np.all(np.isfinite(per_im))
+
+
+def test_the_estimate_recovers_the_rig_it_was_generated_from(synthetic_problem):
+    """Exact detections must give back the cameras that made them."""
+    cams, target, detection, poses = synthetic_problem
+
+    extrinsics, target_poses, per_im = estimate_initial_rig(
+        _cam_relative_poses(cams, poses), cams, 0, target, detection)
+
+    truth = np.array([cams[name].extrinsic for name in cams.get_names()])
+    relative_est = np.array([e @ np.linalg.inv(extrinsics[0]) for e in extrinsics])
+    relative_truth = np.array([t @ np.linalg.inv(truth[0]) for t in truth])
+
+    assert np.allclose(relative_est, relative_truth, atol=1e-6)
+    assert np.all(per_im < 1e-6)
+
+
+def test_the_world_frame_is_anchored_on_the_reference_image(synthetic_problem):
+    """The solve holds one target pose fixed, so the gauge has to match it."""
+    cams, target, detection, poses = synthetic_problem
+
+    for reference in range(N_IMAGES):
+        _, target_poses, _ = estimate_initial_rig(
+            _cam_relative_poses(cams, poses), cams, reference, target, detection)
+        assert np.allclose(target_poses[reference], np.eye(4), atol=1e-6)
 
 
 def test_per_image_reprojection_is_a_mean_not_a_sum():

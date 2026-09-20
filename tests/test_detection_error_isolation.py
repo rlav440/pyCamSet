@@ -26,6 +26,7 @@ import cv2
 import numpy as np
 import pytest
 
+from conftest import UndrawableTarget
 from pyCamSet.calibration_targets import AbstractTarget, ImageDetection
 
 #: A marker value no ordinary image index in these tests collides with.
@@ -34,7 +35,7 @@ N_IMAGES = 4
 FAIL_IDX = 2  # the third image (0-indexed) is the one made to fail
 
 
-class _FlakyStubTarget(AbstractTarget):
+class _FlakyStubTarget(UndrawableTarget, AbstractTarget):
     """A minimal target whose own detection can be made to fail on command."""
 
     def __init__(self, fail_marker: int | None = None, raise_type: str = "cv2"):

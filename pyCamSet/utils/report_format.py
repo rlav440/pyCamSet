@@ -125,12 +125,8 @@ def colour_enabled(override: bool | None = None) -> bool:
         return False
 
 
-def quality_colour(fraction: float) -> int:
-    """
-    The band a fraction falls in, as a colour.
-
-    :param fraction: the value, where 1.0 is 100%
-    """
+def _quality_colour(fraction: float) -> int:
+    """The band a detection rate falls in, as a colour."""
     if fraction >= GOOD_FRACTION:
         return SOLARIZED["green"]
     if fraction >= FAIR_FRACTION:
@@ -144,19 +140,11 @@ def quality_cell(fraction: float) -> Cell:
 
     :param fraction: the value, where 1.0 is 100%
     """
-    return Cell(percent(fraction), quality_colour(fraction))
+    return Cell(percent(fraction), _quality_colour(fraction))
 
 
-def deviation_colour(value: float) -> int:
-    """
-    The band a rig deviation falls in, as a colour.
-
-    The same numeric bands serve millimetres and degrees: under 1 is a rigid
-    rig, under 5 is tolerable, and anything more says the images are not of
-    the same instant.
-
-    :param value: the deviation, in mm or in degrees
-    """
+def _deviation_colour(value: float) -> int:
+    """The band a rig deviation falls in, as a colour. mm and degrees share it."""
     if value < DEVIATION_GOOD:
         return SOLARIZED["green"]
     if value < DEVIATION_FAIR:
@@ -171,21 +159,15 @@ def deviation_cell(value: float, places: int = 2) -> Cell:
     :param value: the deviation, in mm or in degrees
     :param places: decimal places to show
     """
-    return Cell(f"{value:.{places}f}", deviation_colour(value))
+    return Cell(f"{value:.{places}f}", _deviation_colour(value))
 
 
-def error_colour(pixels: float) -> int:
+def _error_colour(pixels: float) -> int:
     """
     The band a reprojection error falls in, as a colour.
 
-    Four bands rather than three, because the difference between a calibration
-    that is fine and one that is genuinely excellent is worth seeing: under a
-    tenth of a pixel is blue.
-
     A NaN error falls through every comparison to red, which is the right
     answer for a solve that did not produce a usable number.
-
-    :param pixels: the error, in pixels
     """
     if pixels < ERROR_EXCELLENT_PX:
         return SOLARIZED["blue"]
@@ -203,7 +185,7 @@ def error_cell(pixels: float, places: int = 2) -> Cell:
     :param pixels: the error, in pixels
     :param places: decimal places to show
     """
-    return Cell(f"{pixels:.{places}f}", error_colour(pixels))
+    return Cell(f"{pixels:.{places}f}", _error_colour(pixels))
 
 
 def strip_ansi(text: str) -> str:

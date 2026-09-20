@@ -107,13 +107,9 @@ def _grid_board_ids(grid_size: tuple[int, int], ids,
     return flat
 
 
-#: The grey level of the border an image is padded with before detection.
-#: White, because aruco2's black-marker pass looks for pixels darker than
-#: their neighbourhood's mean, and a pixel at 255 never is: the border adds
-#: no black contour, so every black marker aruco2 finds comes from a contour
-#: inside the original image. (No constant keeps the white pass out of the
-#: border too -- a flat region always passes its "not darker" test -- but that
-#: pass does not push corners outwards; see _grid_board_padding.)
+#: The grey level an image's border is padded with. White: aruco2's
+#: black-marker pass wants pixels darker than their neighbourhood, and
+#: 255 never is, so every black marker comes from the original image.
 _PAD_VALUE = 255
 
 #: The largest half window aruco2 gives cv2.cornerSubPix:
@@ -434,44 +430,15 @@ _VALIDATE_IRLS_ITERATIONS = 3
 #: A corner with fewer non-collinear neighbours than this cannot be checked,
 #: and is dropped rather than trusted.
 _VALIDATE_MIN_NEIGHBOURS = 5
-#: How much the near/far local-homography disagreement (see
-#: :func:`validate_grid_board_corners`) is scaled up before being added to
-#: the removal tolerance. The near fit still extrapolates (just less), so
-#: the raw near/far gap undershoots the true curvature-driven bias at the
-#: far fit's own corner; calibrated empirically (see
-#: tests/test_aruco2_gridboard_quality.py) against two competing numbers:
-#: false removals on exact distorted lattices (which want it large) and
-#: injected-fault detection (which wants it small, since the same extra
-#: tolerance that forgives curvature can also forgive a small fault). 4.0
-#: is the smallest value that clears every combination of the false-removal
-#: grid at <=0.5%; injected-fault detection stays within stage A's
-#: tolerance at this value but is not perfectly unchanged (a 10 px shift
-#: lands within a few degrees of an edge, where curvature and fault
-#: magnitude are closest, roughly 1-2% of the time).
+#: Scales up the near/far local-homography disagreement before it is
+#: added to the removal tolerance, since the near fit extrapolates too
+#: and so undershoots. Smallest value holding false removals at <=0.5%.
 _VALIDATE_MODEL_ERROR_SCALE = 4.0
-#: The Tukey IRLS reweighting inside ``score`` exists to reject a genuinely
-#: *wrong* neighbour (an injected fault elsewhere on the board) without
-#: letting it drag the fit -- not to pass judgement on the corner under
-#: test, which the final ``tau_abs``/``tau_rel``-based comparison already
-#: does. Reusing that same tight, fixed threshold inside IRLS made it
-#: misread ordinary curvature (tens of pixels of genuine, correlated
-#: deviation from a single local homography, at a large board's strongly
-#: distorted, steeply tilted edge) as if every neighbour were an outlier,
-#: collapsing the fit onto a near-degenerate handful of survivors --
-#: worse-conditioned than the honest full neighbourhood, and too few left
-#: for the model-uncertainty check above to run at all. IRLS instead scales
-#: its own threshold to a robust (low-percentile, not mean) residual among
-#: the corner's own present neighbours each round -- a standard
-#: robust-regression device (c.f. a MAD-scaled Tukey biweight): correlated
-#: curvature moves most residuals together, so this tracks it and the
-#: threshold loosens with it; a minority of genuinely wrong neighbours (an
-#: injected fault) leaves it near zero, so the threshold -- and IRLS's power
-#: to reject them -- does not loosen at all. A low percentile, not the
-#: median, because a very small board's tiny neighbourhoods can have a
-#: sizeable *fraction* corrupted (e.g. 3 of 16 corners on a 3x3 ghost-marker
-#: board), which pulls the median itself up; a low percentile stays robust
-#: to a larger contaminated fraction, at the cost of tracking curvature
-#: less generously.
+#: IRLS here stops a wrong neighbour dragging the fit; the tau
+#: comparison judges the corner. So its threshold follows a robust
+#: residual among the neighbours: curvature moves them together and it
+#: loosens, a wrong minority leaves it near zero. A low percentile, not
+#: the median, since a small neighbourhood can be largely corrupt.
 _VALIDATE_IRLS_PERCENTILE = 25.0
 _VALIDATE_IRLS_SCALE = 8.0
 
@@ -576,32 +543,15 @@ def validate_grid_board_corners(
     checked at all, and is dropped rather than trusted; so is one whose
     non-finite position makes it impossible to check in the first place.
 
-    Model uncertainty: a plain residual-vs-threshold test assumes the local
-    homography is itself a trustworthy little model of the lattice near the
-    corner -- true in the interior, where neighbours surround the corner on
-    every side, but not at the edge of a large, strongly distorted, steeply
-    tilted board, where the neighbourhood only has neighbours on one side
-    and the fit is already *extrapolating* to reach the corner at all. Such
-    a fit can look confident (low in-sample residual on its own neighbours)
-    while being a poor predictor of the untested point. This is measured
-    directly: refit the same (Tukey-reweighted) homography once per
-    neighbour, each time leaving that one neighbour out, and see how far the
-    prediction at the corner's own lattice offset -- never itself part of
-    any of these fits -- moves across the refits. An interior corner's fit
-    barely reacts to dropping any single neighbour (near-zero spread); an
-    extrapolating edge corner's fit can swing a long way (large spread).
-    Adding that spread to the tolerance lets a corner survive when the
-    *model* is what is uncertain there, without loosening the tolerance
-    everywhere else.
-
-    Validated in stage A task A3 against exact distorted lattices (no false
-    removals up to a wide-lens model-error floor of 0.098 squares), the v1
-    silent-corruption ghost cases (all 3 wrong corners removed, 0 false
-    removals), injected 10 px shifts/label swaps/an L of 3 shifted corners
-    (99%+ caught), and against combinations well beyond that envelope (large
-    boards, k1 to -0.30, tilt to 75 degrees) that the model-uncertainty term
-    above was added to cover -- see
-    ``tests/test_aruco2_gridboard_quality.py``.
+    Model uncertainty: a residual-vs-threshold test assumes the local
+    homography is a trustworthy model of the lattice at the corner. It is,
+    in the interior. At the edge of a distorted, steeply tilted board the
+    neighbours lie on one side and the fit is extrapolating to reach the
+    corner at all, so it can look confident on its own neighbours while
+    predicting the untested point poorly. The spread of its prediction
+    across leave-one-neighbour-out refits measures that, and is added to
+    the tolerance, so a corner survives where the *model* is uncertain
+    without loosening the tolerance everywhere.
 
     :param lattice_cr: ``(N, 2)`` ``(col, row)`` lattice coordinates.
     :param image_points: ``(N, 2)`` image positions (post-refinement). A
@@ -706,21 +656,9 @@ def validate_grid_board_corners(
             prediction, square = predict(homography)
             verifiable &= np.isfinite(square)
 
-        # Model uncertainty (see the function docstring): refit using only
-        # the immediate (Chebyshev radius 1) ring of neighbours -- a
-        # smaller-support, lower-order check -- and compare its prediction
-        # at the corner's own lattice offset with the full-neighbourhood
-        # fit's. In the interior the two agree closely (the lattice is
-        # locally planar at either scale). At an edge, where the far fit is
-        # already extrapolating across several squares of curvature to
-        # reach a corner with support on one side only, shrinking the
-        # support changes the extrapolation distance and reveals how much
-        # the far prediction owes to curvature the model cannot represent,
-        # rather than to the corner's own position. ``_MODEL_ERROR_SCALE``
-        # corrects the near/far gap's own systematic undershoot of the true
-        # bias (near still extrapolates too, just less): calibrated in
-        # tests/test_aruco2_gridboard_quality.py against the exact
-        # parameter range this exists for.
+        # Refit on the immediate ring alone: in the interior it agrees
+        # with the full fit, at an edge the gap is how much of the full
+        # fit's prediction is curvature rather than the corner.
         near_weight = tukey_w * near_mask[None, :]
         near_ok = support(near_weight, min_count=4)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -822,27 +760,13 @@ def detect_grid_board_corners(
         board aruco2 fails on (which is logged as a warning), so a board cut
         by the image edge costs its edge corners, not the image.
 
-        **Pixel convention:** a returned point is in the same pixel-*corner*
-        convention as pyCamSet's OpenCV-backed ``ChArUco``/``Ccube``
-        (``cv2.aruco.CharucoDetector``) -- 0.5 px from aruco2's own,
-        pixel-*centre*, convention on both axes. ChArUco/Ccube need no
-        explicit shift for this, under EITHER detector: aruco1 reads them
-        with ``CharucoDetector.detectBoard`` directly, and the aruco2 marker
-        path is an adapter that hands its own markers to that SAME native
-        call (see ``pyCamSet.calibration_targets.markers.aruco2
-        .interpolate_board_corners``), so both inherit OpenCV's own
-        pixel-corner convention rather than applying a shift of their own.
-        ChArUco2/Ccube2 have no such call to inherit it from -- aruco2's
-        grid-board detector never goes through ``CharucoDetector`` -- so the
-        +0.5 applied just below exists to land their corners on that same
-        convention explicitly. This is a deliberate choice, checked by rendering a
-        pixel-aligned ``ChArUco`` board and a pixel-aligned ``ChArUco2``
-        board with matching analytic corner positions and confirming
-        ``ChArUco.find_in_image``/``ChArUco2.find_in_image`` agree to
-        ~0.05 px (``tests/test_aruco2_gridboard_quality.py``), so that every
-        ArUco-based target in pyCamSet shares one convention and calibration
-        results do not depend on which target read the image. The shift is
-        applied last, after refinement and validation.
+        **Pixel convention:** points are returned in OpenCV's pixel-*corner*
+        convention, 0.5 px from aruco2's own pixel-*centre* one on both
+        axes. ChArUco and Ccube inherit it by going through
+        ``CharucoDetector``; ChArUco2 and Ccube2 never do, so the +0.5 below
+        puts them on it explicitly, last, after refinement and validation.
+        Every ArUco-based target then shares one convention, so a
+        calibration does not depend on which read the image.
     :raises ValueError: when ``ids`` is given and is not one distinct
         marker of the dictionary per square.
     """
@@ -867,14 +791,10 @@ def detect_grid_board_corners(
             found, board = aruco2.detect_grid_board(
                 padded, (grid_w, grid_h), int(dict_int), board_ids)
     except (cv2.error, ValueError) as err:
-        # aruco2 hands OpenCV's cornerSubPix "starting point outside the
-        # image" assertion back as a ValueError (see
-        # _is_cornersubpix_edge_failure): the padding above is meant to make
-        # it unreachable, and if it is still reached, this board is lost
-        # from this image, not the image or the folder it is in. Any other
-        # ValueError/cv2.error -- a real bug, a malformed board -- is not
-        # this failure and must propagate rather than being read as "no
-        # detection".
+        # aruco2 reports cornerSubPix's "start outside the image"
+        # assertion as a ValueError. The padding should make it
+        # unreachable; if not, this board is lost from this image, not
+        # the folder. Any other ValueError is a real bug and propagates.
         if not _is_cornersubpix_edge_failure(err):
             raise
         _LOG.warning(
@@ -893,13 +813,9 @@ def detect_grid_board_corners(
     if obj_points.shape[0] == 0:
         return None, None
 
-    # aruco2 should never hand back a non-finite corner in practice, but
-    # refine_grid_board_corners/validate_grid_board_corners are not the
-    # place to find out: a NaN here would otherwise reach them (and, worse,
-    # poison another corner's neighbourhood-based checks). Dropped up front,
-    # explicitly, rather than relying on it happening to fail the
-    # edge-margin comparisons below (NaN compares False either way, but
-    # that is incidental, not a documented contract).
+    # A NaN corner would poison another corner's neighbourhood checks,
+    # so drop it here rather than rely on it failing the comparisons
+    # below, which it does only incidentally.
     finite = np.isfinite(img_points).all(axis=1)
     if not finite.all():
         _LOG.debug(
@@ -920,13 +836,10 @@ def detect_grid_board_corners(
     row = np.round(obj_points[:, 1] / float(marker_size)).astype(np.int64)
     corner_ids = row * (grid_w + 1) + col
 
-    # A corner this close to the image edge was refined over a window that
-    # reaches past it, into the padding (or, unpadded, into cornerSubPix's
-    # replicated border), so it is pulled off its true position: by 1-4 px
-    # at the median on rendered boards cut by the edge, against 0.2-0.3 px
-    # further in. Such a corner is not measured, so it is not returned --
-    # before the refinement/validation below, so their bounding-box/lattice
-    # work never spends effort on a corner that is being dropped anyway.
+    # Refined over a window reaching past the image edge, so pulled off
+    # position: 1-4 px at the median against 0.2-0.3 px further in. Not
+    # measured, so not returned, and dropped before refinement spends
+    # anything on it.
     margin = _edge_margin()
     height, width = img.shape[:2]
     inside = ((img_points[:, 0] >= margin) & (img_points[:, 1] >= margin)
@@ -968,7 +881,7 @@ def render_grid_board_image(
     aruco2's own raster of a grid board.
 
     pyCamSet prints from the vector layout in
-    :mod:`pyCamSet.calibration_targets.charuco2.layout`; this is the
+    :mod:`pyCamSet.calibration_targets.markers.gridboard_layout`; this is the
     reference that layout is checked against, pixel for pixel.
 
     :param grid_size: ``(num_squares_x, num_squares_y)``, in markers.
@@ -1100,8 +1013,8 @@ def grid_board_marker_bits(
 
     ``Dictionary.get_marker_bits`` gives 1 for a *white* cell, in the
     orientation aruco2 draws the marker (rotation 0); this flips it to True
-    for black, which is what :func:`pyCamSet.calibration_targets.charuco2
-    .layout.grid_board_rectangles` takes. Neither the polarity nor the
+    for black, which is what :func:`pyCamSet.calibration_targets.markers
+    .gridboard_layout.grid_board_rectangles` takes. Neither the polarity nor the
     orientation is assumed: both were established by rasterising the layout
     built from these bits and comparing it, pixel for pixel, with
     ``aruco2.get_grid_board_image`` for several dictionaries, board shapes

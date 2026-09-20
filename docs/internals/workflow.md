@@ -88,8 +88,8 @@ run = phase1.run(params, workspace, log=print)
 read with aruco2. It belongs to the detection rather than the target: the GUI chooses
 it in Phase 1 and the Optimisation tab, and Phases 2 and 3 take it from the
 Phase 1 run they continue. Phase 1 caches detections per detector — an aruco2
-run caches to `detected_datapoints_aruco2.pickle` beside the images, and an
-aruco1 run keeps `detected_datapoints.pickle` — so a run never reuses the other
+run caches to `detected_datapoints_aruco2.npz` beside the images, and an
+aruco1 run keeps `detected_datapoints.npz` — so a run never reuses the other
 detector's detections. Remembered recent targets ignore it: the same board read
 with the other detector is the same target.
 

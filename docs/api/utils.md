@@ -6,6 +6,12 @@
 
 ::: pyCamSet.utils.saving
 
+::: pyCamSet.utils.setup_reports
+
+::: pyCamSet.utils.intrinsics_report
+
+::: pyCamSet.utils.paths
+
 ---
 
 ::: pyCamSet.utils.logs

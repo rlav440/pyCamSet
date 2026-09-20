@@ -15,7 +15,7 @@ TypeError: 'NoneType' object is not callable
 To see the real cause, import the target's module directly:
 
 ```python
-import pyCamSet.calibration_targets.charuco.target
+import pyCamSet.calibration_targets.charuco
 ```
 
 That raises the underlying `ImportError` — most often a missing `svgwrite` or
@@ -55,7 +55,7 @@ In a conda environment the whole graphics stack can go in at once:
 conda install -c conda-forge cairo cairosvg svgwrite
 ```
 
-Afterwards `import pyCamSet.calibration_targets.charuco.target` should succeed.
+Afterwards `import pyCamSet.calibration_targets.charuco` should succeed.
 
 ## `pycamset` will not start
 

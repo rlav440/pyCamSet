@@ -4,22 +4,31 @@ import logging
 logger = logging.getLogger(__name__)
 import math as m
 import sys
-import time
 from itertools import zip_longest, chain
 from pathlib import Path
 import os
 
 import cv2
-import numba
 import numpy as np
 from cv2 import aruco
 from matplotlib import pyplot as plt
 from natsort import natsorted
 from numpy.linalg import svd
 from tqdm import tqdm
-from uniplot import histogram
 
 from scipy.spatial.transform import Rotation as R
+
+def someone_is_watching() -> bool:
+    """
+    Whether there is a person at a terminal to answer or to close a window.
+
+    :return: True when stdin is a terminal
+    """
+    try:
+        return bool(sys.stdin is not None and sys.stdin.isatty())
+    except (AttributeError, ValueError):  # closed or replaced stdin
+        return False
+
 
 def ask_yes_no(context: str, question: str, default: str = 'n') -> str:
     """
@@ -37,12 +46,7 @@ def ask_yes_no(context: str, question: str, default: str = 'n') -> str:
     :return: 'y' or 'n'
     """
     logger.info(context)
-    try:
-        interactive = sys.stdin is not None and sys.stdin.isatty()
-    except (AttributeError, ValueError):  # closed or replaced stdin
-        interactive = False
-
-    if not interactive:
+    if not someone_is_watching():
         logger.warning(
             f"{context} Not running interactively, so assuming '{default}'. "
             f"Set the handler's 'outliers' option to 'y' or 'n' to choose."
@@ -94,52 +98,6 @@ def flatten_pose_list(pose_list):
     """
     params = [ext_4x4_to_rod(t) for t in pose_list]
     return np.concatenate(list(chain(*params)), axis=0)
-
-
-def benchmark(func, repeats=100, mode="ms", timer=time.time_ns, max_runtime=100):
-    """
-    A handy function to benchmark a function. Tracks the execution time, and also the numba allocations.
-    :param func: The function to benchmark as a lambda
-    :param repeats: The number of times to repeat the function call
-    :param mode: The mode to display the results in. Can be "us", "ms", or "s"
-    :param timer: The timer to use. Can be time.time_ns, or time.perf_counter_ns
-    """
-
-    ranges = {
-        "us":1e-3,
-        "ms":1e-6,
-        "s":1e-9,
-    }
-    # starting_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
-    times = []
-    loop_start = timer()
-    for _ in range(repeats):
-        start = timer()
-        func()
-        end=timer()
-        times.append(end-start)
-        total_time = end - loop_start
-        if (total_time * ranges['s'] )> max_runtime:
-            print(
-            f"Exceeded given max_runtime of {max_runtime} seconds."
-            )
-            break
-
-    times = np.array(times)
-    mean = np.mean(times) * ranges[mode]
-    stdev = np.std(times * ranges[mode])
-    median = np.median(times) * ranges[mode]
-    max_t = min(mean + 3*stdev,np.amax(times) * ranges[mode])
-    print(f"Mean: {mean:.2f} {mode}, median: {median:.2f} {mode}, stdev: {stdev:.2f} {mode}")
-    histogram(times*ranges[mode], bins=20,
-              bins_min=max(mean- 3*stdev, 0),
-              x_max = min(mean + 5*stdev, max_t),
-              height = 3,
-              color = True,
-              y_unit=" freq",
-              x_unit=mode,
-              )
-    # final_alloc = numba.core.runtime.rtsys.get_allocation_stats()[0]
 
 
 def mad_outlier_detection(data: np.ndarray|list, out_thresh = 3, draw=True) -> np.ndarray or None:
@@ -195,13 +153,16 @@ def mad_outlier_detection(data: np.ndarray|list, out_thresh = 3, draw=True) -> n
                 f'{n_unusable} of these have no finite error to score: '
                 f'indicies{"".join(f" {w}" for w in np.nonzero(~finite)[0])}')
         logger.critical(f'These may prevent calibration conversion')
-        if draw:
+        if draw and not someone_is_watching():  # a Qt plt.show() never returns unattended
+            logger.info("Not running interactively, so the outlier plot is "
+                        "not drawn.")
+        elif draw:
             # Anything without a score of its own -- no finite error, or a
             # majority so concentrated that its score is infinite -- is drawn
             # on the threshold rather than left out, so the plot accounts for
             # every index the function just returned.
             on_scale = finite & np.isfinite(scores)
-            fig, ax = plt.subplots(1, 1)
+            _, ax = plt.subplots(1, 1)
             ax.plot(np.nonzero(on_scale)[0], scores[on_scale], '.')
             if not np.all(on_scale):
                 ax.plot(np.nonzero(~on_scale)[0],
@@ -220,24 +181,17 @@ _SUPPORTED_IMAGE_SUFFIXES = {".png", ".bmp", ".tiff", ".jpeg", ".jpg"}
 _IGNORED_CAMERA_ROOT_FOLDERS = {"sparse", "optimisation_runs"}
 
 
-def glob_ims(loc: Path):
+def glob_ims(loc: Path, recursive: bool = True) -> list[Path]:
     """
-    Returns a list of all images one folder below the input path
-    :param loc:
-    :return:
-    """
-    imlocs = [p.resolve() for p in loc.glob("**/*") if p.suffix.lower() in _SUPPORTED_IMAGE_SUFFIXES]
-    return imlocs
+    Every supported image under a path.
 
-
-def glob_ims_local(loc: Path):
+    :param loc: the folder to search
+    :param recursive: search subfolders as well as this one
+    :return: the resolved image paths
     """
-    Returns a list of all images in this folder
-    :param loc:
-    :return:
-    """
-    imlocs = [p.resolve() for p in loc.glob("*") if p.suffix.lower() in _SUPPORTED_IMAGE_SUFFIXES]
-    return imlocs
+    pattern = "**/*" if recursive else "*"
+    return [p.resolve() for p in loc.glob(pattern)
+            if p.suffix.lower() in _SUPPORTED_IMAGE_SUFFIXES]
 
 
 def _is_candidate_camera_folder(path: Path) -> bool:
@@ -251,7 +205,7 @@ def _is_candidate_camera_folder(path: Path) -> bool:
             "Ignoring folder %r: it is a known generated (non-camera) folder.", path.name
         )
         return False
-    if not glob_ims_local(path):  # Ignore folders that contain no supported image files.
+    if not glob_ims(path, recursive=False):  # Ignore folders that contain no supported image files.
         logger.warning(
             "Ignoring folder %r: it contains no image files directly (images in nested "
             "subfolders are not detected). If this is a camera folder, move its images "
@@ -379,7 +333,7 @@ def ext_4x4_to_rod(h4):
     """
     rot_m = h4[:3, :3]
     trans = h4[:3, -1]
-    rot, m = cv2.Rodrigues(rot_m)
+    rot, _ = cv2.Rodrigues(rot_m)
     return rot.squeeze(), trans
 
 

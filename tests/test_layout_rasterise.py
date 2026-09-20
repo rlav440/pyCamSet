@@ -24,7 +24,7 @@ from fractions import Fraction
 
 import numpy as np
 
-from pyCamSet.calibration_targets.charuco2 import layout
+from pyCamSet.calibration_targets.markers import gridboard_layout as layout
 
 
 def _exact_first_pixel(edge: Fraction, top_left: Fraction, ppu: Fraction) -> int:

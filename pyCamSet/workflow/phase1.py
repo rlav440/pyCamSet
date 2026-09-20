@@ -29,7 +29,6 @@ from pyCamSet.workflow.workspace import (
     WorkspaceManager,
     copy_file,
     count_images_in_folder,
-    delete_file,
     get_camera_subfolders,
     make_run_id,
     path_exists,
@@ -39,17 +38,15 @@ from pyCamSet.workflow.workspace import (
 _LOG = logging.getLogger(__name__)
 
 try:
-    from pyCamSet.calibration.camera_calibrator import (
-        cache_identity_path,
+    from pyCamSet.calibration.camera_calibrator import detect_datapoints_in_imfile
+    from pyCamSet.calibration.detection_cache import (
         cache_matches,
-        detect_datapoints_in_imfile,
         load_verified_cache,
-        validate_detections,
     )
+    from pyCamSet.utils.setup_reports import validate_detections
 
     BACKEND_OK = True
 except (ImportError, OSError) as exc:
-    cache_identity_path = None
     cache_matches = None
     detect_datapoints_in_imfile = None
     load_verified_cache = None
@@ -304,20 +301,17 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
             # own cache lookup (against root / cache_name) can never see a
             # cache: even a previous run of this EXACT subset only ever left
             # one beside the images at f_loc, via the copy-back below.
-            # Bringing that cache (and its identity sidecar, which is what
-            # actually lets it be confirmed) into the staged root first is
-            # what lets a rerun of the same subset hit it at all. cam_names
+            # Bringing that cache into the staged root first is what lets a
+            # rerun of the same subset hit it at all. cam_names
             # is passed to detect_datapoints_in_imfile explicitly below (this
             # run's own selection, pinned above), so a different subset's
             # identity still fails to match and correctly redetects. Best-effort only
             # -- see this function's own docstring -- a failure here can
             # only cost a cache hit, never this call's own detections.
             cached_source = f_loc / cache_name
-            cached_source_identity = cache_identity_path(cached_source)
-            if path_exists(cached_source) and path_exists(cached_source_identity):
+            if path_exists(cached_source):
                 try:
                     copy_file(cached_source, root / cache_name)
-                    copy_file(cached_source_identity, cache_identity_path(root / cache_name))
                 except OSError as exc:
                     # A race with a concurrent writer at f_loc (the source
                     # unlinked between the path_exists() checks above and
@@ -356,9 +350,8 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
 
         if root != f_loc and caching:
             # The cache lands beside the images the pass read, i.e. the
-            # staging folder -- bring it (and its identity sidecar) back to
-            # the image folder, where a rerun of this same subset looks for
-            # it. Purely a speed-up for a LATER run: this call's own
+            # staging folder -- bring it back to the image folder, where a
+            # rerun of this same subset looks for it. Purely a speed-up for a LATER run: this call's own
             # (detections, cam_res) below are already final and returned
             # regardless of whether this copy-back succeeds, so the whole
             # thing is best-effort -- any failure here is logged and
@@ -368,16 +361,6 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
                 destination = f_loc / cache_name
                 try:
                     copy_file(cached, destination)
-                    cached_identity = cache_identity_path(cached)
-                    destination_identity = cache_identity_path(destination)
-                    if path_exists(cached_identity):
-                        copy_file(cached_identity, destination_identity)
-                    else:
-                        # The staged root wrote no sidecar for this pickle
-                        # (an unregistered target, or an older run) -- a
-                        # sidecar already sitting beside the destination
-                        # must never end up paired with a different pickle.
-                        delete_file(destination_identity)
                 except OSError as exc:
                     _LOG.warning(
                         "Could not copy the freshly written detection "

@@ -45,25 +45,17 @@ from pyCamSet.calibration_targets.core.parameters import (
     Parameter,
     DetectorParameterisation,
 )
-# The corner-interpolation adapter (below) hands aruco2's markers to
-# OpenCV's own CharucoDetector, built through the SAME helper the aruco1
-# path uses -- for configuration parity, not because it changes anything
-# observable here (see _charuco_detector_for's docstring).
+# The corner-interpolation adapter below hands aruco2's markers to
+# OpenCV's CharucoDetector, built through the same helper the aruco1
+# path uses, so both are configured alike.
 from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
 from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
 
-# Module-level lazy aruco2 import guard (D3): the module must import cleanly
-# even when aruco2 is not installed. ARUCO2_AVAILABLE is the single source of
-# truth for availability checks in the target classes.
-#
-# ImportError means the package is not on the path at all (not installed).
-# OSError means the package *was found* -- its .pyd loaded far enough for the
-# loader to try to import it -- but pulling in its native dependencies (the
-# Microsoft Visual C++ runtime DLLs the aruco2 wheel links against, such as
-# CONCRT140.dll, MSVCP140.dll or VCRUNTIME140.dll) failed. Those are two
-# different problems with two different fixes, so the OSError text is kept
-# for _require_aruco2() to report rather than folded into the same "not
-# installed" message.
+# This module must import cleanly without aruco2 installed;
+# ARUCO2_AVAILABLE is the single source of truth for that. The two
+# failures are kept apart because their fixes differ: ImportError is
+# 'not installed', OSError is installed but its native runtime DLLs
+# would not load, and _require_aruco2 reports that text.
 try:
     import aruco2  # noqa: F401  (used lazily through the module reference)
     _aruco2_importable = True
@@ -172,12 +164,9 @@ def resolve_dictionary(a_dict, marker_backend: str = "aruco1") -> cv2.aruco.Dict
     )
 
 
-#: Bounds a marker id must fall within to survive _detect()'s own
-#: ``np.asarray(..., dtype=np.int32)`` cast further down this module: an id
-#: outside this range raises OverflowError from numpy rather than being
-#: skipped the way an out-of-bounds/foreign id normally is (round-3
-#: finding, P3). See the ``good = []`` filtering loop in
-#: :func:`interpolate_board_corners`.
+#: Bounds a marker id must fall within to survive the np.int32 cast
+#: below: an id outside it raises OverflowError from numpy instead of
+#: being skipped the way a foreign id is.
 _INT32_MIN = int(np.iinfo(np.int32).min)
 _INT32_MAX = int(np.iinfo(np.int32).max)
 
@@ -195,43 +184,25 @@ def detect_markers(image, dict_int):
     return [(int(m.id), np.asarray(m.corners, dtype=np.float32)) for m in markers]
 
 
-#: Bounds how many (board, detector) entries _CHARUCO_DETECTOR_CACHE keeps
-#: alive at once. Arbitrary but generous: a target holds at most a handful
-#: of live boards (a ChArUco one, six for a Ccube), so this is not expected
-#: to bind in normal use -- it exists so the cache cannot grow without
-#: bound across many short-lived boards (e.g. a study that rebuilds targets
-#: repeatedly), which the strong board reference below would otherwise do.
+#: How many (board, detector) entries the cache keeps. Generous: a
+#: target holds a handful of live boards, so it binds only when
+#: something rebuilds targets repeatedly.
 _CHARUCO_DETECTOR_CACHE_MAXSIZE = 64
 
-#: One cv2.aruco.CharucoDetector per board, built once and reused. Keyed by
-#: id(board), but each entry ALSO holds a strong reference to the board
-#: itself: CPython reuses a garbage-collected object's address for a new
-#: object (verified empirically: alternating two differently-shaped boards
-#: through a construct/delete/gc loop reused ids for most iterations), so a
-#: bare id()-keyed cache can hand a new, differently-shaped board the OLD
-#: board's detector -- silently, since detectBoard never re-validates that
-#: its detector's own board matches the geometry the caller thinks it is
-#: reading. Keeping the board alongside its detector lets a lookup check
-#: identity (``is``) before reusing an entry, which is correct regardless
-#: of whether an id() match is a genuine hit or a collision: a collision
-#: simply misses (rebuilds), because the stored board is never the one
-#: being asked for. See :func:`_charuco_detector_for`.
+#: One CharucoDetector per board, keyed by id(board) but holding the
+#: board too: CPython reuses the address of a collected object, and
+#: detectBoard never checks that its detector's board matches the
+#: geometry the caller means. The stored board is compared by identity,
+#: so a recycled address misses and rebuilds rather than silently
+#: reading one board with another's detector.
 _CHARUCO_DETECTOR_CACHE: dict[int, tuple[cv2.aruco.CharucoBoard, cv2.aruco.CharucoDetector]] = {}
 
-#: Guards every read-check-insert-evict sequence on
-#: :data:`_CHARUCO_DETECTOR_CACHE` (round-2 review, P2). The cache is
-#: process-local -- pyCamSet's own ``multiprocessing.Pool`` workers each get
-#: an independent copy, so this is not about that -- but a caller that drives
-#: this backend from real OS threads (a GUI worker thread, a
-#: ``ThreadPoolExecutor`` pipeline) could otherwise race the dict's
-#: check-then-delete eviction step: two threads evicting concurrently can
-#: compute the same "oldest" key and both try to delete it (``KeyError``), or
-#: a mutation can land between another thread's ``iter()`` and its lookup
-#: (``RuntimeError: dictionary changed size during iteration``). Both were
-#: reproduced directly against this cache under a widened thread-switch
-#: interval. The common path is cache-hit-dominated, so a single lock around
-#: the whole lookup/build/evict body costs it a negligible uncontended
-#: acquisition.
+#: Guards every read-check-insert-evict sequence on the cache. The
+#: cache is process-local, but a caller driving this from OS threads
+#: can race the eviction: two threads picking the same oldest key
+#: (KeyError), or a mutation landing mid-iteration (RuntimeError).
+#: Both were reproduced. The hit-dominated path pays only an
+#: uncontended acquisition.
 _CHARUCO_DETECTOR_CACHE_LOCK = threading.Lock()
 
 
@@ -374,18 +345,11 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
     """
     image = _as_uint8_image(image)
 
-    # aruco2's own detect_markers() always returns (4,2) float32 quads, so
-    # this is not a validation pass over well-formed real input -- it is
-    # what keeps a malformed/foreign marker list (the regression test
-    # below; interpolate_board_corners is a public seam) from being cast
-    # into one inhomogeneous array. OpenCV's own detectBoard needs no
-    # finite/area/bounds guarding beyond that: verified to tolerate
-    # out-of-bounds (cropped/partial-view) and foreign-id markers without
-    # raising, unlike the D4-step homography this replaces -- EXCEPT an id
-    # outside int32 range, which _detect()'s own np.int32 cast (below) would
-    # otherwise raise OverflowError on (round-3 finding, P3): drop it here,
-    # the same fail-safe way a wrong-shaped quad is dropped, rather than let
-    # a single foreign id abort the whole frame.
+    # aruco2's detect_markers always returns (4,2) float32 quads, so this
+    # guards the public seam against a malformed or foreign marker list
+    # rather than validating real input. detectBoard itself tolerates
+    # out-of-bounds and foreign ids; an id outside int32 range is
+    # dropped here because the cast below would raise on it.
     good = []
     for mid, corners in markers:
         corners = np.asarray(corners, dtype=np.float32)
@@ -408,11 +372,9 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
         # to "nothing to interpolate" -- short-circuit before that happens.
         return None, None
 
-    # An id seen twice in one frame is ambiguous -- which of the two is the
-    # real marker cannot be told here -- and detectBoard's own consistency
-    # check rejects the WHOLE frame over it rather than picking one. Drop
-    # every marker sharing a repeated id (not just the extras) before it
-    # ever reaches detectBoard.
+    # An id seen twice is ambiguous, and detectBoard rejects the whole
+    # frame over it rather than choosing. Drop every marker sharing a
+    # repeated id, not just the extras.
     id_counts: dict[int, int] = {}
     for mid, _corners in good:
         id_counts[mid] = id_counts.get(mid, 0) + 1
@@ -436,18 +398,9 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
     c_corners, c_ids, mloc, mid = _detect(good)
 
     if c_corners is None and mloc is not None:
-        # Approved policy: no retry -- board's own legacy flag is never
-        # touched here, and the configured pattern's own "no corners" result
-        # stands. The only thing left to decide is whether this frame is
-        # strong enough evidence of a mismatch to warn about (see
-        # markers.legacy_probe.should_warn_legacy_mismatch's docstring for
-        # exactly what "strong" means); a throwaway probe board/detector is
-        # used for that check, built for the OPPOSITE pattern, never
-        # board's own -- its corners are evidence only, never returned.
-        # warn_legacy is None once the caller has already warned (P2,
-        # round-1 review): that also skips should_warn_legacy_mismatch's
-        # own probe below via this short-circuit, so it is paid at most
-        # once per target, not on every later qualifying frame.
+        # No retry: the configured pattern's "no corners" stands, and the
+        # probe only decides whether to warn. None once the caller has
+        # warned, which also skips the probe's cost from then on.
         if warn_legacy is not None and should_warn_legacy_mismatch(
             board, ARUCO_OPENCV_DETECTOR.resolve(None), image,
             len(mloc), mloc, mid,

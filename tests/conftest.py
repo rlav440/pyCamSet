@@ -342,3 +342,27 @@ def charuco_problem(session_data_dir, charuco_target, charuco_detections):
     cams = run_initial_calibration(detections, charuco_target, camera_res, save=False)
     cams.set_resolutions_from_file(floc=session_data_dir / "calibration_charuco")
     return charuco_target, detections, cams
+
+
+class UndrawableTarget:
+    """The drawing half of :class:`AbstractTarget`, for a detection-only double.
+
+    A target must declare that it can be printed and plotted. A stub that
+    only detects says so here rather than in five separate bodies.
+    """
+
+    @classmethod
+    def printable_name(cls, values, kind="svg"):
+        raise NotImplementedError(f"{cls.__name__} is not drawn")
+
+    def save_printable(self, path, kind="svg", **options):
+        raise NotImplementedError(f"{type(self).__name__} is not drawn")
+
+    def save_to_svg(self, f_out, **options):
+        raise NotImplementedError(f"{type(self).__name__} is not drawn")
+
+    def save_to_pdf(self, f_out, data_format="raster", **options):
+        raise NotImplementedError(f"{type(self).__name__} is not drawn")
+
+    def plot(self):
+        raise NotImplementedError(f"{type(self).__name__} is not drawn")

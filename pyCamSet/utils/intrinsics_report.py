@@ -354,3 +354,20 @@ def per_view_reprojection(
         overall_rms[cam_name] = _pool(board_rms[solved], board_points[solved])
 
     return per_view, overall_rms
+
+
+def report_initial_calibration(cams, detection, target,
+                               min_detections_per_board: int = 12) -> IntrinsicsReport:
+    """
+    Reports what each camera's own calibration came out as.
+
+    :param cams: the per camera calibration to describe
+    :param detection: the detections it was solved from
+    :param target: the calibration target they were found with
+    :param min_detections_per_board: the per board minimum it was solved under
+    :return: the report, which is also logged
+    """
+    report = IntrinsicsReport.from_calibration(
+        cams, detection, target, min_detections_per_board)
+    logger.info("\n" + report.summary())
+    return report

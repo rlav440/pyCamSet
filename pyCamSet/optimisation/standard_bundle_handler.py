@@ -184,10 +184,6 @@ class SelfBundleHandler(TemplateBundleHandler):
         self.visible_feature_mask = np.isin(np.arange(n_points), dd)
         self.feat_unfixed = np.repeat(self.visible_feature_mask, 3)
 
-        # fix the gauge of the optimisation by fixing 7 coordinates of the
-        # target. They are chosen from the features that were seen: a fixed
-        # coordinate of an unseen feature is not a parameter of this
-        # optimisation and so removes no freedom from it.
         self.fixed_inds, self.gauge_axis = find_gauge_points(
             self.flat_point_data.reshape((-1, 3)),
             candidates=np.flatnonzero(self.visible_feature_mask),
@@ -368,6 +364,51 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         return new_cams, ps
 
+    def _scale_against_target(self, point_estimate, ref_points) -> float:
+        """
+        How much the solved points must grow to match the target as drawn.
+
+        Read from the distances between features rather than their positions,
+        which is what makes it independent of where the solve put them.
+
+        :param point_estimate: the solved feature positions
+        :param ref_points: the same features, as the target is drawn
+        :raises ValueError: when the target offers no valid distance pair
+        """
+        valid_map = self.target.valid_map
+        vm = self.visible_feature_mask
+
+        if isinstance(valid_map, np.ndarray):
+            new_map = ch.calc_distance_subset(point_estimate, point_estimate, valid_map[:,:2])
+            ref_map = ch.calc_distance_subset(ref_points, ref_points, valid_map[:,:2])
+        elif valid_map is True:
+            inds = np.triu_indices(point_estimate[vm].shape[0], k=1)
+            new_map = cdist(point_estimate[vm], point_estimate[vm])[inds]
+            ref_map = cdist(ref_points[vm], ref_points[vm])[inds]
+            # One square's edge only: every other distance is some multiple of
+            # it, and a pair a whole board apart is the least well solved.
+            mask = np.isclose(ref_map, self.target.square_size)
+            new_map, ref_map = new_map[mask], ref_map[mask]
+            if len(ref_map) == 0:
+                raise ValueError(
+                    "No pair of visible features was one square apart, so the "
+                    "target's square size does not match its geometry.")
+        elif valid_map is False:
+            raise ValueError(
+                "The target reports no valid distance comparisons, so its "
+                "scale cannot be recovered.")
+        else:
+            raise ValueError(
+                "target.valid_map must be True for all comparisons, or an "
+                f"(n, 2) array of index pairs; got {type(valid_map).__name__}.")
+
+        scale = float(np.mean(ref_map / new_map))
+        if np.isnan(scale):
+            raise ValueError(
+                "The scale came out NaN, so the distances it was read from "
+                "did not exist.")
+        return scale
+
     def apply_gauge_transform(self, proj, extr, poses, point_estimate) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Maps a set of parameters from an existing representation to the scale and transformation that best matches the provided model.
@@ -388,53 +429,28 @@ class SelfBundleHandler(TemplateBundleHandler):
         :param point_estimate: The array containing the estimated locations of the calibration target features.
         :return: A tuple containing updated proj, extr, poses, and point estimate.
         """
-        # the arrays of the bundle primitive are refilled from the parameters
-        # on every call, so the transform is applied to copies: a plot or a
-        # second call for the camera set must not leave a transformed pose
-        # behind for the next one to transform again. The projection is copied
-        # for the same reason -- a rotation only camera takes the scale there.
         poses = poses.copy()
         extr = extr.copy()
         proj = proj.copy()
 
         ref_points = self.target.point_data.reshape((-1,3))
-        valid_map = self.target.valid_map
         vm = self.visible_feature_mask
 
-        if isinstance(valid_map, bool):
-            if valid_map == False:
-                raise ValueError("Target has given a valid map of False, which indicates no distance comparisons are valid.")
-            #use cdist, take the upper
-            inds = np.triu_indices(point_estimate[vm].shape[0], k=1)
-            new_map = cdist(point_estimate[vm], point_estimate[vm])[inds]
-            ref_map = cdist(ref_points[vm], ref_points[vm])[inds]
-            dt = self.target.square_size
-            mask = np.isclose(ref_map, dt)
-            new_map = new_map[mask]
-            ref_map = ref_map[mask]
-            
-            if len(ref_map) == 0:
-                raise ValueError("The mask of valid distance pairs was empty, indicating an issue with the square size of the target.")
-
-        elif isinstance(valid_map, np.ndarray):
-            new_map = ch.calc_distance_subset(point_estimate, point_estimate, valid_map[:,:2])
-            ref_map = ch.calc_distance_subset(ref_points, ref_points, valid_map[:,:2])
-        else:
-            raise ValueError("The target.valid_map property either needs to be true, for all comparisons being valid, or a nx2 list of index pairs.")
-        s = np.mean(ref_map/new_map)
+        s = self._scale_against_target(point_estimate, ref_points)
         logger.info(f"Scale factor found {s}")
-
         new_points = s * point_estimate
-        if np.isnan(s):
-            raise ValueError("Found S as nan, indicating that the requisite mappings did not exist")
         try:
             update_tform = gu.make_4x4h_tform(*ch.n_estimate_rigid_transform(
                 new_points[vm], ref_points[vm])
             ) #this mapping from used points to a reference space
-        except Exception as e:
-            logger.critical("Failed to find an acceptable gauge transform, returning the identity")
-            logger.critical(f"Gave error: {e}")
-            update_tform = np.eye(4)
+        except Exception as exc:
+            # Returning the identity here would hand back an ungauged result
+            # that this method's contract says is gauged, and no caller can
+            # tell the two apart.
+            raise ValueError(
+                "Could not find a gauge transform against the target, so the "
+                "solved geometry cannot be put back in the target's frame."
+            ) from exc
 
         inv_update = np.linalg.inv(update_tform)
         new_points = gu.h_tform(new_points, update_tform)
@@ -546,22 +562,12 @@ class SelfBundleHandler(TemplateBundleHandler):
         s.add_scalar_bar(title="Euclidean displacement from initial model (mm).")
         s.add_mesh(pv.PolyData(og_data*descale), color='k', label = "Original Model", point_size=0.3)
 
-        # a lattice for every face of the target: point_data's (u, ... w, n, 3)
-        # shape groups the n coplanar points of each face together, so the
-        # faces are the rows of that reshape whatever the shape of the object.
-        # It is drawn grey rather than black held faint by opacity: the lattice
-        # is the ground the arrows are read against, and a renderer that blends
-        # the overlapping lines of the far side differently -- the docs' vtk.js
-        # viewer does -- turns faint black into solid black and buries them.
         for face in og_data.reshape((-1, self.point_data.shape[-2], 3)):
             lattice = pv.PolyData(face*descale, lines=make_connectivity(face))
             s.add_mesh(lattice, style='wireframe', line_width=2, color='lightgrey')
 
         s.add_legend(bcolor='w', border=True)
 
-        # the direction the target is viewed from is a choice; the distance is
-        # not, and a fixed one draws a small target as a speck. reset_camera
-        # keeps the direction and fits the distance to what is being drawn.
         camera = s.camera
         camera.position = (-60, -60, -36)
         camera.focal_point = (0,0,0)
@@ -610,22 +616,3 @@ def row_length(pts):
         if np.linalg.norm(np.cross(step, next_step)) > 1e-6:
             return idp
     return len(pts)
-
-
-
-def rms_plane(c, n, data):
-    norms = np.sum((data - c) * n, axis=1)
-    return np.mean(np.abs(norms), axis=0)
-
-
-def angle_between_planes(normal1, normal2):
-    # Normalize the vectors
-    normal1_unit = normal1 / np.linalg.norm(normal1)
-    normal2_unit = normal2 / np.linalg.norm(normal2)
-    
-    # Calculate the dot product
-    dot_product = np.dot(normal1_unit, normal2_unit)
-    
-    # Calculate the angle in radians and then convert to degrees
-    angle = np.arccos(dot_product)
-    return np.degrees(angle)

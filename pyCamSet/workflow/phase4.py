@@ -13,11 +13,11 @@ from typing import Optional
 
 import numpy as np
 
+from pyCamSet.utils.paths import long_path
 from pyCamSet.workflow.diagnostics import per_camera_mean_reprojection
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
-    as_io_path,
     make_run_id,
 )
 
@@ -144,7 +144,7 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet optimisation modules are not importable.")
 
-    previous_cams = load_CameraSet(as_io_path(phase3_camset))
+    previous_cams = load_CameraSet(long_path(phase3_camset))
     selected = list(params.get("selected_cameras") or [])
     if selected and set(previous_cams.get_names()) != set(selected):
         raise RuntimeError(

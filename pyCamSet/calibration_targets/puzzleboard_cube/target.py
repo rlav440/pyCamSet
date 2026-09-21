@@ -268,7 +268,7 @@ class PuzzleBoardCube(AbstractTarget):
 
     @classmethod
     def printable_name(cls, values: dict, kind: str = "svg") -> str:
-        return (f"puzzleboard_cube_{int(values['n_points'])}points_"
+        return (f"pcube_{int(values['n_points'])}points_"
                 f"{float(values['length']):g}mm{EXPORT_SUFFIXES[kind]}")
 
     def save_printable(self, path, kind: str = "svg", border_width: float = 10.0,
@@ -637,7 +637,7 @@ class PuzzleBoardCube(AbstractTarget):
     ) -> Path:
         """Save the deterministic cube net as a physically sized vector SVG."""
         if f_out is None:  # Construct a descriptive filename when no output path was supplied.
-            f_out = Path(f"puzzleboard_cube_{self.n_points}points_{self.length:g}mm.svg")
+            f_out = Path(f"pcube_{self.n_points}points_{self.length:g}mm.svg")
         else:  # Accept strings and paths like the other target classes.
             f_out = Path(f_out)
         f_out = f_out.expanduser().with_suffix(".svg").resolve()  # Force the vector extension.
@@ -664,7 +664,7 @@ class PuzzleBoardCube(AbstractTarget):
     ) -> Path:
         """Save the cube net as a raster or vector PDF."""
         if f_out is None:  # Construct a descriptive filename when no output path was supplied.
-            f_out = Path(f"puzzleboard_cube_{self.n_points}points_{self.length:g}mm.pdf")
+            f_out = Path(f"pcube_{self.n_points}points_{self.length:g}mm.pdf")
         else:  # Accept strings and paths like the other target classes.
             f_out = Path(f_out)
         f_out = f_out.expanduser().with_suffix(".pdf").resolve()  # Force the PDF extension.

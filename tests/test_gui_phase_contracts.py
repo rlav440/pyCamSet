@@ -2027,6 +2027,7 @@ def test_the_target_combo_shows_labels_and_answers_with_registry_names():
         assert shown["ChArUco2"] == "ChArUco2"
         assert shown["Ccube2"] == "ChArUco2 ccube"
         assert shown["PuzzleBoard"] == "PuzzleBoard"
+        assert shown["PuzzleBoardCube"] == "pcube"
 
         form.set_target_type("Ccube")
         assert combo.currentText() == "ChArUco1 ccube"
@@ -2051,8 +2052,24 @@ def test_every_target_label_names_a_registered_target():
     )
 
     assert set(TARGET_LABELS) <= set(TARGET_NAMES)
-    assert target_label("PuzzleBoardCube") == "PuzzleBoardCube", "falls back to the name"
+    assert target_label("PuzzleBoardCube") == "pcube"
     assert len(set(map(target_label, TARGET_NAMES))) == len(TARGET_NAMES)
+
+
+@pytest.mark.gui
+def test_pcube_is_a_presentation_label_but_specs_keep_the_registry_name():
+    from PySide6.QtWidgets import QApplication
+
+    from pyCamSet.calibration_targets.core.target_registry import target_label
+
+    QApplication.instance() or QApplication([])
+    form = _target_form("PuzzleBoardCube")
+    try:
+        assert target_label("PuzzleBoardCube") == "pcube"
+        assert form._target_combo.currentText() == "pcube"
+        assert form.spec()["type"] == "PuzzleBoardCube"
+    finally:
+        form.deleteLater()
 
 
 @pytest.mark.gui

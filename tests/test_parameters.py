@@ -739,6 +739,24 @@ def test_a_target_names_its_own_file_from_its_own_arguments(name, cls):
         assert "/" not in filename and filename.strip() == filename
 
 
+def test_puzzleboard_cube_default_printable_names_use_the_pcube_label(tmp_path, monkeypatch):
+    from pyCamSet.calibration_targets.puzzleboard_cube.generate import default_output_name
+    from pyCamSet.calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
+
+    values = {"n_points": 2, "length": 20.0}
+    for kind in ("svg", "pdf_vector", "pdf_raster"):
+        assert PuzzleBoardCube.printable_name(values, kind).startswith("pcube_")
+        assert default_output_name(2, 20.0, kind).startswith("pcube_")
+
+    monkeypatch.chdir(tmp_path)
+    cube = PuzzleBoardCube(n_points=2, length=20.0)
+    svg_path = cube.save_to_svg()
+    pdf_path = cube.save_to_pdf()
+
+    assert svg_path.name.startswith("pcube_")
+    assert pdf_path.name.startswith("pcube_")
+
+
 @pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
 def test_every_target_writes_itself_as_every_format(tmp_path, name, cls):
     """One export path, rather than the four copies of the same dispatch

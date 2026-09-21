@@ -9,16 +9,20 @@ rectangular board's outer corners their contrast still does so along a
 staircase.
 """
 import re
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "setup_scripts"))
 
 aruco2 = pytest.importorskip("aruco2")
 
 from pyCamSet import calibration_targets  # noqa: E402
 from pyCamSet.calibration_targets import TARGET_NAMES  # noqa: E402
 from pyCamSet.calibration_targets.cico2 import (  # noqa: E402
-    CIco2, corners_touching_cells,
+    FACE_LATTICE, CIco2, corners_touching_cells,
 )
 from pyCamSet.calibration_targets.core.abstract_target import (  # noqa: E402
     EXPORT_KINDS,
@@ -107,10 +111,90 @@ def test_a_marker_on_every_square_is_what_makes_clipping_worth_it():
     assert ratios == sorted(ratios, reverse=True)
 
 
+@pytest.mark.slow
+def test_the_checked_in_lattice_is_what_the_generator_makes():
+    """A pasted constant can drift from the tool that made it."""
+    from calculate_cico2_lattice import MIN_POINTS, solve
+
+    made = {}
+    n_points = MIN_POINTS
+    while True:
+        found = solve(n_points)
+        if found is None:
+            break
+        if made and found["corners"] <= previous:
+            break
+        made[n_points] = (found["scale"], found["phase"])
+        previous = found["corners"]
+        n_points += 1
+
+    assert made == FACE_LATTICE
+
+
+@pytest.mark.parametrize("n_points", sorted(FACE_LATTICE))
+def test_the_lattice_it_draws_is_the_one_it_was_given(n_points):
+    """
+    The scale and phase reach the drawing, not just the constructor.
+
+    Every square, corner and tab is placed from ``board_offset``, so the
+    phase is applied there and nowhere else; this is what says it arrived.
+    """
+    made = CIco2(length=100.0, n_points=n_points)
+    scale, phase = FACE_LATTICE[n_points]
+
+    assert made.square_size == pytest.approx(made.board_edge / scale)
+    inset = made.length - made.board_edge
+    assert made.board_offset[0] == pytest.approx(
+        inset / 2 + phase * made.square_size)
+
+    # and the squares are the ones that scale and phase actually clip to
+    assert sorted(map(tuple, made.cells)) == sorted(map(tuple, (
+        clip_lattice_to_face(TRIANGLE_CORNERS, scale, (phase, 0.0)))))
+
+
+@pytest.mark.parametrize("n_points", sorted(FACE_LATTICE))
+def test_choosing_the_lattice_never_costs_a_corner_or_a_marker(n_points):
+    """
+    What the search is for: more corners, no more of the alphabet.
+
+    Against leaving the lattice flush in the corner of the face, which is
+    what a board that does not choose gets.  Some sizes gain no corner and
+    take a larger square instead, so this is the floor and not the claim.
+    """
+    chosen = CIco2(length=100.0, n_points=n_points)
+    flush_cells = clip_lattice_to_face(TRIANGLE_CORNERS, n_points)
+    flush_corners = len(corners_touching_cells(flush_cells))
+    flush_markers = 20 * len(flush_cells) + (
+        n_points * (int(flush_cells[:, 1].max()) + 1) - len(flush_cells))
+
+    assert chosen.points_per_face >= flush_corners
+    assert chosen.square_size >= chosen.board_edge / n_points
+    markers = 20 * chosen.markers_per_face + (
+        chosen.board_columns * chosen.board_rows - chosen.markers_per_face)
+    assert markers <= max(flush_markers, 1000)
+
+
+@pytest.mark.parametrize("n_points", sorted(FACE_LATTICE))
+def test_every_size_it_offers_fits_a_thousand_marker_dictionary(n_points):
+    """The table is held to what the dictionaries in ordinary use hold."""
+    CIco2(length=100.0, n_points=n_points, aruco_dict="DICT_4X4_1000")
+
+
+def test_the_size_past_the_table_is_refused_rather_than_repeated():
+    """
+    Thirteen squares to an edge cannot be afforded, and says so.
+
+    The best lattice a thirteen-square face could afford is the twelve-square
+    face's, which would be the same target under another name.
+    """
+    with pytest.raises(ValueError, match="markers"):
+        CIco2(length=100.0, n_points=max(FACE_LATTICE) + 1)
+
+
 def test_every_face_carries_the_same_lattice(target):
     assert target.point_data.shape == (20, target.points_per_face, 3)
     assert target.point_local.shape == target.point_data.shape
-    assert target.points_per_face == 65
+    assert target.points_per_face == 66
 
 
 def test_each_face_is_flat(target):

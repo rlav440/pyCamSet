@@ -324,7 +324,7 @@ def make_icosahedral() -> PolyhedralBasis:
 
 def clip_lattice_to_face(
     face: np.ndarray,
-    cells_across: int,
+    cells_across: float,
     phase: tuple[float, float] = (0.0, 0.0),
 ) -> np.ndarray:
     """
@@ -335,7 +335,10 @@ def clip_lattice_to_face(
     nothing.  Clipping to whole cells keeps 51% of a triangular face at six
     cells to an edge and 84% at twenty, against the 50% the largest rectangle
     that fits inside a triangle would keep at any size.  Shifting ``phase`` by
-    a fraction of a cell is worth another cell or two at coarse pitches.
+    a fraction of a cell is worth another cell or two at coarse pitches, and
+    ``cells_across`` need not be a whole number: letting the lattice fall a
+    fraction of a cell short of the edge buys a little more again.
+    :class:`~pyCamSet.calibration_targets.cico2.CIco2` chooses both.
 
     Cells that are dropped are simply not printed.  Nothing downstream needs
     telling: a detector reading a board whose cells are missing is reading a
@@ -343,16 +346,17 @@ def clip_lattice_to_face(
 
     :param face: the face's corners as ``(k, 2)`` or ``(k, 3)``, convex and
         wound anticlockwise, in edge lengths
-    :param cells_across: how many cells span one edge length
+    :param cells_across: how many cells span one edge length, which need not
+        be a whole number of them
     :param phase: where the lattice starts, in cells, as ``(x, y)``
     :return: the ``(n, 2)`` integer ``(column, row)`` index of each whole cell,
         in row-major order
     :raises ValueError: for a cell count that is not positive
     """
-    if int(cells_across) < 1:
+    if not float(cells_across) >= 1:
         raise ValueError("cells_across must be at least one.")
     polygon = np.asarray(face, dtype=float)[:, :2]
-    pitch = 1.0 / int(cells_across)
+    pitch = 1.0 / float(cells_across)
 
     # A convex polygon wound anticlockwise holds every point that is left of
     # each of its edges, so a cell is whole exactly when all four of its

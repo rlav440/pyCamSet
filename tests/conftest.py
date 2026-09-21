@@ -65,7 +65,8 @@ def skip_without_aruco2(name: str) -> None:
 
 MARKERS = {
     "data": "requires the image corpus in tests/test_data",
-    "slow": "takes more than ~10s; runs a full bundle adjustment",
+    "slow": "takes more than ~10s; runs a full bundle adjustment, or a "
+            "design-time search a checked-in constant came from",
     "gui": "requires the optional PySide6 dependency",
     "needs_jit": "asserts on numba's compiled behaviour; invalid with NUMBA_DISABLE_JIT",
     "needs_opengl": "renders through VTK, which needs an OpenGL context",

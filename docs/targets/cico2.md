@@ -68,11 +68,25 @@ it they are board on one side and blank paper on the other, and there is no
 corner to find.
 
 A clipped board's outer boundary is a **staircase**, not a rectangle, so the
-ring cannot be drawn as it stands. The rule it follows — a tab outward from a
-square whose `(column + row)` is odd — is applied instead to every edge of a
-printed square that meets one that was clipped away, with the same square
-filling the outward diagonal where two such edges meet. `CIco2` prints that
-staircase band, and every boundary corner is recovered because of it.
+ring cannot be drawn as it stands. The rule `CIco2` follows is the
+chessboard's own, rather than anything about edges: **a square just outside
+the board that the chessboard would have printed black is printed, cut back to
+the band's depth.** `grid_board_cells` puts the inverted marker on squares
+with an odd `column + row`, so the black ones are the even ones.
+
+Taking it from the chessboard rather than from the boundary is what makes it
+right on a staircase. Across an *edge* the parity flips, so "the square
+outside is black" and "the square inside is white" agree — which is why a rule
+phrased about the inside squares works on a rectangle. Across a *corner* the
+parity does not flip, and a staircase is mostly corners, so the two readings
+disagree exactly there. A boundary-phrased rule puts every staircase corner
+tab on white and breaks the pattern.
+
+On a board with nothing clipped away this draws the rectangular band exactly,
+less the two squares aruco2 puts at the far corners of the board — those sit
+on white, and are that design's own anchors rather than part of the
+chessboard. `CIco2` prints the staircase band, and every boundary corner is
+recovered because of it.
 
 ## Marker ids, and what clipping would otherwise cost
 
@@ -120,6 +134,11 @@ target.to_stl("cico2_core")
 - The boundary corners — more than half of a clipped board's corners — are all
   found, which is what the staircase band is for —
   `test_the_band_keeps_the_corners_on_a_clipped_board_s_edge`.
+- Every tab lies on a square the chessboard would have printed black —
+  `test_the_band_is_the_chessboard_carried_on_outside_the_board`.
+- Given a board with nothing clipped, the staircase rule reproduces aruco2's
+  own band, less its two far-corner anchors —
+  `test_the_band_matches_the_real_one_on_an_unclipped_board`.
 - Corners land within a fiftieth of a square of where `point_data` says they
   are — `test_a_printed_face_puts_its_corners_where_it_says_they_are`.
 - No two faces share a *printed* marker, and the only ids they do share are the

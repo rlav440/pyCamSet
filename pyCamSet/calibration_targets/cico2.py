@@ -405,35 +405,57 @@ class CIco2(AbstractTarget):
 
         A rectangular board gets a ring of alternating tabs, which is what
         gives its outer corners a black side and a white one.  Clipped, its
-        outer boundary is a staircase, and the rule the ring follows -- a tab
-        outward from a square whose ``(column + row)`` is odd -- is applied to
-        every edge of a printed square that meets one that was clipped away.
+        outer boundary is a staircase, and the ring has to follow it.
+
+        The rule is the chessboard's own, rather than anything about edges:
+        a square just outside the board that the chessboard would have printed
+        *black* is printed, cut back to the band's depth.  ``grid_board_cells``
+        puts the inverted marker on squares with an odd ``column + row``, so
+        the black ones are the even ones.
+
+        Taking it from the chessboard rather than from the boundary is what
+        makes it right on a staircase.  Across an edge the parity flips, so
+        "the square outside is black" and "the square inside is white" agree --
+        which is why a rule about the inside squares works on a rectangle.
+        Across a *corner* the parity does not flip, and a staircase is mostly
+        corners, so the two rules disagree there and only this one continues
+        the pattern.
+
+        On an unclipped rectangle this draws the real band exactly, less the
+        two corner squares aruco2 puts at the far corners of the board, which
+        sit on white and are that design's own anchors rather than part of the
+        chessboard.
         """
         printed = self._printed_cells()
         square = self.square_size
         depth = band_depth(square)
         ox, oy = float(self.board_offset[0]), float(self.board_offset[1])
+
+        outside = {(column + dx, row + dy)
+                   for column, row in printed
+                   for dx in (-1, 0, 1) for dy in (-1, 0, 1)} - printed
         tabs: list[tuple[float, float, float, float]] = []
-        for column, row in sorted(printed):
-            if (column + row) % 2 != 1:
+        for column, row in sorted(outside):
+            if (column + row) % 2 != 0:
                 continue
             x0, y0 = ox + column * square, oy + row * square
             x1, y1 = x0 + square, y0 + square
-            if (column, row - 1) not in printed:
-                tabs.append((x0, y0 - depth, x1, y0))
-            if (column, row + 1) not in printed:
-                tabs.append((x0, y1, x1, y1 + depth))
-            if (column - 1, row) not in printed:
-                tabs.append((x0 - depth, y0, x0, y1))
-            if (column + 1, row) not in printed:
-                tabs.append((x1, y0, x1 + depth, y1))
-            # The square that fills the outward diagonal where two of those
-            # edges meet, as the ring's four corner squares do.
-            for dx, ex in ((-1, x0 - depth), (1, x1)):
-                for dy, ey in ((-1, y0 - depth), (1, y1)):
-                    if ((column + dx, row) not in printed
-                            and (column, row + dy) not in printed):
-                        tabs.append((ex, ey, ex + depth, ey + depth))
+            # The part of this square nearest the board it borders: a strip
+            # along each edge it shares with a printed square...
+            if (column, row - 1) in printed:
+                tabs.append((x0, y0, x1, y0 + depth))
+            if (column, row + 1) in printed:
+                tabs.append((x0, y1 - depth, x1, y1))
+            if (column - 1, row) in printed:
+                tabs.append((x0, y0, x0 + depth, y1))
+            if (column + 1, row) in printed:
+                tabs.append((x1 - depth, y0, x1, y1))
+            # ...and a square in each corner that a printed square only
+            # touches diagonally, which a staircase has a great many of.
+            for dx, cx in ((-1, x0), (1, x1 - depth)):
+                for dy, cy in ((-1, y0), (1, y1 - depth)):
+                    if (column + dx, row + dy) in printed:
+                        tabs.append((cx, cy, cx + depth, cy + depth))
         return tabs
 
     def face_rectangles(self, face_index: int) -> np.ndarray:

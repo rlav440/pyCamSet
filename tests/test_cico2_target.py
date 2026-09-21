@@ -226,6 +226,88 @@ def test_the_band_keeps_the_corners_on_a_clipped_board_s_edge(target):
     assert set(boundary) <= found, "boundary corners were not found"
 
 
+def test_the_band_is_the_chessboard_carried_on_outside_the_board(target):
+    """
+    Every tab lies in a square the chessboard would have printed black.
+
+    The rule has to be taken from the chessboard, not from the boundary.
+    Across an edge the parity flips, so "the square outside is black" and
+    "the square inside is white" agree, and either reading works on a
+    rectangle.  Across a corner it does not flip, and a staircase is mostly
+    corners -- so a rule about the inside squares puts the corner tabs on
+    white and breaks the pattern, which is what this catches.
+    """
+    from pyCamSet.calibration_targets.markers.gridboard_layout import band_depth
+
+    square = target.square_size
+    depth = band_depth(square)
+    ox, oy = target.board_offset
+    printed = target._printed_cells()
+
+    tabs = target._staircase_band()
+    assert tabs, "a clipped board has a boundary, so it has a band"
+    for x0, y0, x1, y1 in tabs:
+        # The square this tab lies in, found from its middle so that a strip
+        # along an edge is attributed to the square outside, not the one in.
+        column = int(round(((x0 + x1) / 2 - ox) // square))
+        row = int(round(((y0 + y1) / 2 - oy) // square))
+        assert (column, row) not in printed, "a tab is on the board itself"
+        assert (column + row) % 2 == 0, (
+            f"tab at square ({column}, {row}) sits on a white square")
+        assert x1 - x0 <= square + 1e-9 and y1 - y0 <= square + 1e-9
+        assert min(x1 - x0, y1 - y0) <= depth + 1e-9, "a tab is deeper than the band"
+
+
+def test_the_band_matches_the_real_one_on_an_unclipped_board(target):
+    """
+    Pinned against the band aruco2's own layout draws.
+
+    Given a board with nothing clipped away, the staircase rule has to
+    reproduce the rectangular band -- less the two squares aruco2 puts at the
+    far corners of the board, which sit on white and are that design's own
+    anchors rather than part of the chessboard.
+    """
+    import numpy as np
+    from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
+        grid_board_marker_bits)
+    from pyCamSet.calibration_targets.markers.gridboard_layout import (
+        band_depth, grid_board_rectangles)
+
+    columns, rows = target.grid_size
+    square = target.square_size
+    whole = {(c, r) for c in range(columns) for r in range(rows)}
+
+    unclipped = object.__new__(type(target))
+    unclipped.__dict__.update(target.__dict__)
+    unclipped.cells = np.array(sorted(whole))
+    unclipped.board_offset = np.zeros(2)
+
+    bits = grid_board_marker_bits(
+        target.grid_size, target._aruco_dict_int, ids=target.face_ids[0])
+    everything = grid_board_rectangles(
+        target.grid_size, square, bits, origin=(0.0, 0.0))
+    depth = band_depth(square)
+    real = [tuple(np.round(r, 9)) for r in everything
+            if r[0] < -1e-9 or r[1] < -1e-9
+            or r[2] > columns * square + 1e-9 or r[3] > rows * square + 1e-9]
+
+    def paint(rects, per=16):
+        scale = per / square
+        grid = np.zeros((int((rows + 2) * per), int((columns + 2) * per)), bool)
+        for x0, y0, x1, y1 in rects:
+            grid[int(round((y0 + square) * scale)):int(round((y1 + square) * scale)),
+                 int(round((x0 + square) * scale)):int(round((x1 + square) * scale))] = True
+        return grid
+
+    drawn = paint(unclipped._staircase_band())
+    expected = paint(real)
+    assert not (drawn & ~expected).any(), "the band draws outside the real one"
+
+    missing = expected & ~drawn
+    # Only the two far-corner anchors, each one band square.
+    assert missing.sum() == 2 * round(depth / square * 16) ** 2
+
+
 def test_a_printed_face_puts_its_corners_where_it_says_they_are(target):
     _skip_without_cairo()
     width = 1600

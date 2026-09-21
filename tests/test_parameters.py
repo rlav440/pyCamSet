@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from cv2 import aruco
 
-from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE, ARUCO2_DETECTOR
+from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_DETECTOR
 from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
 from pyCamSet.calibration_targets.core.parameters import (
     NO_PARAMETERS,
@@ -24,6 +24,7 @@ from pyCamSet.calibration_targets.core.parameters import (
     combine,
     parameters_from_docstring,
 )
+from conftest import skip_without_aruco2
 
 GROUPS = {"CharucoParameters", "DetectorParameters", "RefineParameters"}
 
@@ -553,10 +554,7 @@ def test_a_target_builds_from_the_arguments_it_declares(name, cls):
     still collect what it needs to build one."""
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
-    if name in ("ChArUco2", "Ccube2", "CIco2") and not ARUCO2_AVAILABLE:
-        # ChArUco2 and Ccube2 have no aruco1 equivalent -- they cannot be
-        # built at all without aruco2, unlike ChArUco/Ccube's aruco2 branch.
-        pytest.skip("aruco2 is not installed")
+    skip_without_aruco2(name)
 
     spec = {"type": name, **cls.construction_parameters().defaults()}
     target = build_target(spec)
@@ -745,10 +743,7 @@ def test_every_target_writes_itself_as_every_format(tmp_path, name, cls):
     the target generators each carried."""
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
-    if name in ("ChArUco2", "Ccube2", "CIco2") and not ARUCO2_AVAILABLE:
-        # ChArUco2 and Ccube2 have no aruco1 equivalent -- they cannot be
-        # built at all without aruco2, unlike ChArUco/Ccube's aruco2 branch.
-        pytest.skip("aruco2 is not installed")
+    skip_without_aruco2(name)
 
     # Small enough to draw quickly; the point is the path, not the page.
     small = {

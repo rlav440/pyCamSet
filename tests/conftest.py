@@ -38,6 +38,31 @@ TEST_DATA = REPO_ROOT / "tests" / "test_data"
 # Seed chosen once so a failure is reproducible; any fixed value would do.
 RANDOM_SEED = 20260909
 
+#: The registered targets that cannot be built at all without the optional
+#: aruco2 backend.  ChArUco, Ccube and CIco print aruco1 markers by default
+#: and only *offer* aruco2, so they build either way; the ChArUco2 family
+#: has no aruco1 equivalent and raises ImportError from its constructor.
+#:
+#: Kept here because five separate tests parametrize over every registered
+#: target and each has to skip the same three.  It was five separate copies
+#: of the tuple, and adding CIco2 updated two of them -- the other three
+#: went red on CI, where aruco2 is not installed, and stayed green locally,
+#: where it is.  ``test_aruco2_only_targets.py`` checks this against what
+#: the constructors actually do rather than trusting the list.
+ARUCO2_ONLY_TARGETS: frozenset[str] = frozenset({"ChArUco2", "Ccube2", "CIco2"})
+
+
+def skip_without_aruco2(name: str) -> None:
+    """
+    Skip the running test if *name* needs aruco2 and it is not installed.
+
+    :param name: a target name, as :data:`TARGET_CLASSES` keys it
+    """
+    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
+
+    if name in ARUCO2_ONLY_TARGETS and not ARUCO2_AVAILABLE:
+        pytest.skip(f"{name} is printed with aruco2 markers, which are not installed")
+
 MARKERS = {
     "data": "requires the image corpus in tests/test_data",
     "slow": "takes more than ~10s; runs a full bundle adjustment",

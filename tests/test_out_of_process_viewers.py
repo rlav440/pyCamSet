@@ -36,6 +36,7 @@ from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES
 from pyCamSet.gui import assess_calibration, viewer_process
 from pyCamSet.optimisation import optimisation_handling as backend
 from pyCamSet.utils import gui_safety, visualise_camset, visualise_target
+from conftest import skip_without_aruco2
 
 # --------------------------------------------------------------------------
 # Drawing a calibration
@@ -205,12 +206,8 @@ def test_every_target_type_can_be_built_from_what_the_dialog_sends(target_type):
     constructors it named.
     """
     from pyCamSet.calibration_targets.core.target_registry import target_class
-    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
 
-    if target_type in ("ChArUco2", "Ccube2") and not ARUCO2_AVAILABLE:
-        # ChArUco2 and Ccube2 have no aruco1 equivalent -- they cannot be
-        # built at all without aruco2, unlike every other registered target.
-        pytest.skip("aruco2 is not installed")
+    skip_without_aruco2(target_type)
 
     spec = {"type": target_type,
             **target_class(target_type).construction_parameters().defaults()}

@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from pyCamSet.utils.visualisation import finalise_figure, finalise_plotter
+from conftest import skip_without_aruco2
 
 
 @pytest.fixture
@@ -291,12 +292,7 @@ def test_a_flat_target_draws_itself_into_a_figure(name, no_new_figures):
     """
     _skip_without_cairo()
     from pyCamSet.calibration_targets import target_class
-    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
-
-    if name == "ChArUco2" and not ARUCO2_AVAILABLE:
-        # ChArUco2 has no aruco1 equivalent -- it cannot be built at all
-        # without aruco2, unlike ChArUco/PuzzleBoard's own dependencies.
-        pytest.skip("aruco2 is not installed")
+    skip_without_aruco2(name)
 
     figure = plt.figure()
     try:
@@ -315,12 +311,7 @@ def test_a_solid_target_renders_a_scene(name, no_new_figures):
     what pyvista serialises into the page's turnable frame."""
     _skip_without_cairo()
     from pyCamSet.calibration_targets import target_class
-    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
-
-    if name == "Ccube2" and not ARUCO2_AVAILABLE:
-        # Ccube2's faces are ChArUco2 boards, which cannot be built at all
-        # without aruco2.
-        pytest.skip("aruco2 is not installed")
+    skip_without_aruco2(name)
 
     scene = target_class(name)().plot(return_scene=True)
     scene.off_screen = True

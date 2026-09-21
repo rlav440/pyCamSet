@@ -18,6 +18,7 @@ from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
 
 from pyCamSet.workflow.targets import describe_target_mismatch
 from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES
+from conftest import skip_without_aruco2
 
 # The Ccube target behind the reported failure, as a run records it.  The
 # backend-seam tests carry their own copy: what a form must round-trip and
@@ -808,11 +809,9 @@ def test_the_form_can_build_every_target_it_offers(name):
     except ChArUco2 and Ccube2, which have no aruco1 equivalent and cannot
     be built at all without aruco2 installed."""
 
-    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
-    if name in ("ChArUco2", "Ccube2") and not ARUCO2_AVAILABLE:
-        pytest.skip("aruco2 is not installed")
+    skip_without_aruco2(name)
 
     form = _target_form(name)
     spec = form.spec()

@@ -255,7 +255,7 @@ class PuzzleBoardCube(AbstractTarget):
 
     @classmethod
     def printable_name(cls, values: dict, kind: str = "svg") -> str:
-        return (f"puzzleboard_cube_{int(values['n_points'])}points_"
+        return (f"pcube_{int(values['n_points'])}points_"
                 f"{float(values['length']):g}mm{EXPORT_SUFFIXES[kind]}")
 
     def save_printable(self, path, kind: str = "svg", border_width: float = 10.0,
@@ -615,6 +615,7 @@ class PuzzleBoardCube(AbstractTarget):
             fh.write(svg_text)
             fh.flush()
         if (not f_out.exists()) or f_out.stat().st_size == 0:
+
             raise IOError(f"SVG write failed: {f_out}")
         if not suppress_svg_log:
             logging.info("Saved PuzzleBoard cube SVG: %s", f_out)
@@ -640,6 +641,7 @@ class PuzzleBoardCube(AbstractTarget):
             logging.info("Saved PuzzleBoard cube Vector PDF: %s", f_out)
             return f_out
         if data_format != "raster":
+
             raise ValueError("data_format must be one of: raster, vector")
         png = cairosvg.svg2png(
             bytestring=svg_bytes,

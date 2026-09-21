@@ -19,7 +19,49 @@ from pyCamSet.calibration_targets import TargetDetection
 from pyCamSet.utils.calibration_report import (
     CalibrationReport, HIGH_INITIAL_ERROR_PX, reprojection_residuals)
 from pyCamSet.utils.progress import OptimisationProgress
-    
+
+#: How many threads BLAS may use while a bundle adjustment runs.
+#:
+#: One.  An iteration alternates the compiled kernels with a little dense
+#: linear algebra, and between its calls OpenBLAS leaves its threads spinning
+#: rather than sleeping.  On a machine with more logical cores than the solve
+#: can use, those spinners preempt the kernels -- which do no BLAS at all --
+#: and cost far more than the linear algebra they belong to: the loss kernel
+#: of a Ccube self calibration runs in 1.9 ms with BLAS held to one thread and
+#: 22.2 ms with OpenBLAS's default of one per core, on an 8 core machine.
+#:
+#: Nothing is lost by it.  The systems here are small -- the reduced camera
+#: system of a self calibration is a few hundred square, and the Cholesky that
+#: solves it took 4 ms of a 10 s solve -- and that is the size at which
+#: threading a dense solve is already a loss rather than a win.
+#:
+#: macOS does not show this: its BLAS is Accelerate, which does not hold a
+#: spinning pool, which is why the same solve is an order of magnitude faster
+#: there on lesser hardware.  Setting OPENBLAS_NUM_THREADS is the workaround
+#: available to anyone already affected; limiting the pool around the solve is
+#: the fix, and needs no environment variable and no knowledge of the machine.
+_BLAS_THREADS_DURING_SOLVE = 1
+
+try:
+    from threadpoolctl import threadpool_limits as _threadpool_limits
+except ImportError:  # pragma: no cover - threadpoolctl is a declared dependency
+    import contextlib
+
+    def _threadpool_limits(limits=None, user_api=None):
+        """
+        Stand in for threadpoolctl, so its absence costs speed and not a run.
+
+        It is a declared dependency, so this is for an environment that
+        upgraded pyCamSet without its dependencies rather than for a supported
+        configuration.
+        """
+        logger.warning(
+            "threadpoolctl is not installed, so BLAS keeps its own thread "
+            "count during the solve. On a machine whose BLAS holds a spinning "
+            "thread pool this is several times slower; install threadpoolctl, "
+            "or set OPENBLAS_NUM_THREADS=1.")
+        return contextlib.nullcontext()
+
 if TYPE_CHECKING:
     from pyCamSet.calibration_targets import AbstractTarget
     from pyCamSet.cameras import CameraSet, Camera
@@ -274,28 +316,33 @@ def _solve_bundle_adjustment(
 
     start = time.time()
     usable, reason = can_use_schur(param_handler)
-    if usable and bundle_jac is not None:
-        solver = "schur"
-        optimisation = run_schur_bundle_adjustment(
-            param_handler, loss_fn, bundle_jac, init_params, threads)
-    else:
-        solver = "trf"
-        if bundle_jac is not None and param_handler.problem_opts.get(
-                "solver", "schur") == "schur":
-            logger.warning(f"Falling back to the trust region solver: {reason}")
-        bounds = (-np.inf, np.inf)
-        if hasattr(param_handler, "get_lockbox_bounds"):
-            bounds = param_handler.get_lockbox_bounds(len(init_params))
-        optimisation = least_squares(
-            loss_fn,
-            init_params,
-            verbose=param_handler.problem_opts['verbosity'],
-            jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
-            max_nfev=param_handler.problem_opts["max_nfev"],
-            x_scale='jac',
-            xtol=1e-4,
-            bounds=bounds,
-        )
+    # Held around the whole solve rather than around the linear algebra: what
+    # the spinning pool costs is the kernels between the BLAS calls, not the
+    # BLAS calls themselves.  See _BLAS_THREADS_DURING_SOLVE.  Both solvers
+    # alternate the same way, so both are inside it.
+    with _threadpool_limits(limits=_BLAS_THREADS_DURING_SOLVE, user_api="blas"):
+        if usable and bundle_jac is not None:
+            solver = "schur"
+            optimisation = run_schur_bundle_adjustment(
+                param_handler, loss_fn, bundle_jac, init_params, threads)
+        else:
+            solver = "trf"
+            if bundle_jac is not None and param_handler.problem_opts.get(
+                    "solver", "schur") == "schur":
+                logger.warning(f"Falling back to the trust region solver: {reason}")
+            bounds = (-np.inf, np.inf)
+            if hasattr(param_handler, "get_lockbox_bounds"):
+                bounds = param_handler.get_lockbox_bounds(len(init_params))
+            optimisation = least_squares(
+                loss_fn,
+                init_params,
+                verbose=param_handler.problem_opts['verbosity'],
+                jac= bundle_jac if bundle_jac is not None else "2-point", #pass the function for the jacobian if it exists
+                max_nfev=param_handler.problem_opts["max_nfev"],
+                x_scale='jac',
+                xtol=1e-4,
+                bounds=bounds,
+            )
     end = time.time()
 
     report = CalibrationReport.from_optimisation(

@@ -28,6 +28,11 @@ dependencies = [
     "opencv-python>=4.8",
     "tqdm",
     "numba",
+    # Holds BLAS to one thread while a bundle adjustment runs.  Its pool spins
+    # rather than sleeps between calls, and preempts the compiled kernels that
+    # do the actual work -- see _BLAS_THREADS_DURING_SOLVE in
+    # optimisation/optimisation_handling.py.
+    "threadpoolctl",
     "natsort",
     "coloredlogs",
     "blosc",

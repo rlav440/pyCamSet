@@ -14,6 +14,8 @@ and would fail on a machine whose BLAS does not hold a spinning pool -- macOS
 does not, which is why this was invisible there.  ``setup_scripts/
 benchmark_blas_contention.py`` is what measures the gain.
 """
+import sys
+
 import numpy as np
 import pytest
 
@@ -34,10 +36,20 @@ def test_threadpoolctl_can_see_this_blas():
 
     numpy and scipy each load their own OpenBLAS, and both have to be found
     for the limit to mean anything.
+
+    Except on macOS, where numpy's arm64 wheels link Accelerate.  It exposes
+    no thread pool for threadpoolctl to find and holds no spinning one to
+    limit, so the limit is correctly a no-op there -- which is the same
+    reason this contention was never visible on a Mac.  Skipped rather than
+    asserted, because a Linux or Windows run finding no pool *is* the
+    regression this guards against.
     """
     import scipy.linalg  # noqa: F401
     np.linalg.cholesky(np.eye(8))
-    assert _blas_threads(), (
+    pools = _blas_threads()
+    if not pools and sys.platform == "darwin":
+        pytest.skip("numpy links Accelerate, which exposes no thread pool")
+    assert pools, (
         "threadpoolctl found no BLAS pool, so limiting it would do nothing")
 
 

@@ -19,7 +19,13 @@ from pyCamSet.calibration_targets.polyhedra import (
     ICO_NET_FORMS,
     ICO_TFORMS,
     TRIANGLE_CORNERS,
+    cells_touching_face,
     clip_lattice_to_face,
+    clip_polygon_to_face,
+    corners_inside_face,
+    corners_within_cells,
+    face_depths,
+    inset_face,
     make_icosahedral,
 )
 from pyCamSet.utils.general_utils import h_tform
@@ -235,6 +241,139 @@ def test_shifting_the_lattice_can_fit_another_cell():
 def test_a_lattice_finer_than_one_cell_is_refused():
     with pytest.raises(ValueError, match="at least one"):
         clip_lattice_to_face(TRIANGLE_CORNERS, 0)
+
+
+# -- clipping a pattern that can be cut ---------------------------------------
+
+def _square(x, y, side):
+    return np.array([[x, y], [x + side, y], [x + side, y + side], [x, y + side]])
+
+
+def _area(polygon):
+    x, y = np.asarray(polygon)[:, 0], np.asarray(polygon)[:, 1]
+    return 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+
+
+@pytest.mark.parametrize("cells_across, whole, touching", [
+    (6, 8, 24), (8, 18, 38), (12, 46, 78), (16, 90, 132), (20, 146, 200)])
+def test_a_cut_lattice_covers_the_face_a_whole_one_leaves_half_of(
+        cells_across, whole, touching):
+    """
+    What printing partial cells buys, pinned.
+
+    Whole cells cover 51% of a triangular face at six cells to an edge and 84%
+    at twenty; the cells that touch the face cover all of it, because the parts
+    of them that hang over the edge are what gets clipped away.
+    """
+    assert len(clip_lattice_to_face(TRIANGLE_CORNERS, cells_across)) == whole
+    cells = cells_touching_face(TRIANGLE_CORNERS, cells_across)
+    assert len(cells) == touching
+
+    covered = sum(_area(clip_polygon_to_face(
+        _square(column / cells_across, row / cells_across, 1 / cells_across),
+        TRIANGLE_CORNERS)) for column, row in cells)
+    assert covered == pytest.approx(np.sqrt(3) / 4, rel=1e-9)
+
+
+def test_the_cells_that_touch_a_face_include_every_cell_wholly_inside_it():
+    whole = {tuple(cell) for cell in clip_lattice_to_face(TRIANGLE_CORNERS, 14)}
+    touching = {tuple(cell) for cell in cells_touching_face(TRIANGLE_CORNERS, 14)}
+    assert whole < touching
+
+
+def test_a_cell_that_only_touches_a_face_along_its_edge_is_left_out():
+    """A cell with no area inside the face would be printed as nothing."""
+    cells = {tuple(cell) for cell in cells_touching_face(TRIANGLE_CORNERS, 8)}
+    assert (0, -1) not in cells   # below the bottom edge, sharing it
+    assert (-1, -1) not in cells  # sharing only the origin
+
+
+def test_a_square_face_keeps_its_whole_lattice_either_way():
+    square = np.array([[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.]])
+    assert len(cells_touching_face(square, 8)) == 64
+
+
+def test_a_cut_lattice_finer_than_one_cell_is_refused():
+    with pytest.raises(ValueError, match="at least one"):
+        cells_touching_face(TRIANGLE_CORNERS, 0)
+
+
+def test_clipping_keeps_the_part_of_a_polygon_inside_the_face():
+    clipped = clip_polygon_to_face(_square(0.9, 0.0, 0.2), TRIANGLE_CORNERS)
+    assert len(clipped) == 3
+    assert np.all(face_depths(clipped, TRIANGLE_CORNERS) > -1e-12)
+    assert _area(clipped) < _area(_square(0.9, 0.0, 0.2))
+
+
+def test_clipping_leaves_a_polygon_already_inside_the_face_alone():
+    inside = _square(0.4, 0.1, 0.1)
+    assert _area(clip_polygon_to_face(inside, TRIANGLE_CORNERS)) == pytest.approx(
+        _area(inside))
+
+
+def test_a_polygon_with_no_area_inside_the_face_clips_to_nothing():
+    assert len(clip_polygon_to_face(_square(2.0, 2.0, 0.2), TRIANGLE_CORNERS)) == 0
+    assert len(clip_polygon_to_face(_square(-0.2, -0.2, 0.2), TRIANGLE_CORNERS)) == 0
+
+
+def test_how_deep_inside_a_face_a_point_is():
+    """Measured to the nearest edge, so a triangle's centre is its inradius."""
+    centre = TRIANGLE_CORNERS[:, :2].mean(axis=0)
+    assert face_depths(centre[None], TRIANGLE_CORNERS)[0] == pytest.approx(
+        1 / (2 * np.sqrt(3)))
+    assert face_depths(TRIANGLE_CORNERS, TRIANGLE_CORNERS) == pytest.approx(0)
+    assert face_depths(np.array([[0.5, -0.1]]), TRIANGLE_CORNERS)[0] < 0
+
+
+def test_an_inset_face_is_the_face_pulled_in_from_every_edge():
+    inset = inset_face(TRIANGLE_CORNERS, 0.05)
+    assert face_depths(inset, TRIANGLE_CORNERS) == pytest.approx(0.05)
+    # Still a triangle, and still the same one, only smaller.
+    assert inset.shape == (3, 2)
+    assert _area(inset) < np.sqrt(3) / 4
+
+
+def test_insetting_a_face_away_to_nothing_is_refused():
+    with pytest.raises(ValueError, match="shrinks it away"):
+        inset_face(TRIANGLE_CORNERS, 0.5)
+
+
+@pytest.mark.parametrize("cells_across, within, inside", [
+    (6, 2, 20), (8, 8, 33), (12, 29, 69), (16, 65, 120), (20, 114, 184)])
+def test_a_cut_lattice_offers_more_corners_than_a_whole_one(
+        cells_across, within, inside):
+    """
+    The point of cutting the cells: corners the whole-cell clip cannot offer.
+
+    A corner needs its four cells, and where one of them was dropped for
+    hanging over the edge there is no corner to find.  Printed cut, the pattern
+    reaches the edge and those corners are there -- counted here with no
+    margin, so the face's own edge counts as inside it.
+    """
+    cells = clip_lattice_to_face(TRIANGLE_CORNERS, cells_across)
+    assert len(corners_within_cells(cells)) == within
+    assert len(corners_inside_face(TRIANGLE_CORNERS, cells_across)) == inside
+
+
+def test_every_corner_the_whole_cell_clip_finds_is_also_inside_the_face():
+    """Cutting the cells takes nothing away, whatever else it adds."""
+    for cells_across in (6, 11, 16, 24):
+        cells = clip_lattice_to_face(TRIANGLE_CORNERS, cells_across)
+        within = {tuple(c) for c in corners_within_cells(cells)}
+        inside = {tuple(c) for c in corners_inside_face(
+            TRIANGLE_CORNERS, cells_across)}
+        assert within <= inside
+
+
+def test_asking_for_a_margin_keeps_only_the_corners_that_far_in():
+    cells_across = 16
+    pitch = 1 / cells_across
+    for margin in (0.0, 0.35, 1.0):
+        corners = corners_inside_face(TRIANGLE_CORNERS, cells_across, margin)
+        depths = face_depths(corners * pitch, TRIANGLE_CORNERS)
+        assert np.all(depths >= margin * pitch - 1e-12)
+    assert (len(corners_inside_face(TRIANGLE_CORNERS, cells_across, 1.0))
+            < len(corners_inside_face(TRIANGLE_CORNERS, cells_across, 0.0)))
 
 
 # -- printing the solid -------------------------------------------------------

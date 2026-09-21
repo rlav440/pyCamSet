@@ -9,7 +9,7 @@ As on the cube, each face prints a different window of PuzzleBoard's periodic
 code field, so a decoded position says both which face was seen and where on
 it. There are no markers to share out and no dictionary to run out of, which
 is why this is the densest of the icosahedral targets: at sixteen squares to an
-edge a face carries 65 corners, **1300 points in total**.
+edge a face carries 93 corners, **1860 points in total**.
 
 !!! note "PuzzleBoardIco is an optional dependency"
 
@@ -64,13 +64,36 @@ patches a face shows at once, not in the margin of any one of them.
 
 ## Geometry
 
-The window is clipped to the triangle, whole squares only, and a corner is kept
-only where all four of its squares were printed. At sixteen squares to an edge
-that is 90 printed squares and 65 corners a face.
+The window is clipped to the triangle, squares and all: a square the triangle
+cuts through is printed as the part of it that fits. A cut square still meets
+its neighbours in corners, and a chessboard corner is the whole of what the
+detector wants, so there is nothing to gain by dropping it — and a good deal to
+lose, because dropping it costs the corners along the entire edge of the face.
+At sixteen squares to an edge the pattern covers the face and carries **93
+corners, against the 65 whole squares alone would leave**.
 
-A circle carries a bit on the edge between two squares, so it is printed only
-where **both** of those squares were: a circle with nothing on one side of it
-is a mark in the margin, not a bit.
+A circle carries a bit inside a square rather than at its corners, so unlike a
+square it does not survive being cut: one is printed only where it fits whole.
+Where a circle is missing its bit reads as noise and is outvoted, which is
+where PuzzleBoard puts its robustness anyway.
+
+### Two things the clip has to respect
+
+**The pattern stops a fifth of a square short of the face's edge.** Two faces
+that share an edge in the net sit side by side across the fold, their lattices
+at sixty degrees to each other. Printed flush they join into *one* grid under
+the detector and the decode goes wrong — rasterised and read back, seven of the
+twenty faces came out as nothing and others as more points than they have.
+Holding each face's pattern back leaves a white channel two fifths of a square
+wide down every fold, and every face then reads back complete.
+
+**A corner is kept only 0.15 of a square inside what was printed.** A lattice
+corner is a chessboard corner wherever the pattern surrounds it, but a corner
+sitting on the edge of the pattern is half a junction and is not found. Keeping
+object points for corners the detector cannot see would leave the target
+claiming points that never arrive; 0.15 of a square is where, rendered and read
+back, nothing kept is missed — from six squares to an edge up to the largest
+window the code field holds.
 
 !!! note "A half-square convention worth knowing about"
 
@@ -105,5 +128,10 @@ target.to_stl("puzzleboard_ico_core")
   half-square phase is for —
   `test_a_printed_window_decodes_to_the_window_it_was_cut_from`.
 - Rasterising the printed net and reading it back recovers **all twenty faces,
-  with every one of the 65 corners on every face** —
-  `test_the_printed_net_gives_back_every_face`.
+  with every one of the 93 corners on every face** —
+  `test_the_printed_net_gives_back_every_face`. This is also what pins the
+  channel down the folds: printed flush, this test is what fails.
+- Nothing printed runs past the fold, and every corner the target keeps has
+  printed pattern around it —
+  `test_nothing_printed_runs_past_where_the_face_is_folded`,
+  `test_every_corner_a_face_keeps_has_printed_pattern_around_it`.

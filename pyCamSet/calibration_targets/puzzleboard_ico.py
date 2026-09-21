@@ -6,7 +6,9 @@ The cube version is
 the arrangement is the same one: the printed pattern is a window of the
 periodic code field, a different window per face, so a decoded position says
 both which face was seen and where on it.  Here the window is then clipped to
-the triangle, and only whole squares are printed.
+the triangle, squares and all: a square the triangle cuts through is printed
+as the part of it that fits, because a cut square still meets its neighbours
+in corners and a chessboard corner is all the detector wants.
 
 **Why the windows are simply tiled, and not chosen for code distance.**  It
 would be reasonable to expect that spacing the twenty windows apart in the
@@ -48,8 +50,11 @@ from pyCamSet.calibration_targets.markers.puzzleboard import (
 )
 from pyCamSet.calibration_targets.polyhedra import (
     TRIANGLE_HEIGHT,
-    clip_lattice_to_face,
-    corners_within_cells,
+    cells_touching_face,
+    clip_polygon_to_face,
+    corners_inside_face,
+    face_depths,
+    inset_face,
     make_icosahedral,
 )
 from pyCamSet.calibration_targets.puzzleboard import _CODE_FIELD, _CODE_SIZE
@@ -70,9 +75,37 @@ FACE_GRID_ROWS = 4
 #: The largest window that still lets twenty of them tile the field.
 MAX_FACE_SQUARES = _CODE_SIZE // FACE_GRID_COLUMNS
 
-#: The smallest face worth clipping to.  Below this the triangle holds too few
-#: whole squares to leave any corner with all four of its squares printed.
+#: The coarsest face the target will build.  It is a floor rather than a
+#: recommendation: the detector wants a twelve-node grid before it decodes
+#: anything, which a six-square face's ten corners do not reach on their own,
+#: so the sizes worth printing start well above this -- see ``n_points``.
 _MIN_POINTS = 6
+
+#: How far short of the face's edge the printed pattern stops, in squares.
+#:
+#: Two faces that share an edge in the net have their patterns side by side
+#: across the fold, at sixty degrees to each other.  Printed flush, the
+#: detector links the two lattices into one grid across that fold and the
+#: decode goes wrong -- rasterised and read back, seven of twenty faces came
+#: out as nothing and others as more points than they have.  A fifth of a
+#: square held back on each side leaves a white channel two fifths of a square
+#: wide between them, and every face then reads back complete.
+_PRINT_INSET = 0.2
+
+#: How much printed pattern a corner needs around it to be found, in squares.
+#:
+#: A lattice corner is a chessboard corner wherever the pattern surrounds it,
+#: which after clipping means anywhere far enough inside what was printed.  A
+#: corner on the edge of it is half a junction and is not found: rendered and
+#: read back, a fifth of the corners sitting exactly on the face's edge were
+#: missed.  Nothing beyond 0.15 of a square is missed, from six squares to an
+#: edge up to the largest window the code field holds.
+_CORNER_COLLAR = 0.15
+
+#: How far inside the face a corner must be for the face to keep a point for
+#: it: the pattern stops short of the edge, and the corner needs its collar
+#: inside that.
+_CORNER_MARGIN = _PRINT_INSET + _CORNER_COLLAR
 
 #: How far the code read for a square is shifted from the square's position.
 #:
@@ -180,9 +213,8 @@ class PuzzleBoardIco(AbstractTarget):
         if n_points < _MIN_POINTS:
             raise ValueError(
                 f"A PuzzleBoardIco face must be at least {_MIN_POINTS} squares "
-                f"along its edge; got n_points={n_points}. Below that, "
-                f"clipping the window to the triangle leaves no corner with "
-                f"all four of its squares printed.")
+                f"along its edge; got n_points={n_points}. Below that a face "
+                f"holds too few corners for the detector to decode it.")
         if n_points > MAX_FACE_SQUARES:
             raise ValueError(
                 f"n_points must not exceed {MAX_FACE_SQUARES} for "
@@ -202,15 +234,20 @@ class PuzzleBoardIco(AbstractTarget):
         self.length = length / 1000
         self.square_size = self.length / self.n_points
 
-        self.cells = clip_lattice_to_face(self.basis.base_face, self.n_points)
-        self.live_corners = corners_within_cells(self.cells)
-        if not len(self.live_corners):
+        self.cells = cells_touching_face(self.basis.base_face, self.n_points)
+        self.live_corners = corners_inside_face(
+            self.basis.base_face, self.n_points, _CORNER_MARGIN)
+        if len(self.live_corners) < 3:
             raise ValueError(
-                f"A {self.n_points}-square face clips to {len(self.cells)} "
-                f"whole squares, which leave no corner with all four of its "
-                f"squares printed.")
+                f"A {self.n_points}-square face keeps only "
+                f"{len(self.live_corners)} corners, and three are needed to "
+                f"say which way the face is facing.")
 
         self.face_origins = self.face_origins_for_size(self.n_points)
+
+        self.print_window = inset_face(
+            np.asarray(self.basis.base_face)[:, :2] * self.length,
+            _PRINT_INSET * self.square_size)
 
         self.base_face = np.concatenate([
             self.basis.base_face[:, :2] * self.length,
@@ -285,27 +322,33 @@ class PuzzleBoardIco(AbstractTarget):
         """
         Return one face's black squares and its code circles, in local metres.
 
-        A circle sits on the edge between two squares, so it is printed only
-        where both of those squares were.  A circle with nothing on one side
-        of it is a mark in the margin, not a bit.
+        The squares are clipped to the printed window rather than dropped, so
+        a face carries the pattern right out to its edge; a square the window
+        cuts through is drawn as the part of it that fits.  A circle is a
+        marked spot inside a square rather than a shape that survives being
+        cut, so one is printed only where it fits whole.
 
         :param face_index: which face
         :return: the black square polygons, and ``(centre, is_white)`` circles
         """
         origin_x, origin_y = self.face_origins[face_index]
         printed = {(int(c), int(r)) for c, r in self.cells}
+        window = self.print_window
         square = self.square_size
+        radius = square / 6.0
 
         polygons = []
         for column, row in sorted(printed):
             if (column + row + origin_x + origin_y) % 2 != 0:
                 continue
             x0, y0 = column * square, row * square
-            polygons.append(np.array([
+            clipped = clip_polygon_to_face(np.array([
                 [x0, y0], [x0 + square, y0],
-                [x0 + square, y0 + square], [x0, y0 + square]]))
+                [x0 + square, y0 + square], [x0, y0 + square]]), window)
+            if len(clipped):
+                polygons.append(clipped)
 
-        circles = []
+        marks = []
         for column, row in sorted(printed):
             value = _code_at(origin_y + row, origin_x + column)
             # Which bit goes on which edge is PuzzleBoard's, and is easy to
@@ -316,13 +359,16 @@ class PuzzleBoardIco(AbstractTarget):
             # integer instead, which moves both by half a square: the
             # horizontal edge below this square is at (column + 0.5, row + 1).
             if (column, row + 1) in printed:
-                circles.append((
-                    np.array([(column + 0.5) * square, (row + 1) * square]),
-                    bool(value & 2)))
+                marks.append(((column + 0.5) * square, (row + 1) * square,
+                              bool(value & 2)))
             if (column + 1, row) in printed:
-                circles.append((
-                    np.array([(column + 1) * square, (row + 0.5) * square]),
-                    bool(value & 1)))
+                marks.append(((column + 1) * square, (row + 0.5) * square,
+                              bool(value & 1)))
+
+        centres = np.array([[x, y] for x, y, _ in marks]).reshape(-1, 2)
+        whole = face_depths(centres, window) >= radius
+        circles = [(centres[index], marks[index][2])
+                   for index in np.flatnonzero(whole)]
         return polygons, circles
 
     def _face_outline(self) -> np.ndarray:

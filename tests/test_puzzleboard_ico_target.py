@@ -18,9 +18,15 @@ from pyCamSet.calibration_targets import TARGET_NAMES
 from pyCamSet.calibration_targets.core.abstract_target import EXPORT_KINDS
 from pyCamSet.calibration_targets.core.parameters import DocumentedParameters
 from pyCamSet.calibration_targets.core.target_registry import TARGET_LABELS
+from pyCamSet.calibration_targets.polyhedra import (
+    clip_lattice_to_face,
+    corners_within_cells,
+    face_depths,
+)
 from pyCamSet.calibration_targets.puzzleboard import _CODE_SIZE
 from pyCamSet.calibration_targets.puzzleboard_ico import (
     MAX_FACE_SQUARES,
+    _PRINT_INSET,
     PuzzleBoardIco,
 )
 
@@ -136,6 +142,68 @@ def test_the_points_sit_inside_the_face_they_belong_to(target):
         a, b = coefficients
         assert np.all(a > -1e-9) and np.all(b > -1e-9)
         assert np.all(a + b < 1 + 1e-9)
+
+
+# -- printing the pattern out to the edge --------------------------------------
+
+def test_a_cut_square_is_printed_as_the_part_of_it_that_fits(target):
+    """
+    What a face gains by printing partial squares.
+
+    A square the triangle cuts through still meets its neighbours in corners,
+    and a corner is all the detector wants, so there is no reason to drop it --
+    dropping it costs the corners along the whole edge of the face.
+    """
+    whole = corners_within_cells(
+        clip_lattice_to_face(target.basis.base_face, target.n_points))
+    assert target.points_per_face == 93
+    assert target.points_per_face > len(whole)
+
+    polygons, _ = target._face_shapes(0)
+    cut = [polygon for polygon in polygons if len(polygon) != 4]
+    assert cut, "no square was cut, so nothing was gained"
+
+
+def test_nothing_printed_runs_past_where_the_face_is_folded(target):
+    """
+    Why the pattern stops short of the edge.
+
+    Two faces that share an edge in the net sit side by side across the fold,
+    their lattices at sixty degrees.  Printed flush they join into one grid
+    under the detector and the decode goes wrong, so each face holds its
+    pattern back and the two leave a white channel between them.
+    """
+    window = target.print_window
+    inset = _PRINT_INSET * target.square_size
+    face = np.asarray(target.basis.base_face)[:, :2] * target.length
+
+    assert face_depths(window, face) == pytest.approx(inset)
+    for face_index in (0, 11):
+        polygons, circles = target._face_shapes(face_index)
+        for polygon in polygons:
+            assert np.all(face_depths(polygon, face) > inset - 1e-12)
+        for centre, _ in circles:
+            radius = target.square_size / 6.0
+            assert face_depths(centre[None], face)[0] > inset + radius - 1e-12
+
+
+def test_every_corner_a_face_keeps_has_printed_pattern_around_it(target):
+    """A corner on the edge of what was printed is half a junction."""
+    corners = target.live_corners * target.square_size
+    depths = face_depths(corners, target.print_window)
+    assert np.all(depths > 0)
+
+
+def test_the_coarsest_face_allowed_holds_enough_corners_to_be_a_face():
+    """
+    Three points, because a plane needs three.
+
+    Printed whole-square, six squares to an edge left two corners and the
+    target fell over in the plane fit rather than saying so.
+    """
+    coarse = PuzzleBoardIco(length=100.0, n_points=6)
+    assert coarse.points_per_face >= 3
+    assert coarse.point_data.shape == (20, coarse.points_per_face, 3)
 
 
 # -- reading one back ---------------------------------------------------------

@@ -330,11 +330,13 @@ def clip_lattice_to_face(
     """
     Return the square lattice cells lying wholly inside a face.
 
-    A square lattice does not fit a triangle, and the pattern targets draw is
-    built of whole cells: a half a cell carries half a marker, which reads as
-    nothing.  Clipping to whole cells keeps 51% of a triangular face at six
-    cells to an edge and 84% at twenty, against the 50% the largest rectangle
-    that fits inside a triangle would keep at any size.  Shifting ``phase`` by
+    A square lattice does not fit a triangle, and a marker is built of whole
+    cells: half a cell carries half a marker, which reads as nothing.  Clipping
+    to whole cells keeps 51% of a triangular face at six cells to an edge and
+    84% at twenty, against the 50% the largest rectangle that fits inside a
+    triangle would keep at any size.  A pattern that *can* be cut -- a
+    chessboard, whose cut cells still meet their neighbours in corners -- keeps
+    the whole face instead, with :func:`cells_touching_face`.  Shifting ``phase`` by
     a fraction of a cell is worth another cell or two at coarse pitches, and
     ``cells_across`` need not be a whole number: letting the lattice fall a
     fraction of a cell short of the edge buys a little more again.
@@ -390,9 +392,10 @@ def corners_within_cells(cells: np.ndarray) -> np.ndarray:
 
     The feature a chessboard corner is is the meeting of four cells, two
     black and two white.  Where one of the four was clipped away there is no
-    corner to find, only the end of a line, so these are the corners a clipped
-    face can actually offer -- and the ones a target should keep object points
-    for.
+    corner to find, only the end of a line, so these are the corners a face
+    printed in whole cells can actually offer -- and the ones a target should
+    keep object points for.  A face printed with cut cells has more of them, and
+    asks :func:`corners_inside_face` instead.
 
     :param cells: the ``(n, 2)`` cell indices :func:`clip_lattice_to_face`
         returned
@@ -411,3 +414,186 @@ def corners_within_cells(cells: np.ndarray) -> np.ndarray:
                for dx in (-1, 0) for dy in (-1, 0))
     ]
     return np.array(kept, dtype=int).reshape(-1, 2)
+
+
+def face_depths(points: np.ndarray, face: np.ndarray) -> np.ndarray:
+    """
+    Return how far inside a face each point lies, in the face's own units.
+
+    Measured to the nearest of the face's edge lines, which for a point inside
+    a convex face is its distance to the face's boundary, and which goes
+    negative outside the face.
+
+    :param points: the points as ``(n, 2)`` or ``(n, 3)``
+    :param face: the face's corners as ``(k, 2)`` or ``(k, 3)``, convex and
+        wound anticlockwise
+    :return: the ``(n,)`` depth of each point
+    """
+    polygon = np.asarray(face, dtype=float)[:, :2]
+    points = np.atleast_2d(np.asarray(points, dtype=float))[:, :2]
+    edges = np.roll(polygon, -1, axis=0) - polygon
+    offsets = points[:, None, :] - polygon[None, :, :]
+    cross = (edges[None, :, 0] * offsets[..., 1]
+             - edges[None, :, 1] * offsets[..., 0])
+    return np.min(cross / np.linalg.norm(edges, axis=1)[None, :], axis=1)
+
+
+def inset_face(face: np.ndarray, distance: float) -> np.ndarray:
+    """
+    Return a face shrunk by moving every one of its edges inwards.
+
+    :param face: the face's corners as ``(k, 2)`` or ``(k, 3)``, convex and
+        wound anticlockwise
+    :param distance: how far each edge moves, in the face's own units
+    :return: the shrunk face's ``(k, 2)`` corners
+    :raises ValueError: for a distance that shrinks the face away entirely
+    """
+    polygon = np.asarray(face, dtype=float)[:, :2]
+    edges = np.roll(polygon, -1, axis=0) - polygon
+    normals = np.stack([-edges[:, 1], edges[:, 0]], axis=1)
+    normals = normals / np.linalg.norm(normals, axis=1, keepdims=True)
+    offsets = np.sum(normals * polygon, axis=1) + float(distance)
+
+    # A corner of the shrunk face is where its two moved edges now cross.
+    corners = np.stack([
+        np.linalg.solve(np.stack([normals[i - 1], normals[i]]),
+                        np.array([offsets[i - 1], offsets[i]]))
+        for i in range(len(polygon))
+    ])
+    if np.any(face_depths(corners, polygon) < -1e-12):
+        raise ValueError(
+            f"Insetting this face by {distance} shrinks it away entirely.")
+    return corners
+
+
+def clip_polygon_to_face(polygon: np.ndarray, face: np.ndarray) -> np.ndarray:
+    """
+    Return the part of a polygon that lies inside a face.
+
+    Sutherland-Hodgman, which is exact for the convex faces here: the polygon
+    is cut against one edge of the face at a time.
+
+    :param polygon: the polygon's corners as ``(n, 2)``, wound anticlockwise
+    :param face: the face's corners as ``(k, 2)`` or ``(k, 3)``, convex and
+        wound anticlockwise
+    :return: the clipped polygon's ``(m, 2)`` corners, empty where the part
+        inside the face has no area
+    """
+    kept = [point for point in np.asarray(polygon, dtype=float)[:, :2]]
+    boundary = np.asarray(face, dtype=float)[:, :2]
+    for index in range(len(boundary)):
+        start = boundary[index]
+        edge = boundary[(index + 1) % len(boundary)] - start
+        sides = [float(edge[0] * (point[1] - start[1])
+                       - edge[1] * (point[0] - start[0])) for point in kept]
+        clipped = []
+        for i, point in enumerate(kept):
+            j = (i + 1) % len(kept)
+            here, there = sides[i], sides[j]
+            if here >= -1e-15:
+                clipped.append(point)
+            if (here > 1e-15) != (there > 1e-15):
+                clipped.append(point + (kept[j] - point) * (here / (here - there)))
+        kept = clipped
+        if not kept:
+            return np.empty((0, 2))
+
+    # Cutting through a corner of the polygon lands the same point in the list
+    # twice, which is a corner the shape does not have.
+    distinct = [point for index, point in enumerate(kept)
+                if not np.allclose(point, kept[index - 1], atol=1e-12)]
+    if len(distinct) < 3:
+        return np.empty((0, 2))
+    return np.array(distinct)
+
+
+def cells_touching_face(
+    face: np.ndarray,
+    cells_across: float,
+    phase: tuple[float, float] = (0.0, 0.0),
+) -> np.ndarray:
+    """
+    Return the square lattice cells with any of their area inside a face.
+
+    The counterpart of :func:`clip_lattice_to_face`, for a pattern that can be
+    printed as a part of a cell: a chessboard can, because a cut square still
+    meets its neighbours in corners, whereas a marker cannot.  Where the
+    pattern allows it this keeps the whole face rather than the 51-84% whole
+    cells do, and the cells it adds are drawn clipped -- see
+    :func:`clip_polygon_to_face`.
+
+    :param face: the face's corners as ``(k, 2)`` or ``(k, 3)``, convex and
+        wound anticlockwise, in edge lengths
+    :param cells_across: how many cells span one edge length, which need not
+        be a whole number of them
+    :param phase: where the lattice starts, in cells, as ``(x, y)``
+    :return: the ``(n, 2)`` integer ``(column, row)`` index of each cell, in
+        row-major order
+    :raises ValueError: for a cell count that is not positive
+    """
+    if not float(cells_across) >= 1:
+        raise ValueError("cells_across must be at least one.")
+    polygon = np.asarray(face, dtype=float)[:, :2]
+    pitch = 1.0 / float(cells_across)
+    edges = np.roll(polygon, -1, axis=0) - polygon
+
+    low = np.floor(polygon.min(axis=0) / pitch).astype(int) - 1
+    high = np.ceil(polygon.max(axis=0) / pitch).astype(int) + 1
+    grid = np.stack(np.meshgrid(np.arange(low[0], high[0] + 1),
+                                np.arange(low[1], high[1] + 1),
+                                indexing="xy"), axis=-1).reshape(-1, 2)
+
+    # Two convex shapes are apart only if one of their own edges holds them
+    # apart, so a cell overlaps the face unless some face edge leaves all four
+    # of the cell's corners outside, or the cell misses the face's box.
+    corners = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=float)
+    points = (grid[:, None, :] + np.asarray(phase, dtype=float)
+              + corners[None, :, :]) * pitch
+    offsets = points[:, :, None, :] - polygon[None, None, :, :]
+    cross = (edges[None, None, :, 0] * offsets[..., 1]
+             - edges[None, None, :, 1] * offsets[..., 0])
+    held_apart = np.any(np.all(cross < 1e-12, axis=1), axis=1)
+    in_box = np.all((points.max(axis=1) > polygon.min(axis=0) + 1e-12)
+                    & (points.min(axis=1) < polygon.max(axis=0) - 1e-12), axis=1)
+    return grid[in_box & ~held_apart]
+
+
+def corners_inside_face(
+    face: np.ndarray,
+    cells_across: float,
+    margin: float = 0.0,
+    phase: tuple[float, float] = (0.0, 0.0),
+) -> np.ndarray:
+    """
+    Return the lattice corners lying at least ``margin`` cells inside a face.
+
+    The counterpart of :func:`corners_within_cells` for a face printed with
+    partial cells.  Where whole cells are printed a corner exists only where
+    all four of its cells were kept; where partial ones are, the pattern
+    reaches the face's edge, and a corner is a corner wherever enough of that
+    pattern surrounds it.  ``margin`` is that "enough": a corner on the edge of
+    what was printed is half a junction and is not found, so the caller asks
+    for the collar its detector needs.
+
+    :param face: the face's corners as ``(k, 2)`` or ``(k, 3)``, convex and
+        wound anticlockwise, in edge lengths
+    :param cells_across: how many cells span one edge length
+    :param margin: how far inside the face a corner must be, in cells
+    :param phase: where the lattice starts, in cells, as ``(x, y)``
+    :return: the ``(n, 2)`` integer corner indices, in row-major order, in
+        :func:`corners_within_cells`' convention
+    :raises ValueError: for a cell count that is not positive
+    """
+    if not float(cells_across) >= 1:
+        raise ValueError("cells_across must be at least one.")
+    polygon = np.asarray(face, dtype=float)[:, :2]
+    pitch = 1.0 / float(cells_across)
+
+    low = np.floor(polygon.min(axis=0) / pitch).astype(int) - 1
+    high = np.ceil(polygon.max(axis=0) / pitch).astype(int) + 1
+    grid = np.stack(np.meshgrid(np.arange(low[0], high[0] + 1),
+                                np.arange(low[1], high[1] + 1),
+                                indexing="xy"), axis=-1).reshape(-1, 2)
+    points = (grid + np.asarray(phase, dtype=float)) * pitch
+    deep = face_depths(points, polygon) >= float(margin) * pitch - 1e-12
+    return grid[deep]

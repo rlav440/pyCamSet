@@ -1,4 +1,7 @@
 .idea/
+.vscode/
+.claude/
+.mcp.json
 .DS_Store
 __pycache__/
 docs/build/

@@ -12,8 +12,8 @@ def build_puzzleboard_cube(
 ) -> pbc.PuzzleBoardCube:
     """Instantiate a deterministic PuzzleBoard cube from explicit parameters."""
     return pbc.PuzzleBoardCube(  # Construct the bounded six-face target.
-        n_points=int(n_points),  # Normalise the face dimension.
-        length=float(length),  # Normalise the physical square size in millimetres.
+        n_points=int(n_points),  # Normalise the number of PuzzleBoard squares per face edge.
+        length=float(length),  # Normalise the physical cube-edge length in millimetres.
     )
 
 

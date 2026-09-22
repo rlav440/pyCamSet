@@ -252,7 +252,7 @@ class PuzzleBoardCube(AbstractTarget):
 
     @classmethod
     def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
-        """What decides where a cube's corners are."""
+        """What decides the square grid and physical size of a cube."""
         return DocumentedParameters(cls.__init__, "n_points", "length")
 
     @classmethod
@@ -268,7 +268,7 @@ class PuzzleBoardCube(AbstractTarget):
 
     @classmethod
     def printable_name(cls, values: dict, kind: str = "svg") -> str:
-        return (f"pcube_{int(values['n_points'])}points_"
+        return (f"pcube_{int(values['n_points'])}squares_"
                 f"{float(values['length']):g}mm{EXPORT_SUFFIXES[kind]}")
 
     def save_printable(self, path, kind: str = "svg", border_width: float = 10.0,
@@ -308,9 +308,9 @@ class PuzzleBoardCube(AbstractTarget):
     ):
         """Initialise a cube whose six faces use disjoint windows of the periodic code.
 
-        :param n_points: Corners per face -- corners along one edge of one
-            of the cube's six faces. Each face is a separate window of the
-            periodic code. Suggested: 10-30.
+        :param n_points: Squares per face -- PuzzleBoard squares along one
+            edge of one of the cube's six faces. Each face is a separate
+            window of the periodic code. Suggested: 10-30.
         :param length: Cube edge (mm) -- the printed edge length of the
             cube, in millimetres. Suggested: 100-300.
         :param detection_options: what the detector is told, by the keys
@@ -374,7 +374,7 @@ class PuzzleBoardCube(AbstractTarget):
           0.69-1.50 squares) never reach stage 2.
         """
         super().__init__(inputs=locals())  # Save constructor inputs for pyCamSet serialisation and multiprocessing.
-        self.n_points = int(n_points)  # Store the puzzle-piece count along one cube-face edge.
+        self.n_points = int(n_points)  # Store the PuzzleBoard square count along one cube-face edge.
         self.length = float(length)  # Store the total physical cube edge length in millimetres.
         self._validate_dimensions()  # Reject invalid counts/lengths before deriving the pitch.
         self.square_size = self.length / self.n_points  # Retain the derived puzzle-piece pitch for rendering/detection.
@@ -637,7 +637,7 @@ class PuzzleBoardCube(AbstractTarget):
     ) -> Path:
         """Save the deterministic cube net as a physically sized vector SVG."""
         if f_out is None:  # Construct a descriptive filename when no output path was supplied.
-            f_out = Path(f"pcube_{self.n_points}points_{self.length:g}mm.svg")
+            f_out = Path(f"pcube_{self.n_points}squares_{self.length:g}mm.svg")
         else:  # Accept strings and paths like the other target classes.
             f_out = Path(f_out)
         f_out = f_out.expanduser().with_suffix(".svg").resolve()  # Force the vector extension.
@@ -664,7 +664,7 @@ class PuzzleBoardCube(AbstractTarget):
     ) -> Path:
         """Save the cube net as a raster or vector PDF."""
         if f_out is None:  # Construct a descriptive filename when no output path was supplied.
-            f_out = Path(f"pcube_{self.n_points}points_{self.length:g}mm.pdf")
+            f_out = Path(f"pcube_{self.n_points}squares_{self.length:g}mm.pdf")
         else:  # Accept strings and paths like the other target classes.
             f_out = Path(f_out)
         f_out = f_out.expanduser().with_suffix(".pdf").resolve()  # Force the PDF extension.

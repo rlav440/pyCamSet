@@ -11,6 +11,8 @@ Every test here needs the GUI toolkit, so every test here is marked
 
 from __future__ import annotations
 
+import shutil
+
 import numpy as np
 import pytest
 
@@ -349,7 +351,9 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
     images.mkdir()
     for camera in sorted((session_data_dir / "calibration_charuco").iterdir()):
         if camera.is_dir():
-            (images / camera.name).symlink_to(camera, target_is_directory=True)
+            # Copy rather than require Windows' ``create symbolic links``
+            # privilege; the workflow writes only beside these copies.
+            shutil.copytree(camera, images / camera.name)
 
     refused: list[str] = []
     for name in ("critical", "warning"):

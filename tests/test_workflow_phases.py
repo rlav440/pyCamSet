@@ -13,6 +13,7 @@ here.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 
@@ -318,14 +319,15 @@ def charuco_image_folder(session_data_dir, tmp_path):
     """The ChArUco corpus, somewhere a run may write to.
 
     Phase 1 caches its detections beside the images, so it needs a folder of
-    its own; symlinked per camera rather than copied, because the corpus is
-    20 MB and nothing here writes to the images themselves.
+    its own.  Copy the camera folders rather than requiring the Windows
+    ``create symbolic links`` privilege; the fixture is deliberately
+    cross-platform and the source corpus remains untouched either way.
     """
     folder = tmp_path / "images"
     folder.mkdir()
     for camera in sorted((session_data_dir / "calibration_charuco").iterdir()):
         if camera.is_dir():
-            (folder / camera.name).symlink_to(camera, target_is_directory=True)
+            shutil.copytree(camera, folder / camera.name)
     return folder
 
 
@@ -389,6 +391,41 @@ def test_phase_1_detects_and_records_a_run(charuco_image_folder, tmp_path):
     assert any(line.startswith("1b") for line in lines)
     assert any("Run saved" in line for line in lines)
     assert any("Detection summary" in line for line in lines)
+
+
+def test_phase_1_records_blocking_detection_report_as_incomplete(tmp_path, monkeypatch):
+    """A blocking report must not be saved as a completed phase."""
+    report = {
+        "flags": ["camera \"cam1\" detected nothing"],
+        "blocking_flags": ["camera \"cam1\" detected nothing"],
+    }
+    monkeypatch.setattr(
+        phase1, "_detect",
+        lambda _params, _log: (None, None, {}, report),
+    )
+
+    metadata = phase1.run(
+        {"f_loc": str(tmp_path)},
+        WorkspaceManager(workspace_path_for(tmp_path)),
+    )
+
+    assert metadata["status"] == "incomplete"
+    assert metadata["error"] is None
+
+
+def test_phase_1_records_detection_exception_as_failed(tmp_path, monkeypatch):
+    """An exception is a failed run, never a completed one."""
+    def fail(_params, _log):
+        raise RuntimeError("detector exploded")
+
+    monkeypatch.setattr(phase1, "_detect", fail)
+    metadata = phase1.run(
+        {"f_loc": str(tmp_path)},
+        WorkspaceManager(workspace_path_for(tmp_path)),
+    )
+
+    assert metadata["status"] == "failed"
+    assert metadata["error"] == "detector exploded"
 
 
 def test_a_phases_output_carries_its_reports_not_only_its_warnings():

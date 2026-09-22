@@ -177,11 +177,49 @@ class SelfBundleHandler(TemplateBundleHandler):
         super().__init__(camset, target, detection, fixed_params, options, missing_poses) 
 
         self.flat_point_data = np.copy(self.point_data.reshape((-1)))
+        self.super_primitive = self.bundlePrimitive
 
-        # a feature no camera saw cannot be solved for, so it is held fixed
+        self.param_len = None
+        self.jac_mask = None
+        self.missing_poses: list | None = missing_poses
+        self._setup_free_points()
+        self.op_fun: fb.optimisation_function = self._intr_block() + self._extr_block() + fb.rigidTform3d() +  fb.free_point()
+
+        # The kernels index a dense parameter array whose blocks are as long
+        # as the arrays build_param_list packs: one entry per camera, per
+        # image and per target feature. Left to infer them, make_param_struct
+        # takes each count from the largest index in the detections it is
+        # given, so a trailing image or feature that nothing detected makes
+        # its block one element short -- which shifts every block after it.
+        # The per image poses come before the per key geometry, so an
+        # undetected last image has the kernels reading the target's
+        # coordinates six parameters early, and the residuals then measure
+        # nothing to do with the reprojection they stand for. Stating the
+        # counts keeps the kernels' layout the one the parameter mask and
+        # build_param_list describe.
+        self.problem_maximums = {
+            "max_cams": self.camset.get_n_cams(),
+            "max_imgs": self.detection.max_ims,
+            "max_keys": int(np.prod(self.point_data.shape[:-1])),
+        }
+
+    def _setup_free_points(self):
+        """
+        Decides which feature coordinates this solve may move, and rebuilds
+        the bundle primitive around them.
+
+        Which features are solvable depends on which detections the optimiser
+        is allowed to fit, so this has to be redone whenever that changes --
+        when ``missing_poses`` arrives from a previous solve, for instance.  A
+        feature seen only in a pose that solve discarded has no residual here
+        either, and leaving it free puts three all-zero columns in the
+        jacobian; taking the gauge from one is worse still, since it fixes the
+        seven freedoms against a point nothing constrains.
+        """
         n_points = int(np.prod(self.point_data.shape[:-1]))
-        dd = self.detection.return_flattened_keys(self.target.point_data.shape[:-1]).get_data()[:, 2]
-        self.visible_feature_mask = np.isin(np.arange(n_points), dd)
+        seen_keys = self._flat_detections()[:, 2]
+        # a feature no camera saw cannot be solved for, so it is held fixed
+        self.visible_feature_mask = np.isin(np.arange(n_points), seen_keys)
         self.feat_unfixed = np.repeat(self.visible_feature_mask, 3)
 
         self.fixed_inds, self.gauge_axis = find_gauge_points(
@@ -193,24 +231,20 @@ class SelfBundleHandler(TemplateBundleHandler):
         self.feat_unfixed[3*i1:3*i1+3] = False
         self.feat_unfixed[3*i2 + self.gauge_axis] = False
 
-        superBundlePrimitive = self.bundlePrimitive
-
+        # the same arrays the super primitive holds, so a value written to
+        # either -- a fixed parameter, say -- is seen by the cost function
+        super_primitive = self.super_primitive
         self.bundlePrimitive = StandardBundlePrimitive(
-            superBundlePrimitive.poses, self.flat_point_data, superBundlePrimitive.extr, superBundlePrimitive.intr,
-            extr_unfixed=superBundlePrimitive.extr_unfixed, intr_unfixed=superBundlePrimitive.intr_unfixed, poses_unfixed=superBundlePrimitive.poses_unfixed, bundle_points_unfixed=self.feat_unfixed
+            super_primitive.poses, self.flat_point_data, super_primitive.extr, super_primitive.intr,
+            extr_unfixed=super_primitive.extr_unfixed, intr_unfixed=super_primitive.intr_unfixed, poses_unfixed=super_primitive.poses_unfixed, bundle_points_unfixed=self.feat_unfixed
         )
-
-        self.param_len = None
-        self.jac_mask = None
-        self.missing_poses: list | None = missing_poses
-        self.op_fun: fb.optimisation_function = self._intr_block() + self._extr_block() + fb.rigidTform3d() +  fb.free_point()
 
     def _kernel_extra_args(self) -> tuple:
         # the target geometry is a parameter here, not a fixed template
         return ()
 
     def _kernel_maximums(self):
-        return None
+        return self.problem_maximums
 
     def parameter_groups(self) -> list[ParamGroup]:
         """The blocks of this problem; the free target points are eliminated."""
@@ -235,9 +269,9 @@ class SelfBundleHandler(TemplateBundleHandler):
         :params threads: the number of threads to use.
 
         """
-        target_shape = self.target.point_data.shape
-        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
-        temp_loss = self.op_fun.make_full_loss_fn(dd, threads)
+        dd = self._flat_detections()
+        self._base_residual_count = 2 * int(dd.shape[0])  # two per observation
+        temp_loss = self.op_fun.make_full_loss_fn(dd, threads, self.problem_maximums)
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
@@ -252,10 +286,12 @@ class SelfBundleHandler(TemplateBundleHandler):
         :params threads: the number of threads to use for the optimisation.
         :returns jac_fn: a callable jacobian function that returns the jacobian of the given paramaters.
         """
-        target_shape = self.target.point_data.shape
-        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        # the same rows the loss uses, or the jacobian describes a
+        # different problem from the residuals being minimised
+        dd = self._flat_detections()
         temp_loss = self.op_fun.make_jacobean(
-            dd, threads, unfixed_params=self.parameter_mask())
+            dd, threads, unfixed_params=self.parameter_mask(),
+            problem_maximums=self.problem_maximums)
         def jac_fn(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
@@ -298,18 +334,120 @@ class SelfBundleHandler(TemplateBundleHandler):
         """
         Sets the initial values of the calibration from a previous calibration of the same system.
         The previous system must have used a TemplateBundleHandler.
-        :param prev_cams: The calibrated camseet to use.
-        """
-        self.initial_params = np.empty(self.bundlePrimitive.bdpt_end)
 
-        if not isinstance(prev_cams.calibration_handler, TemplateBundleHandler):
+        A parameter vector only carries what its own solve left free, so the
+        previous vector cannot be copied into this one: anything that solve
+        held fixed is absent from it, and every parameter after the gap lands
+        one slot early. What the two solves fix need not even agree -- a
+        camera pinned there may be free here, and the reverse -- so the
+        previous solution is expanded through the masks that produced it,
+        giving a value for every camera, and then re-packed against the masks
+        of this problem.
+
+        A parameter this solve fixes keeps the value it was fixed at, which is
+        what ``fixed_params`` asked for; one it leaves free starts from the
+        previous solve's answer, fixed there or not.
+
+        :param prev_cams: The calibrated camseet to use.
+        :raises ValueError: if the previous calibration was not a templated
+            adjustment, or describes a different rig to this one.
+        """
+        prev_handler = prev_cams.calibration_handler
+        if not isinstance(prev_handler, TemplateBundleHandler):
             raise ValueError("Previous camera set was not a templated adjustment")
-        self.missing_poses =  prev_cams.calibration_handler.missing_poses
-        self.initial_params[:self.bundlePrimitive.pose_end] = prev_cams.calibration_params.copy()
-        self.initial_params[ 
-            self.bundlePrimitive.pose_end:
-        ] = prev_cams.calibration_handler.target.point_data.copy().flatten()[self.feat_unfixed]
-        # print(prev_cams.calibration_handler.target.point_data.flatten()[:20])
+        if prev_cams.calibration_params is None:
+            raise ValueError(
+                "The previous camera set holds no calibration parameters, so "
+                "there is no solution to start this one from.")
+
+        prev_primitive = prev_handler.bundlePrimitive
+        prev_params = np.asarray(prev_cams.calibration_params, dtype=float)
+        if prev_params.shape[0] != prev_primitive.pose_end:
+            raise ValueError(
+                f"The previous calibration's {prev_params.shape[0]} parameters "
+                f"do not fill its own intrinsic, extrinsic and pose blocks, "
+                f"which take {prev_primitive.pose_end}. A parameter vector from "
+                "a self calibration carries a target geometry block as well, "
+                "and cannot be read as a templated one.")
+
+        self._adopt_missing_poses(prev_handler.missing_poses)
+
+        # Expanding through the previous solve's masks fills in whatever it
+        # held fixed from the arrays it fixed them in, so every camera and
+        # pose comes back whole however that solve was parameterised.
+        prev_intr, prev_extr, prev_poses = (
+            np.copy(a) for a in prev_primitive.return_bundle_primitives(prev_params))
+
+        bundle = self.bundlePrimitive
+        for name, prev_vals, vals, unfixed in (
+            ("intrinsic", prev_intr, bundle.intr, bundle.intr_unfixed),
+            ("extrinsic", prev_extr, bundle.extr, bundle.extr_unfixed),
+            ("pose", prev_poses, bundle.poses, bundle.poses_unfixed),
+        ):
+            if prev_vals.shape != vals.shape:
+                raise ValueError(
+                    f"The previous calibration's {name} block is "
+                    f"{prev_vals.shape}, and this one's is {vals.shape}. The "
+                    "two calibrations describe different problems, so one "
+                    "cannot seed the other.")
+            vals[unfixed] = prev_vals[unfixed]
+
+        prev_points = prev_handler.target.point_data.copy().flatten()
+        if prev_points.shape != self.flat_point_data.shape:
+            raise ValueError(
+                f"The previous calibration's target has "
+                f"{prev_points.shape[0] // 3} features, and this one's has "
+                f"{self.flat_point_data.shape[0] // 3}.")
+
+        self.initial_params = np.empty(bundle.bdpt_end)
+        self.initial_params[:bundle.intr_end] = bundle.intr[bundle.intr_unfixed].flatten()
+        self.initial_params[bundle.intr_end:bundle.extr_end] = (
+            bundle.extr[bundle.extr_unfixed].flatten())
+        self.initial_params[bundle.extr_end:bundle.pose_end] = (
+            bundle.poses[bundle.poses_unfixed].flatten())
+        self.initial_params[bundle.pose_end:] = prev_points[self.feat_unfixed]
+
+    def _adopt_missing_poses(self, missing_poses):
+        """
+        Takes on the poses a previous solve gave up on.
+
+        A pose it could not estimate -- unposed by the initial estimate, or
+        thrown out as an outlier -- is absent from its parameter vector,
+        because ``calc_initial_params`` holds such poses fixed.  Its value in
+        that solve is therefore the identity it was initialised to, not an
+        estimate of anything.  Carrying that identity over while still fitting
+        the detections it came from asks this solve to reproject a target
+        sitting in the camera's centre, which is where the enormous initial
+        error comes from.  So the pose is held fixed here too and its
+        detections are dropped, exactly as the previous solve had them.
+
+        Rebuilding the free points afterwards matters as much: without it the
+        gauge could be fixed on a feature only those discarded poses saw.
+
+        :param missing_poses: the previous solve's mask, or None
+        """
+        if missing_poses is None:
+            return
+
+        missing = np.asarray(missing_poses, dtype=bool)
+        n_poses = self.super_primitive.poses.shape[0]
+        if missing.shape != (n_poses,):
+            raise ValueError(
+                f"The previous calibration marks {missing.size} poses missing, "
+                f"and this problem has {n_poses} poses.")
+        self.missing_poses = missing
+
+        if not np.any(missing):
+            return
+        logger.info(
+            f"{int(missing.sum())} poses the previous calibration could not "
+            "estimate are held fixed, and their detections excluded")
+        self.super_primitive.poses_unfixed = (
+            self.super_primitive.poses_unfixed & ~missing)
+        self.super_primitive.calc_free_poses()
+        # which features are solvable, and which may take the gauge, both
+        # follow from the detections that are left
+        self._setup_free_points()
 
     def get_initial_params(self) -> np.ndarray:
         """

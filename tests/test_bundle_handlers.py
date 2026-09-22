@@ -782,6 +782,119 @@ def test_set_from_templated_camset_requires_a_templated_calibration(self_handler
         self_handler.set_from_templated_camset(cams)
 
 
+# --------------------------------------------------------------------------
+# Seeding a self-calibration from a previous solve that fixed parameters
+# --------------------------------------------------------------------------
+
+
+def _solved_camset(synthetic_problem, fixed_params=None):
+    """The synthetic problem as a camset carrying a finished templated solve.
+
+    The parameters themselves are arbitrary -- the seeding only moves them
+    around -- but their length is not: it is whatever that solve left free.
+    """
+    cams, target, detection, _ = synthetic_problem
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detection,
+        fixed_params=fixed_params, options={"outliers": "n"},
+    )
+    rng = np.random.default_rng(0)
+    cams.calibration_handler = handler
+    cams.calibration_params = rng.normal(size=handler.bundlePrimitive.pose_end)
+    return cams, target, detection, handler
+
+
+def test_set_from_templated_camset_reads_a_solve_that_fixed_parameters(
+        synthetic_problem):
+    """The previous vector omits what that solve fixed, so it cannot be copied.
+
+    Fixing one camera's intrinsics leaves nine fewer parameters in the
+    previous vector than this problem's camera blocks take, and copying it
+    straight in either raises or shifts every later parameter by nine.
+    """
+    fixed = {"left": {"int": np.arange(9, dtype=float)}}
+    cams, target, detection, prev = _solved_camset(synthetic_problem, fixed)
+
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    assert len(cams.calibration_params) < handler.bundlePrimitive.pose_end
+
+    handler.set_from_templated_camset(cams)
+
+    assert len(handler.initial_params) == handler.bundlePrimitive.bdpt_end
+    # the round trip through this problem's own layout returns the previous
+    # solve's cameras and poses, in full
+    intr, extr, poses, _ = handler.get_bundle_adjustment_inputs(
+        handler.initial_params)
+    assert np.allclose(intr, prev.bundlePrimitive.intr)
+    assert np.allclose(extr, prev.bundlePrimitive.extr)
+    assert np.allclose(poses, prev.bundlePrimitive.poses)
+
+
+def test_set_from_templated_camset_carries_a_previously_fixed_value_over(
+        synthetic_problem):
+    """A parameter pinned there and free here starts from the value it was pinned at."""
+    pinned = np.arange(9, dtype=float)
+    cams, target, detection, _ = _solved_camset(
+        synthetic_problem, {"left": {"int": pinned}})
+
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    handler.set_from_templated_camset(cams)
+
+    assert np.allclose(handler.bundlePrimitive.intr[0], pinned)
+    assert handler.bundlePrimitive.intr_unfixed[0]
+
+
+def test_set_from_templated_camset_keeps_this_solves_fixed_values(
+        synthetic_problem):
+    """What this solve fixes stays where fixed_params put it, not where the last solve left it."""
+    cams, target, detection, _ = _solved_camset(
+        synthetic_problem, {"left": {"int": np.arange(9, dtype=float)}})
+
+    pinned_now = np.full(9, 7.0)
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection,
+        fixed_params={"left": {"int": pinned_now}}, options={"outliers": "n"},
+    )
+    handler.set_from_templated_camset(cams)
+
+    assert not handler.bundlePrimitive.intr_unfixed[0]
+    assert np.allclose(handler.bundlePrimitive.intr[0], pinned_now)
+    intr, _, _, _ = handler.get_bundle_adjustment_inputs(handler.initial_params)
+    assert np.allclose(intr[0], pinned_now)
+
+
+def test_set_from_templated_camset_refuses_a_self_calibration_vector(
+        synthetic_problem):
+    """A self-calibration's vector carries a geometry block a templated read would misplace."""
+    cams, target, detection, _ = _solved_camset(synthetic_problem)
+
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    handler.set_from_templated_camset(cams)
+    # a SelfBundleHandler is a TemplateBundleHandler, so the isinstance check
+    # passes and only the block lengths give it away
+    cams.calibration_handler = handler
+    cams.calibration_params = handler.initial_params
+
+    with pytest.raises(ValueError, match="self calibration"):
+        SelfBundleHandler(
+            camset=cams, target=target, detection=detection,
+            options={"outliers": "n"},
+        ).set_from_templated_camset(cams)
+
+
+def test_set_from_templated_camset_needs_parameters_to_read(synthetic_problem):
+    cams, target, detection, _ = _solved_camset(synthetic_problem)
+    cams.calibration_params = None
+
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    with pytest.raises(ValueError, match="no calibration parameters"):
+        handler.set_from_templated_camset(cams)
+
+
 def test_an_image_with_no_detections_does_not_make_the_problem_degenerate(
         synthetic_problem, caplog):
     """A frame nothing was seen in costs that frame, not the calibration.

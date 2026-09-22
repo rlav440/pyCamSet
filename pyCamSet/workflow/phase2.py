@@ -261,6 +261,10 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
                 n_lim=params["n_lim"],
                 camset=cams,
                 cam_names=cam_names,
+                rescale_and_gamma=(params.get("rescale_and_gamma", False)
+                                   and "puzzleboard" in type(target).__module__.lower()),
+                preprocessing_scale=params.get("preprocessing_scale", 0.25),
+                preprocessing_gamma=params.get("preprocessing_gamma", 0.5),
             )
             cams = calibrate(
                 detections, cam_res, target,
@@ -345,6 +349,10 @@ def _load_or_detect(params: dict, target, root: Path,
             # _calibrate's own comment for why this must not be left to a
             # fresh scan of root/f_loc.
             cam_names=cam_names,
+            rescale_and_gamma=(params.get("rescale_and_gamma", False)
+                               and "puzzleboard" in type(target).__module__.lower()),
+            preprocessing_scale=params.get("preprocessing_scale", 0.25),
+            preprocessing_gamma=params.get("preprocessing_gamma", 0.5),
         )
     return detections, cam_res
 

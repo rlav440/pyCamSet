@@ -238,7 +238,17 @@ def load_matching_image_folder_cache(params: dict) -> Optional[tuple]:
             Path(f_loc), params.get("selected_cameras"))]
     except Exception:
         return None
-    return load_verified_cache(candidate, target, cam_names, params.get("n_lim"))
+    preprocessing = None
+    if (params.get("rescale_and_gamma", False)
+            and "puzzleboard" in type(target).__module__.lower()):
+        preprocessing = {
+            "rescale_and_gamma": True,
+            "scale": float(params.get("preprocessing_scale", 0.25)),
+            "gamma": float(params.get("preprocessing_gamma", 0.5)),
+        }
+    return load_verified_cache(
+        candidate, target, cam_names, params.get("n_lim"),
+        preprocessing=preprocessing)
 
 
 def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
@@ -260,6 +270,9 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
 
     f_loc = Path(params["f_loc"])
     upscale_factor = params.get("upscale_factor", 1)
+    rescale_and_gamma = bool(params.get("rescale_and_gamma", False))
+    preprocessing_scale = float(params.get("preprocessing_scale", 0.25))
+    preprocessing_gamma = float(params.get("preprocessing_gamma", 0.5))
     caching = bool(params["caching"])
 
     # Scanned fresh here for the camera-subset selection below -- NOT reused
@@ -279,6 +292,9 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
     log(f"1a  Camera sub-folders: {cam_names}")
     if upscale_factor > 1:
         log(f"1a  Upscale factor: {upscale_factor}x")
+    if rescale_and_gamma:
+        log(f"1a  Rescale and apply gamma: scale={preprocessing_scale}, "
+            f"gamma={preprocessing_gamma}")
 
     if not cam_folders:
         raise RuntimeError("No selected camera sub-folders found.")
@@ -288,6 +304,11 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
             "Camera folders must contain equal non-zero image counts.")
 
     target = target_of_params(params)
+    # The preparation is deliberately a pcube/PuzzleBoard path.  Ignoring the
+    # checkbox for other targets keeps ChArUco2 and the other detectors byte
+    # compatible even when an old settings file carries the new key.
+    if "puzzleboard" not in type(target).__module__.lower():
+        rescale_and_gamma = False
     cache_name = _cache_name_of(params)
 
     # Scanned again, as late as possible -- immediately before the
@@ -340,6 +361,9 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
             draw=False,
             n_lim=params["n_lim"],
             upscale_factor=upscale_factor,
+            rescale_and_gamma=rescale_and_gamma,
+            preprocessing_scale=preprocessing_scale,
+            preprocessing_gamma=preprocessing_gamma,
             # This run's own selection, fixed above before any staging
             # decision or later race window -- passed through explicitly so
             # detect_datapoints_in_imfile never re-derives it from a fresh

@@ -432,7 +432,8 @@ def cache_identity_path(cache_path: Path) -> Path:
 
 def _target_identity(calibration_target, cam_names: list[str],
                       n_lim: int | None,
-                      camset: CameraSet | None = None) -> dict | None:
+                      camset: CameraSet | None = None,
+                      preprocessing: dict | None = None) -> dict | None:
     """The identity a detection cache is checked against.
 
     None when the target cannot be described (not a registered type, e.g. a
@@ -468,7 +469,10 @@ def _target_identity(calibration_target, cam_names: list[str],
         spec = spec_of(calibration_target)
     except ValueError:
         return None
-    return {"target_spec": spec, "cam_names": sorted(cam_names), "n_lim": n_lim}
+    identity = {"target_spec": spec, "cam_names": sorted(cam_names), "n_lim": n_lim}
+    if preprocessing is not None:
+        identity["preprocessing"] = dict(preprocessing)
+    return identity
 
 
 def _identity_text(payload: dict) -> str:
@@ -556,7 +560,8 @@ def _sidecar_record(cache_path: Path) -> dict | None:
 
 
 def cache_matches(cache_path: Path, calibration_target, cam_names: list[str],
-                   n_lim: int | None, camset: CameraSet | None = None) -> bool:
+                   n_lim: int | None, camset: CameraSet | None = None,
+                   preprocessing: dict | None = None) -> bool:
     """Whether *cache_path* was produced for this exact target, camera
     selection and image cap. False whenever this cannot be confirmed --
     cache missing, sidecar missing/unreadable, target unregistered, a
@@ -582,7 +587,9 @@ def cache_matches(cache_path: Path, calibration_target, cam_names: list[str],
     """
     if not _long_path(cache_path).exists():
         return False
-    identity = _target_identity(calibration_target, cam_names, n_lim, camset=camset)
+    identity = _target_identity(
+        calibration_target, cam_names, n_lim, camset=camset,
+        preprocessing=preprocessing)
     if identity is None:
         return False
     recorded = _sidecar_record(cache_path)
@@ -596,7 +603,8 @@ def cache_matches(cache_path: Path, calibration_target, cam_names: list[str],
 
 def _load_cache_if_verified(cache_path: Path, calibration_target,
                              cam_names: list[str], n_lim: int | None,
-                             camset: CameraSet | None = None):
+                             camset: CameraSet | None = None,
+                             preprocessing: dict | None = None):
     """A cache hit, read exactly once.
 
     The hot path inside :func:`detect_datapoints_in_imfile`: identity is
@@ -619,7 +627,9 @@ def _load_cache_if_verified(cache_path: Path, calibration_target,
     """
     if not _long_path(cache_path).exists():
         return None
-    identity = _target_identity(calibration_target, cam_names, n_lim, camset=camset)
+    identity = _target_identity(
+        calibration_target, cam_names, n_lim, camset=camset,
+        preprocessing=preprocessing)
     if identity is None:
         return None
     recorded = _sidecar_record(cache_path)
@@ -649,7 +659,8 @@ def _load_cache_if_verified(cache_path: Path, calibration_target,
 
 def load_verified_cache(cache_path: Path, calibration_target,
                          cam_names: list[str], n_lim: int | None,
-                         camset: CameraSet | None = None):
+                         camset: CameraSet | None = None,
+                         preprocessing: dict | None = None):
     """Public entry point to :func:`_load_cache_if_verified`, for a caller
     outside this module that needs a confirmed, single-read load of a cache
     pickle.
@@ -680,7 +691,8 @@ def load_verified_cache(cache_path: Path, calibration_target,
 def write_cache_identity(cache_path: Path, calibration_target,
                           cam_names: list[str], n_lim: int | None,
                           cache_sha256: str | None = None,
-                          camset: CameraSet | None = None) -> None:
+                          camset: CameraSet | None = None,
+                          preprocessing: dict | None = None) -> None:
     """Write the sidecar identity beside a freshly written cache.
 
     Always starts by discarding whatever sidecar is already there, so an
@@ -722,7 +734,9 @@ def write_cache_identity(cache_path: Path, calibration_target,
             "Could not remove the stale detection cache identity sidecar "
             "%s before rewriting it: %s; continuing to write the fresh "
             "identity over it.", sidecar, exc)
-    identity = _target_identity(calibration_target, cam_names, n_lim, camset=camset)
+    identity = _target_identity(
+        calibration_target, cam_names, n_lim, camset=camset,
+        preprocessing=preprocessing)
     if identity is None:
         return
     if cache_sha256 is None:
@@ -757,6 +771,9 @@ def detect_datapoints_in_imfile(
     threads=1,
     upscale_factor:int=1,
     cam_names: list[str] | None = None,
+    rescale_and_gamma: bool = False,
+    preprocessing_scale: float = 0.25,
+    preprocessing_gamma: float = 0.5,
 ) -> tuple[TargetDetection, list[tuple]]:
     """
     This function organises the detection of the image datapoints in a folder of images.
@@ -831,8 +848,16 @@ def detect_datapoints_in_imfile(
     # with a second, separate cache_matches() call after load_pickle(): with
     # only one read, there is no gap between "confirmed" and "used" left for
     # a concurrent writer to land in.
+    preprocessing = None
+    if rescale_and_gamma:
+        preprocessing = {
+            "rescale_and_gamma": True,
+            "scale": float(preprocessing_scale),
+            "gamma": float(preprocessing_gamma),
+        }
     cache_hit = (_load_cache_if_verified(
-        cache_path, calibration_target, cam_names, n_lim, camset=camset)
+        cache_path, calibration_target, cam_names, n_lim, camset=camset,
+        preprocessing=preprocessing)
         if caching else None)
     if cache_hit is not None:
         logger.info('loading cached detection')
@@ -876,6 +901,9 @@ def detect_datapoints_in_imfile(
             camera=cam,
             threads=threads,
             upscale_factor=upscale_factor,
+            rescale_and_gamma=rescale_and_gamma,
+            preprocessing_scale=preprocessing_scale,
+            preprocessing_gamma=preprocessing_gamma,
         )
 
     if use_cams:
@@ -889,7 +917,8 @@ def detect_datapoints_in_imfile(
     # When upscale_factor > 1, detected 2D pixel coords are in the upscaled
     # frame, so cam_res must match. Multiply native .shape[:2] by the factor
     # (cheaper than re-reading the image and resizing it).
-    cam_res = [tuple(int(d * upscale_factor) for d in cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2]) for cname in cam_names]
+    coordinate_scale = 1 if rescale_and_gamma else upscale_factor
+    cam_res = [tuple(int(d * coordinate_scale) for d in cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2]) for cname in cam_names]
 
     if caching:
         # A1: pairing integrity across the write -- no sidecar can be
@@ -938,7 +967,8 @@ def detect_datapoints_in_imfile(
         cache_sha256 = (hashlib.sha256(written).hexdigest()
                         if isinstance(written, (bytes, bytearray)) else None)
         write_cache_identity(cache_path, calibration_target, cam_names, n_lim,
-                             cache_sha256=cache_sha256, camset=camset)
+                             cache_sha256=cache_sha256, camset=camset,
+                             preprocessing=preprocessing)
     return detected, cam_res
 
 def validate_detections(detected: TargetDetection,

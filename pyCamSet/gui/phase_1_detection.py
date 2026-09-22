@@ -108,6 +108,10 @@ def _run_header(params: dict) -> list[str]:
     ]
     if params.get("upscale_factor", 1) != 1:
         lines.append(f"upscale      : {params['upscale_factor']}x")
+    if params.get("rescale_and_gamma", False):
+        lines.append(
+            f"pcube prep   : scale={params['preprocessing_scale']} "
+            f"gamma={params['preprocessing_gamma']}")
     lines.append(f"selected cams: {params['selected_cameras']}")
     lines.append("Starting detection…")
     return lines
@@ -299,6 +303,21 @@ class Phase1Tab(QWidget):
             "are poor."
         )
         detect_form.addRow("Upscale factor:", self._upscale_combo)
+
+        self._rescale_gamma_cb = QCheckBox("Rescale and apply gamma")
+        self._rescale_gamma_cb.setToolTip(
+            "PuzzleBoard/pcube only. For uint16 images, take the upper byte, "
+            "apply gamma once, and resize once before detection. uint8 images "
+            "remain uint8. Default: disabled.")
+        detect_form.addRow(self._rescale_gamma_cb)
+
+        self._preprocessing_scale_edit = QLineEdit("0.25")
+        self._preprocessing_scale_edit.setFixedWidth(100)
+        detect_form.addRow("Preprocessing scale:", self._preprocessing_scale_edit)
+
+        self._preprocessing_gamma_edit = QLineEdit("0.5")
+        self._preprocessing_gamma_edit.setFixedWidth(100)
+        detect_form.addRow("Preprocessing gamma:", self._preprocessing_gamma_edit)
 
         self._hd_cb = QCheckBox("High Distortion Mode")
         self._hd_cb.setToolTip(
@@ -597,6 +616,11 @@ class Phase1Tab(QWidget):
             "threads": as_optional_positive_int(
                 self._threads_edit.text(), "Threads"),
             "upscale_factor": int(self._upscale_combo.currentText().rstrip("x")),
+            "rescale_and_gamma": self._rescale_gamma_cb.isChecked(),
+            "preprocessing_scale": as_positive_float(
+                self._preprocessing_scale_edit.text(), "Preprocessing scale"),
+            "preprocessing_gamma": as_positive_float(
+                self._preprocessing_gamma_edit.text(), "Preprocessing gamma"),
             "fixed_params": as_json_object(
                 self._fp_edit.text(), "Fixed params JSON"),
             "problem_options": as_json_object(

@@ -97,7 +97,33 @@ def _looks_like_native_opencv_error(exc: BaseException) -> bool:
     return str(exc).lstrip().startswith("OpenCV(")
 
 
-def _process_image(im_file:Path, cam_name:str, idx:int, draw:bool, camera:Camera, upscale_factor:int=1):
+def _prepare_detection_image(
+    image: np.ndarray, *, rescale_and_gamma: bool,
+    preprocessing_scale: float, preprocessing_gamma: float,
+) -> tuple[np.ndarray, float]:
+    """Prepare an optional PuzzleBoard image and return its scale."""
+    if not rescale_and_gamma:
+        return image, 1.0
+    from pyCamSet.calibration_targets.markers.puzzleboard import (
+        preprocess_puzzleboard_image,
+    )
+    return preprocess_puzzleboard_image(
+        image, enabled=True, scale=preprocessing_scale,
+        gamma=preprocessing_gamma), float(preprocessing_scale)
+
+
+def _restore_native_coordinates(detection: ImageDetection, scale: float) -> ImageDetection:
+    """Map detector points back to the native image coordinate system."""
+    if scale != 1.0 and detection.has_data:
+        detection.image_points = np.asarray(
+            detection.image_points, dtype=np.float64) / scale
+    return detection
+
+
+def _process_image(
+    im_file: Path, cam_name: str, idx: int, draw: bool, camera: Camera,
+    upscale_factor: int = 1, rescale_and_gamma: bool = False,
+    preprocessing_scale: float = 0.25, preprocessing_gamma: float = 0.5):
     """
     Detect one image, in a worker process.
 
@@ -114,13 +140,19 @@ def _process_image(im_file:Path, cam_name:str, idx:int, draw:bool, camera:Camera
         was unreadable, and any warning the target stashed on
         ``legacy_warning_message`` for the caller to log
     """
-    im = cv2.imread(im_file)
+    im = cv2.imread(
+        im_file, cv2.IMREAD_UNCHANGED if rescale_and_gamma else cv2.IMREAD_COLOR)
     if im is None:
         return cam_name, idx, ImageDetection(), "unreadable or undecodable", True, None
     try:
-        if upscale_factor > 1:
+        if upscale_factor > 1 and not rescale_and_gamma:
             im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
+        im, preparation_scale = _prepare_detection_image(
+            im, rescale_and_gamma=rescale_and_gamma,
+            preprocessing_scale=preprocessing_scale,
+            preprocessing_gamma=preprocessing_gamma)
         detection = worker_detector.find_in_image(im, draw=draw, camera=camera)
+        detection = _restore_native_coordinates(detection, preparation_scale)
     except (cv2.error, ValueError) as exc:
         if isinstance(exc, ValueError) and not _looks_like_native_opencv_error(exc):
             raise
@@ -388,7 +420,11 @@ class AbstractTarget(ABC):
         :return: An ImageDetection object, containing the detected data
         """
 
-    def find_in_imfolder(self, file:Path, cam_names, draw=False, n_lim=None, camera: Camera=None, threads=12, upscale_factor:int=1) -> TargetDetection:
+    def find_in_imfolder(
+        self, file: Path, cam_names, draw=False, n_lim=None,
+        camera: Camera = None, threads=12, upscale_factor: int = 1,
+        rescale_and_gamma: bool = False, preprocessing_scale: float = 0.25,
+        preprocessing_gamma: float = 0.5) -> TargetDetection:
         """
         Notes: A function to detect the camera results in the image folder.
         generally a process wrapper around the previous function
@@ -425,7 +461,9 @@ class AbstractTarget(ABC):
             n_unreadable = 0
             n_detect_error = 0
             for idx, im_file in enumerate(im_locs):
-                im = cv2.imread(im_file)
+                im = cv2.imread(
+                    im_file,
+                    cv2.IMREAD_UNCHANGED if rescale_and_gamma else cv2.IMREAD_COLOR)
                 if im is None:
                     # cv2.imread returns None rather than raising.
                     logger.warning(
@@ -442,9 +480,14 @@ class AbstractTarget(ABC):
                 # message shape; any other ValueError is a programming
                 # error and surfaces.
                 try:
-                    if upscale_factor > 1:
+                    if upscale_factor > 1 and not rescale_and_gamma:
                         im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
+                    im, preparation_scale = _prepare_detection_image(
+                        im, rescale_and_gamma=rescale_and_gamma,
+                        preprocessing_scale=preprocessing_scale,
+                        preprocessing_gamma=preprocessing_gamma)
                     detection = self.find_in_image(im, draw=draw, camera=camera)
+                    detection = _restore_native_coordinates(detection, preparation_scale)
                 except (cv2.error, ValueError) as exc:
                     if isinstance(exc, ValueError) and not _looks_like_native_opencv_error(exc):
                         raise
@@ -465,7 +508,10 @@ class AbstractTarget(ABC):
 
         os.environ['Detection_PID'] = str(os.getpid())
 
-        tasks = [(im_file, cam_name, idx, draw, camera, upscale_factor) for idx, im_file in enumerate(im_locs)]
+        tasks = [(
+            im_file, cam_name, idx, draw, camera, upscale_factor,
+            rescale_and_gamma, preprocessing_scale, preprocessing_gamma,
+        ) for idx, im_file in enumerate(im_locs)]
         if not (processname := multiprocessing.current_process().name) == "MainProcess":
             logger.critical("Python multiprocessing attempted to start an infinite loop. Use the if __name__ == '__main__' idiom in your calling script to prevent this")
             raise RuntimeError()

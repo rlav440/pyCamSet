@@ -314,6 +314,9 @@ def detect_datapoints_in_imfile(
     threads=1,
     upscale_factor:int=1,
     cam_names: list[str] | None = None,
+    rescale_and_gamma: bool = False,
+    preprocessing_scale: float = 0.25,
+    preprocessing_gamma: float = 0.5,
 ) -> tuple[TargetDetection, list[tuple]]:
     """
     This function organises the detection of the image datapoints in a folder of images.
@@ -341,8 +344,16 @@ def detect_datapoints_in_imfile(
     scan_cam_names = cam_names is None
     cam_names = get_subfolder_names(f_loc=f_loc) if scan_cam_names else list(cam_names)
 
+    preprocessing = None
+    if rescale_and_gamma:
+        preprocessing = {
+            "rescale_and_gamma": True,
+            "scale": float(preprocessing_scale),
+            "gamma": float(preprocessing_gamma),
+        }
     cache_hit = (load_verified_cache(
-        cache_path, calibration_target, cam_names, n_lim, camset=camset)
+        cache_path, calibration_target, cam_names, n_lim, camset=camset,
+        preprocessing=preprocessing)
         if caching else None)
     if cache_hit is not None:
         logger.info('loading cached detection')
@@ -373,6 +384,9 @@ def detect_datapoints_in_imfile(
             camera=cam,
             threads=threads,
             upscale_factor=upscale_factor,
+            rescale_and_gamma=rescale_and_gamma,
+            preprocessing_scale=preprocessing_scale,
+            preprocessing_gamma=preprocessing_gamma,
         )
 
     if camset is not None:
@@ -384,11 +398,13 @@ def detect_datapoints_in_imfile(
 
     # Detected coordinates are in the upscaled frame, so cam_res must be too:
     # scaling the native shape is cheaper than re-reading and resizing.
-    cam_res = [tuple(int(d * upscale_factor) for d in cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2]) for cname in cam_names]
+    coordinate_scale = 1 if rescale_and_gamma else upscale_factor
+    cam_res = [tuple(int(d * coordinate_scale) for d in cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2]) for cname in cam_names]
 
     if caching:
         save_to_cache(detected, cam_res, cache_path, calibration_target,
-                      cam_names, n_lim, camset)
+                      cam_names, n_lim, camset,
+                      preprocessing=preprocessing)
     return detected, cam_res
 
 

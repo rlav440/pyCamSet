@@ -98,9 +98,15 @@ def run(params: dict,
             diagnostics["error"] = error
 
     run_id = make_run_id()
+    blocking_flags = list((report or {}).get("blocking_flags", []))
     metadata = {
         "run_id": run_id,
         "phase": "phase1",
+        "status": (
+            "failed" if error else
+            "incomplete" if blocking_flags else
+            "complete"
+        ),
         "params": params,
         "diagnostics": diagnostics,
         "report": report,
@@ -125,6 +131,10 @@ def run(params: dict,
         log(f"Artifact saved: {saved}")
         workspace.save_run("phase1", run_id, metadata)
 
+    if blocking_flags:
+        log("Phase 1 incomplete: " + "; ".join(map(str, blocking_flags)))
+    else:
+        log("Phase 1 complete.")
     log(f"Run saved: {run_id}")
     return metadata
 
@@ -397,7 +407,10 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
         detections, target, image_counts=cam_img_counts, n_lim=params["n_lim"])
 
     diagnostics = _diagnostics(report, detections, cam_res, log)
-    log("Phase 1 complete.")
+    if report.blocking_flags:
+        log("Phase 1 detection finished with blocking flags.")
+    else:
+        log("Phase 1 complete.")
     return detections, cam_res, diagnostics, report.to_dict()
 
 

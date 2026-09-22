@@ -737,6 +737,12 @@ def test_a_target_names_its_own_file_from_its_own_arguments(name, cls):
         assert "/" not in filename and filename.strip() == filename
 
 
+def test_puzzleboard_cube_printable_name_says_squares_per_face():
+    from pyCamSet.calibration_targets.puzzleboard_cube import PuzzleBoardCube
+
+    values = {"n_points": 2, "length": 20.0}
+    assert PuzzleBoardCube.construction_parameters().parameter("n_points").label == "Squares per face"
+    assert PuzzleBoardCube.printable_name(values, "svg").startswith("pcube_2squares_")
 @pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
 def test_every_target_writes_itself_as_every_format(tmp_path, name, cls):
     """One export path, rather than the four copies of the same dispatch

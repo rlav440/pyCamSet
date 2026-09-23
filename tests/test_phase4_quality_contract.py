@@ -204,7 +204,7 @@ def test_fixed_camera_warm_start_keeps_only_free_parameters():
     previous_handler.bundlePrimitive = _Primitive(extr_unfixed=[True, True])
     previous_cams = SimpleNamespace(
         calibration_handler=previous_handler,
-        calibration_params=np.arange(15.0),
+        calibration_params=np.arange(12.0),
     )
 
     current_handler = TemplateBundleHandler.__new__(TemplateBundleHandler)

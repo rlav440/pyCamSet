@@ -403,7 +403,7 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         prev_primitive = prev_handler.bundlePrimitive
         prev_params = np.asarray(prev_cams.calibration_params, dtype=float)
-        if prev_params.shape[0] < prev_primitive.pose_end:
+        if prev_params.shape[0] != prev_primitive.pose_end:
             raise ValueError(
                 f"The previous calibration's {prev_params.shape[0]} parameters "
                 f"do not fill its own intrinsic, extrinsic and pose blocks, "

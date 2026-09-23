@@ -10,7 +10,7 @@ Future: Re-run the four-dataset matrix when an upstream Phase 2 limitation chang
 This record covers the Phase 3 backend and GUI seam after the P16X-2 Phase 1/2
 corpus run. Source TIFF roots were treated as read-only. Bulk run directories
 remain outside git under
-`D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/`.
+`evidence/`.
 
 ## Backend result
 
@@ -91,7 +91,7 @@ artefacts.
 `QT_QPA_PLATFORM=offscreen`, loaded the saved Phase 3 workspace, rendered its
 summary/diagnostics tabs, and captured:
 
-`D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/phase3_diagnostics_offscreen.png`
+`evidence/phase3_real/phase3_diagnostics_offscreen.png`
 
 The diagnostics data also exposes the initial per-image values, residual XY
 scatter, per-camera means and the camera-pose view hook used by the GUI.
@@ -99,15 +99,15 @@ scatter, per-camera means and the camera-pose view hook used by the GUI.
 [VERIFIED-BY-EXECUTION] Additional offscreen captures demonstrate the actual
 rendering surfaces, not only their object construction:
 
-- `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/phase3_gui_residuals.png`
+- `evidence/phase3_real/phase3_gui_residuals.png`
   shows the residual diagnostics view;
-- `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/phase3_gui_poses.png`
+- `evidence/phase3_real/phase3_gui_poses.png`
   shows the camera-pose view;
-- `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/phase3_pyvista_offscreen.png`
+- `evidence/phase3_real/phase3_pyvista_offscreen.png`
   shows the offscreen 3D camera/target render;
 - the corresponding telecentric eight-camera GUI and PyVista captures are in
-  `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_telecentric_pcube5/`;
-- `D:/Hermes/profiles/rebels/cache/pcube_p16x3_overlay/phase1_native_pixel_observation_overlay.png`
+  `evidence/phase3_telecentric_pcube5/`;
+- `evidence/phase1_native_pixel_observation_overlay.png`
   shows native camera frames with lime detection points overlaid (view1 and
   view3 contain detections for image index 2; views2 and 4 legitimately show
   zero points for that frame).
@@ -119,9 +119,9 @@ then tested both `pinhole` and `telecentric` on those same exact detections:
 telecentric recovered `pcube_5_squares/enabled`, while `pcube_4_squares` and
 `rpan_6_squares` failed with explicit out-of-plane-extent diagnostics. The
 probe outputs remain outside git in
-`D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase2_recovery/`
+`evidence/phase2_recovery/`
 and
-`D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase2_model_recovery/`.
+`evidence/phase2_model_recovery/`.
 
 ## Tests
 

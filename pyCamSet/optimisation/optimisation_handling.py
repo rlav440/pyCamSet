@@ -233,10 +233,14 @@ def get_bundle_adjustment_stats(
         optimisation.fun, param_handler)
     final_euclid = float(np.mean(np.linalg.norm(
         np.reshape(final_reprojection, (-1, 2)), axis=1)))
+    initial_reprojection_cost = 0.5 * float(init_reprojection @ init_reprojection)
+    final_reprojection_cost = 0.5 * float(final_reprojection @ final_reprojection)
 
     stats = {
         "initial_euclid": init_euclid,
         "final_euclid": final_euclid,
+        "initial_reprojection_cost": initial_reprojection_cost,
+        "final_reprojection_cost": final_reprojection_cost,
         "param_count": int(np.size(init_params)),
         "observation_count": int(np.size(final_reprojection) // 2),
         "prior_residual_count": (

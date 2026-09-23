@@ -185,14 +185,20 @@ class Phase1Tab(QWidget):
             lbl = QLabel("(no cameras found)")
             lbl.setStyleSheet("color: gray; font-size: 10px;")
             self._cameras_area_layout.addWidget(lbl)
+            self._cameras_area.setMinimumHeight(lbl.sizeHint().height())
             self._rebuilding_cameras = False
             return
         for name in camera_names:
             cb = QCheckBox(name)
+            cb.setMinimumHeight(cb.sizeHint().height())
             cb.setChecked(True if restore_states is None else bool(restore_states.get(name, True)))
             cb.stateChanged.connect(lambda _state: self._emit_cameras_changed())
             self._cam_checkboxes[name] = cb
             self._cameras_area_layout.addWidget(cb)
+        checkbox_heights = [cb.sizeHint().height() for cb in self._cam_checkboxes.values()]
+        spacing = self._cameras_area_layout.spacing()
+        content_height = sum(checkbox_heights) + spacing * max(0, len(checkbox_heights) - 1)
+        self._cameras_area.setMinimumHeight(content_height)
         self._rebuilding_cameras = False
 
     def _emit_cameras_changed(self) -> None:
@@ -204,7 +210,7 @@ class Phase1Tab(QWidget):
 
     def _build_ui(self, terminal_cb: QCheckBox) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
+        root.setContentsMargins(4, 4, 4, 4)
 
         top_row = QHBoxLayout()
         root.addLayout(top_row)
@@ -212,7 +218,7 @@ class Phase1Tab(QWidget):
         form_widget = QWidget()
         form_root = QVBoxLayout(form_widget)
         form_root.setContentsMargins(0, 0, 0, 0)
-        form_root.setSpacing(4)
+        form_root.setSpacing(2)
         form_scroll = QScrollArea()  # Keep long parameter forms usable when collapsible sections expand.
         form_scroll.setWidgetResizable(True)  # Resize the inner form to the available width.
         form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)  # Match the existing flat panel styling.
@@ -410,7 +416,9 @@ class Phase1Tab(QWidget):
         self._cameras_area_layout.addWidget(self._cameras_placeholder)
         cam_scroll = QScrollArea()
         cam_scroll.setWidgetResizable(True)
-        cam_scroll.setFixedHeight(90)
+        # Keep several camera choices visible while avoiding a large empty
+        # placeholder panel in the default form; longer lists still scroll.
+        cam_scroll.setFixedHeight(56)
         cam_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         cam_scroll.setWidget(self._cameras_area)
         form_root.addWidget(cam_scroll)

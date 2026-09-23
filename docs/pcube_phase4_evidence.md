@@ -184,3 +184,33 @@ The missing-image gate and initial-error fallback each have regression tests.
 
 The source image roots were not modified. Bulk run artefacts remain outside the
 repository.
+
+## GUI and upstream-boundary proof
+
+The real `Phase4Tab` and `Phase4DiagnosticsTab` were instantiated against the
+saved M_NEBULA Phase 3/Phase 4 workspace under
+`QT_QPA_PLATFORM=offscreen PYVISTA_OFF_SCREEN=true`. The diagnostics tab loaded
+the exact GOOD repeat `20260923_040751_fba3d2`, rendered its summary, and the
+PyVista export path produced a real 3D camera/target PNG:
+
+- GUI diagnostics summary: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_gui_summary_good.png`
+- GUI Phase 4 settings: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_gui_settings_good.png`
+- PyVista 3D render: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_pyvista_good_render.png`
+- GUI state evidence: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_gui_state_evidence.json`
+
+The state harness exercised the actual tab callbacks and recorded the honest
+labels `Cancellation requested; waiting for the active solver step…`,
+`Incomplete — quality gate blocked hand-off: ...`, `Failed — demo failure`, and
+`Complete — quality gate passed`; retry was disabled after the complete result.
+This supplements the existing 95 headless GUI contract tests with a real saved
+run, diagnostics rendering, visual export, and state-transition evidence.
+
+Phase 4 was deliberately not fabricated for the two R_pan cut-TIFF roots that
+did not produce a valid Phase 3 input. The upstream four-dataset record
+(`docs/pcube_phase3_evidence.md`, lines 67–85) records both r_nebula 6-squares
+and the native 7-squares dispositions as upstream-limited, while the enabled
+7-squares root produced the verified pinhole Phase 3 run used above. The same
+record covers the M_NEBULA 4-squares native/enabled failures and the
+M_NEBULA 5-squares native zero-detection path. Thus the Phase 4 GUI/backend
+uses the exact provenance-matching Phase 3 output where one exists and reports
+upstream failure rather than silently changing roots, preprocessing, or models.

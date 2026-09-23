@@ -75,6 +75,15 @@ That controlled repeat is evidence that simply allowing more iterations does
 not recover a useful Phase 4 solution for this telecentric corpus; it is not
 presented as an underdetermination theorem.
 
+The remaining physical limitation is explicit in the current pyCamSet model:
+`pyCamSet/optimisation/function_block_implementations.py` defines the
+telecentric extrinsic block as rotation-only because axial translation is an
+exact gauge freedom, while `telecentric_intrinsic` carries magnification and
+telecentricity. The Phase 4 gauge report therefore records the three fixed
+target points and reference pose; it does not invent an unobservable
+telecentric camera translation. This is a model-level limitation, not a
+silent camera or image drop.
+
 ## Code and regression coverage
 
 The implementation adds:

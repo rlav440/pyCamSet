@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "pycamset.visual-style"
-VERSION = 1
+VERSION = 2
 _VISUAL_OVERRIDES = WeakKeyDictionary()
 
 
@@ -21,7 +21,12 @@ class VisualStyle:
 
     font_family: str | None = None
     font_size: float | None = None
+    font_weight: str | None = None
     text_colour: str | None = None
+    title_colour: str | None = None
+    tick_colour: str | None = None
+    axes_colour: str | None = None
+    legend_colour: str | None = None
     figure_background: str | None = None
     axes_background: str | None = None
     line_width: float | None = None
@@ -32,11 +37,16 @@ class VisualStyle:
     overlay_colour: str | None = None
     overlay_edge_colour: str | None = None
     series_colours: dict[str, str] = field(default_factory=dict)
+    series_styles: dict[str, dict[str, Any]] = field(default_factory=dict)
+    colormap: str | None = None
+    suggested_preset: str | None = None
 
     def validate(self) -> None:
         """Reject unknown, malformed or out-of-range style state."""
         if self.font_family is not None and (not self.font_family.strip() or len(self.font_family) > 128):
             raise ValueError("font_family must be a non-empty name up to 128 characters")
+        if self.font_weight is not None and self.font_weight not in {"normal", "bold"}:
+            raise ValueError("font_weight must be 'normal' or 'bold'")
         for name in ("font_size", "marker_size", "overlay_size"):
             value = getattr(self, name)
             if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool)
@@ -46,7 +56,8 @@ class VisualStyle:
                 not isinstance(self.line_width, (int, float))
                 or isinstance(self.line_width, bool) or not 0.2 <= self.line_width <= 12):
             raise ValueError("line_width must be between 0.2 and 12")
-        for name in ("text_colour", "figure_background", "axes_background",
+        for name in ("text_colour", "title_colour", "tick_colour", "axes_colour",
+                     "legend_colour", "figure_background", "axes_background",
                      "overlay_colour", "overlay_edge_colour"):
             _validate_colour(getattr(self, name), name)
         if len(self.series_colours) > 128:
@@ -55,6 +66,27 @@ class VisualStyle:
             if not isinstance(series_id, str) or not series_id or len(series_id) > 160:
                 raise ValueError("series IDs must be non-empty strings up to 160 characters")
             _validate_colour(colour, f"series_colours[{series_id!r}]")
+        if len(self.series_styles) > 128:
+            raise ValueError("too many per-series style overrides")
+
+        for series_id, values in self.series_styles.items():
+            if not isinstance(series_id, str) or not series_id or len(series_id) > 160 or not isinstance(values, dict):
+                raise ValueError("series style entries require stable IDs and objects")
+            if set(values) - {"line_width", "line_style", "marker", "colour"}:
+                raise ValueError("unsupported per-series style control")
+            if "line_width" in values and (not isinstance(values["line_width"], (int, float))
+                    or isinstance(values["line_width"], bool) or not 0.2 <= values["line_width"] <= 12):
+                raise ValueError("series line_width must be between 0.2 and 12")
+            if values.get("line_style", "-") not in {"-", "--", "-.", ":"}:
+                raise ValueError("unsupported series line_style")
+            if values.get("marker", "") not in {"", "o", "s", "^", "v", "D", "+", "x", "."}:
+                raise ValueError("unsupported series marker")
+            if "colour" in values:
+                _validate_colour(values["colour"], f"series_styles[{series_id!r}].colour")
+        if self.colormap is not None and self.colormap not in {"viridis", "plasma", "inferno", "magma", "cividis", "coolwarm", "RdBu_r"}:
+            raise ValueError("unsupported colormap")
+        if self.suggested_preset is not None and self.suggested_preset not in {"Nature", "Science", "Cell", "IEEE"}:
+            raise ValueError("unsupported suggested preset")
         if self.grid_visible is not None and not isinstance(self.grid_visible, bool):
             raise ValueError("grid_visible must be boolean or null")
         if self.legend_visible is not None and not isinstance(self.legend_visible, bool):
@@ -87,14 +119,22 @@ def style_from_json(text: str, expected_visual_id: str | None = None) -> VisualS
         raise ValueError(f"Invalid style JSON: {exc}") from exc
     if not isinstance(document, dict) or set(document) != {"schema", "version", "visual_id", "style"}:
         raise ValueError("Style document has missing or unknown top-level keys")
-    if document["schema"] != SCHEMA or document["version"] != VERSION:
+    if document["schema"] != SCHEMA or type(document["version"]) is not int or document["version"] not in {1, VERSION}:
         raise ValueError("Unsupported style schema or version")
     if not isinstance(document["visual_id"], str) or not document["visual_id"]:
         raise ValueError("visual_id must be a non-empty string")
     if expected_visual_id is not None and document["visual_id"] != expected_visual_id:
         raise ValueError("Style belongs to a different visual")
     values = document["style"]
-    if not isinstance(values, dict) or set(values) != set(VisualStyle.__dataclass_fields__):
+    if not isinstance(values, dict):
+        raise ValueError("Style has missing or unknown keys")
+    if document["version"] == 1:
+        # V1 documents are migrated in memory; the original JSON remains untouched
+        # until a user explicitly saves the upgraded style.
+        values = {**values, "font_weight": None, "title_colour": None, "tick_colour": None,
+                  "axes_colour": None, "legend_colour": None, "series_styles": {},
+                  "colormap": None, "suggested_preset": None}
+    if set(values) != set(VisualStyle.__dataclass_fields__):
         raise ValueError("Style has missing or unknown keys")
     style = VisualStyle(**values)
     style.validate()
@@ -108,16 +148,25 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
     style.validate()
     if theme_name not in THEME_TOKENS:
         raise ValueError(f"Unknown theme: {theme_name}")
+    if style.colormap is not None and not any(
+            (image.get_gid() or "").startswith("style:colormap:")
+            for axes in figure.axes for image in axes.images):
+        raise ValueError("No image explicitly supports a cosmetic colormap override")
     _VISUAL_OVERRIDES[figure] = style
     tokens = THEME_TOKENS[theme_name]
     figure.set_facecolor(style.figure_background or tokens["background"])
     for axes_index, axes in enumerate(figure.axes):
         axes.set_facecolor(style.axes_background or tokens["surface"])
         axes.title.set_color(style.text_colour or tokens["text"])
+        if style.title_colour is not None:
+            axes.title.set_color(style.title_colour)
         axes.xaxis.label.set_color(style.text_colour or tokens["text"])
         axes.yaxis.label.set_color(style.text_colour or tokens["text"])
         for tick in axes.get_xticklabels() + axes.get_yticklabels():
-            tick.set_color(style.text_colour or tokens["text"])
+            tick.set_color(style.tick_colour or style.text_colour or tokens["text"])
+        if style.axes_colour is not None:
+            axes.xaxis.label.set_color(style.axes_colour)
+            axes.yaxis.label.set_color(style.axes_colour)
         if style.grid_visible is not None:
             axes.grid(style.grid_visible)
         for line in axes.lines:
@@ -130,6 +179,15 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
                 series_id = f"line:{axes_index}:{line.get_label()}"
             if series_id in style.series_colours:
                 line.set_color(style.series_colours[series_id])
+            series = style.series_styles.get(series_id, {})
+            if "line_width" in series:
+                line.set_linewidth(series["line_width"])
+            if "line_style" in series:
+                line.set_linestyle(series["line_style"])
+            if "marker" in series:
+                line.set_marker(series["marker"] or "None")
+            if "colour" in series:
+                line.set_color(series["colour"])
         # Detection overlays opt in through a stable gid and are styled without
         # touching the underlying image or detection coordinate arrays.
         for collection in axes.collections:
@@ -145,15 +203,26 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
         if legend is not None:
             if style.legend_visible is not None:
                 legend.set_visible(style.legend_visible)
-            if style.text_colour is not None:
+            if style.legend_colour is not None or style.text_colour is not None:
                 for text in legend.get_texts():
-                    text.set_color(style.text_colour)
+                    text.set_color(style.legend_colour or style.text_colour)
+        # Scalar colour maps are deliberately limited to explicitly opted-in
+        # image artists. Existing semantic maps/ranges are never themed.
+        if style.colormap is not None:
+            opted_in = [image for image in axes.images
+                        if (image.get_gid() or "").startswith("style:colormap:")]
+            if not opted_in:
+                raise ValueError("No image explicitly supports a cosmetic colormap override")
+            for image in opted_in:
+                image.set_cmap(style.colormap)
     # Font properties are applied to existing text artists, not data artists.
     for text in figure.findobj(match=lambda artist: hasattr(artist, "set_fontsize")):
         if style.font_size is not None:
             text.set_fontsize(style.font_size)
         if style.font_family is not None:
             text.set_fontfamily(style.font_family)
+        if style.font_weight is not None:
+            text.set_fontweight(style.font_weight)
     figure.canvas.draw_idle()
 
 
@@ -178,8 +247,10 @@ def _capture_presentation_state(figure: Any) -> dict[str, Any]:
         axes_state = {
             "axes_object": axes,
             "axes": axes.get_facecolor(),
-            "lines": [(line, line.get_linewidth(), line.get_markersize(), line.get_color())
+            "lines": [(line, line.get_linewidth(), line.get_markersize(), line.get_color(),
+                       line.get_linestyle(), line.get_marker())
                       for line in axes.lines],
+            "images": [(image, image.get_cmap().copy()) for image in axes.images],
             "collections": [(collection,
                              collection.get_sizes().copy() if hasattr(collection, "get_sizes") else None,
                              collection.get_facecolors().copy() if hasattr(collection, "get_facecolors") else None,
@@ -204,10 +275,14 @@ def _restore_presentation_state(figure: Any, state: dict[str, Any]) -> None:
     for axes_state in state["axes"]:
         axes = axes_state["axes_object"]
         axes.set_facecolor(axes_state["axes"])
-        for line, width, marker_size, colour in axes_state["lines"]:
+        for line, width, marker_size, colour, linestyle, marker in axes_state["lines"]:
             line.set_linewidth(width)
             line.set_markersize(marker_size)
             line.set_color(colour)
+            line.set_linestyle(linestyle)
+            line.set_marker(marker)
+        for image, cmap in axes_state["images"]:
+            image.set_cmap(cmap)
         for collection, sizes, face, edge in axes_state["collections"]:
             if sizes is not None:
                 collection.set_sizes(sizes)
@@ -291,6 +366,10 @@ class VisualStyleDialog:
                 self.font.setEditable(True)
                 self.font.setCurrentText(style.font_family or "Sans Serif")
                 form.addRow("Typeface:", self.font)
+                self.font_weight = QComboBox()
+                self.font_weight.addItems(["Theme default", "Normal", "Bold"])
+                self.font_weight.setCurrentIndex({None: 0, "normal": 1, "bold": 2}[style.font_weight])
+                form.addRow("Font weight:", self.font_weight)
                 self.font_size = _number(QDoubleSpinBox, style.font_size, 10, 1, 48)
                 form.addRow("Typography size (pt):", self.font_size)
                 self.line_width = _number(QDoubleSpinBox, style.line_width, 1.5, 0.2, 12)
@@ -298,7 +377,15 @@ class VisualStyleDialog:
                 self.marker_size = _number(QDoubleSpinBox, style.marker_size, 6, 1, 24)
                 form.addRow("Marker size:", self.marker_size)
                 self.text_colour = _colour(QLineEdit, style.text_colour)
-                form.addRow("Text colour (#RRGGBB):", self.text_colour)
+                form.addRow("General text colour (#RRGGBB):", self.text_colour)
+                self.title_colour = _colour(QLineEdit, style.title_colour)
+                form.addRow("Title colour:", self.title_colour)
+                self.tick_colour = _colour(QLineEdit, style.tick_colour)
+                form.addRow("Tick colour:", self.tick_colour)
+                self.axes_colour = _colour(QLineEdit, style.axes_colour)
+                form.addRow("Axes-label colour:", self.axes_colour)
+                self.legend_colour = _colour(QLineEdit, style.legend_colour)
+                form.addRow("Legend text colour:", self.legend_colour)
                 self.figure_background = _colour(QLineEdit, style.figure_background)
                 form.addRow("Figure background:", self.figure_background)
                 self.axes_background = _colour(QLineEdit, style.axes_background)
@@ -319,10 +406,48 @@ class VisualStyleDialog:
                             self.series_id.addItem(f"{label} [{stable_id}]", stable_id)
                 form.addRow("Series ID:", self.series_id)
                 self.series_colour = _colour(QLineEdit, "")
+                self.series_width = _number(QDoubleSpinBox, None, 1.5, 0.2, 12)
+                self.series_dash = QComboBox()
+                self.series_dash.addItems(["Theme default", "Solid", "Dashed", "Dash-dot", "Dotted"])
+                self.series_marker = QComboBox()
+                self.series_marker.addItems(["Theme default", "None", "Circle", "Square", "Triangle up",
+                                             "Triangle down", "Diamond", "Plus", "Cross", "Point"])
                 if self.series_id.count() < 2:
                     self.series_id.setEnabled(False)
                     self.series_colour.setEnabled(False)
                 form.addRow("Series colour (#RRGGBB):", self.series_colour)
+                form.addRow("Series line width:", self.series_width)
+                form.addRow("Series dash:", self.series_dash)
+                form.addRow("Series marker:", self.series_marker)
+                self.colormap = QComboBox()
+                self.colormap.addItems(["Theme default", "viridis", "plasma", "inferno", "magma",
+                                        "cividis", "coolwarm", "RdBu_r"])
+                can_recolour = any((image.get_gid() or "").startswith("style:colormap:")
+                                   for axes in figure.axes for image in axes.images)
+                self.colormap.setEnabled(can_recolour)
+                self.colormap.setToolTip("Only explicitly opted-in scalar images can change palette; scientific ranges are unchanged.")
+                form.addRow("Opted-in scalar image palette:", self.colormap)
+                scale_note = QLabel("Numeric limits, units, colourbar labels, heatmap palettes and signed/error-map encodings are fixed by the scientific producer. Range controls stay unavailable unless a producer explicitly supplies non-semantic presentation limits.")
+                scale_note.setWordWrap(True)
+                scale_note.setAccessibleName("Scientific colour-scale limits are protected")
+                root.addWidget(scale_note)
+                self.preset = QComboBox()
+                self.preset.addItems(["Custom", "Nature suggestion", "Science suggestion",
+                                      "Cell suggestion", "IEEE suggestion"])
+                self.preset.setCurrentIndex({None: 0, "Nature": 1, "Science": 2,
+                                             "Cell": 3, "IEEE": 4}[style.suggested_preset])
+                form.addRow("Suggested appearance:", self.preset)
+                citation = QLabel(
+                    "Suggestions only; not journal compliance. Nature: Preparing figures, "
+                    "https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/ "
+                    "(accessed 2026-09-23). Science/AAAS: Guide to Preparing Figures (2022), "
+                    "https://www.science.org/do/10.5555/page.2385610/full/author_figure_prep_guide_2022-1708116021087.pdf. "
+                    "DejaVu Sans fallback: DejaVu Fonts licence, https://dejavu-fonts.github.io/License.html. "
+                    "Cell and IEEE controls are generic starting points without verified journal-specific prescriptions.")
+                citation.setWordWrap(True)
+                citation.setAccessibleName("Suggested figure-style sources and limitations")
+                root.addWidget(citation)
+                self.preset.currentIndexChanged.connect(self._apply_suggested_preset)
                 self.grid = QCheckBox("Override grid visibility")
                 self.grid.setChecked(style.grid_visible is not None)
                 self.grid_value = QCheckBox("Show grid")
@@ -352,11 +477,13 @@ class VisualStyleDialog:
                 buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
                                            QDialogButtonBox.StandardButton.Cancel)
                 root.addWidget(buttons)
-                for widget in (self.font, self.font_size, self.line_width, self.marker_size,
-                               self.text_colour, self.figure_background, self.axes_background,
+                for widget in (self.font, self.font_weight, self.font_size, self.line_width, self.marker_size,
+                               self.text_colour, self.title_colour, self.tick_colour, self.axes_colour,
+                               self.legend_colour, self.figure_background, self.axes_background,
                                self.overlay_size, self.overlay_colour, self.overlay_edge_colour,
-                               self.series_id,
-                               self.series_colour, self.grid, self.grid_value,
+                               self.series_id, self.series_colour, self.series_width,
+                               self.series_dash, self.series_marker, self.colormap, self.preset,
+                               self.grid, self.grid_value,
                                self.legend, self.legend_value):
                     signal = getattr(widget, "currentTextChanged", None) or getattr(widget, "valueChanged", None) \
                         or getattr(widget, "textChanged", None) or getattr(widget, "toggled", None)
@@ -371,18 +498,40 @@ class VisualStyleDialog:
 
             def _read(self):
                 series_colours = dict(self.current.series_colours)
+                series_styles = {key: dict(value) for key, value in self.current.series_styles.items()}
                 selected_id = self.series_id.currentData()
                 if selected_id:
+                    properties = {}
+                    if self.series_width.value() != 1.5:
+                        properties["line_width"] = self.series_width.value()
+                    if self.series_dash.currentIndex():
+                        properties["line_style"] = ["-", "-", "--", "-.", ":"][self.series_dash.currentIndex()]
+                    if self.series_marker.currentIndex():
+                        properties["marker"] = ["", "", "o", "s", "^", "v", "D", "+", "x", "."][self.series_marker.currentIndex()]
                     colour = self.series_colour.text().strip()
                     if colour:
-                        series_colours[str(selected_id)] = colour
+                        if series_colours.get(str(selected_id)) == colour:
+                            pass  # Keep legacy colour-only overrides in their v1 field.
+                        else:
+                            series_colours.pop(str(selected_id), None)
+                            properties["colour"] = colour
                     else:
                         series_colours.pop(str(selected_id), None)
+                    if properties:
+                        series_styles[str(selected_id)] = properties
+                    else:
+                        series_styles.pop(str(selected_id), None)
                 return VisualStyle(
                     font_family=(self.font.currentText()
                                  if self.font.currentText() != "Sans Serif" else None),
+                    font_weight=(None if self.font_weight.currentIndex() == 0
+                                 else ("normal" if self.font_weight.currentIndex() == 1 else "bold")),
                     font_size=self.font_size.value() if self.font_size.value() != 10 else None,
                     text_colour=_optional(self.text_colour.text()),
+                    title_colour=_optional(self.title_colour.text()),
+                    tick_colour=_optional(self.tick_colour.text()),
+                    axes_colour=_optional(self.axes_colour.text()),
+                    legend_colour=_optional(self.legend_colour.text()),
                     figure_background=_optional(self.figure_background.text()),
                     axes_background=_optional(self.axes_background.text()),
                     line_width=self.line_width.value() if self.line_width.value() != 1.5 else None,
@@ -393,11 +542,35 @@ class VisualStyleDialog:
                                   if self.overlay_size.value() != 6 else None),
                     overlay_colour=_optional(self.overlay_colour.text()),
                     overlay_edge_colour=_optional(self.overlay_edge_colour.text()),
-                    series_colours=series_colours)
+                    series_colours=series_colours, series_styles=series_styles,
+                    colormap=(self.colormap.currentText() if self.colormap.currentIndex() else None),
+                    suggested_preset=(None if self.preset.currentIndex() == 0
+                                      else ("Nature", "Science", "Cell", "IEEE")[self.preset.currentIndex() - 1]))
 
             def _load_series_colour(self, *_):
                 stable_id = self.series_id.currentData()
-                self.series_colour.setText(self.current.series_colours.get(stable_id, ""))
+                settings = self.current.series_styles.get(stable_id, {})
+                self.series_colour.setText(settings.get("colour")
+                                            or self.current.series_colours.get(stable_id, ""))
+                self.series_width.setValue(settings.get("line_width", 1.5))
+                self.series_dash.setCurrentIndex({"-": 1, "--": 2, "-.": 3, ":": 4}.get(settings.get("line_style"), 0))
+                self.series_marker.setCurrentIndex({"o": 2, "s": 3, "^": 4, "v": 5, "D": 6,
+                                                    "+": 7, "x": 8, ".": 9}.get(settings.get("marker"), 0))
+
+            def _apply_suggested_preset(self, index):
+                """Offer a restrained typography starting point, never compliance."""
+                if index == 0:
+                    return
+                self.font.setCurrentText("DejaVu Sans")
+                self.font_weight.setCurrentIndex(1)
+                self.font_size.setValue(8)
+                self.line_width.setValue(1.2)
+                self.marker_size.setValue(4.5)
+                self.text_colour.clear()
+                self.title_colour.clear()
+                self.tick_colour.clear()
+                self.axes_colour.clear()
+                self.legend_colour.clear()
 
             def _preview(self, *_):
                 try:
@@ -412,10 +585,15 @@ class VisualStyleDialog:
             def _reset(self):
                 self.current = VisualStyle()
                 self.font.setCurrentText("Sans Serif")
+                self.font_weight.setCurrentIndex(0)
                 self.font_size.setValue(10)
                 self.line_width.setValue(1.5)
                 self.marker_size.setValue(6)
                 self.text_colour.clear()
+                self.title_colour.clear()
+                self.tick_colour.clear()
+                self.axes_colour.clear()
+                self.legend_colour.clear()
                 self.figure_background.clear()
                 self.axes_background.clear()
                 self.overlay_size.setValue(6)
@@ -423,6 +601,11 @@ class VisualStyleDialog:
                 self.overlay_edge_colour.clear()
                 self.series_id.setCurrentIndex(0)
                 self.series_colour.clear()
+                self.series_width.setValue(1.5)
+                self.series_dash.setCurrentIndex(0)
+                self.series_marker.setCurrentIndex(0)
+                self.colormap.setCurrentIndex(0)
+                self.preset.setCurrentIndex(0)
                 self.grid.setChecked(False)
                 self.legend.setChecked(False)
                 self._preview()
@@ -448,23 +631,32 @@ class VisualStyleDialog:
                     return
                 try:
                     candidate = style_from_json(Path(path).read_text(encoding="utf-8"), visual_id)
+                    if candidate.colormap and not self.colormap.isEnabled():
+                        raise ValueError("This visual does not explicitly support colormap changes")
                 except (OSError, ValueError) as exc:
                     QMessageBox.warning(self, "Style not loaded",
                                         f"The style file was rejected.\n\nTechnical detail: {exc}")
                     return
                 self.current = candidate
-                controls = (self.font, self.font_size, self.line_width, self.marker_size,
-                            self.text_colour, self.figure_background, self.axes_background,
+                controls = (self.font, self.font_weight, self.font_size, self.line_width, self.marker_size,
+                            self.text_colour, self.title_colour, self.tick_colour, self.axes_colour,
+                            self.legend_colour, self.figure_background, self.axes_background,
                             self.overlay_size, self.overlay_colour, self.overlay_edge_colour,
-                            self.series_id, self.series_colour, self.grid, self.grid_value,
+                            self.series_id, self.series_colour, self.series_width, self.series_dash,
+                            self.series_marker, self.colormap, self.preset, self.grid, self.grid_value,
                             self.legend, self.legend_value)
                 blocked = [control.blockSignals(True) for control in controls]
                 try:
                     self.font.setCurrentText(candidate.font_family or "Sans Serif")
+                    self.font_weight.setCurrentIndex({None: 0, "normal": 1, "bold": 2}[candidate.font_weight])
                     self.font_size.setValue(candidate.font_size or 10)
                     self.line_width.setValue(candidate.line_width or 1.5)
                     self.marker_size.setValue(candidate.marker_size or 6)
                     self.text_colour.setText(candidate.text_colour or "")
+                    self.title_colour.setText(candidate.title_colour or "")
+                    self.tick_colour.setText(candidate.tick_colour or "")
+                    self.axes_colour.setText(candidate.axes_colour or "")
+                    self.legend_colour.setText(candidate.legend_colour or "")
                     self.figure_background.setText(candidate.figure_background or "")
                     self.axes_background.setText(candidate.axes_background or "")
                     self.overlay_size.setValue(candidate.overlay_size or 6)
@@ -472,16 +664,22 @@ class VisualStyleDialog:
                     self.overlay_edge_colour.setText(candidate.overlay_edge_colour or "")
                     self.series_id.setCurrentIndex(0)
                     self.series_colour.clear()
+                    self.series_width.setValue(1.5)
+                    self.series_dash.setCurrentIndex(0)
+                    self.series_marker.setCurrentIndex(0)
                     for index in range(self.series_id.count()):
                         stable_id = self.series_id.itemData(index)
-                        if stable_id in candidate.series_colours:
+                        if stable_id in candidate.series_colours or stable_id in candidate.series_styles:
                             self.series_id.setCurrentIndex(index)
-                            self.series_colour.setText(candidate.series_colours[stable_id])
+                            self._load_series_colour()
                             break
                     self.grid.setChecked(candidate.grid_visible is not None)
                     self.grid_value.setChecked(bool(candidate.grid_visible))
                     self.legend.setChecked(candidate.legend_visible is not None)
                     self.legend_value.setChecked(bool(candidate.legend_visible))
+                    self.colormap.setCurrentIndex(self.colormap.findText(candidate.colormap or "Theme default"))
+                    self.preset.setCurrentIndex({None: 0, "Nature": 1, "Science": 2,
+                                                 "Cell": 3, "IEEE": 4}[candidate.suggested_preset])
                 finally:
                     for control, was_blocked in zip(controls, blocked):
                         control.blockSignals(was_blocked)

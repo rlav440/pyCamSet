@@ -25,8 +25,12 @@ from pyCamSet.gui.visual_style import (
 
 def test_style_json_round_trip_is_versioned_and_visual_specific():
     style = VisualStyle(font_family="DejaVu Sans", line_width=2.5,
-                        series_colours={"line:0:error": "#123456"})
+                        font_weight="bold", title_colour="#111111",
+                        series_colours={"line:0:error": "#123456"},
+                        series_styles={"line:0:error": {"line_width": 3, "line_style": "--",
+                                                          "marker": "o"}})
     text = style_to_json(style, "phase2:view-errors")
+    assert json.loads(text)["version"] == 2
     assert style_from_json(text, "phase2:view-errors") == style
     with pytest.raises(ValueError, match="different visual"):
         style_from_json(text, "phase3:residuals")
@@ -42,6 +46,21 @@ def test_style_json_rejects_malformed_unknown_and_invalid_values():
         style_from_json(json.dumps(document))
     with pytest.raises(ValueError, match="line_width"):
         style_from_json(style_to_json(VisualStyle(line_width=0.1), "view"))
+
+
+def test_v1_style_document_migrates_without_losing_saved_values():
+    style = VisualStyle(font_family="DejaVu Sans", line_width=2.5,
+                        series_colours={"stable:residual": "#123456"})
+    old_document = json.loads(style_to_json(style, "view"))
+    old_document["version"] = 1
+    for key in ("font_weight", "title_colour", "tick_colour", "axes_colour", "legend_colour",
+                "series_styles", "colormap", "suggested_preset"):
+        old_document["style"].pop(key)
+    migrated = style_from_json(json.dumps(old_document), "view")
+    assert migrated.font_family == style.font_family
+    assert migrated.line_width == style.line_width
+    assert migrated.series_colours == style.series_colours
+    assert migrated.font_weight is None and migrated.series_styles == {}
 
 
 def test_style_paths_are_separate_and_visual_ids_do_not_collide(tmp_path):
@@ -79,7 +98,9 @@ def test_apply_style_preserves_data_limits_colormap_and_axes_state():
                 axes.get_xlim(), axes.get_ylim(), image.get_cmap().name,
                 image.get_array().copy(), line.get_color())
     style = VisualStyle(line_width=3.0, marker_size=8.0, grid_visible=False,
-                        axes_background="#fafafa", text_colour="#101010")
+                        axes_background="#fafafa", text_colour="#101010",
+                        title_colour="#123456", tick_colour="#654321",
+                        axes_colour="#abcdef")
     apply_visual_style(figure, style, "Sepia")
     assert line.get_xdata().tolist() == original[0].tolist()
     assert line.get_ydata().tolist() == original[1].tolist()
@@ -90,8 +111,49 @@ def test_apply_style_preserves_data_limits_colormap_and_axes_state():
     assert line.get_linewidth() == 3.0
     assert axes.get_facecolor() == (0.9803921568627451, 0.9803921568627451,
                                     0.9803921568627451, 1.0)
+    assert axes.title.get_color() == "#123456"
+    assert axes.xaxis.label.get_color() == "#abcdef"
+    assert axes.get_xticklabels()[0].get_color() == "#654321"
     assert not any(grid.get_visible() for grid in axes.xaxis.get_gridlines() +
                    axes.yaxis.get_gridlines())
+
+
+def test_series_styles_apply_by_stable_gid_and_preserve_numeric_arrays():
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    line, = axes.plot([0, 1], [2, 4], label="residual")
+    line.set_gid("phase3:residual:cam-01")
+    x, y = line.get_xdata().copy(), line.get_ydata().copy()
+    style = VisualStyle(series_styles={"phase3:residual:cam-01": {
+        "line_width": 3.5, "line_style": "--", "marker": "s", "colour": "#123456"}})
+    apply_visual_style(figure, style)
+    assert (line.get_linewidth(), line.get_linestyle(), line.get_marker(), line.get_color()) == (
+        3.5, "--", "s", "#123456")
+    assert line.get_xdata().tolist() == x.tolist()
+    assert line.get_ydata().tolist() == y.tolist()
+
+
+def test_colormap_override_requires_explicit_opt_in_and_preserves_norm_and_values():
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    image = axes.imshow([[0.0, 0.5, 1.0]], cmap="viridis", vmin=0, vmax=1)
+    image.set_gid("semantic:reprojection-error")
+    original = (image.get_array().copy(), image.norm.vmin, image.norm.vmax, image.get_cmap().name)
+    with pytest.raises(ValueError, match="explicitly supports"):
+        apply_visual_style(figure, VisualStyle(colormap="plasma"))
+    assert image.get_cmap().name == original[3]
+    image.set_gid("style:colormap:generic-scalar")
+    apply_visual_style(figure, VisualStyle(colormap="plasma"))
+    assert image.get_cmap().name == "plasma"
+    assert image.norm.vmin == original[1] and image.norm.vmax == original[2]
+    assert image.get_array().tolist() == original[0].tolist()
+
+
+def test_unsupported_colour_map_and_series_controls_fail_closed():
+    with pytest.raises(ValueError, match="unsupported colormap"):
+        VisualStyle(colormap="rainbow").validate()
+    with pytest.raises(ValueError, match="unsupported per-series"):
+        VisualStyle(series_styles={"id": {"visible": False}}).validate()
 
 
 def test_theme_defaults_and_explicit_overrides_coexist_on_theme_switch():

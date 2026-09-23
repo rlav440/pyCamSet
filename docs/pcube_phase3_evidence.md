@@ -86,6 +86,27 @@ summary/diagnostics tabs, and captured:
 The diagnostics data also exposes the initial per-image values, residual XY
 scatter, per-camera means and the camera-pose view hook used by the GUI.
 
+[VERIFIED-BY-EXECUTION] Additional offscreen captures demonstrate the actual
+rendering surfaces, not only their object construction:
+
+- `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/phase3_gui_residuals.png`
+  shows the residual diagnostics view;
+- `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/phase3_gui_poses.png`
+  shows the camera-pose view;
+- `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/phase3_pyvista_offscreen.png`
+  shows the offscreen 3D camera/target render;
+- `D:/Hermes/profiles/rebels/cache/pcube_p16x3_overlay/phase1_native_pixel_observation_overlay.png`
+  shows native camera frames with lime detection points overlaid (view1 and
+  view3 contain detections for image index 2; views2 and 4 legitimately show
+  zero points for that frame).
+
+An authorised Phase 2 recovery probe lowered the minimum detections-per-board
+threshold to 4 for the three enabled datasets without a valid camset. It did
+not turn any of those Zhang pose-coverage failures into valid Phase 2 inputs,
+so no Phase 3 runs were invented for them. The probe output remains outside
+git in
+`D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase2_recovery/`.
+
 ## Tests
 
 [VERIFIED-BY-EXECUTION]

@@ -164,6 +164,71 @@ def refresh_visual_style(figure: Any, theme_name: str) -> None:
         apply_visual_style(figure, style, theme_name)
 
 
+def _capture_presentation_state(figure: Any) -> dict[str, Any]:
+    """Snapshot only properties the style applier can change, for cancel rollback."""
+    state: dict[str, Any] = {
+        "figure": figure.get_facecolor(),
+        "axes": [],
+        "text_artists": [(artist, artist.get_color(), artist.get_fontsize(), artist.get_fontfamily())
+                         for artist in figure.findobj(
+                             match=lambda item: hasattr(item, "set_fontsize")
+                             and hasattr(item, "get_color"))],
+    }
+    for axes in figure.axes:
+        axes_state = {
+            "axes_object": axes,
+            "axes": axes.get_facecolor(),
+            "lines": [(line, line.get_linewidth(), line.get_markersize(), line.get_color())
+                      for line in axes.lines],
+            "collections": [(collection,
+                             collection.get_sizes().copy() if hasattr(collection, "get_sizes") else None,
+                             collection.get_facecolors().copy() if hasattr(collection, "get_facecolors") else None,
+                             collection.get_edgecolors().copy() if hasattr(collection, "get_edgecolors") else None)
+                            for collection in axes.collections
+                            if (collection.get_gid() or "").startswith("detection-overlay:")],
+            "grid": [(gridline, gridline.get_visible())
+                     for gridline in axes.xaxis.get_gridlines() + axes.yaxis.get_gridlines()],
+            "legend": axes.get_legend(),
+        }
+        legend = axes_state["legend"]
+        axes_state["legend_visible"] = legend.get_visible() if legend is not None else None
+        axes_state["legend_text"] = ([(text, text.get_color()) for text in legend.get_texts()]
+                                      if legend is not None else [])
+        state["axes"].append(axes_state)
+    return state
+
+
+def _restore_presentation_state(figure: Any, state: dict[str, Any]) -> None:
+    """Restore the captured rendered appearance without altering scientific data."""
+    figure.set_facecolor(state["figure"])
+    for axes_state in state["axes"]:
+        axes = axes_state["axes_object"]
+        axes.set_facecolor(axes_state["axes"])
+        for line, width, marker_size, colour in axes_state["lines"]:
+            line.set_linewidth(width)
+            line.set_markersize(marker_size)
+            line.set_color(colour)
+        for collection, sizes, face, edge in axes_state["collections"]:
+            if sizes is not None:
+                collection.set_sizes(sizes)
+            if face is not None:
+                collection.set_facecolor(face)
+            if edge is not None:
+                collection.set_edgecolor(edge)
+        for gridline, visible in axes_state["grid"]:
+            gridline.set_visible(visible)
+        legend = axes_state["legend"]
+        if legend is not None:
+            legend.set_visible(axes_state["legend_visible"])
+            for artist, colour in axes_state["legend_text"]:
+                artist.set_color(colour)
+    for artist, colour, size, family in state["text_artists"]:
+        artist.set_color(colour)
+        artist.set_fontsize(size)
+        artist.set_fontfamily(family)
+    figure.canvas.draw_idle()
+
+
 def scale_bar_unavailable(pixel_to_world: Any = None, unit: str | None = None) -> str | None:
     """Return the disabling explanation unless a physical transform and unit exist."""
     if pixel_to_world is None or not unit or not str(unit).strip():
@@ -199,6 +264,8 @@ class VisualStyleDialog:
                 self.visual_id = visual_id
                 self.original = VisualStyle(**asdict(style))
                 self.current = VisualStyle(**asdict(style))
+                self.original_artist_state = _capture_presentation_state(figure)
+                self.original_override = _VISUAL_OVERRIDES.get(figure)
                 self.theme_name = theme_name
                 self.on_preview = on_preview
                 root = QVBoxLayout(self)
@@ -206,6 +273,7 @@ class VisualStyleDialog:
                 root.addLayout(form)
                 self.font = QComboBox()
                 self.font.addItems(["Sans Serif"] + sorted(QFontDatabase.families()))
+                self.font.setEditable(True)
                 self.font.setCurrentText(style.font_family or "Sans Serif")
                 form.addRow("Typeface:", self.font)
                 self.font_size = _number(QDoubleSpinBox, style.font_size, 10, 1, 48)
@@ -224,6 +292,8 @@ class VisualStyleDialog:
                 form.addRow("Detection marker size:", self.overlay_size)
                 self.overlay_colour = _colour(QLineEdit, style.overlay_colour)
                 form.addRow("Detection marker colour:", self.overlay_colour)
+                self.overlay_edge_colour = _colour(QLineEdit, style.overlay_edge_colour)
+                form.addRow("Detection marker edge colour:", self.overlay_edge_colour)
                 self.series_id = QComboBox()
                 self.series_id.addItem("No series override", "")
                 for axes_index, axes in enumerate(figure.axes):
@@ -269,7 +339,8 @@ class VisualStyleDialog:
                 root.addWidget(buttons)
                 for widget in (self.font, self.font_size, self.line_width, self.marker_size,
                                self.text_colour, self.figure_background, self.axes_background,
-                               self.overlay_size, self.overlay_colour, self.series_id,
+                               self.overlay_size, self.overlay_colour, self.overlay_edge_colour,
+                               self.series_id,
                                self.series_colour, self.grid, self.grid_value,
                                self.legend, self.legend_value):
                     signal = getattr(widget, "currentTextChanged", None) or getattr(widget, "valueChanged", None) \
@@ -306,7 +377,7 @@ class VisualStyleDialog:
                     overlay_size=(self.overlay_size.value()
                                   if self.overlay_size.value() != 6 else None),
                     overlay_colour=_optional(self.overlay_colour.text()),
-                    overlay_edge_colour=self.current.overlay_edge_colour,
+                    overlay_edge_colour=_optional(self.overlay_edge_colour.text()),
                     series_colours=series_colours)
 
             def _load_series_colour(self, *_):
@@ -332,6 +403,11 @@ class VisualStyleDialog:
                 self.text_colour.clear()
                 self.figure_background.clear()
                 self.axes_background.clear()
+                self.overlay_size.setValue(6)
+                self.overlay_colour.clear()
+                self.overlay_edge_colour.clear()
+                self.series_id.setCurrentIndex(0)
+                self.series_colour.clear()
                 self.grid.setChecked(False)
                 self.legend.setChecked(False)
                 self._preview()
@@ -361,23 +437,48 @@ class VisualStyleDialog:
                                         f"The style file was rejected.\n\nTechnical detail: {exc}")
                     return
                 self.current = candidate
-                self.font.setCurrentText(candidate.font_family or "Sans Serif")
-                self.font_size.setValue(candidate.font_size or 10)
-                self.line_width.setValue(candidate.line_width or 1.5)
-                self.marker_size.setValue(candidate.marker_size or 6)
-                self.text_colour.setText(candidate.text_colour or "")
-                self.figure_background.setText(candidate.figure_background or "")
-                self.axes_background.setText(candidate.axes_background or "")
-                self.grid.setChecked(candidate.grid_visible is not None)
-                self.grid_value.setChecked(bool(candidate.grid_visible))
-                self.legend.setChecked(candidate.legend_visible is not None)
-                self.legend_value.setChecked(bool(candidate.legend_visible))
+                controls = (self.font, self.font_size, self.line_width, self.marker_size,
+                            self.text_colour, self.figure_background, self.axes_background,
+                            self.overlay_size, self.overlay_colour, self.overlay_edge_colour,
+                            self.series_id, self.series_colour, self.grid, self.grid_value,
+                            self.legend, self.legend_value)
+                blocked = [control.blockSignals(True) for control in controls]
+                try:
+                    self.font.setCurrentText(candidate.font_family or "Sans Serif")
+                    self.font_size.setValue(candidate.font_size or 10)
+                    self.line_width.setValue(candidate.line_width or 1.5)
+                    self.marker_size.setValue(candidate.marker_size or 6)
+                    self.text_colour.setText(candidate.text_colour or "")
+                    self.figure_background.setText(candidate.figure_background or "")
+                    self.axes_background.setText(candidate.axes_background or "")
+                    self.overlay_size.setValue(candidate.overlay_size or 6)
+                    self.overlay_colour.setText(candidate.overlay_colour or "")
+                    self.overlay_edge_colour.setText(candidate.overlay_edge_colour or "")
+                    self.series_id.setCurrentIndex(0)
+                    self.series_colour.clear()
+                    for index in range(self.series_id.count()):
+                        stable_id = self.series_id.itemData(index)
+                        if stable_id in candidate.series_colours:
+                            self.series_id.setCurrentIndex(index)
+                            self.series_colour.setText(candidate.series_colours[stable_id])
+                            break
+                    self.grid.setChecked(candidate.grid_visible is not None)
+                    self.grid_value.setChecked(bool(candidate.grid_visible))
+                    self.legend.setChecked(candidate.legend_visible is not None)
+                    self.legend_value.setChecked(bool(candidate.legend_visible))
+                finally:
+                    for control, was_blocked in zip(controls, blocked):
+                        control.blockSignals(was_blocked)
                 self._preview()
 
             def exec(self):
                 result = super().exec()
                 if result != QDialog.DialogCode.Accepted:
-                    apply_visual_style(figure, self.original, theme_name)
+                    _restore_presentation_state(figure, self.original_artist_state)
+                    if self.original_override is None:
+                        _VISUAL_OVERRIDES.pop(figure, None)
+                    else:
+                        _VISUAL_OVERRIDES[figure] = self.original_override
                     if self.on_preview:
                         self.on_preview(self.original)
                 else:

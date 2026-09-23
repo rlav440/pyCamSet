@@ -111,12 +111,82 @@ def test_style_dialog_preview_and_cancel_restore_the_figure():
     figure = Figure()
     axes = figure.add_subplot(111)
     line, = axes.plot([0, 1], [1, 3], label="series")
-    original = (axes.get_facecolor(), line.get_ydata().copy())
+    axes.grid(True)
+    legend = axes.legend()
+    overlay = axes.scatter([0.5], [2], s=9, c="#123456")
+    overlay.set_gid("detection-overlay:observed")
+    original = (figure.get_facecolor(), axes.get_facecolor(), line.get_ydata().copy(),
+                line.get_linewidth(), line.get_markersize(), line.get_color(),
+                [grid.get_visible() for grid in axes.xaxis.get_gridlines()],
+                legend.get_visible(), overlay.get_sizes().copy(),
+                overlay.get_facecolors().copy(), overlay.get_edgecolors().copy())
     dialog = VisualStyleDialog(figure, "test:visual", VisualStyle(), "Light")
     dialog.axes_background.setText("#fafafa")
+    dialog.line_width.setValue(4)
+    dialog.marker_size.setValue(12)
+    dialog.text_colour.setText("#abcdef")
+    dialog.grid.setChecked(True)
+    dialog.grid_value.setChecked(False)
+    dialog.legend.setChecked(True)
+    dialog.legend_value.setChecked(False)
+    dialog.overlay_size.setValue(12)
+    dialog.overlay_colour.setText("#abcdef")
     dialog._preview()
-    assert axes.get_facecolor() != original[0]
+    assert axes.get_facecolor() != original[1]
     QTimer.singleShot(0, dialog.reject)
     assert dialog.exec() != 1
-    assert axes.get_facecolor() == original[0]
-    assert line.get_ydata().tolist() == original[1].tolist()
+    assert figure.get_facecolor() == original[0]
+    assert axes.get_facecolor() == original[1]
+    assert line.get_ydata().tolist() == original[2].tolist()
+    assert line.get_linewidth() == original[3]
+    assert line.get_markersize() == original[4]
+    assert line.get_color() == original[5]
+    assert [grid.get_visible() for grid in axes.xaxis.get_gridlines()] == original[6]
+    assert legend.get_visible() == original[7]
+    assert overlay.get_sizes().tolist() == original[8].tolist()
+    assert overlay.get_facecolors().tolist() == original[9].tolist()
+    assert overlay.get_edgecolors().tolist() == original[10].tolist()
+
+
+def test_style_dialog_reset_clears_overlay_and_series_overrides():
+    from PySide6.QtWidgets import QApplication
+    from pyCamSet.gui.visual_style import VisualStyleDialog
+
+    app = QApplication.instance() or QApplication([])
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    line, = axes.plot([0, 1], [1, 3], label="series")
+    line.set_gid("stable:series")
+    style = VisualStyle(overlay_size=9, overlay_colour="#123456",
+                        overlay_edge_colour="#654321",
+                        series_colours={"stable:series": "#abcdef"})
+    dialog = VisualStyleDialog(figure, "test:visual", style, "Light")
+    dialog._reset()
+    reset = dialog._read()
+    assert reset.overlay_size is None
+    assert reset.overlay_colour is None
+    assert reset.overlay_edge_colour is None
+    assert reset.series_colours == {}
+
+
+def test_style_dialog_json_load_populates_every_serialised_control(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication, QFileDialog
+    from pyCamSet.gui.visual_style import VisualStyleDialog
+
+    app = QApplication.instance() or QApplication([])
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    line, = axes.plot([0, 1], [1, 3], label="series")
+    line.set_gid("stable:series")
+    candidate = VisualStyle(font_family="DejaVu Sans", font_size=14, text_colour="#111111",
+                            figure_background="#222222", axes_background="#333333",
+                            line_width=2.5, marker_size=8, grid_visible=True,
+                            legend_visible=False, overlay_size=11, overlay_colour="#444444",
+                            overlay_edge_colour="#555555",
+                            series_colours={"stable:series": "#666666"})
+    path = tmp_path / "style.json"
+    path.write_text(style_to_json(candidate, "test:visual"), encoding="utf-8")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(path), "JSON"))
+    dialog = VisualStyleDialog(figure, "test:visual", VisualStyle(), "Light")
+    dialog._load()
+    assert dialog._read() == candidate

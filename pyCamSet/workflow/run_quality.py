@@ -30,4 +30,9 @@ def blocking_reasons(metadata: dict | None) -> list[str]:
 
     report = metadata.get("report") or {}
     reasons.extend(str(flag) for flag in report.get("blocking_flags", []))
+    quality_gate = (metadata.get("diagnostics") or {}).get("quality_gate") or {}
+    reasons.extend(
+        str(flag) for flag in quality_gate.get("blocking_flags", [])
+        if str(flag) not in reasons
+    )
     return reasons

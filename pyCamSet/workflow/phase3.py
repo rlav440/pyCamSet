@@ -118,6 +118,14 @@ def run(params: dict,
     metadata = {
         "run_id": run_id,
         "phase": "phase3",
+        # A saved camset is useful for diagnosis even when the optimiser did
+        # not finish.  Keep that distinct from a scientifically usable result
+        # so the GUI cannot offer an unconverged run as a clean hand-off.
+        "status": (
+            "failed" if error else
+            (diagnostics.get("quality_gate", {}).get("status", "incomplete")
+             if diagnostics else "incomplete")
+        ),
         "params": params,
         "diagnostics": diagnostics,
         "report": report,
@@ -354,6 +362,10 @@ def _diagnostics(optimisation, handler, stats: dict,
     observation_count = int(
         stats.get("observation_count", len(optimisation.fun) // 2))
 
+    quality_gate = _quality_gate(
+        optimisation, handler, stats, residual_xy, initial_euclid,
+        final_euclid, observation_count)
+
     n_missing_before = int(np.sum(missing_before))
     n_missing_after = int(np.sum(missing_after))
 
@@ -381,4 +393,68 @@ def _diagnostics(optimisation, handler, stats: dict,
         "D3.11_residual_xy_scatter": residual_xy.tolist(),
         "D3.12_per_camera_mean_reprojection": per_camera,
         "D3.13_extrinsic_pose_view": "rendered in diagnostics tab",
+        "quality_gate": quality_gate,
+    }
+
+
+def _quality_gate(optimisation, handler, stats: dict,
+                  residual_xy: np.ndarray, initial_euclid: float,
+                  final_euclid: float, observation_count: int) -> dict:
+    """Return the fail-closed disposition for a Phase 3 result.
+
+    Optimiser termination alone is not a calibration-quality claim.  These
+    checks are intentionally small and deterministic: the parameters and
+    residuals must be finite, the solver must report success, observations
+    must exist for every camera in the active detection order, and the final
+    reprojection error must improve strictly over the initial value.
+    """
+    blocking: list[str] = []
+    finite_parameters = bool(np.all(np.isfinite(np.asarray(
+        getattr(optimisation, "x", []), dtype=float))))
+    finite_residuals = bool(np.all(np.isfinite(np.asarray(
+        residual_xy, dtype=float)))) and residual_xy.size > 0
+    solver_success = bool(stats.get("success", getattr(optimisation, "success", False)))
+    error_reduced = bool(
+        np.isfinite(initial_euclid)
+        and np.isfinite(final_euclid)
+        and final_euclid < initial_euclid
+    )
+
+    if not finite_parameters:
+        blocking.append("optimiser parameters are non-finite")
+    if not finite_residuals:
+        blocking.append("reprojection residuals are missing or non-finite")
+    if not solver_success:
+        blocking.append("solver did not report successful termination")
+    if observation_count <= 0:
+        blocking.append("no reprojection observations entered the solve")
+    if not error_reduced:
+        blocking.append("final reprojection error did not improve finitely")
+
+    observed_cameras: list[int] = []
+    try:
+        data = np.asarray(handler.get_detection_data(flatten=True))
+        if data.ndim == 2 and data.shape[1] > 0:
+            observed_cameras = sorted(set(data[:, 0].astype(int).tolist()))
+    except Exception:
+        pass
+    expected_cameras = len(getattr(handler, "cam_names", []))
+    camera_coverage = (
+        expected_cameras > 0
+        and observed_cameras == list(range(expected_cameras))
+    )
+    if not camera_coverage:
+        blocking.append("camera observation graph does not cover every active camera")
+
+    return {
+        "status": "complete" if not blocking else "incomplete",
+        "blocking_flags": blocking,
+        "finite_parameters": finite_parameters,
+        "finite_residuals": finite_residuals,
+        "solver_success": solver_success,
+        "error_reduced": error_reduced,
+        "camera_coverage": camera_coverage,
+        "observed_cameras": observed_cameras,
+        "expected_camera_count": expected_cameras,
+        "observation_count": int(observation_count),
     }

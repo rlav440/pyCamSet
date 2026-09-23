@@ -112,12 +112,15 @@ def test_matplotlib_theme_changes_chrome_without_changing_scientific_data(applic
     figure = Figure()
     axes = figure.add_subplot(111)
     line, = axes.plot([0, 1], [2, 3], color="#d62728", label="measurement")
+    axes.grid(True)
     axes.set_title("Diagnostic")
     axes.set_xlabel("View")
     axes.set_ylabel("Error (px)")
     axes.legend()
     original_x = line.get_xdata().copy()
     original_y = line.get_ydata().copy()
+    gridlines = axes.xaxis.get_gridlines() + axes.yaxis.get_gridlines()
+    assert gridlines and all(gridline.get_visible() for gridline in gridlines)
     for theme_name in ("Light", "Dark", "Sepia"):
         apply_matplotlib_theme(figure, theme_name)
         assert figure.get_facecolor() == to_rgba(THEME_TOKENS[theme_name]["background"])
@@ -125,6 +128,18 @@ def test_matplotlib_theme_changes_chrome_without_changing_scientific_data(applic
         assert line.get_color() == "#d62728"
         assert line.get_xdata().tolist() == original_x.tolist()
         assert line.get_ydata().tolist() == original_y.tolist()
+        assert all(gridline.get_color() == THEME_TOKENS[theme_name]["border"]
+                   for gridline in gridlines)
+
+    # A disabled grid stays disabled; theming must not create visible gridlines.
+    no_grid_figure = Figure()
+    no_grid_axes = no_grid_figure.add_subplot(111)
+    no_grid_figure.canvas.draw()
+    assert not any(gridline.get_visible() for gridline in
+                   no_grid_axes.xaxis.get_gridlines() + no_grid_axes.yaxis.get_gridlines())
+    apply_matplotlib_theme(no_grid_figure, "Dark")
+    assert not any(gridline.get_visible() for gridline in
+                   no_grid_axes.xaxis.get_gridlines() + no_grid_axes.yaxis.get_gridlines())
 
     # Live refresh updates the registered figure and does not reconstruct data.
     apply_theme(application, "Sepia")

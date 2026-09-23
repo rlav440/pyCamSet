@@ -214,6 +214,11 @@ def apply_matplotlib_theme(figure, theme_name: str | None = None) -> None:
         axes.xaxis.label.set_color(tokens["text"])
         axes.yaxis.label.set_color(tokens["text"])
         axes.tick_params(axis="both", colors=tokens["text_muted"])
+        # Grid lines are existing neutral chrome; recolour them without
+        # enabling grids or touching data-series line/marker encodings.
+        for axis in (axes.xaxis, axes.yaxis):
+            for gridline in axis.get_gridlines():
+                gridline.set_color(tokens["border"])
         for spine in axes.spines.values():
             spine.set_color(tokens["border_strong"])
         legend = axes.get_legend()

@@ -83,6 +83,30 @@ def find_gauge_points(points, candidates=None):
 
     return (int(i0), int(i1), int(inds[furthest])), int(np.argmax(np.abs(normals[furthest])))
 
+
+def _gauge_square_size(target) -> float:
+    """Return a target spacing in the same units as ``point_data``.
+
+    Several target classes keep their declared square size in millimetres
+    while storing point coordinates in metres.  The self-calibration gauge
+    compares distances from ``point_data``; using the declaration directly
+    therefore leaves no valid distance pairs and aborts Phase 4.
+    """
+    declared = float(getattr(target, "square_size", float("nan")))
+    points = np.asarray(getattr(target, "point_data", []), dtype=float).reshape(-1, 3)
+    sample = points[:10000]
+    if sample.shape[0] > 1:
+        adjacent = np.linalg.norm(np.diff(sample, axis=0), axis=1)
+        adjacent = adjacent[np.isfinite(adjacent) & (adjacent > 1e-12)]
+        if adjacent.size:
+            candidate = float(np.min(adjacent))
+            if not np.isfinite(declared) or not np.isclose(candidate, declared, rtol=0.1):
+                return candidate
+    if np.isfinite(declared) and declared > 1.0:
+        return declared / 1000.0
+    return declared
+
+
 class StandardBundlePrimitive:
     """
     A class that contains a set of base arrays.

@@ -1,0 +1,76 @@
+'''Purpose: Evidence report for the pcube Phase 4 self-calibration vertical slice.
+Status: Active; records the fail-closed disposition of the real Phase 4 run.
+Future: Add the four-dataset Phase 4 campaign matrix and a quality-gate-passing run when the upstream observation set supports it.
+'''
+
+# pcube Phase 4 evidence
+
+This report records one real Phase 4 run from the verified r_nebula seven-square
+Phase 3 output. It is an evidence record, not a claim that the Phase 4 result is
+scientifically accepted.
+
+## Run identity
+
+- Phase 3 input run: `20260923_014000_be0d2f`
+- Phase 4 run: `20260923_031029_a2b7cb`
+- Source image root: `E:/R_pan/1 Data/2026-07-31/cut_tiffs_14h-14m-02s`
+- Machine-readable output: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_real_rpan7.json`
+- Reloaded CameraSet: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/.pycamset_workspace/phase4_runs/20260923_031029_a2b7cb/self_calibrated_cameras.camset`
+
+## Observed result
+
+The backend completed and saved/reloaded a four-camera Phase 4 result, but the
+quality gate correctly classified it as `incomplete`:
+
+- initial mean reprojection error: 4.480463 px
+- final mean reprojection error: 2.925415 px
+- improvement against the Phase 3 final: 1.555048 px
+- free target points: 205
+- gauge-fixed target points: 3 (`[0, 1, 7]`)
+- observed cameras: 4/4
+- observed image indices: 75 of 92
+- explicitly missing image indices: 17
+- per-camera final means: view1 2.667614 px, view2 2.345418 px,
+  view3 3.461900 px, view4 3.251131 px
+- camera parameter drift: zero for the saved camera arrays in this run
+- finite camera parameters and proper rotations: true for all four cameras
+
+The blocking disposition is:
+
+1. the SciPy solver reached `max_iter` and reported unsuccessful termination;
+2. the observation graph has missing global image indices.
+
+The result is therefore not presented as a successful self-calibration. The
+Phase 4 GUI exposes the same disposition, blocking flags, camera/image coverage,
+gauge accounting, and per-image residual count instead of equating a reduced
+error with acceptance.
+
+## Code and regression coverage
+
+The implementation adds:
+
+- fail-closed Phase 4 metadata status and persisted quality-gate disposition;
+- explicit solver, finite-value, camera/image coverage, gauge, save/reload and
+  camera-geometry checks;
+- per-camera and per-image final residual diagnostics;
+- fallback extraction of initial per-image errors when a real handler exposes an
+  empty cache;
+- a target-point-data-unit-aware self-calibration gauge spacing;
+- GUI run/cancel/retry status handling and quality-gate presentation.
+
+The missing-image gate and initial-error fallback each have regression tests.
+
+## Verification
+
+- Phase 4 contract: 6 passed.
+- Workflow backend seam and phase tests plus Phase 4 contract: 151 passed.
+- GUI phase contracts (offscreen): 95 passed.
+- Bundle-handler tests: 43 passed, 13 pre-existing numerical/plot warnings.
+- `py_compile`: passed for all changed Python files.
+- `git diff --check`: passed.
+- Mutation test: solver-success guard killed; missing-image guard killed; restore
+  verified by the mutation harness.
+- Real runner: exit 0; quality disposition `incomplete` as reported above.
+
+The source image roots were not modified. Bulk run artefacts remain outside the
+repository.

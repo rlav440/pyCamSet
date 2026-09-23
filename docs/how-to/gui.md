@@ -30,10 +30,11 @@ the same live controls used by the application, not separate copies.
 The Settings theme selector offers Light, Dark, and Sepia. The selected theme
 sets application chrome and the neutral chrome of GUI-managed Matplotlib
 figures (figure/axes backgrounds, labels, ticks, borders, and legend frames).
-It does not recolour plotted data, overlays, or colormaps. PyVista/Open3D views
-retain their backend defaults; a consistent 3D theme remains a separate task
-because those renderers need backend-specific changes that preserve scientific
-colour meanings.
+Managed PyVista assessment views inherit the selected theme for their default
+background; an explicit saved per-visual background overrides that default.
+Neither theme nor presentation styles recolour plotted data, overlays, or
+scientific colormaps. Open3D retains its native interactive view and does not
+support these managed 3D style controls.
 
 The persistent action row below each phase's parameters keeps its run,
 diagnostics, and available continue/assessment actions in reach while expanded
@@ -220,8 +221,14 @@ chrome and **Save 2D assessment exports…** writes its three 2D diagnostics (no
 the 3D scenes) as PNG, SVG and PDF using a generic screen/single-/double-column width/DPI template.
 Per-figure style controls and source-backed CSV are not yet available on that
 path. See [visual export coverage](visual-export.md)
-for the surface-by-surface traceability and remaining gaps. Three-dimensional
-views are handled separately; target printable SVG/PDF generation remains unchanged.
+for the surface-by-surface traceability and remaining gaps. Managed PyVista
+views also provide 3D background, point-size, camera-view, axes,
+and error-legend controls. Save style and Load saved operate on a versioned
+per-visual preference in the user configuration directory; Reset style removes
+that override and returns to theme-default inheritance. The settings are
+presentation-only and do not modify calibration coordinates, error scalars,
+or run artefacts. Open3D controls that cannot be implemented are explicitly
+unavailable; target printable SVG/PDF generation remains unchanged.
 
 Phase 3 and Phase 4 additionally offer **Assess Calibration**, which opens the full-size
 reconstruction and residual views in native matplotlib and PyVista windows

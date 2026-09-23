@@ -703,7 +703,8 @@ class Phase4DiagnosticsTab(QWidget):
             style_row.addWidget(theme_combo)
         style_row.addStretch()
         visual_layout.addLayout(style_row)
-        self._three_d_style = ThreeDStyleControls(self._visual_widget)
+        self._three_d_style = ThreeDStyleControls(
+            self._visual_widget, visual_id="assessment:phase4")
         visual_layout.addWidget(self._three_d_style)
         # Shows which run/phase the most recent Assess Calibration click actually
         # resolved to -- lets a user comparing PyVista vs. Open3D (or comparing this

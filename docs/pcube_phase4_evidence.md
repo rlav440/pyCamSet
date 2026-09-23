@@ -13,9 +13,9 @@ accepted.
 
 - Phase 3 input run: `20260923_014000_be0d2f`
 - Phase 4 run: `20260923_032323_fb3dce`
-- Source image root: `E:/R_pan/1 Data/2026-07-31/cut_tiffs_14h-14m-02s`
-- Machine-readable output: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_real_rpan7.json`
-- Reloaded CameraSet: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/.pycamset_workspace/phase4_runs/20260923_032323_fb3dce/self_calibrated_cameras.camset`
+- Source image root: `the R_pan 7-square dataset root`
+- Machine-readable output: `evidence/phase4_real_rpan7.json`
+- Reloaded CameraSet: `evidence/phase3_real/.pycamset_workspace/phase4_runs/20260923_032323_fb3dce/self_calibrated_cameras.camset`
 
 ## Observed result
 
@@ -33,7 +33,9 @@ quality gate correctly classified it as `incomplete`:
 - explicitly missing image indices: 17
 - per-camera final means: view1 2.667614 px, view2 2.345418 px,
   view3 3.461900 px, view4 3.251131 px
-- camera parameter drift: zero for the saved camera arrays in this run
+- pre-fix metadata recorded zero camera drift, but that value is invalid because
+  the Phase 4 output path mutated the Phase 3 Camera objects before comparison;
+  this incomplete run is not used as drift evidence
 - finite camera parameters and proper rotations: true for all four cameras
 
 The blocking disposition is:
@@ -53,8 +55,8 @@ changing the source images:
 
 - Phase 3 input run: `20260923_021835_70e2cc`
 - Phase 4 run: `20260923_031443_d5fb27`
-- machine-readable output: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_real_pcube5_telecentric.json`
-- reloaded CameraSet: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_telecentric_pcube5/.pycamset_workspace/phase4_runs/20260923_031443_d5fb27/self_calibrated_cameras.camset`
+- machine-readable output: `evidence/phase4_real_pcube5_telecentric.json`
+- reloaded CameraSet: `evidence/phase3_telecentric_pcube5/.pycamset_workspace/phase4_runs/20260923_031443_d5fb27/self_calibrated_cameras.camset`
 - observed cameras: 8/8
 - observed images: 100, with no missing image indices
 - initial mean reprojection error: 12.734540 px
@@ -69,8 +71,8 @@ into a calibration success. The least-squares objective cost did decrease, but
 the mean reprojection error and median error increased; the quality gate keeps
 those distinct rather than treating objective reduction as scientific validity.
 A repeat with `max_nfev=100` produced the same
-12.734540 -> 13.557749 px result as `max_nfev=300`; the reported camera
-intrinsic, distortion and extrinsic drift was zero for all eight cameras.
+12.734540 -> 13.557749 px result as `max_nfev=300`; its pre-fix zero-drift
+metadata is not trusted for the same aliasing reason described above.
 That controlled repeat is evidence that simply allowing more iterations does
 not recover a useful Phase 4 solution for this telecentric corpus; it is not
 presented as an underdetermination theorem.
@@ -104,7 +106,7 @@ extrinsics, intrinsics, or both could produce a good result:
 
 All three start at 12.734540 px and reduce the objective while worsening the
 mean error. The complete machine-readable probe output is
-`D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_telecentric_fixed_variants.json`.
+`evidence/phase4_telecentric_fixed_variants.json`.
 This rules out the simplest camera-parameter warm-start explanation without
 weakening the quality gate. Together with the repeated all-free run and the
 rotation-only telecentric extrinsic model, the current evidence supports a
@@ -122,15 +124,18 @@ the actual `phase4.run` workflow:
 
 - run: `20260923_040725_7a42b3`
 - deterministic repeat: `20260923_040751_fba3d2`
-- machine-readable output: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_real_pcube5_telecentric.json`
-- first-run preserved copy: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_real_pcube5_telecentric_soft_l1_first.json`
+- machine-readable output: `evidence/phase4_real_pcube5_telecentric.json`
+- first-run preserved copy: `evidence/phase4_real_pcube5_telecentric_soft_l1_first.json`
 - save/reload artefacts: both run directories contain `self_calibrated_cameras.camset`
 - solver: successful trust-region termination; 100 image indices observed for all 8 cameras
 - mean reprojection error: `12.734540 -> 5.832703 px`
 - Phase 3 comparison: `12.734540 -> 5.832703 px` (improvement `6.901837 px`)
 - target shape displacement: `0.684601 mm` mean; gauge scale factor `0.976606`
 - camera quality: all eight finite, positive-focal, proper-rotation checks passed
-- parameter drift: zero for all saved camera intrinsic, distortion and extrinsic arrays
+- recomputed maximum absolute camera-parameter change against the saved Phase 3
+  CameraSet: intrinsic `522.7668429102`, distortion `1.6208375997`, extrinsic
+  `0.0517495545` (both GOOD runs); the per-camera normalized drift is now
+  persisted in the machine-readable metadata rather than reported as zero
 - quality-gate status: `complete`, with no blocking flags
 - repeat spread: `0.0 px` final mean and `0.0` objective-cost difference across the two runs
 
@@ -172,6 +177,10 @@ The missing-image gate and initial-error fallback each have regression tests.
   verified by the mutation harness.
 - Fixed-camera warm-start regression: passed; the real telecentric lock probes
   completed for extrinsics, intrinsics, and both together.
+- Camera-drift regression: passed; Phase 4 now clones geometry-only Camera
+  objects, uses `set_extrinsic`, and preserves the Phase 3 rig for comparison.
+- Saved GOOD-run drift recomputation: passed; both runs produce the same camera
+  parameter arrays, while their serialised camset files have distinct hashes.
 - Robust-loss solver routing regression: passed; the custom Schur path is not
   used when `loss` is non-linear.
 - Real r_nebula runner: exit 0; quality disposition `incomplete` as reported above.
@@ -193,10 +202,10 @@ saved M_NEBULA Phase 3/Phase 4 workspace under
 the exact GOOD repeat `20260923_040751_fba3d2`, rendered its summary, and the
 PyVista export path produced a real 3D camera/target PNG:
 
-- GUI diagnostics summary: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_gui_summary_good.png`
-- GUI Phase 4 settings: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_gui_settings_good.png`
-- PyVista 3D render: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_pyvista_good_render.png`
-- GUI state evidence: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_gui_state_evidence.json`
+- GUI diagnostics summary: `evidence/phase4_gui_summary_good.png`
+- GUI Phase 4 settings: `evidence/phase4_gui_settings_good.png`
+- PyVista 3D render: `evidence/phase4_pyvista_good_render.png`
+- GUI state evidence: `evidence/phase4_gui_state_evidence.json`
 
 The state harness exercised the actual tab callbacks and recorded the honest
 labels `Cancellation requested; waiting for the active solver step…`,

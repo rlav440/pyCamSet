@@ -4,7 +4,7 @@ Status: executed on 2026-09-23 in `calibration_15092026`, with the pyCamSet-pcub
 
 This is an evidence summary, not a claim that every supplied dataset supports a scientifically valid intrinsic solve. The complete machine-readable outputs remain outside the repository at:
 
-`D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/`
+`evidence/`
 
 Important files:
 

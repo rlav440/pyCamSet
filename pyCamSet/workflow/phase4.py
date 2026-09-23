@@ -256,6 +256,8 @@ def _diagnostics(optimisation, handler, stats: dict,
         "D4.3_per_image_initial_reprojection": per_image_initial.tolist(),
         "D4.3_initial_euclid_px": initial_euclid,
         "D4.3_final_euclid_px": final_euclid,
+        "D4.3_initial_reprojection_cost": stats.get("initial_reprojection_cost"),
+        "D4.3_final_reprojection_cost": stats.get("final_reprojection_cost"),
         "D4.4_vs_phase3_delta_px": improvement,
         "D4.5_gauge_scale_factor": scale,
         "D4.7_mean_target_displacement_mm": displacement_mm,
@@ -304,6 +306,11 @@ def _quality_gate(optimisation, handler, stats: dict,
     error_reduced = bool(
         np.isfinite(initial_euclid) and np.isfinite(final_euclid)
         and final_euclid < initial_euclid)
+    initial_cost = float(stats.get("initial_reprojection_cost", float("nan")))
+    final_cost = float(stats.get("final_reprojection_cost", float("nan")))
+    objective_cost_reduced = bool(
+        np.isfinite(initial_cost) and np.isfinite(final_cost)
+        and final_cost < initial_cost)
 
     if not finite_parameters:
         blocking.append("optimiser parameters are non-finite")
@@ -366,6 +373,7 @@ def _quality_gate(optimisation, handler, stats: dict,
         "finite_residuals": finite_residuals,
         "solver_success": solver_success,
         "error_reduced": error_reduced,
+        "objective_cost_reduced": objective_cost_reduced,
         "camera_coverage": camera_coverage,
         "image_coverage": image_coverage,
         "observed_cameras": observed_cameras,

@@ -12,10 +12,10 @@ accepted.
 ## Run identity
 
 - Phase 3 input run: `20260923_014000_be0d2f`
-- Phase 4 run: `20260923_031029_a2b7cb`
+- Phase 4 run: `20260923_032323_fb3dce`
 - Source image root: `E:/R_pan/1 Data/2026-07-31/cut_tiffs_14h-14m-02s`
 - Machine-readable output: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_real_rpan7.json`
-- Reloaded CameraSet: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/.pycamset_workspace/phase4_runs/20260923_031029_a2b7cb/self_calibrated_cameras.camset`
+- Reloaded CameraSet: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/.pycamset_workspace/phase4_runs/20260923_032323_fb3dce/self_calibrated_cameras.camset`
 
 ## Observed result
 
@@ -24,6 +24,7 @@ quality gate correctly classified it as `incomplete`:
 
 - initial mean reprojection error: 4.480463 px
 - final mean reprojection error: 2.925415 px
+- reprojection objective cost: 609596.8632 -> 104142.5216
 - improvement against the Phase 3 final: 1.555048 px
 - free target points: 205
 - gauge-fixed target points: 3 (`[0, 1, 7]`)
@@ -58,12 +59,16 @@ changing the source images:
 - observed images: 100, with no missing image indices
 - initial mean reprojection error: 12.734540 px
 - final mean reprojection error: 13.557749 px
+- reprojection objective cost: 10264690.6723 -> 8528445.0210
 - free target points: 150; gauge-fixed points: 3 (`[0, 1, 5]`)
 
 Its only blocking flag was `final reprojection error did not improve finitely`.
 This is the expected fail-closed outcome for a run that made the result worse:
 the presence of complete observation coverage does not turn non-improvement
-into a calibration success. A repeat with `max_nfev=100` produced the same
+into a calibration success. The least-squares objective cost did decrease, but
+the mean reprojection error and median error increased; the quality gate keeps
+those distinct rather than treating objective reduction as scientific validity.
+A repeat with `max_nfev=100` produced the same
 12.734540 -> 13.557749 px result as `max_nfev=300`; the reported camera
 intrinsic, distortion and extrinsic drift was zero for all eight cameras.
 That controlled repeat is evidence that simply allowing more iterations does
@@ -76,7 +81,8 @@ The implementation adds:
 
 - fail-closed Phase 4 metadata status and persisted quality-gate disposition;
 - explicit solver, finite-value, camera/image coverage, gauge, save/reload and
-  camera-geometry checks;
+  camera-geometry checks, including separate objective-cost and mean-error
+  dispositions;
 - per-camera and per-image final residual diagnostics;
 - fallback extraction of initial per-image errors when a real handler exposes an
   empty cache;
@@ -87,8 +93,8 @@ The missing-image gate and initial-error fallback each have regression tests.
 
 ## Verification
 
-- Phase 4 contract: 6 passed.
-- Workflow backend seam and phase tests plus Phase 4 contract: 151 passed.
+- Phase 4 contract: 8 passed.
+- Workflow backend seam and phase tests plus Phase 4 contract: 153 passed.
 - GUI phase contracts (offscreen): 95 passed.
 - Bundle-handler tests: 43 passed, 13 pre-existing numerical/plot warnings.
 - `py_compile`: passed for all changed Python files.
@@ -96,9 +102,9 @@ The missing-image gate and initial-error fallback each have regression tests.
 - Mutation test: solver-success guard killed; missing-image guard killed; restore
   verified by the mutation harness.
 - Real r_nebula runner: exit 0; quality disposition `incomplete` as reported above.
-- Real M_NEBULA telecentric runner: exit 0 at `max_nfev=300`; quality disposition
-  `incomplete` because the final error increased. The `max_nfev=100` repeat had
-  the same disposition and metrics.
+- Real M_NEBULA telecentric runner: exit 0 at `max_nfev=100`; quality disposition
+  `incomplete` because the final mean error increased despite objective-cost
+  reduction. The independent `max_nfev=300` repeat had the same metrics.
 
 The source image roots were not modified. Bulk run artefacts remain outside the
 repository.

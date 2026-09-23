@@ -305,7 +305,15 @@ def _solve_bundle_adjustment(
 
     start = time.time()
     usable, reason = can_use_schur(param_handler)
-    if usable and bundle_jac is not None:
+    requested_loss = param_handler.problem_opts.get("loss", "linear")
+    # The custom Schur path only minimises the raw residual vector; sending a
+    # scipy robust-loss request through it would silently ignore the GUI/API
+    # option.  Use scipy's trust-region implementation whenever a nonlinear
+    # loss is requested so the selected loss and scale are actually honoured.
+    use_schur = (
+        usable and bundle_jac is not None and requested_loss == "linear"
+    )
+    if use_schur:
         solver = "schur"
         optimisation = run_schur_bundle_adjustment(
             param_handler, loss_fn, bundle_jac, init_params, threads)
@@ -328,6 +336,8 @@ def _solve_bundle_adjustment(
             max_nfev=param_handler.problem_opts["max_nfev"],
             x_scale='jac',
             xtol=1e-4,
+            loss=requested_loss,
+            f_scale=float(param_handler.problem_opts.get("f_scale", 1.0)),
             bounds=bounds,
         )
     end = time.time()

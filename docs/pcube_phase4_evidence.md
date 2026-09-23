@@ -1,6 +1,6 @@
 '''Purpose: Evidence report for the pcube Phase 4 self-calibration vertical slice.
-Status: Active; records the fail-closed disposition of the real Phase 4 run.
-Future: Add the four-dataset Phase 4 campaign matrix and a quality-gate-passing run when the upstream observation set supports it.
+Status: Active; records fail-closed and quality-gate-passing real Phase 4 runs.
+Future: Add the four-dataset Phase 4 campaign matrix and native/offscreen visual evidence for the robust-loss run.
 '''
 
 # pcube Phase 4 evidence
@@ -111,6 +111,37 @@ rotation-only telecentric extrinsic model, the current evidence supports a
 model/data-level limitation for this telecentric corpus rather than a reason to
 accept its Phase 4 result.
 
+## GOOD robust-loss Phase 4 run
+
+The rejection above exposed a real implementation defect: the GUI/API exposed
+`loss` and `f_scale`, but the custom Schur path silently ignored them. The
+backend now routes non-linear losses through SciPy's trust-region solver and
+passes the requested `loss` and `f_scale` values. The validated telecentric
+recipe (`loss=soft_l1`, `f_scale=1.0`, `max_nfev=100`) was then executed through
+the actual `phase4.run` workflow:
+
+- run: `20260923_040725_7a42b3`
+- deterministic repeat: `20260923_040751_fba3d2`
+- machine-readable output: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_real_pcube5_telecentric.json`
+- first-run preserved copy: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_real_pcube5_telecentric_soft_l1_first.json`
+- save/reload artefacts: both run directories contain `self_calibrated_cameras.camset`
+- solver: successful trust-region termination; 100 image indices observed for all 8 cameras
+- mean reprojection error: `12.734540 -> 5.832703 px`
+- Phase 3 comparison: `12.734540 -> 5.832703 px` (improvement `6.901837 px`)
+- target shape displacement: `0.684601 mm` mean; gauge scale factor `0.976606`
+- camera quality: all eight finite, positive-focal, proper-rotation checks passed
+- parameter drift: zero for all saved camera intrinsic, distortion and extrinsic arrays
+- quality-gate status: `complete`, with no blocking flags
+- repeat spread: `0.0 px` final mean and `0.0` objective-cost difference across the two runs
+
+The robust run's raw least-squares reprojection cost is higher than the linear
+run's cost because `soft_l1` deliberately optimises a different robust
+objective. That is recorded as `objective_cost_reduced=false`; it does not
+invalidate the run because the acceptance gate is based on finite, successful,
+fully covered, physically plausible calibration with reduced native-pixel
+reprojection error. The result is the required GOOD Phase 4 calibration, while
+the earlier linear result remains correctly classified as incomplete.
+
 ## Code and regression coverage
 
 The implementation adds:
@@ -124,13 +155,15 @@ The implementation adds:
   empty cache;
 - a target-point-data-unit-aware self-calibration gauge spacing;
 - GUI run/cancel/retry status handling and quality-gate presentation.
+- non-linear loss handling that cannot silently fall through the custom Schur
+  path; SciPy trust-region receives the requested loss and scale.
 
 The missing-image gate and initial-error fallback each have regression tests.
 
 ## Verification
 
 - Phase 4 contract: 9 passed.
-- Workflow backend seam and phase tests plus Phase 4 contract: 153 passed.
+- Workflow backend seam and phase tests plus Phase 4 contract: 155 passed.
 - GUI phase contracts (offscreen): 95 passed.
 - Bundle-handler tests: 43 passed, 13 pre-existing numerical/plot warnings.
 - `py_compile`: passed for all changed Python files.
@@ -139,10 +172,15 @@ The missing-image gate and initial-error fallback each have regression tests.
   verified by the mutation harness.
 - Fixed-camera warm-start regression: passed; the real telecentric lock probes
   completed for extrinsics, intrinsics, and both together.
+- Robust-loss solver routing regression: passed; the custom Schur path is not
+  used when `loss` is non-linear.
 - Real r_nebula runner: exit 0; quality disposition `incomplete` as reported above.
 - Real M_NEBULA telecentric runner: exit 0 at `max_nfev=100`; quality disposition
   `incomplete` because the final mean error increased despite objective-cost
   reduction. The independent `max_nfev=300` repeat had the same metrics.
+- Real M_NEBULA telecentric robust-loss runner: exit 0 twice; quality disposition
+  `complete` with exact repeat metrics and save/reload artefacts as recorded
+  above.
 
 The source image roots were not modified. Bulk run artefacts remain outside the
 repository.

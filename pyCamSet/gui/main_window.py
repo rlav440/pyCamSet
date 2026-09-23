@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject
+from PySide6.QtCore import QEvent, QObject, QSettings
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -72,6 +72,14 @@ class PyCamSetApp(QMainWindow):
         self.resize(1140, 820)
         self.setMinimumSize(860, 640)
 
+        # Apply the saved theme before widgets are constructed.
+        self._theme_settings = QSettings("pyCamSet", "pyCamSet")
+        theme_name = self._theme_settings.value("appearance/theme", "Light", type=str)
+        from pyCamSet.gui.theme import THEME_TOKENS, apply_theme
+        if theme_name not in THEME_TOKENS:
+            theme_name = "Light"
+        apply_theme(QApplication.instance(), theme_name)
+
         # Shared state injected into child tabs
         self._info_cb = QCheckBox("Enable Informational Windows")
         self._info_cb.setChecked(True)
@@ -84,6 +92,15 @@ class PyCamSetApp(QMainWindow):
 
         self._terminal_cb = QCheckBox("Show Terminal Output")
         self._terminal_cb.setChecked(True)
+
+        self._theme_combo = QComboBox()
+        self._theme_combo.setObjectName("themeSelector")
+        self._theme_combo.setAccessibleName("Colour theme")
+        self._theme_combo.setToolTip("Choose the application colour theme")
+        self._theme_combo.addItems(("Light", "Dark"))
+        self._theme_combo.setCurrentText(
+            QApplication.instance().property("pycamsetTheme") or "Light")
+        self._theme_combo.currentTextChanged.connect(self._on_theme_changed)
 
         # Tab-bar indices of the diagnostics pages, which are hidden
         # until something navigates to one.  See show_tab().
@@ -122,6 +139,7 @@ class PyCamSetApp(QMainWindow):
         ctrl_row.addWidget(self._info_cb)
         ctrl_row.addSpacing(16)
         ctrl_row.addWidget(self._terminal_cb)
+        ctrl_row.addWidget(self._theme_combo)
         ctrl_row.addStretch()
         root_layout.addLayout(ctrl_row)
 
@@ -556,6 +574,14 @@ class PyCamSetApp(QMainWindow):
         QApplication.instance().setProperty(
             "tooltipsEnabled", self._info_cb.isChecked()
         )
+
+    def _on_theme_changed(self, theme_name: str) -> None:
+        """Apply and persist the selected presentation theme."""
+        from pyCamSet.gui.theme import apply_theme
+
+        apply_theme(QApplication.instance(), theme_name)
+        self._theme_settings.setValue("appearance/theme", theme_name)
+        self._theme_settings.sync()
 
     def switch_to_tab(self, name: str) -> None:
         """Switch to the named tab by its display text."""

@@ -43,7 +43,6 @@ from pyCamSet.workflow.recent_folders import (
     remember_folder,
 )
 from pyCamSet.gui.shared_functions import (
-    BLUE_BTN_STYLE,
     IMAGE_FOLDER_SCHEMATIC,
     RunSelectorWidget,
     TAB_PHASE1,

@@ -80,53 +80,7 @@ TAB_EXPORT_CALIBRATION = "Export Calibration"
 # Styling helpers
 # ---------------------------------------------------------------------------
 
-ORANGE = "#e07b00"
-DARK_ORANGE = "#c06000"
-GREEN = "#2e7d32"
-DARK_GREEN = "#1b5e20"
-DULL_RED = "#8c3b3b"
-DARK_DULL_RED = "#733030"
-SECTION_COLOR = "#1976d2"
-BABY_BLUE = "#8fd3ff"
-DARK_BABY_BLUE = "#67bde8"
-
-ORANGE_BTN_STYLE = (
-    f"QPushButton {{ background-color: {ORANGE}; color: white; font-weight: bold;"
-    f" border-radius: 4px; padding: 4px 10px; }}"
-    f"QPushButton:hover {{ background-color: {DARK_ORANGE}; }}"
-    f"QPushButton:pressed {{ background-color: {DARK_ORANGE}; }}"
-)
-
-GREEN_BTN_STYLE = (
-    f"QPushButton {{ background-color: {GREEN}; color: white; font-weight: bold;"
-    f" border-radius: 4px; padding: 4px 10px; }}"
-    f"QPushButton:hover {{ background-color: {DARK_GREEN}; }}"
-    f"QPushButton:pressed {{ background-color: {DARK_GREEN}; }}"
-)
-
-BLUE_BTN_STYLE = (
-    f"QPushButton {{ background-color: {BABY_BLUE}; color: #083b5c; font-weight: bold;"
-    f" border-radius: 4px; padding: 4px 10px; }}"
-    f"QPushButton:hover {{ background-color: {DARK_BABY_BLUE}; }}"
-    f"QPushButton:pressed {{ background-color: {DARK_BABY_BLUE}; }}"
-)
-
-#: A continue button whose run produced nothing worth carrying forward. Dull
-#: rather than bright, because it is a warning against going on rather than
-#: an action of its own.
-BLOCKED_BTN_STYLE = (
-    f"QPushButton {{ background-color: {DULL_RED}; color: white; font-weight: bold;"
-    f" border-radius: 4px; padding: 4px 10px; }}"
-    f"QPushButton:hover {{ background-color: {DARK_DULL_RED}; }}"
-    f"QPushButton:pressed {{ background-color: {DARK_DULL_RED}; }}"
-)
-
-SECTION_STYLE = "QLabel { color: #1976d2; font-weight: bold; margin-top: 6px; }"
-
-TERMINAL_STYLE = (
-    "QTextEdit { background: #1e1e1e; color: #d4d4d4; font-family: Courier, monospace;"
-    " font-size: 10pt; border: none; }"
-)
+BUTTON_ROLES = {"orange": "secondary", "green": "success", "blue": "primary"}
 
 # ---------------------------------------------------------------------------
 # Section label factory
@@ -136,7 +90,7 @@ TERMINAL_STYLE = (
 def make_section_label(text: str) -> QLabel:
     """Return a styled section-header label."""
     lbl = QLabel(text)
-    lbl.setStyleSheet(SECTION_STYLE)
+    lbl.setProperty("designRole", "section")
     return lbl
 
 
@@ -149,25 +103,24 @@ def make_separator() -> QFrame:
 
 
 def make_orange_button(text: str, callback: Callable) -> QPushButton:
-    """Return an orange push button connected to *callback*."""
-    btn = QPushButton(text)
-    btn.setStyleSheet(ORANGE_BTN_STYLE)
-    btn.clicked.connect(callback)
-    return btn
+    """Return a secondary action button connected to *callback*."""
+    return _make_role_button(text, callback, BUTTON_ROLES["orange"])
 
 
 def make_green_button(text: str, callback: Callable) -> QPushButton:
-    """Return a green push button connected to *callback*."""
-    btn = QPushButton(text)
-    btn.setStyleSheet(GREEN_BTN_STYLE)
-    btn.clicked.connect(callback)
-    return btn
+    """Return a success/commit button connected to *callback*."""
+    return _make_role_button(text, callback, BUTTON_ROLES["green"])
 
 
 def make_blue_button(text: str, callback: Callable) -> QPushButton:
-    """Return a baby-blue action button connected to *callback*."""
+    """Return a primary action button connected to *callback*."""
+    return _make_role_button(text, callback, BUTTON_ROLES["blue"])
+
+
+def _make_role_button(text: str, callback: Callable, role: str) -> QPushButton:
+    """Create a button styled by the active application theme."""
     btn = QPushButton(text)
-    btn.setStyleSheet(BLUE_BTN_STYLE)
+    btn.setProperty("designRole", role)
     btn.clicked.connect(callback)
     return btn
 
@@ -203,11 +156,15 @@ def set_continue_blocked(btn: QPushButton, reasons: list[str]) -> None:
     if reasons:
         if not hasattr(btn, "_unblocked_tooltip"):
             btn._unblocked_tooltip = btn.toolTip()
-        btn.setStyleSheet(BLOCKED_BTN_STYLE)
+        btn.setProperty("designRole", "warning")
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
         btn.setToolTip("This run cannot be carried forward:\n\n"
                        + "\n\n".join(reasons))
         return
-    btn.setStyleSheet(GREEN_BTN_STYLE)
+    btn.setProperty("designRole", "success")
+    btn.style().unpolish(btn)
+    btn.style().polish(btn)
     btn.setToolTip(getattr(btn, "_unblocked_tooltip", btn.toolTip()))
 
 
@@ -1167,7 +1124,7 @@ class TerminalWidget(QTextEdit):
     def __init__(self, show_cb: QCheckBox, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setReadOnly(True)
-        self.setStyleSheet(TERMINAL_STYLE)
+        self.setObjectName("terminalOutput")
         self.setMinimumHeight(110)
         self.setMaximumHeight(200)
         self._show_cb = show_cb

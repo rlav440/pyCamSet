@@ -1312,6 +1312,10 @@ class Phase1DiagnosticsTab(QWidget):
         cols = min(3, n)
         rows = int(math.ceil(n / cols))
         fig = Figure(figsize=(5 * cols, 3.5 * rows), tight_layout=True)
+        from pyCamSet.gui.theme import apply_matplotlib_theme
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        apply_matplotlib_theme(fig, app.property("pycamsetTheme") if app else "Light")
         canvas = FigureCanvasQTAgg(fig)
 
         axes: dict[str, object] = {}
@@ -1398,6 +1402,12 @@ class Phase1DiagnosticsTab(QWidget):
 
         # Update the permanent status label (always the same instance)
         self._draw_status_lbl.setText(f"{idx + 1}/{max_images}")
+        from pyCamSet.gui.theme import apply_matplotlib_theme
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        apply_matplotlib_theme(
+            self._draw_state["fig"],
+            app.property("pycamsetTheme") if app else "Light")
         self._draw_state["canvas"].draw_idle()
 
     def _resolve_private_pickle_path_for_run(self, run: dict) -> Optional[Path]:

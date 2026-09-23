@@ -1,7 +1,8 @@
-"""Semantic light and dark themes for the PySide6 application shell."""
+"""Semantic application and Matplotlib themes for the PySide6 GUI."""
 from __future__ import annotations
 
 from collections.abc import Mapping
+from weakref import WeakSet
 
 from PySide6.QtGui import QColor, QPalette
 
@@ -52,7 +53,32 @@ THEME_TOKENS: dict[str, dict[str, str]] = {
         "selection_text": "#ffffff",
         "focus": "#d6a8ff",
     },
+    "Sepia": {
+        "background": "#f3ecdf",
+        "surface": "#fffaf0",
+        "surface_alt": "#e9ddc8",
+        "border": "#9a876b",
+        "border_strong": "#6d5940",
+        "text": "#30271e",
+        "text_muted": "#594832",
+        "text_disabled": "#6d5940",
+        "accent": "#70451f",
+        "accent_hover": "#5b3719",
+        "accent_pressed": "#472a13",
+        "on_accent": "#fffaf0",
+        "success": "#315f3d",
+        "on_success": "#fffaf0",
+        "danger": "#963b30",
+        "on_danger": "#fffaf0",
+        "warning": "#87470f",
+        "on_warning": "#fffaf0",
+        "selection": "#70451f",
+        "selection_text": "#fffaf0",
+        "focus": "#704a91",
+    },
 }
+
+_MANAGED_FIGURES = WeakSet()
 
 
 def contrast_ratio(foreground: str, background: str) -> float:
@@ -170,6 +196,41 @@ def apply_theme(application, theme_name: str) -> None:
     application.setPalette(palette)
     application.setStyleSheet(_stylesheet(tokens))
     application.setProperty("pycamsetTheme", theme_name)
+
+
+def apply_matplotlib_theme(figure, theme_name: str | None = None) -> None:
+    """Theme Matplotlib chrome only; retain all data and scientific colours."""
+    theme_name = theme_name or "Light"
+    if theme_name not in THEME_TOKENS:
+        raise ValueError(f"Unknown theme: {theme_name}")
+    tokens = THEME_TOKENS[theme_name]
+    _MANAGED_FIGURES.add(figure)
+    figure.patch.set_facecolor(tokens["background"])
+    for text in figure.texts:
+        text.set_color(tokens["text"])
+    for axes in figure.axes:
+        axes.set_facecolor(tokens["surface"])
+        axes.title.set_color(tokens["text"])
+        axes.xaxis.label.set_color(tokens["text"])
+        axes.yaxis.label.set_color(tokens["text"])
+        axes.tick_params(axis="both", colors=tokens["text_muted"])
+        for spine in axes.spines.values():
+            spine.set_color(tokens["border_strong"])
+        legend = axes.get_legend()
+        if legend is not None:
+            legend.get_frame().set_facecolor(tokens["surface"])
+            legend.get_frame().set_edgecolor(tokens["border_strong"])
+            for label in legend.get_texts():
+                label.set_color(tokens["text"])
+    canvas = getattr(figure, "canvas", None)
+    if canvas is not None:
+        canvas.draw_idle()
+
+
+def refresh_matplotlib_theme(theme_name: str) -> None:
+    """Re-theme registered GUI figures after a live application theme switch."""
+    for figure in tuple(_MANAGED_FIGURES):
+        apply_matplotlib_theme(figure, theme_name)
 
 
 validate_theme_tokens(THEME_TOKENS)

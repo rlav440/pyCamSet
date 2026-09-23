@@ -10,6 +10,8 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QLineEdit
+from matplotlib.figure import Figure
+from matplotlib.colors import to_rgba
 
 from pyCamSet.gui.theme import (
     THEME_TOKENS,
@@ -32,10 +34,10 @@ def application():
     app.setProperty("pycamsetTheme", previous_theme)
 
 
-def test_light_and_dark_have_identical_complete_semantic_tokens():
+def test_all_themes_have_identical_complete_semantic_tokens():
     """Reject theme drift at the contract boundary."""
     validate_theme_tokens(THEME_TOKENS)
-    assert set(THEME_TOKENS["Light"]) == set(THEME_TOKENS["Dark"])
+    assert set(THEME_TOKENS["Light"]) == set(THEME_TOKENS["Dark"]) == set(THEME_TOKENS["Sepia"])
     assert len(THEME_TOKENS["Light"]) >= 19
 
 
@@ -103,6 +105,39 @@ def test_live_theme_switch_updates_palette_and_accessible_state(application):
     assert application.property("pycamsetTheme") == "Light"
 
 
+def test_matplotlib_theme_changes_chrome_without_changing_scientific_data(application, tmp_path):
+    """Theme figure chrome across all three themes without changing series data/colour."""
+    from pyCamSet.gui.theme import apply_matplotlib_theme, refresh_matplotlib_theme
+
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    line, = axes.plot([0, 1], [2, 3], color="#d62728", label="measurement")
+    axes.set_title("Diagnostic")
+    axes.set_xlabel("View")
+    axes.set_ylabel("Error (px)")
+    axes.legend()
+    original_x = line.get_xdata().copy()
+    original_y = line.get_ydata().copy()
+    for theme_name in ("Light", "Dark", "Sepia"):
+        apply_matplotlib_theme(figure, theme_name)
+        assert figure.get_facecolor() == to_rgba(THEME_TOKENS[theme_name]["background"])
+        assert axes.get_facecolor() == to_rgba(THEME_TOKENS[theme_name]["surface"])
+        assert line.get_color() == "#d62728"
+        assert line.get_xdata().tolist() == original_x.tolist()
+        assert line.get_ydata().tolist() == original_y.tolist()
+
+    # Live refresh updates the registered figure and does not reconstruct data.
+    apply_theme(application, "Sepia")
+    refresh_matplotlib_theme("Sepia")
+    assert axes.title.get_color() == THEME_TOKENS["Sepia"]["text"]
+    assert line.get_ydata().tolist() == original_y.tolist()
+    export_path = tmp_path / "sepia-figure.png"
+    figure.savefig(export_path, dpi=40)
+    from PIL import Image
+    with Image.open(export_path) as exported:
+        assert exported.getpixel((0, 0))[:3] == (243, 236, 223)
+
+
 def test_token_validator_rejects_missing_or_extra_keys():
     """Prove incomplete and drifting token dictionaries cannot pass silently."""
     missing = deepcopy(THEME_TOKENS)
@@ -128,14 +163,23 @@ def test_main_window_theme_selector_switches_and_persists(tmp_path, monkeypatch)
     settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
     settings.clear()
     window = main_window_module.PyCamSetApp()
+    from pyCamSet.gui.theme import apply_matplotlib_theme
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    axes.plot([0, 1], [1, 2], color="#d62728")
+    apply_matplotlib_theme(figure, "Light")
     try:
         assert window._theme_combo.accessibleName() == "Colour theme"
-        window._theme_combo.setCurrentText("Dark")
-        assert QApplication.instance().property("pycamsetTheme") == "Dark"
-        assert settings.value("appearance/theme") == "Dark"
+        assert [window._theme_combo.itemText(i) for i in range(window._theme_combo.count())] == [
+            "Light", "Dark", "Sepia"]
+        window._theme_combo.setCurrentText("Sepia")
+        assert QApplication.instance().property("pycamsetTheme") == "Sepia"
+        assert settings.value("appearance/theme") == "Sepia"
+        assert figure.get_facecolor() == to_rgba(THEME_TOKENS["Sepia"]["background"])
+        assert axes.get_lines()[0].get_color() == "#d62728"
         window.close()
         restored_window = main_window_module.PyCamSetApp()
-        assert restored_window._theme_combo.currentText() == "Dark"
+        assert restored_window._theme_combo.currentText() == "Sepia"
         restored_window.close()
     finally:
         window.close()

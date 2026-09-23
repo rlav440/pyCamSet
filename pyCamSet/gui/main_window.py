@@ -107,7 +107,7 @@ class PyCamSetApp(QMainWindow):
         self._theme_combo.setObjectName("themeSelector")
         self._theme_combo.setAccessibleName("Colour theme")
         self._theme_combo.setToolTip("Choose the application colour theme")
-        self._theme_combo.addItems(("Light", "Dark"))
+        self._theme_combo.addItems(("Light", "Dark", "Sepia"))
         self._theme_combo.setCurrentText(
             QApplication.instance().property("pycamsetTheme") or "Light")
         self._theme_combo.currentTextChanged.connect(self._on_theme_changed)
@@ -599,9 +599,10 @@ class PyCamSetApp(QMainWindow):
 
     def _on_theme_changed(self, theme_name: str) -> None:
         """Apply and persist the selected presentation theme."""
-        from pyCamSet.gui.theme import apply_theme
+        from pyCamSet.gui.theme import apply_theme, refresh_matplotlib_theme
 
         apply_theme(QApplication.instance(), theme_name)
+        refresh_matplotlib_theme(theme_name)
         self._theme_settings.setValue("appearance/theme", theme_name)
         self._theme_settings.sync()
 

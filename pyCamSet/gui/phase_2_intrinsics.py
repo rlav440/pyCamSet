@@ -917,6 +917,10 @@ class Phase2DiagnosticsTab(QWidget):
         ax.grid(alpha=0.25)
         ax.legend(fontsize=8)
 
+        from pyCamSet.gui.theme import apply_matplotlib_theme
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        apply_matplotlib_theme(fig, app.property("pycamsetTheme") if app else "Light")
         canvas = FigureCanvasQTAgg(fig)
         canvas.setMinimumHeight(320)
 

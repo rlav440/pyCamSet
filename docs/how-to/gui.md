@@ -27,6 +27,14 @@ the tabs. Edit contains the informational-tooltip toggle. Settings contains
 the terminal-output toggle and colour-theme selector. These menu controls are
 the same live controls used by the application, not separate copies.
 
+The Settings theme selector offers Light, Dark, and Sepia. The selected theme
+sets application chrome and the neutral chrome of GUI-managed Matplotlib
+figures (figure/axes backgrounds, labels, ticks, borders, and legend frames).
+It does not recolour plotted data, overlays, or colormaps. PyVista/Open3D views
+retain their backend defaults; a consistent 3D theme remains a separate task
+because those renderers need backend-specific changes that preserve scientific
+colour meanings.
+
 The persistent action row below each phase's parameters keeps its run,
 diagnostics, and available continue/assessment actions in reach while expanded
 settings scroll independently. At smaller window sizes, use the parameter

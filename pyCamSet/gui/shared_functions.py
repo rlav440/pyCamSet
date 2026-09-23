@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional
 from PySide6.QtCore import QEvent, QObject, QThread, Signal, Qt
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QAbstractSpinBox,
@@ -233,6 +234,10 @@ class MatplotlibFigureCard(QWidget):
         self._title = title
         self._fig = fig
         self._canvas_cls = canvas_cls
+        from pyCamSet.gui.theme import apply_matplotlib_theme
+        application = QApplication.instance()
+        apply_matplotlib_theme(
+            fig, application.property("pycamsetTheme") if application else "Light")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 8)

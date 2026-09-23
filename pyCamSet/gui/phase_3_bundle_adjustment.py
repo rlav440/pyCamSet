@@ -1297,6 +1297,10 @@ class Phase3DiagnosticsTab(QWidget):
         ax.grid(axis="y", alpha=0.2)
         ax.legend(fontsize=8)
 
+        from pyCamSet.gui.theme import apply_matplotlib_theme
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        apply_matplotlib_theme(fig, app.property("pycamsetTheme") if app else "Light")
         canvas = FigureCanvasQTAgg(fig)
         canvas.setMinimumHeight(320)
 
@@ -1650,6 +1654,10 @@ class Phase3DiagnosticsTab(QWidget):
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
         ax.set_zlabel("Z")
+        from pyCamSet.gui.theme import apply_matplotlib_theme
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        apply_matplotlib_theme(fig, app.property("pycamsetTheme") if app else "Light")
         self._poses_layout.addWidget(FigureCanvasQTAgg(fig))
 
     def _on_backend_changed(self, btn) -> None:

@@ -92,9 +92,6 @@ def _export_target(
     if "return_scene" in inspect.signature(plot_method).parameters:
         scene = plot_method(return_scene=True)
     if scene is not None and hasattr(scene, "screenshot"):
-        if png_path is not None:
-            png_path.parent.mkdir(parents=True, exist_ok=True)
-            scene.screenshot(str(png_path))
         if geometry_path is not None:
             extension = geometry_path.suffix.lower()
             geometry_path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,6 +107,13 @@ def _export_target(
                 merged.save(str(geometry_path))
             else:
                 raise ValueError("This target renderer does not expose reusable scene geometry in the requested format.")
+        if png_path is not None:
+            png_path.parent.mkdir(parents=True, exist_ok=True)
+            # ``screenshot()`` only works after the Plotter owns a render
+            # window; ``show`` creates that renderer and captures the actual
+            # scene without entering an interactive loop. Do this last because
+            # auto-close tears down the renderer and its scene mesh registry.
+            scene.show(screenshot=str(png_path), interactive=False, auto_close=True)
         return
     if geometry_path is not None:
         raise ValueError("Reusable scene geometry is unavailable for this target; printable SVG/PDF is not scene geometry.")

@@ -15,6 +15,7 @@ before, and validated each of them against rules the targets now state.
 """
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 from typing import Optional
@@ -36,7 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.calibration_targets.core.target_registry import build_target, target_class
-from pyCamSet.gui.viewer_process import spawn_viewer
+from pyCamSet.gui.viewer_process import run_viewer, spawn_viewer
 from pyCamSet.gui.shared_functions import (
     DETECTOR_NONE,
     TargetSettingsForm,
@@ -151,8 +152,6 @@ class CreateTargetDialog(QDialog):
         self._name_edit.textEdited.connect(self._on_name_edited)
         form.addRow("Output file name:", self._name_edit)
 
-        self._on_target_changed()
-
         root.addWidget(make_separator())
         btn_row = QHBoxLayout()
         save_button = make_blue_button("Save Target", self._save_target)
@@ -161,6 +160,17 @@ class CreateTargetDialog(QDialog):
         visualise_button = make_blue_button("Visualise Target", self._visualise_target)
         visualise_button.setAccessibleName("Visualise calibration target")
         btn_row.addWidget(visualise_button)
+        save_view_button = QPushButton("Save Target View PNG")
+        save_view_button.setAccessibleName("Save calibration target visualisation as PNG")
+        save_view_button.setToolTip("Save the target using the same renderer used by Visualise Target.")
+        save_view_button.clicked.connect(self._save_target_view_png)
+        btn_row.addWidget(save_view_button)
+        self._save_geometry_button = QPushButton("Export Target Geometry")
+        self._save_geometry_button.setAccessibleName("Export calibration target scene geometry")
+        self._save_geometry_button.setToolTip("Export reusable 3D scene meshes when this target renderer supports them.")
+        self._save_geometry_button.clicked.connect(self._save_target_geometry)
+        btn_row.addWidget(self._save_geometry_button)
+        self._on_target_changed()
         btn_row.addStretch()
         close_btn = QPushButton("Close")
         close_btn.setAccessibleName("Close target dialog")
@@ -196,6 +206,8 @@ class CreateTargetDialog(QDialog):
             self._export_form.addRow(f"{parameter.label}:", widget)
             self._export_widgets[parameter.key] = widget
         self._export_rows.setVisible(bool(self._export_widgets))
+        self._save_geometry_button.setEnabled(
+            "return_scene" in inspect.signature(self._target_class().plot).parameters)
         self._sync_default_name()
 
     def _export_kind(self) -> str:
@@ -332,3 +344,45 @@ class CreateTargetDialog(QDialog):
             self._terminal.append_line(f"ERROR: {detail}")
             return
         self._terminal.append_line("Opened the target in a separate window.")
+
+    def _export_target_view(self, extension: str, description: str) -> None:
+        """Offer a renderer-backed export from the normal Create Target window."""
+        collected = self._collect()
+        if collected is None:
+            return
+        filters = "PNG image (*.png)" if extension == ".png" else "3D scene (*.ply *.obj *.gltf)"
+        default_name = collected["file_name"] + extension
+        path, _ = QFileDialog.getSaveFileName(
+            self, description, str(collected["out_dir"] / default_name), filters)
+        if not path:  # Cancelling the picker must not start a renderer process.
+            return
+        output_path = Path(path)
+        if output_path.exists():
+            answer = QMessageBox.question(
+                self, "Replace existing file?", f"{output_path} already exists. Replace it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        arguments = [json.dumps(collected["spec"], default=str)]
+        flag = "--save-png" if extension == ".png" else "--save-geometry"
+        arguments.extend([flag, str(output_path), "--overwrite"])
+        self._status.setText(f"Saving target visualisation to {output_path}…")
+        self._status.repaint()
+        ok, detail = run_viewer("pyCamSet.utils.visualise_target", arguments)
+        if ok:
+            self._status.setText(f"Saved target visualisation: {output_path}")
+            self._terminal.append_line(f"Saved target visualisation: {output_path}")
+        else:
+            QMessageBox.critical(self, "Target export failed", detail)
+            self._status.setText("Target visualisation export failed.")
+            self._terminal.append_line(f"ERROR: {detail}")
+
+    def _save_target_view_png(self) -> None:
+        """Save the rendered target PNG through the standalone renderer process."""
+        self._export_target_view(".png", "Save Target View PNG")
+
+    def _save_target_geometry(self) -> None:
+        """Save supported scene meshes; Matplotlib-only targets disable this action."""
+        self._export_target_view(".obj", "Export Target Geometry")

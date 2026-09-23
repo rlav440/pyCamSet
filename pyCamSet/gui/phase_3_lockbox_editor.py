@@ -765,6 +765,51 @@ class Phase3LockboxEditor(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "PNG export failed", str(exc))
 
+    def _open_open3d_png_dialog(self) -> None:
+        """Choose a new PNG path in Open3D's native event loop; cancellation is a no-op."""
+        dialog = _o3d_gui.FileDialog(
+            _o3d_gui.FileDialog.SAVE, "Save Open3D scene PNG", self._o3d_window.theme)
+        dialog.add_filter(".png", "PNG image")
+        dialog.set_path(str(self.workspace_path / "lockbox_view.png"))
+        dialog.set_on_cancel(lambda: self._o3d_window.close_dialog())
+        dialog.set_on_done(self._save_open3d_scene_png)
+        self._o3d_window.show_dialog(dialog)
+
+    def _save_open3d_scene_png(self, selected_path: str) -> None:
+        """Capture the currently displayed Open3D scene, refusing silent replacement."""
+        self._o3d_window.close_dialog()
+        output_path = Path(selected_path)
+        if output_path.suffix.lower() != ".png":
+            output_path = output_path.with_suffix(".png")
+        if output_path.exists():
+            self._set_open3d_export_status(
+                f"PNG not saved: {output_path.name} already exists; choose a new filename.")
+            return
+        try:
+            scene = self._o3d_scene_widget.scene.scene
+
+            def capture_complete(image) -> None:
+                try:
+                    if not _o3d.io.write_image(str(output_path), image):
+                        raise OSError("Open3D could not write the rendered PNG.")
+                    message = f"Saved Open3D scene PNG: {output_path}"
+                except Exception as exc:
+                    message = f"PNG export failed: {exc}"
+                _o3d_gui.Application.instance.post_to_main_thread(
+                    self._o3d_window, lambda: self._set_open3d_export_status(message))
+
+            self._set_open3d_export_status("Rendering the current Open3D scene to PNG…")
+            scene.render_to_image(capture_complete)
+        except Exception as exc:
+            self._set_open3d_export_status(f"PNG export failed: {exc}")
+
+    def _set_open3d_export_status(self, message: str) -> None:
+        """Show export status in the native editor window and request a redraw."""
+        if self._o3d_status_label is not None:
+            self._o3d_status_label.text = message
+        if self._o3d_window is not None:
+            self._o3d_window.post_redraw()
+
     def _pv_polydata_to_o3d_lineset(self, pv_mesh) -> object:
         """Convert a PyVista PolyData triangle mesh to an Open3D LineSet (wireframe).
 
@@ -1046,6 +1091,13 @@ class Phase3LockboxEditor(QDialog):
         apply_discard_row.add_child(b_discard)
         hist_sect.add_child(apply_discard_row)
         self._o3d_panel.add_child(hist_sect)
+
+        # The native scene exposes a GUI-only render_to_image callback. This
+        # captures the actual SceneWidget camera, unlike a reconstructed plot.
+        save_view_button = _o3d_gui.Button("Save 3D view PNG")
+        save_view_button.tooltip = "Capture the current Open3D scene view as a PNG (UI controls are not included)."
+        save_view_button.set_on_clicked(self._open_open3d_png_dialog)
+        self._o3d_panel.add_child(save_view_button)
 
         # ── View Settings (collapsed by default — saves vertical space) ─
         vis_sect = _o3d_gui.CollapsableVert("View Settings", 0.15 * em, margins)

@@ -55,9 +55,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="PNG publication preset width; preserves the 8:3 scene ratio")
     parser.add_argument("--3d-dpi", type=int, default=150,
                         help="PNG pixel density used with --3d-width-mm")
-    parser.add_argument("--3d-background", choices=("theme", "white", "charcoal"), default="theme")
-    parser.add_argument("--3d-point-size", type=float, default=3.0)
-    parser.add_argument("--3d-view", choices=("isometric", "top", "front", "side"), default="isometric")
+    parser.add_argument("--3d-background", dest="three_d_background",
+                        choices=("theme", "white", "charcoal"), default="theme")
+    parser.add_argument("--3d-point-size", dest="three_d_point_size", type=float, default=3.0)
+    parser.add_argument("--3d-view", dest="three_d_view",
+                        choices=("isometric", "top", "front", "side"), default="isometric")
     parser.add_argument("--3d-axes", dest="three_d_axes", action="store_true", default=True)
     parser.add_argument("--no-3d-axes", dest="three_d_axes", action="store_false")
     parser.add_argument("--3d-legend", dest="three_d_legend", action="store_true", default=True)

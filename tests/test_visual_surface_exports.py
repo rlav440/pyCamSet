@@ -129,7 +129,12 @@ def test_lockbox_png_dialog_uses_explicit_filename_workflow(tmp_path, monkeypatc
         def set_on_done(self, callback):
             calls["done"] = callback
 
-    window = types.SimpleNamespace(theme=object(), show_dialog=lambda dialog: calls.update(dialog=dialog))
+    window = types.SimpleNamespace(
+        theme=object(),
+        show_dialog=lambda dialog: calls.update(dialog=dialog),
+        close_dialog=lambda: calls.update(cancelled=True),
+        show_message_box=lambda *args: calls.update(message_box=args),
+    )
     editor = editor_module.Phase3LockboxEditor.__new__(editor_module.Phase3LockboxEditor)
     editor.workspace_path = tmp_path
     editor._o3d_window = window
@@ -142,6 +147,9 @@ def test_lockbox_png_dialog_uses_explicit_filename_workflow(tmp_path, monkeypatc
     assert calls["path"] == str(tmp_path)
     assert calls["filter"] == (".png", "PNG image")
     assert calls["done"] == editor._save_open3d_scene_png
+    calls["cancel"]()
+    assert calls["cancelled"] is True
+    assert "message_box" not in calls
 
 
 def test_open3d_lockbox_png_uses_scene_render_and_refuses_overwrite(tmp_path, monkeypatch):
@@ -159,7 +167,12 @@ def test_open3d_lockbox_png_uses_scene_render_and_refuses_overwrite(tmp_path, mo
 
     scene = Scene()
     editor = editor_module.Phase3LockboxEditor.__new__(editor_module.Phase3LockboxEditor)
-    editor._o3d_window = types.SimpleNamespace(close_dialog=lambda: None, post_redraw=lambda: None)
+    messages = []
+    editor._o3d_window = types.SimpleNamespace(
+        close_dialog=lambda: None,
+        post_redraw=lambda: None,
+        show_message_box=lambda *args: messages.append(args),
+    )
     editor._o3d_scene_widget = types.SimpleNamespace(
         scene=types.SimpleNamespace(scene=scene))
     editor._o3d_status_label = types.SimpleNamespace(text="")
@@ -179,12 +192,17 @@ def test_open3d_lockbox_png_uses_scene_render_and_refuses_overwrite(tmp_path, mo
     assert output.read_bytes() == b"rendered scene"
     assert scene.calls == 1
     assert "Saved Open3D scene PNG" in editor._o3d_status_label.text
+    assert messages == []
 
     output.write_bytes(b"keep existing")
     editor._save_open3d_scene_png(str(output))
     assert output.read_bytes() == b"keep existing"
     assert scene.calls == 1
     assert "already exists" in editor._o3d_status_label.text
+    assert len(messages) == 1
+    assert messages[0][0] == "PNG not saved"
+    assert "will not overwrite existing files" in messages[0][1]
+    assert "Choose a different filename and try again" in messages[0][1]
 
 
 def test_create_target_window_surfaces_png_and_supported_geometry_actions():

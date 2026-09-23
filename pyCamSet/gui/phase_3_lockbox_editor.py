@@ -790,8 +790,15 @@ class Phase3LockboxEditor(QDialog):
         if output_path.suffix.lower() != ".png":
             output_path = output_path.with_suffix(".png")
         if output_path.exists():
-            self._set_open3d_export_status(
-                f"PNG not saved: {output_path.name} already exists; choose a new filename.")
+            message = (
+                f"PNG not saved: {output_path.name} already exists; "
+                "choose a new filename.")
+            self._set_open3d_export_status(message)
+            self._o3d_window.show_message_box(
+                "PNG not saved",
+                f"{message}\n\nThis export will not overwrite existing files. "
+                "Choose a different filename and try again.",
+            )
             return
         try:
             scene = self._o3d_scene_widget.scene.scene

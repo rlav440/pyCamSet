@@ -324,3 +324,100 @@ def test_3d_request_still_requires_pyvista(monkeypatch):
     monkeypatch.setattr(visualisation, "_PYVISTA_OK", False)
     with pytest.raises(ImportError, match="pyvista is required"):
         visualisation.visualise_calibration({}, object(), show=False, matplotlib_only=False)
+
+
+def test_pyvista_screenshot_uses_publication_dimensions_without_changing_geometry(tmp_path):
+    import numpy as np
+    import pyvista as pv
+    from pyCamSet.utils.visualisation import save_pyvista_screenshot
+
+    points = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    cloud = pv.PolyData(points.copy())
+    cloud["error_px"] = np.array([0.1, 0.2, 0.3])
+    before_points = cloud.points.copy()
+    before_error = cloud["error_px"].copy()
+    plotter = pv.Plotter(off_screen=True, window_size=(120, 80))
+    try:
+        plotter.add_mesh(cloud, render_points_as_spheres=True, point_size=10)
+        target = tmp_path / "synthetic.png"
+        size = save_pyvista_screenshot(plotter, target, width_mm=85, dpi=300)
+    finally:
+        plotter.close()
+    assert size == (1004, 376)
+    with Image.open(target) as image:
+        assert image.size == size
+    assert np.array_equal(cloud.points, before_points)
+    assert np.array_equal(cloud["error_px"], before_error)
+
+
+@pytest.mark.parametrize("extension", ["ply", "obj", "gltf"])
+def test_3d_export_writes_real_format_and_declares_losses(tmp_path, monkeypatch, extension):
+    import numpy as np
+    import pyvista as pv
+    from types import SimpleNamespace
+    import pyCamSet.utils.visualisation as visualisation
+
+    object_points = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    point_error = np.array([0.1, 0.2, 0.3])
+
+    class Cameras:
+        def get_scene(self, scene, labels=False):
+            scene.add_mesh(pv.Cube(center=(2, 0, 0)), color="steelblue")
+
+    diagnostics = SimpleNamespace(
+        object_points=object_points.copy(), point_error=point_error.copy(),
+        scene_points=object_points.copy(), rejected=0, cams=Cameras(), e_lim=1.0,
+    )
+    monkeypatch.setattr(visualisation.CalibrationDiagnostics, "from_results",
+                        lambda *args: diagnostics)
+    target = tmp_path / f"synthetic.{extension}"
+    ok, message = visualisation.export_calibration_3d(
+        {}, object(), target, provenance="synthetic-run.camset")
+    assert ok, message
+    assert target.is_file() and target.stat().st_size > 20
+    sidecar = target.with_suffix(target.suffix + ".metadata.json")
+    metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert metadata["format"] == extension
+    assert metadata["view_state_included"] is False
+    assert metadata["units"] == "not declared by the calibration artifact"
+    assert metadata["source_camset"] == "synthetic-run.camset"
+    if extension == "ply":
+        exported = pv.read(target)
+        assert np.allclose(exported.points, object_points)
+        assert metadata["point_data_sidecar"]["Reprojection error (px)"] == point_error.tolist()
+        assert metadata["point_data_sidecar"]["units"]["Reprojection error (px)"] == "px"
+        assert metadata["coordinate_frame"] == "target coordinates"
+    else:
+        assert metadata["coordinate_frame"] == "scene coordinates"
+        if extension == "obj":
+            assert target.with_suffix(".mtl").is_file()
+        if extension == "gltf":
+            assert json.loads(target.read_text(encoding="utf-8"))["asset"]["version"] == "2.0"
+            round_trip = pv.read(target)
+            imported_points = np.vstack([block.points for block in round_trip.recursive_iterator()])
+            assert imported_points.shape[0] >= 8
+            assert all(np.any(np.all(np.isclose(imported_points, point), axis=1))
+                       for point in object_points)
+        if extension == "obj":
+            vertices = np.array([
+                [float(value) for value in line.split()[1:4]]
+                for line in target.read_text(encoding="utf-8").splitlines()
+                if line.startswith("v ")
+            ])
+            assert len(vertices) >= 8
+            assert all(np.any(np.all(np.isclose(vertices, point), axis=1))
+                       for point in object_points)
+    assert np.array_equal(diagnostics.object_points, object_points)
+    assert np.array_equal(diagnostics.point_error, point_error)
+
+
+def test_3d_export_refuses_overwrite_and_unsupported_extension(tmp_path, monkeypatch):
+    import pyCamSet.utils.visualisation as visualisation
+
+    existing = tmp_path / "scene.ply"
+    existing.write_bytes(b"keep")
+    ok, message = visualisation.export_calibration_3d({}, object(), existing)
+    assert not ok and "overwrite" in message
+    assert existing.read_bytes() == b"keep"
+    ok, message = visualisation.export_calibration_3d({}, object(), tmp_path / "scene.glb")
+    assert not ok and "GLB is not emitted" in message

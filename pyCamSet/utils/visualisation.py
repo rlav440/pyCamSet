@@ -1,5 +1,6 @@
 from __future__ import annotations
 import datetime
+import json
 import logging
 from dataclasses import dataclass
 from math import copysign
@@ -83,6 +84,22 @@ def _target_mean_distance(target) -> float:
         pts = np.array(pts, dtype=float)
         return float(np.mean(np.linalg.norm(pts, axis=-1)))
     return float(np.mean(np.linalg.norm(target.point_data, axis=-1)))
+
+
+def _publication_render_size(width_mm: float, dpi: int, aspect_ratio: float = 8 / 3) -> tuple[int, int]:
+    """Convert a publication width/DPI preset to deterministic renderer pixels."""
+    if width_mm <= 0 or dpi <= 0 or aspect_ratio <= 0:
+        raise ValueError("Width, DPI and aspect ratio must all be positive.")
+    width_px = round(float(width_mm) * int(dpi) / 25.4)
+    return width_px, round(width_px / aspect_ratio)
+
+
+def save_pyvista_screenshot(plotter, output_path: str | Path,
+                            width_mm: float = 160.0, dpi: int = 150) -> tuple[int, int]:
+    """Save a PyVista render at the requested publication pixel dimensions."""
+    size = _publication_render_size(width_mm, dpi)
+    plotter.screenshot(str(output_path), window_size=size)
+    return size
 
 blues_with_white = LinearSegmentedColormap.from_list('Blues_with_white', [(1, 1, 1), *plt.cm.Blues(np.linspace(0, 1, 1024)[:900])])
 
@@ -1366,12 +1383,16 @@ def render_calibration_pyvista_png(
     o_results: dict,
     param_handler,
     output_path: str,
+    width_mm: float = 160.0,
+    dpi: int = 150,
 ) -> tuple[bool, str]:
     """Render calibration assessment offscreen with PyVista and save to *output_path*.
 
     :param o_results: The optimisation results dict with keys ``err`` and ``x``.
     :param param_handler: The parameter handler used in the optimisation.
     :param output_path: Destination file path for the PNG screenshot.
+    :param width_mm: Generic publication preset width; preserves the 8:3 view ratio.
+    :param dpi: Render density used to calculate the PNG pixel dimensions.
     :returns: ``(success, message)`` tuple.
     """
     if not _PYVISTA_OK:
@@ -1415,8 +1436,10 @@ def render_calibration_pyvista_png(
 
         pv.set_plot_theme('document')
         pv.global_theme.multi_rendering_splitting_position = 0.50
+        pixel_width, pixel_height = _publication_render_size(width_mm, dpi)
         try:
-            plotter = pv.Plotter(shape='1|2', off_screen=True, window_size=(1600, 600))
+            plotter = pv.Plotter(shape='1|2', off_screen=True,
+                                 window_size=(pixel_width, pixel_height))
         except Exception as plotter_exc:
             return False, (
                 "PyVista offscreen plotter could not be created. "
@@ -1447,9 +1470,89 @@ def render_calibration_pyvista_png(
             cube_locs['Reprojection Error (px)'] = errors_scene
             plotter.add_mesh(cube_locs, render_points_as_spheres=True, point_size=4, clim=[0, e_lim])
 
-        plotter.screenshot(output_path)
+        save_pyvista_screenshot(plotter, output_path, width_mm, dpi)
         plotter.close()
         return True, f"PyVista screenshot saved to {output_path}"
 
     except Exception as exc:
         return False, f"PyVista offscreen render failed: {exc}"
+
+
+def export_calibration_3d(
+    o_results: dict,
+    param_handler,
+    output_path: str | Path,
+    provenance: str | None = None,
+) -> tuple[bool, str]:
+    """Export a reusable 3D scene (GLTF/OBJ) or target-frame point cloud (PLY).
+
+    GLTF retains scene geometry and material colours but not the interactive
+    camera/view state, scalar arrays, physical units, or text annotations.
+    OBJ retains geometry/material colours through its MTL companion, but loses
+    scalar arrays, units, view state, and annotation. PLY contains target-frame
+    point coordinates; this VTK writer drops point arrays, which are copied
+    into the metadata sidecar. PLY contains no camera meshes, view, or
+    annotations.
+    A JSON sidecar records the source/frame and these known losses.
+    """
+    if not _PYVISTA_OK:
+        return False, "PyVista is required for 3D export; select the PyVista backend."
+    path = Path(output_path)
+    fmt = path.suffix.lower()
+    if fmt not in {".gltf", ".obj", ".ply"}:
+        return False, "Choose GLTF, OBJ, or PLY; GLB is not emitted by this PyVista exporter."
+    metadata_path = path.with_suffix(path.suffix + ".metadata.json")
+    companion_mtl = path.with_suffix(".mtl") if fmt == ".obj" else None
+    existing = next((candidate for candidate in (path, metadata_path, companion_mtl)
+                     if candidate is not None and candidate.exists()), None)
+    if existing is not None:
+        return False, f"Refusing to overwrite an existing export: {existing}"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        diagnostics = CalibrationDiagnostics.from_results(o_results, param_handler)
+        if fmt == ".ply":
+            if len(diagnostics.object_points) == 0:
+                return False, "No target-frame points are available to export."
+            cloud = pv.PolyData(np.asarray(diagnostics.object_points, dtype=float))
+            cloud["Reprojection error (px)"] = np.asarray(diagnostics.point_error, dtype=float)
+            cloud.save(path)
+            frame = "target coordinates"
+            losses = ["camera geometry", "view state", "annotations",
+                      "PLY writer drops point arrays; reprojection errors are copied to this sidecar"]
+        else:
+            scene = reconstruction_scene(diagnostics)
+            try:
+                if fmt == ".gltf":
+                    scene.export_gltf(str(path), rotate_scene=False)
+                else:
+                    scene.export_obj(str(path))
+            finally:
+                scene.close()
+            frame = "scene coordinates"
+            losses = (["interactive camera/view state", "scalar arrays", "physical units", "text annotations"]
+                      if fmt == ".gltf" else
+                      ["scalar arrays", "physical units", "view state", "text annotations"])
+        metadata = {
+            "source": "CalibrationDiagnostics.from_results",
+            "source_camset": provenance,
+            "coordinate_frame": frame,
+            "units": "not declared by the calibration artifact",
+            "format": fmt.lstrip("."),
+            "format_limitations": losses,
+            "view_state_included": False,
+        }
+        if fmt == ".ply":
+            metadata["point_data_sidecar"] = {
+                "Reprojection error (px)": np.asarray(diagnostics.point_error, dtype=float).tolist(),
+                "units": {"Reprojection error (px)": "px"},
+                "row_count": len(diagnostics.point_error),
+                "note": "PLY writer round-trip drops this point array; values correspond by point row order.",
+            }
+        with metadata_path.open("x", encoding="utf-8") as stream:
+            json.dump(metadata, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        return True, f"Exported {path} and metadata sidecar {metadata_path}."
+    except FileExistsError as exc:
+        return False, f"Refusing to overwrite an existing export: {exc}"
+    except Exception as exc:
+        return False, f"3D export failed: {exc}"

@@ -48,6 +48,13 @@ def main(argv: list[str] | None = None) -> int:
         "--png", type=Path, default=None,
         help="render the offscreen three-panel assessment to this file "
              "instead of drawing the figures")
+    parser.add_argument(
+        "--3d-export", dest="three_d_export", type=Path, default=None,
+        help="export a reusable PyVista scene as GLTF/OBJ or target-frame point cloud as PLY")
+    parser.add_argument("--3d-width-mm", type=float, default=160.0,
+                        help="PNG publication preset width; preserves the 8:3 scene ratio")
+    parser.add_argument("--3d-dpi", type=int, default=150,
+                        help="PNG pixel density used with --3d-width-mm")
     parser.add_argument("--figure-width-mm", type=float, default=160.0)
     parser.add_argument("--figure-dpi", type=int, default=150)
     parser.add_argument("--figure-formats", nargs="+", choices=("png", "svg", "pdf"), default=("png",))
@@ -94,7 +101,25 @@ def main(argv: list[str] | None = None) -> int:
                   "nothing to render.", file=sys.stderr)
             return 1
         ok, detail = render_calibration_pyvista_png(
-            o_results, cams.calibration_handler, str(args.png))
+            o_results, cams.calibration_handler, str(args.png),
+            width_mm=args.three_d_width_mm, dpi=args.three_d_dpi)
+        if not ok:
+            print(detail, file=sys.stderr)
+            return 1
+        print(detail)
+        return 0
+
+    if args.three_d_export is not None:
+        from pyCamSet.gui.assess_calibration import _build_o_results
+        from pyCamSet.utils.visualisation import export_calibration_3d
+
+        o_results = _build_o_results(cams)
+        if o_results is None:
+            print("That camset carries no calibration results, so there is nothing to export.", file=sys.stderr)
+            return 1
+        ok, detail = export_calibration_3d(
+            o_results, cams.calibration_handler, args.three_d_export,
+            provenance=str(args.camset))
         if not ok:
             print(detail, file=sys.stderr)
             return 1

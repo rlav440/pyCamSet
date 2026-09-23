@@ -69,6 +69,7 @@ from pyCamSet.gui.assess_calibration import (
     launch_visualise_calibration_for_run,
     launch_visualise_calibration_open3d_for_run,
     launch_save_pyvista_png_for_run,
+    launch_export_3d_for_run,
     launch_save_assessment_pngs_for_run,
     merge_phase3_phase4_runs,
     select_latest_visualisation_run,
@@ -667,6 +668,17 @@ class Phase4DiagnosticsTab(QWidget):
         self._save_png_btn.setToolTip("Save the current visualisation as PNG.")
         self._save_png_btn.clicked.connect(self._save_visualisation_png)
         visual_btn_row.addWidget(self._save_png_btn)
+        self._three_d_export_preset = QComboBox()
+        self._three_d_export_preset.addItem("3D screen · 160 mm · 150 dpi", (160.0, 150))
+        self._three_d_export_preset.addItem("3D single-column · 85 mm · 300 dpi", (85.0, 300))
+        self._three_d_export_preset.addItem("3D double-column · 180 mm · 300 dpi", (180.0, 300))
+        self._three_d_export_preset.setToolTip(
+            "PNG pixel dimensions follow this generic width/DPI preset; no journal compliance is implied.")
+        visual_btn_row.addWidget(self._three_d_export_preset)
+        export_3d_btn = QPushButton("Export 3D geometry…")
+        export_3d_btn.setToolTip("PyVista: GLTF scene, OBJ geometry, or PLY target-frame point cloud.")
+        export_3d_btn.clicked.connect(self._export_visualisation_3d)
+        visual_btn_row.addWidget(export_3d_btn)
         self._assessment_export_preset = QComboBox()
         self._assessment_export_preset.addItem("Screen template · 160 mm · 150 dpi", (160.0, 150))
         self._assessment_export_preset.addItem("Single-column template · 85 mm · 300 dpi", (85.0, 300))
@@ -893,11 +905,37 @@ class Phase4DiagnosticsTab(QWidget):
                 f"Currently showing: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}"
             )
             from pathlib import Path
-            ok, msg = launch_save_pyvista_png_for_run(chosen, Path(path))
+            width_mm, dpi = self._three_d_export_preset.currentData()
+            ok, msg = launch_save_pyvista_png_for_run(
+                chosen, Path(path), width_mm=width_mm, dpi=dpi)
             if ok:
                 QMessageBox.information(self, "Save PNG", msg)
             else:
                 QMessageBox.warning(self, "Save PNG", f"Could not save PNG:\n{msg}")
+
+    def _export_visualisation_3d(self) -> None:
+        """Offer an actual PyVista geometry export, independent of PNG capture."""
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "Export 3D Geometry", "calibration_scene.gltf",
+            "glTF scene (*.gltf);;Wavefront geometry (*.obj);;PLY point cloud (*.ply)")
+        if not path:
+            return
+        if not Path(path).suffix:
+            extension = {"Wavefront geometry (*.obj)": ".obj",
+                         "PLY point cloud (*.ply)": ".ply"}.get(selected_filter, ".gltf")
+            path = f"{path}{extension}"
+        selected = self._run_selector.get_selected()
+        chosen = select_latest_visualisation_run(selected, self._all_runs)
+        if chosen is None:
+            QMessageBox.warning(self, "3D Export", "Select at least one run first.")
+            return
+        self._current_run_label.setText(
+            f"Currently exporting: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}")
+        ok, message = launch_export_3d_for_run(chosen, Path(path))
+        if ok:
+            QMessageBox.information(self, "3D Export", message)
+        else:
+            QMessageBox.warning(self, "3D Export", message)
 
     def _save_assessment_2d_pngs(self) -> None:
         """Save the child process's numerical 2D assessment figures as PNGs."""

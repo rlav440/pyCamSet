@@ -220,7 +220,9 @@ def launch_visualise_calibration_open3d_for_run(
     return visualise_calibration_open3d(o_results, handler, output_widget=output_widget)
 
 
-def launch_save_pyvista_png_for_run(run: dict, file_path: Path) -> tuple[bool, str]:
+def launch_save_pyvista_png_for_run(
+    run: dict, file_path: Path, width_mm: float = 160.0, dpi: int = 150,
+) -> tuple[bool, str]:
     """Perform offscreen PyVista PNG export for a given run.
 
     :param run: Run metadata dict with an artifacts section containing a camset path.
@@ -253,11 +255,23 @@ def launch_save_pyvista_png_for_run(run: dict, file_path: Path) -> tuple[bool, s
     # because the caller wants the file, not a window.
     ok, detail = run_viewer(
         "pyCamSet.utils.visualise_camset",
-        [str(camset_path), "--png", str(file_path)],
+        [str(camset_path), "--png", str(file_path),
+         "--3d-width-mm", str(width_mm), "--3d-dpi", str(dpi)],
     )
     if not ok:
         return False, detail
     return True, detail or f"Saved {file_path}."
+
+
+def launch_export_3d_for_run(run: dict, file_path: Path) -> tuple[bool, str]:
+    """Export reusable PyVista geometry in a viewer subprocess."""
+    camset_path = resolve_run_camset_artifact(run)
+    if camset_path is None:
+        return False, "Selected run has no readable camset artifact."
+    return run_viewer(
+        "pyCamSet.utils.visualise_camset",
+        [str(camset_path), "--3d-export", str(file_path)],
+    )
 
 
 def launch_save_assessment_pngs_for_run(

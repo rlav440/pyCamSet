@@ -766,11 +766,19 @@ class Phase3LockboxEditor(QDialog):
             QMessageBox.critical(self, "PNG export failed", str(exc))
 
     def _open_open3d_png_dialog(self) -> None:
-        """Choose a new PNG path in Open3D's native event loop; cancellation is a no-op."""
+        """Choose a new PNG path in Open3D's native event loop; cancellation is a no-op.
+
+        Open3D 0.19's FileDialog.set_path() pre-fills the filename but does not
+        reliably refresh the Save button state on every backend. Start in the
+        workspace directory instead and ask the user to enter a new filename.
+        """
         dialog = _o3d_gui.FileDialog(
-            _o3d_gui.FileDialog.SAVE, "Save Open3D scene PNG", self._o3d_window.theme)
+            _o3d_gui.FileDialog.SAVE,
+            "Save Open3D scene PNG (enter a new filename)",
+            self._o3d_window.theme,
+        )
         dialog.add_filter(".png", "PNG image")
-        dialog.set_path(str(self.workspace_path / "lockbox_view.png"))
+        dialog.set_path(str(self.workspace_path))
         dialog.set_on_cancel(lambda: self._o3d_window.close_dialog())
         dialog.set_on_done(self._save_open3d_scene_png)
         self._o3d_window.show_dialog(dialog)

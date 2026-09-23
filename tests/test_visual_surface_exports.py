@@ -104,6 +104,46 @@ def test_lockbox_csv_has_provenance_and_does_not_mutate_coordinates(tmp_path):
     np.testing.assert_array_equal(edited, before[1])
 
 
+def test_lockbox_png_dialog_uses_explicit_filename_workflow(tmp_path, monkeypatch):
+    import types
+
+    import pyCamSet.gui.phase_3_lockbox_editor as editor_module
+
+    calls = {}
+
+    class FileDialog:
+        SAVE = "save"
+
+        def __init__(self, mode, title, theme):
+            calls.update(mode=mode, title=title, theme=theme)
+
+        def add_filter(self, extension, description):
+            calls["filter"] = (extension, description)
+
+        def set_path(self, path):
+            calls["path"] = path
+
+        def set_on_cancel(self, callback):
+            calls["cancel"] = callback
+
+        def set_on_done(self, callback):
+            calls["done"] = callback
+
+    window = types.SimpleNamespace(theme=object(), show_dialog=lambda dialog: calls.update(dialog=dialog))
+    editor = editor_module.Phase3LockboxEditor.__new__(editor_module.Phase3LockboxEditor)
+    editor.workspace_path = tmp_path
+    editor._o3d_window = window
+    monkeypatch.setattr(editor_module, "_o3d_gui", types.SimpleNamespace(FileDialog=FileDialog))
+
+    editor._open_open3d_png_dialog()
+
+    assert calls["mode"] == FileDialog.SAVE
+    assert "enter a new filename" in calls["title"]
+    assert calls["path"] == str(tmp_path)
+    assert calls["filter"] == (".png", "PNG image")
+    assert calls["done"] == editor._save_open3d_scene_png
+
+
 def test_open3d_lockbox_png_uses_scene_render_and_refuses_overwrite(tmp_path, monkeypatch):
     import types
 

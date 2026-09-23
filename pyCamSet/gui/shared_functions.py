@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Callable, Optional
 
-from PySide6.QtCore import QEvent, QObject, QThread, Signal, Qt
+from PySide6.QtCore import QEvent, QObject, QStandardPaths, QThread, Signal, Qt
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -235,9 +236,27 @@ class MatplotlibFigureCard(QWidget):
         self._fig = fig
         self._canvas_cls = canvas_cls
         from pyCamSet.gui.theme import apply_matplotlib_theme
+        from pyCamSet.gui.visual_style import (
+            VisualStyle, apply_visual_style, style_from_json, style_path_for_visual,
+        )
+        self._visual_id = "figure:" + re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")
+        self._style_path = style_path_for_visual(
+            Path(QStandardPaths.writableLocation(
+                QStandardPaths.StandardLocation.AppConfigLocation)), self._visual_id)
+        self._style = VisualStyle()
         application = QApplication.instance()
         apply_matplotlib_theme(
             fig, application.property("pycamsetTheme") if application else "Light")
+        if self._style_path.exists():
+            try:
+                self._style = style_from_json(
+                    self._style_path.read_text(encoding="utf-8"), self._visual_id)
+                apply_visual_style(
+                    fig, self._style,
+                    application.property("pycamsetTheme") if application else "Light")
+            except (OSError, ValueError):
+                # Invalid preference files are ignored, never partially applied.
+                self._style = VisualStyle()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 8)
@@ -249,6 +268,10 @@ class MatplotlibFigureCard(QWidget):
         save_btn.setFixedWidth(82)
         save_btn.clicked.connect(self._save_png)
         header.addWidget(save_btn)
+        style_btn = QPushButton("Style…")
+        style_btn.setAccessibleName(f"Figure style options for {title}")
+        style_btn.clicked.connect(self._edit_style)
+        header.addWidget(style_btn)
         expand_btn = QPushButton("Expand")
         expand_btn.setFixedWidth(78)
         expand_btn.clicked.connect(self._open_expanded)
@@ -274,6 +297,33 @@ class MatplotlibFigureCard(QWidget):
         )
         if path:
             self._fig.savefig(path, dpi=150, bbox_inches="tight")
+
+    def _edit_style(self) -> None:
+        """Preview a visual-only style and persist it outside scientific runs."""
+        from PySide6.QtWidgets import QMessageBox
+        from pyCamSet.gui.visual_style import (
+            VisualStyle, VisualStyleDialog, apply_visual_style, style_to_json,
+        )
+
+        application = QApplication.instance()
+        theme_name = application.property("pycamsetTheme") if application else "Light"
+        dialog = VisualStyleDialog(self._fig, self._visual_id, self._style,
+                                   theme_name, self, self._canvas.draw_idle)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        candidate = dialog.current
+        try:
+            candidate.validate()
+            self._style_path.parent.mkdir(parents=True, exist_ok=True)
+            self._style_path.write_text(
+                style_to_json(candidate, self._visual_id), encoding="utf-8")
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Figure style not saved",
+                                f"The style could not be saved.\n\nTechnical detail: {exc}")
+            return
+        self._style = candidate
+        apply_visual_style(self._fig, candidate, theme_name)
+        self._canvas.draw_idle()
 
     def _open_expanded(self) -> None:
         dlg = QDialog(self)

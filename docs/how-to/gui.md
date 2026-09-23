@@ -195,8 +195,20 @@ Each also shows an **Upstream Run Chain** for the selected run — the phase 2 i
 started from, the phase 1 that fed that — so a result can be traced back to the
 detections that produced it.
 
-Figures are matplotlib cards with **Expand** and **Save PNG** buttons. Phase 3
-and Phase 4 additionally offer **Assess Calibration**, which opens the full-size
+Figures are matplotlib cards with **Expand**, **Save PNG**, and **Style…** buttons. The
+style editor previews typography, figure/axes chrome, line and marker widths,
+legend/grid visibility, and stable-ID series colours. Detection montages also
+offer overlay marker-size and colour controls; the source image and detection
+coordinates are not edited. Styles are kept per visual in the application
+configuration directory, separately from scientific run artefacts, and can be
+saved to or loaded from versioned JSON. Reset returns to theme defaults. Unknown
+or malformed style fields are rejected rather than partially applied. A scale
+bar remains unavailable unless a calibrated pixel-to-world transform and units
+are supplied; no physical length is inferred. This presentation editor applies
+to Matplotlib cards and the Phase 1 detection montage; child-process Assess
+Calibration figures and 3D views are not covered here.
+
+Phase 3 and Phase 4 additionally offer **Assess Calibration**, which opens the full-size
 reconstruction and residual views in native matplotlib and PyVista windows
 rather than embedding them.
 

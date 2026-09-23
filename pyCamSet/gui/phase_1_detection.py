@@ -835,6 +835,11 @@ class Phase1DiagnosticsTab(QWidget):
         self._draw_expand_btn.setFixedWidth(70)
         self._draw_expand_btn.clicked.connect(self._expand_draw_figure)
         nav_bar.addWidget(self._draw_expand_btn)
+        self._draw_style_btn = QPushButton("Style…")
+        self._draw_style_btn.setAccessibleName("Detection overlay style options")
+        self._draw_style_btn.setEnabled(False)
+        self._draw_style_btn.clicked.connect(self._edit_detection_style)
+        nav_bar.addWidget(self._draw_style_btn)
         self._draw_btn = QPushButton("Draw Detections")
         self._draw_btn.clicked.connect(self._draw_detections_clicked)
         nav_bar.addWidget(self._draw_btn)
@@ -1342,6 +1347,7 @@ class Phase1DiagnosticsTab(QWidget):
             img0 = mpimg.imread(ims[0])
             im_artist = ax.imshow(img0, cmap="gray" if getattr(img0, "ndim", 3) == 2 else None)
             sc_artist = ax.scatter([], [], s=10, c="lime", marker="o", linewidths=0.4)
+            sc_artist.set_gid(f"detection-overlay:{cam}")
             ax.axis("off")
             im_art[cam] = im_artist
             sc_art[cam] = sc_artist
@@ -1362,8 +1368,66 @@ class Phase1DiagnosticsTab(QWidget):
             "empty": empty,
             "mpimg": mpimg,
         }
+        # Load only the validated presentation sidecar; science/run files stay untouched.
+        from PySide6.QtCore import QStandardPaths
+        from pyCamSet.gui.visual_style import (
+            style_from_json, style_path_for_visual, apply_visual_style,
+        )
+        style_id = "phase1:detection-overlay"
+        sidecar = style_path_for_visual(Path(QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.AppConfigLocation)), style_id)
+        try:
+            saved_style = style_from_json(sidecar.read_text(encoding="utf-8"), style_id)
+            self._draw_state["style"] = saved_style
+            apply_visual_style(fig, saved_style, app.property("pycamsetTheme") if app else "Light")
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError):
+            # Fail closed: malformed preferences leave the theme defaults active.
+            pass
+        self._draw_style_btn.setEnabled(True)
         self._draw_index = 0
         self._update_draw_frame()
+
+    def _edit_detection_style(self) -> None:
+        """Edit only rendered detections, never their source points or image."""
+        if not self._draw_state:
+            return
+        from PySide6.QtCore import QStandardPaths
+        from PySide6.QtWidgets import QApplication, QMessageBox
+        from pyCamSet.gui.visual_style import (
+            VisualStyle, VisualStyleDialog, apply_visual_style,
+            style_from_json, style_path_for_visual, style_to_json,
+        )
+
+        visual_id = "phase1:detection-overlay"
+        config_dir = Path(QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.AppConfigLocation))
+        style_path = style_path_for_visual(config_dir, visual_id)
+        current = VisualStyle()
+        try:
+            if style_path.exists():
+                current = style_from_json(style_path.read_text(encoding="utf-8"), visual_id)
+        except (OSError, ValueError):
+            current = VisualStyle()
+        app = QApplication.instance()
+        theme = app.property("pycamsetTheme") if app else "Light"
+        figure = self._draw_state["fig"]
+        dialog = VisualStyleDialog(figure, visual_id, current, theme, self,
+                                   self._draw_state["canvas"].draw_idle)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            dialog.current.validate()
+            style_path.parent.mkdir(parents=True, exist_ok=True)
+            style_path.write_text(style_to_json(dialog.current, visual_id), encoding="utf-8")
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Overlay style not saved",
+                                f"The style could not be saved.\n\nTechnical detail: {exc}")
+            return
+        self._draw_state["style"] = dialog.current
+        apply_visual_style(figure, dialog.current, theme)
+        self._draw_state["canvas"].draw_idle()
 
     def _step_draw_image(self, delta: int) -> None:
         if not self._draw_state:
@@ -1416,6 +1480,11 @@ class Phase1DiagnosticsTab(QWidget):
         apply_matplotlib_theme(
             self._draw_state["fig"],
             app.property("pycamsetTheme") if app else "Light")
+        style = self._draw_state.get("style")
+        if style is not None:
+            from pyCamSet.gui.visual_style import apply_visual_style
+            apply_visual_style(self._draw_state["fig"], style,
+                               app.property("pycamsetTheme") if app else "Light")
         self._draw_state["canvas"].draw_idle()
 
     def _resolve_private_pickle_path_for_run(self, run: dict) -> Optional[Path]:

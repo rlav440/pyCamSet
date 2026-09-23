@@ -236,6 +236,10 @@ def refresh_matplotlib_theme(theme_name: str) -> None:
     """Re-theme registered GUI figures after a live application theme switch."""
     for figure in tuple(_MANAGED_FIGURES):
         apply_matplotlib_theme(figure, theme_name)
+        # Per-visual explicit overrides outrank the newly selected theme;
+        # importing lazily keeps the theme module independent at startup.
+        from pyCamSet.gui.visual_style import refresh_visual_style
+        refresh_visual_style(figure, theme_name)
 
 
 validate_theme_tokens(THEME_TOKENS)

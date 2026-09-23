@@ -184,7 +184,11 @@ class Phase0Tab(QWidget):
         form = QFormLayout(form_widget)
         form.setContentsMargins(0, 0, 0, 0)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        root.addWidget(form_widget)
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        form_scroll.setWidget(form_widget)
+        root.addWidget(form_scroll, stretch=1)
 
         form.addRow(make_section_label("Paths"))
 
@@ -252,7 +256,7 @@ class Phase0Tab(QWidget):
         self._continue_btn.setEnabled(False)
         btn_row.addWidget(self._continue_btn)
         btn_row.addStretch()
-        form.addRow(btn_row)
+        root.addLayout(btn_row)
 
         self._status_lbl = QLabel("")
         self._status_lbl.setAccessibleName("Image folder validation status")

@@ -81,7 +81,7 @@ TAB_EXPORT_CALIBRATION = "Export Calibration"
 # Styling helpers
 # ---------------------------------------------------------------------------
 
-BUTTON_ROLES = {"orange": "secondary", "green": "success", "blue": "primary"}
+BUTTON_ROLES = {"orange": "warning", "green": "success", "blue": "primary"}
 
 
 class WheelMutationGuard(QObject):

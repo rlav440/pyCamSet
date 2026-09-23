@@ -144,7 +144,11 @@ class Phase3Tab(QWidget):
         form_root = QVBoxLayout(form_widget)
         form_root.setContentsMargins(0, 0, 0, 0)
         form_root.setSpacing(4)
-        top_row.addWidget(form_widget, stretch=1)
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        form_scroll.setWidget(form_widget)
+        top_row.addWidget(form_scroll, stretch=1)
 
         side = QWidget()
         side.setFixedWidth(240)
@@ -441,8 +445,7 @@ class Phase3Tab(QWidget):
         btn_row.addWidget(self._continue_btn)
         btn_row.addWidget(make_green_button("Assess Calibration", self._visualise_target_from_primary))
         btn_row.addStretch()
-        form_root.addLayout(btn_row)
-        form_root.addStretch()
+        root.addLayout(btn_row)
 
         side_layout.addStretch()
 

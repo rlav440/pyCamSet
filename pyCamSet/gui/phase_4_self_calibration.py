@@ -116,7 +116,11 @@ class Phase4Tab(QWidget):
         form_root = QVBoxLayout(form_widget)
         form_root.setContentsMargins(0, 0, 0, 0)
         form_root.setSpacing(4)
-        top_row.addWidget(form_widget, stretch=1)
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        form_scroll.setWidget(form_widget)
+        top_row.addWidget(form_scroll, stretch=1)
 
         # ── Paths (collapsible) ────────────────────────────────────────
         paths_sect = CollapsibleSection("Paths", expanded=False)
@@ -312,11 +316,10 @@ class Phase4Tab(QWidget):
         btn_row.addWidget(make_orange_button("Diagnostics ▼", self._open_diagnostics))
         btn_row.addWidget(make_green_button("Assess Calibration", self._open_assess_calibration))
         btn_row.addStretch()
-        form_root.addLayout(btn_row)
+        root.addLayout(btn_row)
         self._status_lbl = QLabel("Ready")
         self._status_lbl.setStyleSheet("color: #666;")
-        form_root.addWidget(self._status_lbl)
-        form_root.addStretch()
+        root.addWidget(self._status_lbl)
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)

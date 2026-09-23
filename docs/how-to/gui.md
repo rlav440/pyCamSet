@@ -21,7 +21,18 @@ If it will not start, see
 ![The pyCamSet main window, showing the Phase 0 Data Input tab.](../assets/gui/phase-0-data-input-light.png#only-light)
 ![The pyCamSet main window, showing the Phase 0 Data Input tab.](../assets/gui/phase-0-data-input-dark.png#only-dark)
 
-Three things sit above the tabs and apply to all of them:
+The **File**, **Edit**, and **Settings** menus sit at the top left. File also
+offers **Create Target…**; it remains available as a prominent button above
+the tabs. Edit contains the informational-tooltip toggle. Settings contains
+the terminal-output toggle and colour-theme selector. These menu controls are
+the same live controls used by the application, not separate copies.
+
+The persistent action row below each phase's parameters keeps its run,
+diagnostics, and available continue/assessment actions in reach while expanded
+settings scroll independently. At smaller window sizes, use the parameter
+panel's scroll area to reach the remaining settings.
+
+The following controls are global to the workflow:
 
 **Create Target…**
 :   Opens the target generator, described in [Making a target](#making-a-target).
@@ -31,11 +42,12 @@ Three things sit above the tabs and apply to all of them:
 
 **Enable Informational Windows**
 :   Turns hover tooltips on and off. Most controls explain themselves and say
-    what a sensible value looks like.
+    what a sensible value looks like. This toggle is in **Edit**.
 
 **Show Terminal Output**
 :   Shows or hides the terminal pane at the bottom of each phase tab. That pane
-    is where a phase's output appears while it runs.
+    is where a phase's output appears while it runs. This toggle is in
+    **Settings**.
 
 Behind the tab bar there are eleven tabs, of which seven are visible: the five
 phases, Export Calibration, and Optimisation. The other four are diagnostics

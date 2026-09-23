@@ -48,6 +48,7 @@ def test_text_and_operated_border_contrast_meet_declared_floors():
         for background in ("background", "surface", "surface_alt"):
             assert contrast_ratio(tokens["text_disabled"], tokens[background]) >= 3.0
         assert contrast_ratio(tokens["on_accent"], tokens["accent"]) >= 4.5
+        assert contrast_ratio(tokens["on_warning"], tokens["warning"]) >= 4.5
         assert contrast_ratio(tokens["border_strong"], tokens["surface"]) >= 3.0
 
 

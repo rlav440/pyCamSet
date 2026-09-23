@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
+    QWidgetAction,
     QWidget,
 )
 
@@ -140,17 +141,29 @@ class PyCamSetApp(QMainWindow):
         root_layout.setContentsMargins(4, 4, 4, 4)
         root_layout.setSpacing(4)
 
-        # ── Global controls ────────────────────────────────────────────
+        # ── Global actions ────────────────────────────────────────────
         ctrl_row = QHBoxLayout()
         ctrl_row.addWidget(make_blue_button(
             "Create Target…", self._open_create_target))
-        ctrl_row.addSpacing(16)
-        ctrl_row.addWidget(self._info_cb)
-        ctrl_row.addSpacing(16)
-        ctrl_row.addWidget(self._terminal_cb)
-        ctrl_row.addWidget(self._theme_combo)
         ctrl_row.addStretch()
         root_layout.addLayout(ctrl_row)
+
+        file_menu = self.menuBar().addMenu("File")
+        create_target_action = file_menu.addAction("Create Target…")
+        create_target_action.triggered.connect(self._open_create_target)
+
+        edit_menu = self.menuBar().addMenu("Edit")
+        info_control = QWidgetAction(edit_menu)
+        info_control.setDefaultWidget(self._info_cb)
+        edit_menu.addAction(info_control)
+
+        settings_menu = self.menuBar().addMenu("Settings")
+        terminal_control = QWidgetAction(settings_menu)
+        terminal_control.setDefaultWidget(self._terminal_cb)
+        settings_menu.addAction(terminal_control)
+        theme_control = QWidgetAction(settings_menu)
+        theme_control.setDefaultWidget(self._theme_combo)
+        settings_menu.addAction(theme_control)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)

@@ -185,7 +185,11 @@ class Phase2Tab(QWidget):
         form_root = QVBoxLayout(form_widget)
         form_root.setContentsMargins(0, 0, 0, 0)
         form_root.setSpacing(4)
-        top_row.addWidget(form_widget, stretch=1)
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        form_scroll.setWidget(form_widget)
+        top_row.addWidget(form_scroll, stretch=1)
 
         side = QWidget()
         side.setFixedWidth(200)
@@ -330,7 +334,6 @@ class Phase2Tab(QWidget):
         opts_form.addRow("Fixed params (JSON):", self._fp_edit)
 
         # ── Action buttons ─────────────────────────────────────────────
-        form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
         run_btn = make_blue_button("▶  Run Phase 2", self._run_phase2)
         run_btn.setToolTip("Run per-camera initial intrinsics calibration.")
@@ -341,8 +344,7 @@ class Phase2Tab(QWidget):
         self._continue_btn = make_continue_button(self._continue_to_next)
         btn_row.addWidget(self._continue_btn)
         btn_row.addStretch()
-        form_root.addLayout(btn_row)
-        form_root.addStretch()
+        root.addLayout(btn_row)
 
         side_layout.addStretch()
 

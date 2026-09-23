@@ -416,7 +416,6 @@ class Phase1Tab(QWidget):
         form_root.addWidget(cam_scroll)
 
         # ── Action buttons ─────────────────────────────────────────────
-        form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
         run_btn = make_blue_button("▶  Run Phase 1", self._run_phase1)
         run_btn.setToolTip("Run target detection for the selected image folder.")
@@ -427,8 +426,7 @@ class Phase1Tab(QWidget):
         self._continue_btn = make_continue_button(self._continue_to_next)
         btn_row.addWidget(self._continue_btn)
         btn_row.addStretch()
-        form_root.addLayout(btn_row)
-        form_root.addStretch()
+        root.addLayout(btn_row)
 
         # ── Side panel ────────────────────────────────────────────────
         side_layout.addStretch()

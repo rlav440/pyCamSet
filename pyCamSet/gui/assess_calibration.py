@@ -62,12 +62,17 @@ def resolve_run_camset_artifact(
             and run.get("status") != "complete"):
         return None
     artifacts = run.get("artifacts") or {}
-    for key in (
+    # Accepted Phase 4 resolution must select a Phase 4 output, never its input.
+    artifact_keys = (
+        "self_calibrated_camset",
+        "optimised_camset",
+    ) if accepted_only and run.get("phase") == "phase4" else (
         "self_calibrated_camset",
         "optimised_camset",
         "initial_camset",
         "camset",
-    ):
+    )
+    for key in artifact_keys:
         p = artifacts.get(key)
         if p:
             pp = Path(p)

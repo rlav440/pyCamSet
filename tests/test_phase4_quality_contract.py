@@ -192,6 +192,22 @@ def test_incomplete_phase4_alias_is_diagnostic_only(tmp_path):
     assert resolve_run_camset_artifact(run, accepted_only=True) is None
 
 
+def test_accepted_phase4_requires_a_phase4_output_artifact(tmp_path):
+    from pyCamSet.gui.assess_calibration import resolve_run_camset_artifact
+
+    phase3_input = tmp_path / "initial.camset"
+    phase3_input.write_text("input", encoding="utf-8")
+    run = {
+        "phase": "phase4",
+        "status": "complete",
+        "artifacts": {"initial_camset": str(phase3_input)},
+    }
+
+    # General diagnostic lookup keeps legacy fallback; accepted use must not.
+    assert resolve_run_camset_artifact(run) == phase3_input
+    assert resolve_run_camset_artifact(run, accepted_only=True) is None
+
+
 @pytest.mark.parametrize("phase4_status", ["incomplete", None])
 def test_exporter_rejects_incomplete_or_unknown_phase4_alias(
     tmp_path, monkeypatch, phase4_status
@@ -224,6 +240,41 @@ def test_exporter_rejects_incomplete_or_unknown_phase4_alias(
 
     assert not exports
     assert any("Phase 4 status is not complete" in message for message in messages)
+
+
+def test_exporter_rejects_complete_phase4_without_output_artifact(
+    tmp_path, monkeypatch
+):
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.gui import export_calibration_tab as export_module
+    from pyCamSet.gui.export_calibration_tab import ExportCalibrationTab
+
+    QApplication.instance() or QApplication([])
+    workspace = WorkspaceManager(workspace_path_for(tmp_path))
+    tab = ExportCalibrationTab(QTabWidget(), QCheckBox(), QCheckBox(), workspace)
+    messages = []
+    tab._terminal = SimpleNamespace(append_line=messages.append)
+    phase3_input = tmp_path / "initial.camset"
+    phase3_input.write_text("input", encoding="utf-8")
+    run = {
+        "phase": "phase4",
+        "status": "complete",
+        "run_id": "p4-missing-output",
+        "artifacts": {"initial_camset": str(phase3_input)},
+    }
+    tab._run_selector = SimpleNamespace(get_selected=lambda: [run])
+    tab._selected_format = lambda: "colmap"
+    exports = []
+    monkeypatch.setattr(export_module, "camset_to_colmap", lambda *_args: exports.append(True))
+    monkeypatch.setattr(export_module, "camset_to_apde", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(export_module, "load_CameraSet", lambda _path: object())
+    monkeypatch.setattr(export_module, "_PYCAMSET_OK", True)
+
+    tab._export_selected()
+
+    assert not exports
+    assert any("no camset artifact found" in message for message in messages)
 
 
 def test_phase4_run_persists_quality_gate_disposition(tmp_path, monkeypatch):

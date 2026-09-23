@@ -215,3 +215,46 @@ def test_fixed_camera_warm_start_keeps_only_free_parameters():
 
     assert current_handler.initial_params.shape == (12,)
     assert current_handler.initial_params[:9].tolist() == [40.0, 41.0, 42.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0]
+
+
+def test_self_calibration_output_does_not_mutate_input_camera_set(monkeypatch):
+    from pyCamSet.cameras import Camera, CameraSet
+    from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
+
+    source = CameraSet(camera_dict={"cam0": Camera(name="cam0")})
+    set_extrinsic_calls = []
+    original_set_extrinsic = Camera.set_extrinsic
+
+    def record_set_extrinsic(self, extrinsic):
+        set_extrinsic_calls.append(self)
+        return original_set_extrinsic(self, extrinsic)
+
+    monkeypatch.setattr(Camera, "set_extrinsic", record_set_extrinsic)
+
+    class _Primitive:
+        def return_bundle_primitives(self, _params):
+            return (
+                np.array([[1200.0, 500.0, 1200.0, 500.0, 0.0, 0.0, 0.0, 0.0, 0.0]]),
+                np.array([[0.0, 0.0, 0.0, 1.0, 2.0, 3.0]]),
+                np.empty((0, 6)),
+                np.empty((0, 3)),
+            )
+
+    handler = SelfBundleHandler.__new__(SelfBundleHandler)
+    handler.camset = source
+    handler.cam_names = ["cam0"]
+    handler.bundlePrimitive = _Primitive()
+    handler.apply_gauge_transform = lambda proj, extr, poses, points: (
+        proj, extr, poses, points)
+
+    output = handler.get_camset(np.zeros(1))
+
+    assert output["cam0"] is not source["cam0"]
+    assert len(set_extrinsic_calls) == 2
+    assert output["cam0"] in set_extrinsic_calls
+    assert np.allclose(source["cam0"].extrinsic, np.eye(4))
+    assert not np.shares_memory(output["cam0"].intrinsic, source["cam0"].intrinsic)
+    assert np.allclose(output["cam0"].position, [-1.0, -2.0, -3.0])
+    drift = phase4._camera_drift(source, output)
+    assert drift["available"]
+    assert drift["cameras"]["cam0"]["extrinsic"] > 0.0

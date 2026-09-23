@@ -192,7 +192,7 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     # A Phase 4 result is not accepted merely because the solver returned.
     # Reload the exact bytes written to disk and verify the camera identity
     # before recording a quality disposition.
-    reloaded = load_CameraSet(as_io_path(camset_out))
+    reloaded = load_CameraSet(long_path(camset_out))
     if set(reloaded.get_names()) != set(previous_cams.get_names()):
         raise RuntimeError(
             "Phase 4 save/reload changed the active camera set; refusing "

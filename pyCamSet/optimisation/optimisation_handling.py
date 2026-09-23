@@ -320,12 +320,18 @@ def _solve_bundle_adjustment(
 
     start = time.time()
     usable, reason = can_use_schur(param_handler)
+    requested_loss = param_handler.problem_opts.get("loss", "linear")
+    # The custom Schur path only minimises raw residuals; use SciPy when a
+    # nonlinear loss is requested so the configured loss is actually applied.
+    use_schur = (
+        usable and bundle_jac is not None and requested_loss == "linear"
+    )
     # Held around the whole solve rather than around the linear algebra: what
     # the spinning pool costs is the kernels between the BLAS calls, not the
     # BLAS calls themselves.  See _BLAS_THREADS_DURING_SOLVE.  Both solvers
     # alternate the same way, so both are inside it.
     with _threadpool_limits(limits=_BLAS_THREADS_DURING_SOLVE, user_api="blas"):
-        if usable and bundle_jac is not None:
+        if use_schur:
             solver = "schur"
             optimisation = run_schur_bundle_adjustment(
                 param_handler, loss_fn, bundle_jac, init_params, threads)
@@ -345,6 +351,8 @@ def _solve_bundle_adjustment(
                 max_nfev=param_handler.problem_opts["max_nfev"],
                 x_scale='jac',
                 xtol=1e-4,
+                loss=requested_loss,
+                f_scale=float(param_handler.problem_opts.get("f_scale", 1.0)),
                 bounds=bounds,
             )
     end = time.time()

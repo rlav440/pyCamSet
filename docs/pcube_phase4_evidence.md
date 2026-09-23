@@ -5,9 +5,9 @@ Future: Add the four-dataset Phase 4 campaign matrix and a quality-gate-passing 
 
 # pcube Phase 4 evidence
 
-This report records one real Phase 4 run from the verified r_nebula seven-square
-Phase 3 output. It is an evidence record, not a claim that the Phase 4 result is
-scientifically accepted.
+This report records two real Phase 4 runs from verified Phase 3 outputs. It is
+an evidence record, not a claim that either Phase 4 result is scientifically
+accepted.
 
 ## Run identity
 
@@ -45,6 +45,26 @@ Phase 4 GUI exposes the same disposition, blocking flags, camera/image coverage,
 gauge accounting, and per-image residual count instead of equating a reduced
 error with acceptance.
 
+## Independent telecentric run
+
+The M_NEBULA five-square telecentric Phase 3 output was also run without
+changing the source images:
+
+- Phase 3 input run: `20260923_021835_70e2cc`
+- Phase 4 run: `20260923_031302_a336d4`
+- machine-readable output: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_real_pcube5_telecentric.json`
+- reloaded CameraSet: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_telecentric_pcube5/.pycamset_workspace/phase4_runs/20260923_031302_a336d4/self_calibrated_cameras.camset`
+- observed cameras: 8/8
+- observed images: 100, with no missing image indices
+- initial mean reprojection error: 12.734540 px
+- final mean reprojection error: 13.557749 px
+- free target points: 150; gauge-fixed points: 3 (`[0, 1, 5]`)
+
+Its only blocking flag was `final reprojection error did not improve finitely`.
+This is the expected fail-closed outcome for a run that made the result worse:
+the presence of complete observation coverage does not turn non-improvement
+into a calibration success.
+
 ## Code and regression coverage
 
 The implementation adds:
@@ -70,7 +90,9 @@ The missing-image gate and initial-error fallback each have regression tests.
 - `git diff --check`: passed.
 - Mutation test: solver-success guard killed; missing-image guard killed; restore
   verified by the mutation harness.
-- Real runner: exit 0; quality disposition `incomplete` as reported above.
+- Real r_nebula runner: exit 0; quality disposition `incomplete` as reported above.
+- Real M_NEBULA telecentric runner: exit 0; quality disposition `incomplete` because
+  the final error increased.
 
 The source image roots were not modified. Bulk run artefacts remain outside the
 repository.

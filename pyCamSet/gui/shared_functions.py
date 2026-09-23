@@ -81,7 +81,7 @@ TAB_EXPORT_CALIBRATION = "Export Calibration"
 # Styling helpers
 # ---------------------------------------------------------------------------
 
-BUTTON_ROLES = {"orange": "warning", "green": "success", "blue": "primary"}
+BUTTON_ROLES = {"orange": "secondary", "green": "success", "blue": "primary"}
 
 
 class WheelMutationGuard(QObject):
@@ -123,6 +123,11 @@ def make_separator() -> QFrame:
 def make_orange_button(text: str, callback: Callable) -> QPushButton:
     """Return a secondary action button connected to *callback*."""
     return _make_role_button(text, callback, BUTTON_ROLES["orange"])
+
+
+def make_warning_button(text: str, callback: Callable) -> QPushButton:
+    """Return an orange warning/navigation button connected to *callback*."""
+    return _make_role_button(text, callback, "warning")
 
 
 def make_green_button(text: str, callback: Callable) -> QPushButton:

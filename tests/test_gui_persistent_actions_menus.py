@@ -115,6 +115,8 @@ def test_diagnostics_settings_arrows_use_semantic_warning_role(application):
                 if button.text().startswith("▲ ")
             )
             assert arrow.property("designRole") == "warning"
+        assert window.phase4_tab._cancel_btn.property("designRole") == "secondary"
+        assert window.optimisation_tab._cancel_btn.property("designRole") == "secondary"
     finally:
         window.close()
         window.deleteLater()

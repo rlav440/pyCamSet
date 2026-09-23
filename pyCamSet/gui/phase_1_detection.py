@@ -61,7 +61,7 @@ from pyCamSet.gui.shared_functions import (
     gate_continue_button,
     make_blue_button,
     make_continue_button,
-    make_orange_button,
+    make_warning_button,
     make_scrollable_tab,
     make_section_label,
     make_separator,
@@ -420,7 +420,7 @@ class Phase1Tab(QWidget):
         run_btn = make_blue_button("▶  Run Phase 1", self._run_phase1)
         run_btn.setToolTip("Run target detection for the selected image folder.")
         btn_row.addWidget(run_btn)
-        diag_btn = make_orange_button("Diagnostics ▼", self._open_diagnostics)
+        diag_btn = make_warning_button("Diagnostics ▼", self._open_diagnostics)
         diag_btn.setToolTip("Open Phase 1 diagnostics (hidden tab).")
         btn_row.addWidget(diag_btn)
         self._continue_btn = make_continue_button(self._continue_to_next)
@@ -738,7 +738,7 @@ class Phase1DiagnosticsTab(QWidget):
 
         top_btn_row = QHBoxLayout()
         top_btn_row.addWidget(
-            make_orange_button("▲ Detection Settings", self._go_to_detection_settings)
+            make_warning_button("▲ Detection Settings", self._go_to_detection_settings)
         )
         top_btn_row.addStretch()
         root.addLayout(top_btn_row)

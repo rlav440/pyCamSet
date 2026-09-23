@@ -45,6 +45,7 @@ from pyCamSet.gui.shared_functions import (
     make_blue_button,
     make_green_button,
     make_orange_button,
+    make_warning_button,
     make_section_label,
     make_separator,
     render_predecessor_chain_section,
@@ -313,7 +314,7 @@ class Phase4Tab(QWidget):
         self._retry_btn = make_green_button("Retry", self._run_phase4)
         self._retry_btn.setEnabled(False)
         btn_row.addWidget(self._retry_btn)
-        btn_row.addWidget(make_orange_button("Diagnostics ▼", self._open_diagnostics))
+        btn_row.addWidget(make_warning_button("Diagnostics ▼", self._open_diagnostics))
         btn_row.addWidget(make_green_button("Assess Calibration", self._open_assess_calibration))
         btn_row.addStretch()
         root.addLayout(btn_row)
@@ -595,7 +596,7 @@ class Phase4DiagnosticsTab(QWidget):
         root.setContentsMargins(6, 6, 6, 6)
 
         top_btn_row = QHBoxLayout()
-        top_btn_row.addWidget(make_orange_button("▲ Self-Calibration Settings", self._go_to_settings))
+        top_btn_row.addWidget(make_warning_button("▲ Self-Calibration Settings", self._go_to_settings))
         top_btn_row.addStretch()
         root.addLayout(top_btn_row)
 

@@ -66,7 +66,7 @@ from pyCamSet.gui.shared_functions import (
     make_blue_button,
     make_continue_button,
     make_green_button,
-    make_orange_button,
+    make_warning_button,
     make_scrollable_tab,
     make_section_label,
     make_separator,
@@ -439,7 +439,7 @@ class Phase3Tab(QWidget):
         run_btn = make_blue_button("▶  Run Phase 3", self._run_phase3)
         run_btn.setToolTip("Run template bundle adjustment.")
         btn_row.addWidget(run_btn)
-        btn_row.addWidget(make_orange_button("Diagnostics ▼", self._open_diagnostics))
+        btn_row.addWidget(make_warning_button("Diagnostics ▼", self._open_diagnostics))
         self._continue_btn = make_continue_button(
             self._continue_to_phase4, text="Phase 4 - Self-Calibration")
         btn_row.addWidget(self._continue_btn)
@@ -978,7 +978,7 @@ class Phase3DiagnosticsTab(QWidget):
         root.setContentsMargins(6, 6, 6, 6)
 
         top_btn_row = QHBoxLayout()
-        top_btn_row.addWidget(make_orange_button("▲ Bundle Settings", self._go_to_settings))
+        top_btn_row.addWidget(make_warning_button("▲ Bundle Settings", self._go_to_settings))
         top_btn_row.addStretch()
         root.addLayout(top_btn_row)
 

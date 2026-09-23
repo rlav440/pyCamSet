@@ -33,6 +33,16 @@ The per-camera values are retained as a warning signal even though the global
 quality gate passed; view4 is materially worse than the other cameras and must
 not be hidden by the aggregate.
 
+[VERIFIED-BY-EXECUTION] A second real Phase 3 run used a telecentric Phase 2
+recovery for `pcube_5_squares/enabled`:
+
+- model: telecentric; eight cameras observed, 16,286 observations;
+- mean Euclidean reprojection: 137.7520 px initial -> 12.7345 px final;
+- reduction ratio: 10.8172x; solver success with `xtol` termination after 9
+  function evaluations;
+- all quality-gate flags passed and `load_CameraSet` reloaded all eight named
+  cameras from the saved optimised camset.
+
 [VERIFIED-BY-EXECUTION] A controlled rerun with `max_nfev=100` reduced the
 error to 4.4242 px but terminated with `success=false` (`maximum number of
 function evaluations is exceeded`) and was recorded as `incomplete`, not as a
@@ -64,7 +74,7 @@ only run where Phase 2 produced a valid camset.
 | M_NEBULA pcube 4 squares / native | zero detections | not run; no valid input |
 | M_NEBULA pcube 4 squares / enabled | Zhang pose-coverage failure | not run; no valid input |
 | M_NEBULA pcube 5 squares / native | zero detections | not run; no valid input |
-| M_NEBULA pcube 5 squares / enabled | Zhang pose-coverage failure | not run; no valid input |
+| M_NEBULA pcube 5 squares / enabled | pinhole Zhang failure; telecentric recovery valid | telecentric run complete |
 | r_nebula 6 squares / native | Zhang pose-coverage failure | not run; no valid input |
 | r_nebula 6 squares / enabled | Zhang pose-coverage failure | not run; no valid input |
 | r_nebula 7 squares / native | Zhang pose-coverage failure | not run; no valid input |
@@ -95,17 +105,23 @@ rendering surfaces, not only their object construction:
   shows the camera-pose view;
 - `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_real/phase3_pyvista_offscreen.png`
   shows the offscreen 3D camera/target render;
+- the corresponding telecentric eight-camera GUI and PyVista captures are in
+  `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_telecentric_pcube5/`;
 - `D:/Hermes/profiles/rebels/cache/pcube_p16x3_overlay/phase1_native_pixel_observation_overlay.png`
   shows native camera frames with lime detection points overlaid (view1 and
   view3 contain detections for image index 2; views2 and 4 legitimately show
   zero points for that frame).
 
-An authorised Phase 2 recovery probe lowered the minimum detections-per-board
-threshold to 4 for the three enabled datasets without a valid camset. It did
-not turn any of those Zhang pose-coverage failures into valid Phase 2 inputs,
-so no Phase 3 runs were invented for them. The probe output remains outside
-git in
-`D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase2_recovery/`.
+An authorised recovery probe first lowered the minimum detections-per-board
+threshold to 4 for the three enabled datasets without a valid pinhole camset;
+that did not remove the Zhang pose-coverage failures. A second model probe
+then tested both `pinhole` and `telecentric` on those same exact detections:
+telecentric recovered `pcube_5_squares/enabled`, while `pcube_4_squares` and
+`rpan_6_squares` failed with explicit out-of-plane-extent diagnostics. The
+probe outputs remain outside git in
+`D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase2_recovery/`
+and
+`D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase2_model_recovery/`.
 
 ## Tests
 

@@ -238,7 +238,8 @@ def _capture_presentation_state(figure: Any) -> dict[str, Any]:
     state: dict[str, Any] = {
         "figure": figure.get_facecolor(),
         "axes": [],
-        "text_artists": [(artist, artist.get_color(), artist.get_fontsize(), artist.get_fontfamily())
+        "text_artists": [(artist, artist.get_color(), artist.get_fontsize(),
+                           artist.get_fontfamily(), artist.get_fontweight())
                          for artist in figure.findobj(
                              match=lambda item: hasattr(item, "set_fontsize")
                              and hasattr(item, "get_color"))],
@@ -297,10 +298,11 @@ def _restore_presentation_state(figure: Any, state: dict[str, Any]) -> None:
             legend.set_visible(axes_state["legend_visible"])
             for artist, colour in axes_state["legend_text"]:
                 artist.set_color(colour)
-    for artist, colour, size, family in state["text_artists"]:
+    for artist, colour, size, family, weight in state["text_artists"]:
         artist.set_color(colour)
         artist.set_fontsize(size)
         artist.set_fontfamily(family)
+        artist.set_fontweight(weight)
     figure.canvas.draw_idle()
 
 

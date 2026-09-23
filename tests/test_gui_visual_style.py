@@ -188,9 +188,21 @@ def test_style_dialog_preview_and_cancel_restore_the_figure():
     app = QApplication.instance() or QApplication([])
     figure = Figure()
     axes = figure.add_subplot(111)
+    axes.set_title("Title", fontweight="bold")
+    axes.set_xlabel("X axis", fontweight="normal")
+    axes.set_ylabel("Y axis", fontweight="bold")
     line, = axes.plot([0, 1], [1, 3], label="series")
+    axes.set_xticks([0, 1], labels=["left", "right"])
+    axes.set_yticks([1, 3], labels=["low", "high"])
+    for tick in axes.get_xticklabels() + axes.get_yticklabels():
+        tick.set_fontweight("bold")
     axes.grid(True)
     legend = axes.legend()
+    for text in legend.get_texts():
+        text.set_fontweight("bold")
+    text_artists = figure.findobj(
+        match=lambda artist: hasattr(artist, "set_fontsize") and hasattr(artist, "get_color"))
+    original_weights = [artist.get_fontweight() for artist in text_artists]
     overlay = axes.scatter([0.5], [2], s=9, c="#123456")
     overlay.set_gid("detection-overlay:observed")
     original = (figure.get_facecolor(), axes.get_facecolor(), line.get_ydata().copy(),
@@ -209,8 +221,9 @@ def test_style_dialog_preview_and_cancel_restore_the_figure():
     dialog.legend_value.setChecked(False)
     dialog.overlay_size.setValue(12)
     dialog.overlay_colour.setText("#abcdef")
-    dialog._preview()
+    dialog.font_weight.setCurrentIndex(2)
     assert axes.get_facecolor() != original[1]
+    assert all(artist.get_fontweight() == "bold" for artist in text_artists)
     QTimer.singleShot(0, dialog.reject)
     assert dialog.exec() != 1
     assert figure.get_facecolor() == original[0]
@@ -224,6 +237,32 @@ def test_style_dialog_preview_and_cancel_restore_the_figure():
     assert overlay.get_sizes().tolist() == original[8].tolist()
     assert overlay.get_facecolors().tolist() == original[9].tolist()
     assert overlay.get_edgecolors().tolist() == original[10].tolist()
+    assert [artist.get_fontweight() for artist in text_artists] == original_weights
+
+
+def test_style_dialog_accept_keeps_font_weight_preview():
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+    from pyCamSet.gui.visual_style import VisualStyleDialog
+
+    app = QApplication.instance() or QApplication([])
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    axes.set_title("Title")
+    axes.set_xlabel("X axis")
+    axes.set_ylabel("Y axis")
+    axes.plot([0, 1], [1, 3], label="series")
+    axes.legend()
+    dialog = VisualStyleDialog(figure, "test:visual", VisualStyle(), "Light")
+    dialog.font_weight.setCurrentIndex(2)
+    text_artists = figure.findobj(
+        match=lambda artist: hasattr(artist, "set_fontsize") and hasattr(artist, "get_color"))
+    assert text_artists
+    assert all(artist.get_fontweight() == "bold" for artist in text_artists)
+    QTimer.singleShot(0, dialog.accept)
+    assert dialog.exec() == 1
+    assert dialog.current.font_weight == "bold"
+    assert all(artist.get_fontweight() == "bold" for artist in text_artists)
 
 
 def test_style_dialog_reset_clears_overlay_and_series_overrides():

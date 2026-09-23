@@ -192,7 +192,10 @@ def test_incomplete_phase4_alias_is_diagnostic_only(tmp_path):
     assert resolve_run_camset_artifact(run, accepted_only=True) is None
 
 
-def test_exporter_rejects_incomplete_phase4_alias(tmp_path, monkeypatch):
+@pytest.mark.parametrize("phase4_status", ["incomplete", None])
+def test_exporter_rejects_incomplete_or_unknown_phase4_alias(
+    tmp_path, monkeypatch, phase4_status
+):
     from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
 
     from pyCamSet.gui import export_calibration_tab as export_module
@@ -205,7 +208,7 @@ def test_exporter_rejects_incomplete_phase4_alias(tmp_path, monkeypatch):
     tab._terminal = SimpleNamespace(append_line=messages.append)
     run = {
         "phase": "phase4",
-        "status": "incomplete",
+        "status": phase4_status,
         "run_id": "p4-incomplete",
         "artifacts": {"optimised_camset": str(tmp_path / "diagnostic.camset")},
     }

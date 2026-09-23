@@ -651,6 +651,94 @@ def accuracy_precision_plot(diagnostics: CalibrationDiagnostics,
     return fig
 
 
+def _assessment_csv_payloads(diagnostics: CalibrationDiagnostics) -> dict[str, tuple[list[str], list[tuple]]]:
+    """Return source-array rows for each assessment figure; never digitise artists."""
+    residuals = np.asarray(diagnostics.residuals).reshape(-1, 2)
+    euclidean = np.asarray(diagnostics.euclidean_err).reshape(-1)
+    if len(residuals) != len(euclidean):
+        raise ValueError("Residual and Euclidean-error arrays must have matching observation counts")
+    error_rows = [(index, float(vector[0]), float(vector[1]), float(euclidean[index]))
+                  for index, vector in enumerate(residuals)]
+
+    coverage_rows = []
+    residual_cursor = 0
+    for cam_detection in diagnostics.detection.get_cam_list():
+        datum = cam_detection.get_data()
+        if datum is None:
+            continue
+        cam_n = int(datum[0, 0])
+        camera_name = diagnostics.detection.cam_names[cam_n]
+        residual_slice = residuals[residual_cursor:residual_cursor + len(datum)]
+        if len(residual_slice) != len(datum):
+            raise ValueError("Detection and residual arrays must have matching observation counts")
+        for local_index, (source_row, vector) in enumerate(zip(datum, residual_slice)):
+            magnitude = float(np.linalg.norm(vector))
+            principal = diagnostics.cams[cam_n].intrinsic[:2, 2]
+            direction = np.sign(np.dot(source_row[-2:] - principal, vector))
+            coverage_rows.append((cam_n, camera_name, local_index, float(source_row[-2]),
+                                  float(source_row[-1]), magnitude * (direction or 1)))
+        residual_cursor += len(datum)
+    if residual_cursor != len(residuals):
+        raise ValueError("Residual arrays contain observations not represented by detection rows")
+
+    feature_lengths = (len(diagnostics.accuracy), len(diagnostics.precision),
+                       len(diagnostics.feature_error))
+    if len(set(feature_lengths)) != 1:
+        raise ValueError("Accuracy, precision and feature-error arrays must have matching feature counts")
+    feature_count = feature_lengths[0]
+    accuracy_rows = [(index, float(diagnostics.accuracy[index]),
+                      float(diagnostics.precision[index]),
+                      float(diagnostics.feature_error[index]))
+                     for index in range(feature_count)]
+    return {
+        "error_distribution": (["residual_index", "x_error_px", "y_error_px", "euclidean_error_px"], error_rows),
+        "per_camera_coverage": (["camera_index", "camera_name", "camera_observation_index", "x_px", "y_px", "signed_euclidean_error_px"], coverage_rows),
+        "accuracy_precision": (["feature_array_index", "accuracy_mm", "precision_mm", "mean_reprojection_error_px"], accuracy_rows),
+    }
+
+
+def _write_assessment_csvs(
+    diagnostics: CalibrationDiagnostics, save_dir: Path | str,
+    provenance: str | None = None,
+) -> list[Path]:
+    """Write explicit source-backed CSVs beside the assessment figures."""
+    import csv
+    import json
+
+    output_dir = Path(save_dir)
+    payloads = _assessment_csv_payloads(diagnostics)
+    units = {
+        "error_distribution": {"x_error_px": "px", "y_error_px": "px", "euclidean_error_px": "px"},
+        "per_camera_coverage": {"x_px": "px", "y_px": "px", "signed_euclidean_error_px": "px"},
+        "accuracy_precision": {"accuracy_mm": "mm", "precision_mm": "mm", "mean_reprojection_error_px": "px"},
+    }
+    empty_reasons = {
+        "error_distribution": "No reprojection residual observations",
+        "per_camera_coverage": "No camera detection observations",
+        "accuracy_precision": "No feature was observed in more than two images",
+    }
+    targets = [output_dir / f"{name}.csv" for name in payloads]
+    existing = [str(path) for path in targets if path.exists()]
+    if existing:
+        raise FileExistsError("Refusing to overwrite existing assessment CSV(s): " + ", ".join(existing))
+    written = []
+    for (name, (columns, rows)), path in zip(payloads.items(), targets):
+        with path.open("x", newline="", encoding="utf-8") as stream:
+            stream.write("# " + json.dumps({
+                "source": "CalibrationDiagnostics.from_results source arrays",
+                "diagnostic": name, "units": units[name],
+                "camset_source": provenance,
+                "row_count": len(rows),
+                "empty_reason": empty_reasons[name] if not rows else None,
+                "index_semantics": "array order only; no feature identity inferred",
+            }, ensure_ascii=False) + "\n")
+            writer = csv.writer(stream)
+            writer.writerow(columns)
+            writer.writerows(rows)
+        written.append(path)
+    return written
+
+
 def visualise_calibration(
         o_results:dict,
         param_handler,#: AbstractParamHandler
@@ -661,6 +749,9 @@ def visualise_calibration(
         figure_dpi: int = 150,
         figure_formats: tuple[str, ...] = ("png",),
         matplotlib_only: bool = False,
+        figure_themes: tuple[str, ...] | None = None,
+        provenance: str | None = None,
+        export_csv: bool = False,
     ) -> list[Path]:
     """
     A function to draw and plot the errors in a calibration given the results.
@@ -680,13 +771,26 @@ def visualise_calibration(
     :param matplotlib_only: skip 3D scene generation for a 2D-only export request
     :return: the files written, if any
     """
-    if not _PYVISTA_OK:
+    if not _PYVISTA_OK and not matplotlib_only:
         raise ImportError("pyvista is required for visualisation. Install with: pip install pyvista")
-    import os as _os
-    if _os.name != "nt" and not _os.environ.get("DISPLAY") and not _os.environ.get("PYVISTA_OFF_SCREEN"):
-        _os.environ["PYVISTA_OFF_SCREEN"] = "true"
+    if not matplotlib_only:
+        import os as _os
+        if _os.name != "nt" and not _os.environ.get("DISPLAY") and not _os.environ.get("PYVISTA_OFF_SCREEN"):
+            _os.environ["PYVISTA_OFF_SCREEN"] = "true"
 
     diagnostics = CalibrationDiagnostics.from_results(o_results, param_handler)
+
+    if save_dir is not None:
+        output_dir = Path(save_dir)
+        output_names = ("error_distribution", "per_camera_coverage", "accuracy_precision")
+        targets = [output_dir / f"{name}.{output_format}"
+                   for name in output_names for output_format in figure_formats]
+        if export_csv:
+            targets.extend(output_dir / f"{name}.csv" for name in output_names)
+        existing = [str(path) for path in targets if path.exists()]
+        if existing:
+            raise FileExistsError("Refusing to overwrite existing assessment export(s): "
+                                  + ", ".join(existing))
 
     written: list[Path | None] = []
     figures = [
@@ -694,15 +798,21 @@ def visualise_calibration(
         (per_camera_coverage(diagnostics), "per_camera_coverage"),
         (accuracy_precision_plot(diagnostics), "accuracy_precision"),
     ]
+
     # Apply GUI chrome in this isolated process without recolouring data series.
     from pyCamSet.gui.theme import apply_matplotlib_theme
-    for figure, _ in figures:
-        apply_matplotlib_theme(figure, theme_name)
+    per_figure_themes = figure_themes or (theme_name,) * len(figures)
+    if len(per_figure_themes) != len(figures):
+        raise ValueError("figure_themes must contain one theme per assessment figure")
+    for (figure, _), figure_theme in zip(figures, per_figure_themes):
+        apply_matplotlib_theme(figure, figure_theme)
     # plt.show() is global -- one call draws every figure that is still open --
     # so they are written first and then disposed of together
     written += [save_figure(figure, name, save_dir, width_mm=figure_width_mm,
                             dpi=figure_dpi, formats=figure_formats)
                 for figure, name in figures]
+    if save_dir is not None and export_csv:
+        written.extend(_write_assessment_csvs(diagnostics, save_dir, provenance))
     if show:
         plt.show()
     else:

@@ -251,13 +251,17 @@ def launch_save_pyvista_png_for_run(run: dict, file_path: Path) -> tuple[bool, s
 def launch_save_assessment_pngs_for_run(
     run: dict, directory: Path, theme_name: str = "Light",
     width_mm: float = 160.0, dpi: int = 150,
+    figure_themes: tuple[str, str, str] | None = None,
 ) -> tuple[bool, str]:
     """Save the child viewer's three Matplotlib diagnostic figures and vectors."""
     camset_path = resolve_run_camset_artifact(run)
     if camset_path is None:
         return False, "Selected run has no readable camset artifact."
-    return run_viewer("pyCamSet.utils.visualise_camset", [
+    arguments = [
         str(camset_path), "--save-dir", str(directory), "--no-show", "--theme", theme_name,
         "--figure-width-mm", str(width_mm), "--figure-dpi", str(dpi),
-        "--figure-formats", "png", "svg", "pdf", "--matplotlib-only",
-    ])
+        "--figure-formats", "png", "svg", "pdf", "--matplotlib-only", "--export-csv",
+    ]
+    if figure_themes is not None:
+        arguments.extend(["--figure-themes", *figure_themes])
+    return run_viewer("pyCamSet.utils.visualise_camset", arguments)

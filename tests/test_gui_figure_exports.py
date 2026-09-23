@@ -50,6 +50,39 @@ def test_png_preset_controls_physical_width_dpi_and_restores_figure(tmp_path, mo
     assert card._fig.get_size_inches().tolist() == original.tolist()
 
 
+def test_detection_montage_presets_set_pixel_dimensions_and_cancel_is_noop(tmp_path, monkeypatch, qapp):
+    from types import SimpleNamespace
+    from pyCamSet.gui import phase_1_detection
+
+    figure = Figure(figsize=(4, 2))
+    figure.add_subplot(111).plot([0, 1], [2, 3])
+    original = figure.get_size_inches().copy()
+    target = tmp_path / "montage.png"
+    tab = SimpleNamespace(
+        _draw_state={"fig": figure},
+        _montage_export_preset=SimpleNamespace(currentData=lambda: (160.0, 150)),
+    )
+    monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName", lambda *args: (str(target), "PNG"))
+    phase_1_detection.Phase1DiagnosticsTab._save_detection_montage_png(tab)
+    with Image.open(target) as image:
+        assert image.size == (945, 472)
+    assert figure.get_size_inches().tolist() == original.tolist()
+
+    publication_target = tmp_path / "montage-publication.png"
+    tab._montage_export_preset.currentData = lambda: (85.0, 300)
+    monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName",
+                        lambda *args: (str(publication_target), "PNG"))
+    phase_1_detection.Phase1DiagnosticsTab._save_detection_montage_png(tab)
+    with Image.open(publication_target) as image:
+        assert image.size == (1004, 502)
+    assert figure.get_size_inches().tolist() == original.tolist()
+
+    target.unlink()
+    monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName", lambda *args: ("", ""))
+    phase_1_detection.Phase1DiagnosticsTab._save_detection_montage_png(tab)
+    assert not target.exists()
+
+
 def test_csv_source_adapter_preserves_values_and_metadata(tmp_path, monkeypatch, qapp):
     adapter = {
         "columns": ["view", "error_px"],
@@ -126,10 +159,128 @@ def test_gui_assessment_export_passes_preset_and_vector_formats(monkeypatch, tmp
     monkeypatch.setattr(assess_calibration, "run_viewer",
                         lambda module, arguments: captured.update(module=module, arguments=arguments) or (True, "ok"))
     ok, _ = assess_calibration.launch_save_assessment_pngs_for_run(
-        {"run_id": "r"}, tmp_path, "Dark", 85, 300)
+        {"run_id": "r"}, tmp_path, "Dark", 85, 300, ("Light", "Sepia", "Dark"))
     assert ok
     assert captured["arguments"] == [
         str(tmp_path / "r.camset"), "--save-dir", str(tmp_path), "--no-show",
         "--theme", "Dark", "--figure-width-mm", "85", "--figure-dpi", "300",
-        "--figure-formats", "png", "svg", "pdf", "--matplotlib-only",
+        "--figure-formats", "png", "svg", "pdf", "--matplotlib-only", "--export-csv",
+        "--figure-themes", "Light", "Sepia", "Dark",
     ]
+
+
+def test_assessment_csv_payloads_are_source_arrays_with_declared_units():
+    import numpy as np
+    from types import SimpleNamespace
+    from pyCamSet.utils.visualisation import _assessment_csv_payloads
+
+    class Detection:
+        def get_data(self):
+            return np.array([[0, 0, 0, 10.0, 20.0], [0, 0, 1, 12.0, 25.0]])
+
+    class DetectionSet:
+        cam_names = ["cam0"]
+
+        def get_cam_list(self):
+            return [Detection()]
+
+    camera = SimpleNamespace(intrinsic=np.array([[1, 0, 11], [0, 1, 22], [0, 0, 1]]))
+    diagnostic = SimpleNamespace(
+        residuals=np.array([[1.0, 2.0], [-1.0, 0.0]]),
+        euclidean_err=np.array([np.sqrt(5), 1.0]),
+        detection=DetectionSet(), cams=[camera],
+        accuracy=np.array([0.2]), precision=np.array([0.1]),
+        feature_error=np.array([0.4]),
+    )
+    payloads = _assessment_csv_payloads(diagnostic)
+    assert payloads["error_distribution"][1][0] == (0, 1.0, 2.0, pytest.approx(np.sqrt(5)))
+    assert payloads["per_camera_coverage"][1][0][:5] == (0, "cam0", 0, 10.0, 20.0)
+    assert payloads["accuracy_precision"][1] == [(0, 0.2, 0.1, 0.4)]
+
+
+def test_assessment_csv_serialisation_preserves_metadata_rows(tmp_path):
+    import numpy as np
+    from types import SimpleNamespace
+    from pyCamSet.utils.visualisation import _write_assessment_csvs
+
+    class Detection:
+        def get_data(self):
+            return np.array([[0, 0, 0, 10.0, 20.0]])
+
+    class DetectionSet:
+        cam_names = ["cam0"]
+
+        def get_cam_list(self):
+            return [Detection()]
+
+    diagnostic = SimpleNamespace(
+        residuals=np.array([[3.0, 4.0]]), euclidean_err=np.array([5.0]),
+        detection=DetectionSet(),
+        cams=[SimpleNamespace(intrinsic=np.array([[1, 0, 11], [0, 1, 22], [0, 0, 1]]))],
+        accuracy=np.array([0.2]), precision=np.array([0.1]), feature_error=np.array([0.4]),
+    )
+    paths = _write_assessment_csvs(diagnostic, tmp_path, "run.camset")
+    assert len(paths) == 3
+    lines = paths[0].read_text(encoding="utf-8").splitlines()
+    metadata = json.loads(lines[0][2:])
+    assert metadata["camset_source"] == "run.camset"
+    assert metadata["units"]["x_error_px"] == "px"
+    assert list(csv.reader(lines[1:]))[1] == ["0", "3.0", "4.0", "5.0"]
+
+    blocked_dir = tmp_path / "blocked"
+    blocked_dir.mkdir()
+    existing = blocked_dir / "error_distribution.csv"
+    existing.write_text("preserve", encoding="utf-8")
+    with pytest.raises(FileExistsError, match="Refusing to overwrite"):
+        _write_assessment_csvs(diagnostic, blocked_dir, "run.camset")
+    assert not (blocked_dir / "per_camera_coverage.csv").exists()
+
+
+def test_matplotlib_only_does_not_require_pyvista(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    import numpy as np
+    import pyCamSet.utils.visualisation as visualisation
+
+    camera = SimpleNamespace(
+        intrinsic=np.array([[10.0, 0.0, 50.0], [0.0, 10.0, 50.0], [0.0, 0.0, 1.0]]),
+        res=(100, 100),
+    )
+    class CameraCollection(list):
+        def get_n_cams(self):
+            return len(self)
+
+    detection_data = np.array([
+        [0, 0, 0, 20.0, 30.0], [0, 0, 1, 50.0, 40.0], [0, 0, 2, 70.0, 80.0],
+    ])
+    detection = SimpleNamespace(
+        cam_names=["cam0"],
+        get_cam_list=lambda: [SimpleNamespace(get_data=lambda: detection_data)],
+    )
+    diagnostics = SimpleNamespace(
+        residuals=np.array([1.0, 2.0, -1.0, 0.5, 0.1, -0.3]),
+        euclidean_err=np.array([np.hypot(1, 2), np.hypot(1, 0.5), np.hypot(0.1, 0.3)]),
+        e_lim=4.0, cams=CameraCollection([camera]), detection=detection,
+        accuracy=np.array([0.2, 0.3]), precision=np.array([0.1, 0.2]),
+        feature_error=np.array([0.4, 0.8]),
+    )
+    monkeypatch.setattr(visualisation, "_PYVISTA_OK", False)
+    monkeypatch.setattr(visualisation.CalibrationDiagnostics, "from_results", lambda *args: diagnostics)
+    monkeypatch.setattr(visualisation, "reconstruction_scene", lambda *args: pytest.fail("3D scene requested"))
+    result = visualisation.visualise_calibration({}, object(), show=False,
+                                                save_dir=tmp_path, matplotlib_only=True,
+                                                export_csv=True, provenance="synthetic.camset")
+    assert [path.name for path in result] == [
+        "error_distribution.png", "per_camera_coverage.png", "accuracy_precision.png",
+        "error_distribution.csv", "per_camera_coverage.csv", "accuracy_precision.csv",
+    ]
+    assert all(path.is_file() and path.stat().st_size > 100 for path in result)
+    csv_metadata = json.loads(result[3].read_text(encoding="utf-8").splitlines()[0][2:])
+    assert csv_metadata["camset_source"] == "synthetic.camset"
+
+
+def test_3d_request_still_requires_pyvista(monkeypatch):
+    import pyCamSet.utils.visualisation as visualisation
+
+    monkeypatch.setattr(visualisation, "_PYVISTA_OK", False)
+    with pytest.raises(ImportError, match="pyvista is required"):
+        visualisation.visualise_calibration({}, object(), show=False, matplotlib_only=False)

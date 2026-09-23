@@ -839,6 +839,12 @@ class Phase1DiagnosticsTab(QWidget):
         self._draw_save_btn.setEnabled(False)
         self._draw_save_btn.clicked.connect(self._save_detection_montage_png)
         nav_bar.addWidget(self._draw_save_btn)
+        self._montage_export_preset = QComboBox()
+        self._montage_export_preset.addItem("Screen · 160 mm · 150 dpi", (160.0, 150))
+        self._montage_export_preset.addItem("Single-column · 85 mm · 300 dpi", (85.0, 300))
+        self._montage_export_preset.addItem("Double-column · 180 mm · 300 dpi", (180.0, 300))
+        self._montage_export_preset.setToolTip("Generic width/DPI templates; no journal compliance is implied.")
+        nav_bar.addWidget(self._montage_export_preset)
         self._draw_csv_btn = QPushButton("Save coordinates CSV")
         self._draw_csv_btn.setEnabled(False)
         self._draw_csv_btn.setToolTip("Export observed detected pixel coordinates for the displayed image index.")
@@ -1543,7 +1549,18 @@ class Phase1DiagnosticsTab(QWidget):
         try:
             from pyCamSet.gui.visual_style import _validate_user_style_filename
             _validate_user_style_filename(Path(path).name)
-            self._draw_state["fig"].savefig(path, dpi=150, bbox_inches="tight", format="png")
+            figure = self._draw_state["fig"]
+            width_mm, dpi = self._montage_export_preset.currentData()
+            original_size = figure.get_size_inches().copy()
+            try:
+                width_inches = width_mm / 25.4
+                height_inches = original_size[1] * width_inches / original_size[0]
+                figure.set_size_inches(round(width_inches * dpi) / dpi,
+                                       round(height_inches * dpi) / dpi,
+                                       forward=False)
+                figure.savefig(path, dpi=dpi, format="png")
+            finally:
+                figure.set_size_inches(original_size, forward=False)
         except Exception as exc:
             QMessageBox.warning(self, "PNG export failed", f"The montage could not be saved.\n\nTechnical detail: {exc}")
 

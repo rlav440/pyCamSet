@@ -51,8 +51,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--figure-width-mm", type=float, default=160.0)
     parser.add_argument("--figure-dpi", type=int, default=150)
     parser.add_argument("--figure-formats", nargs="+", choices=("png", "svg", "pdf"), default=("png",))
+    parser.add_argument("--figure-themes", nargs=3, choices=("Light", "Dark", "Sepia"), default=None,
+                        metavar=("ERROR", "COVERAGE", "ACCURACY"),
+                        help="cosmetic Matplotlib chrome theme for each 2D figure")
     parser.add_argument("--matplotlib-only", action="store_true",
                         help="skip PyVista scenes for a 2D-only export request")
+    parser.add_argument("--export-csv", action="store_true",
+                        help="write source-array CSVs beside saved 2D assessment figures")
     args = parser.parse_args(argv)
 
     if not args.camset.is_file():
@@ -103,7 +108,9 @@ def main(argv: list[str] | None = None) -> int:
             results, cams.calibration_handler, show=not args.no_show,
             save_dir=args.save_dir, theme_name=args.theme,
             figure_width_mm=args.figure_width_mm, figure_dpi=args.figure_dpi,
-            figure_formats=tuple(args.figure_formats), matplotlib_only=args.matplotlib_only)
+            figure_formats=tuple(args.figure_formats), matplotlib_only=args.matplotlib_only,
+            figure_themes=tuple(args.figure_themes) if args.figure_themes else None,
+            provenance=str(args.camset), export_csv=args.export_csv)
     except Exception as exc:
         print(f"Could not draw the calibration: {exc}", file=sys.stderr)
         return 1

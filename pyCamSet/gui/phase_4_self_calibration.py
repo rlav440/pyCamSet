@@ -679,6 +679,17 @@ class Phase4DiagnosticsTab(QWidget):
         visual_btn_row.addWidget(save_2d_btn)
         visual_btn_row.addStretch()
         visual_layout.addLayout(visual_btn_row)
+        style_row = QHBoxLayout()
+        self._assessment_figure_themes = []
+        for figure_label in ("Error distribution", "Camera coverage", "Accuracy / precision"):
+            style_row.addWidget(QLabel(f"{figure_label} chrome:"))
+            theme_combo = QComboBox()
+            theme_combo.addItems(("Inherit", "Light", "Dark", "Sepia"))
+            theme_combo.setToolTip("Cosmetic figure chrome only; quantitative colours are unchanged.")
+            self._assessment_figure_themes.append(theme_combo)
+            style_row.addWidget(theme_combo)
+        style_row.addStretch()
+        visual_layout.addLayout(style_row)
         # Shows which run/phase the most recent Assess Calibration click actually
         # resolved to -- lets a user comparing PyVista vs. Open3D (or comparing this
         # tab against Phase 3's own Assess Calibration tab) immediately see whether
@@ -896,7 +907,12 @@ class Phase4DiagnosticsTab(QWidget):
         app = QApplication.instance()
         theme_name = app.property("pycamsetTheme") if app else "Light"
         width_mm, dpi = self._assessment_export_preset.currentData()
-        ok, message = launch_save_assessment_pngs_for_run(chosen, Path(directory), theme_name, width_mm, dpi)
+        figure_themes = tuple(
+            theme.currentText() if theme.currentText() != "Inherit" else theme_name
+            for theme in self._assessment_figure_themes
+        )
+        ok, message = launch_save_assessment_pngs_for_run(
+            chosen, Path(directory), theme_name, width_mm, dpi, figure_themes)
         if ok:
             QMessageBox.information(self, "Assess Calibration", message or "Saved 2D assessment PNGs.")
         else:

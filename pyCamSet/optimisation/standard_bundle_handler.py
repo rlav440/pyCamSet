@@ -320,7 +320,31 @@ class SelfBundleHandler(TemplateBundleHandler):
         if not isinstance(prev_cams.calibration_handler, TemplateBundleHandler):
             raise ValueError("Previous camera set was not a templated adjustment")
         self.missing_poses =  prev_cams.calibration_handler.missing_poses
-        self.initial_params[:self.bundlePrimitive.pose_end] = prev_cams.calibration_params.copy()
+
+        # A fixed-parameter Phase 4 handler has a shorter vector than its
+        # Phase 3 predecessor, so copying the old flat vector by position can
+        # either broadcast-fail or shift poses into camera slots.  Rehydrate
+        # the predecessor's primitive arrays first, then pack only parameters
+        # that remain free in this handler.
+        previous_model = prev_cams.calibration_handler.bundlePrimitive.return_bundle_primitives(
+            prev_cams.calibration_params
+        )
+        previous_intr, previous_extr, previous_poses = previous_model[:3]
+        self.bundlePrimitive.intr[...] = previous_intr
+        self.bundlePrimitive.extr[...] = previous_extr
+        self.bundlePrimitive.poses[...] = previous_poses
+
+        free_parameters = []
+        for value, is_free in zip(self.bundlePrimitive.intr, self.bundlePrimitive.intr_unfixed):
+            if is_free:
+                free_parameters.append(value)
+        for value, is_free in zip(self.bundlePrimitive.extr, self.bundlePrimitive.extr_unfixed):
+            if is_free:
+                free_parameters.append(value)
+        for value, is_free in zip(self.bundlePrimitive.poses, self.bundlePrimitive.poses_unfixed):
+            if is_free:
+                free_parameters.append(value)
+        self.initial_params[:self.bundlePrimitive.pose_end] = np.concatenate(free_parameters)
         self.initial_params[ 
             self.bundlePrimitive.pose_end:
         ] = prev_cams.calibration_handler.target.point_data.copy().flatten()[self.feat_unfixed]

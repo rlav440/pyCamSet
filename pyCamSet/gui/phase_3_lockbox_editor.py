@@ -402,6 +402,26 @@ class Phase3LockboxEditor(QDialog):
             self._view_3d_btn.setText("View in 3D (Open3D not available)")
         self._view_3d_btn.clicked.connect(self._open_open3d_view)
         view_3d_row.addWidget(self._view_3d_btn)
+        self._export_csv_btn = QPushButton("Export centres CSV")
+        self._export_csv_btn.setToolTip(
+            "Export original and edited camera centres and object centre. "
+            "Values use source target-frame units; physical units are not inferred."
+        )
+        self._export_csv_btn.clicked.connect(self._export_centres_csv_dialog)
+        view_3d_row.addWidget(self._export_csv_btn)
+        self._export_png_btn = QPushButton("Save preview PNG")
+        self._export_png_btn.setEnabled(bool(_MATPLOTLIB_OK and not _OPEN3D_OK))
+        self._export_png_btn.setToolTip(
+            "Save the Matplotlib preview as PNG. Open3D native-window capture is not supported here."
+        )
+        self._export_png_btn.clicked.connect(self._export_preview_png_dialog)
+        view_3d_row.addWidget(self._export_png_btn)
+        self._export_ply_btn = QPushButton("Export points PLY")
+        self._export_ply_btn.setToolTip(
+            "Export camera and object-centre points only; camera wireframes, axes and labels are not included."
+        )
+        self._export_ply_btn.clicked.connect(self._export_centres_ply_dialog)
+        view_3d_row.addWidget(self._export_ply_btn)
         view_3d_row.addStretch()
         centre_layout.addLayout(view_3d_row)
 
@@ -666,6 +686,84 @@ class Phase3LockboxEditor(QDialog):
         self.canvas.draw_idle()
         if self._o3d_scene_widget is not None:
             self._refresh_open3d_native_view()
+
+    def _export_centres_csv_dialog(self) -> None:
+        """Export source-backed camera centres without modifying the solve."""
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export lockbox centres", str(self.workspace_path / "lockbox_centres.csv"),
+            "CSV files (*.csv)",
+        )
+        if not path:  # A cancelled dialog is a no-op.
+            return
+        try:
+            self._write_centres_csv(Path(path))
+        except Exception as exc:
+            QMessageBox.critical(self, "CSV export failed", str(exc))
+
+    def _write_centres_csv(self, path: Path) -> None:
+        """Write camera centre provenance and coordinates in target-frame units."""
+        import csv
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["source_camset", str(self.source_camset_path)])
+            writer.writerow(["coordinate_units", "source target-frame units; physical unit unspecified"])
+            writer.writerow(["kind", "name", "x", "y", "z"])
+            writer.writerow(["object_centre", self.centre_definition["label"], *self.object_centre.tolist()])
+            for name, state in self.states.items():
+                writer.writerow(["original_camera_centre", name, *state.original_center.tolist()])
+                writer.writerow(["edited_camera_centre", name, *state.edited_center.tolist()])
+
+    def _export_centres_ply_dialog(self) -> None:
+        """Export the source-backed point geometry, not the full Open3D presentation scene."""
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export lockbox centre points", str(self.workspace_path / "lockbox_centres.ply"),
+            "PLY point cloud (*.ply)",
+        )
+        if not path:  # A cancelled dialog is a no-op.
+            return
+        try:
+            self._write_centres_ply(Path(path))
+        except Exception as exc:
+            QMessageBox.critical(self, "PLY export failed", str(exc))
+
+    def _write_centres_ply(self, path: Path) -> None:
+        """Write camera/object centres as actual PLY vertices with unit provenance."""
+        vertices = [self.object_centre]
+        for state in self.states.values():
+            vertices.extend((state.original_center, state.edited_center))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="ascii", newline="\n") as stream:
+            stream.write("ply\nformat ascii 1.0\n")
+            stream.write(f"comment source_json {json.dumps(str(self.source_camset_path), ensure_ascii=True)}\n")
+            stream.write("comment coordinates use source target-frame units; physical unit unspecified\n")
+            stream.write(f"element vertex {len(vertices)}\n")
+            stream.write("property double x\nproperty double y\nproperty double z\nend_header\n")
+            for point in vertices:
+                stream.write("{:.17g} {:.17g} {:.17g}\n".format(*point))
+
+    def _export_preview_png_dialog(self) -> None:
+        """Save the actual Matplotlib preview; never claim an Open3D capture."""
+        from PySide6.QtWidgets import QFileDialog
+
+        if self.figure is None:
+            QMessageBox.information(self, "PNG export unavailable", "No Matplotlib preview is realised; Open3D native-window capture is not supported.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save lockbox preview", str(self.workspace_path / "lockbox_preview.png"),
+            "PNG image (*.png)",
+        )
+        if not path:  # A cancelled dialog is a no-op.
+            return
+        try:
+            self.figure.savefig(Path(path), format="png", dpi=160)
+        except Exception as exc:
+            QMessageBox.critical(self, "PNG export failed", str(exc))
 
     def _pv_polydata_to_o3d_lineset(self, pv_mesh) -> object:
         """Convert a PyVista PolyData triangle mesh to an Open3D LineSet (wireframe).

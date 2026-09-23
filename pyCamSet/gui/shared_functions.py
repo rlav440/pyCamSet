@@ -248,6 +248,12 @@ class MatplotlibFigureCard(QWidget):
         self._canvas = self._canvas_cls(self._fig)
         self._canvas.setMinimumHeight(min_height)
         self._canvas.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Expose the figure's visible heading to assistive technology without
+        # claiming a data summary that the canvas cannot reliably provide.
+        self._canvas.setAccessibleName(title)
+        self._canvas.setAccessibleDescription(
+            f"Scientific figure: {title}. Use the figure controls to expand or save it."
+        )
         layout.addWidget(self._canvas)
 
     def _save_png(self) -> None:
@@ -1247,22 +1253,45 @@ class RunSelectorWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        layout.addWidget(make_section_label("Saved runs"))
+        self._heading = make_section_label("Saved runs")
+        layout.addWidget(self._heading)
+
+        self._selection_summary = QLabel("No runs selected.")
+        self._selection_summary.setWordWrap(True)
+        self._selection_summary.setAccessibleName("Run selection summary")
+        layout.addWidget(self._selection_summary)
 
         self._list = QListWidget()
         self._list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self._list.setAccessibleName("Saved runs")
+        self._list.setAccessibleDescription(
+            "Select one or more saved runs to show their diagnostics."
+        )
         self._list.itemSelectionChanged.connect(self._emit_selection)
         layout.addWidget(self._list)
 
-        self._empty_lbl = QLabel("No runs saved yet.")
-        self._empty_lbl.setStyleSheet("color: gray;")
+        self._empty_lbl = QLabel("No saved runs are available. Run this phase, then refresh.")
+        self._empty_lbl.setWordWrap(True)
+        self._empty_lbl.setAccessibleName("No saved runs")
+        self._empty_lbl.setAccessibleDescription(
+            "The run list is empty. Complete a phase run and refresh to load it."
+        )
         layout.addWidget(self._empty_lbl)
 
         self._runs: list[dict] = []
         self.refresh(runs)
 
     def _emit_selection(self) -> None:
+        self._update_selection_summary()
         self.selection_changed.emit(self.get_selected())
+
+    def _update_selection_summary(self) -> None:
+        selected_count = len(self._list.selectedItems())
+        total_count = len(self._runs)
+        self._selection_summary.setText(
+            f"{selected_count} of {total_count} runs selected. "
+            "Select runs to compare their diagnostics."
+        )
 
     def get_selected(self) -> list[dict]:
         """Return currently selected run-metadata dicts."""
@@ -1280,6 +1309,7 @@ class RunSelectorWidget(QWidget):
         if not runs:
             self._list.hide()
             self._empty_lbl.show()
+            self._update_selection_summary()
             return
         self._empty_lbl.hide()
         self._list.show()
@@ -1290,6 +1320,7 @@ class RunSelectorWidget(QWidget):
         count = max(0, min(self._preselect, n))
         for i in range(n - count, n):
             self._list.item(i).setSelected(True)
+        self._update_selection_summary()
 
     def enforce_max_selection(self, max_selected: int) -> None:
         """Keep only the most recent selected rows when selection exceeds *max_selected*."""

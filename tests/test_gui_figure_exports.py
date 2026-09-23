@@ -156,6 +156,8 @@ def test_assess_calibration_action_forwards_per_figure_themes(
         _run_selector=SimpleNamespace(get_selected=lambda: [selected_run]),
         _all_runs=[selected_run],
         _current_run_label=SimpleNamespace(setText=lambda text: None),
+        _three_d_style=SimpleNamespace(setEnabled=lambda enabled: None,
+                                       viewer_arguments=lambda: ["--3d-view", "front"]),
         _open3d_cb=SimpleNamespace(isChecked=lambda: False),
         _assessment_figure_themes=[
             SimpleNamespace(currentText=lambda value=value: value)
@@ -166,6 +168,7 @@ def test_assess_calibration_action_forwards_per_figure_themes(
     assert captured["run"] is selected_run
     assert captured["kwargs"] == {
         "theme_name": "Dark", "figure_themes": ("Light", "Dark", "Sepia"),
+        "three_d_arguments": ["--3d-view", "front"],
     }
 
 

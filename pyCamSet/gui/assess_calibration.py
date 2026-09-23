@@ -135,6 +135,7 @@ def _build_o_results(cam_set: Any) -> Optional[dict[str, np.ndarray]]:
 def launch_visualise_calibration_for_run(
     run: dict, theme_name: str = "Light",
     figure_themes: tuple[str, str, str] | None = None,
+    three_d_arguments: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Launch native matplotlib/pyvista windows via visualise_calibration()."""
     if load_CameraSet is None or visualise_calibration is None:
@@ -163,7 +164,8 @@ def launch_visualise_calibration_for_run(
     # failures still reach the user as a dialog.  The drawing itself is not:
     # see visualise_camset for why it cannot share a process with Qt.
     ok, detail = spawn_calibration_viewer(
-        camset_path, theme_name=theme_name, figure_themes=figure_themes)
+        camset_path, theme_name=theme_name, figure_themes=figure_themes,
+        three_d_arguments=three_d_arguments)
     if not ok:
         return False, detail
     return True, f"Opened Assess Calibration for run {run_id} in a new window."
@@ -172,6 +174,7 @@ def launch_visualise_calibration_for_run(
 def spawn_calibration_viewer(
     camset_path: Path, theme_name: str = "Light",
     figure_themes: tuple[str, str, str] | None = None,
+    three_d_arguments: list[str] | None = None,
 ) -> tuple[bool, str]:
     """
     Draw a calibration in a process of its own.
@@ -184,6 +187,8 @@ def spawn_calibration_viewer(
         if len(figure_themes) != 3:
             raise ValueError("figure_themes must contain one theme per assessment figure")
         arguments.extend(["--figure-themes", *figure_themes])
+    if three_d_arguments:
+        arguments.extend(three_d_arguments)
     return spawn_viewer("pyCamSet.utils.visualise_camset", arguments)
 
 
@@ -222,6 +227,7 @@ def launch_visualise_calibration_open3d_for_run(
 
 def launch_save_pyvista_png_for_run(
     run: dict, file_path: Path, width_mm: float = 160.0, dpi: int = 150,
+    theme_name: str = "Light", three_d_arguments: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Perform offscreen PyVista PNG export for a given run.
 
@@ -255,8 +261,9 @@ def launch_save_pyvista_png_for_run(
     # because the caller wants the file, not a window.
     ok, detail = run_viewer(
         "pyCamSet.utils.visualise_camset",
-        [str(camset_path), "--png", str(file_path),
-         "--3d-width-mm", str(width_mm), "--3d-dpi", str(dpi)],
+        [str(camset_path), "--png", str(file_path), "--theme", theme_name,
+         "--3d-width-mm", str(width_mm), "--3d-dpi", str(dpi),
+         *(three_d_arguments or [])],
     )
     if not ok:
         return False, detail

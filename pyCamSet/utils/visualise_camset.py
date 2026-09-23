@@ -55,6 +55,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="PNG publication preset width; preserves the 8:3 scene ratio")
     parser.add_argument("--3d-dpi", type=int, default=150,
                         help="PNG pixel density used with --3d-width-mm")
+    parser.add_argument("--3d-background", choices=("theme", "white", "charcoal"), default="theme")
+    parser.add_argument("--3d-point-size", type=float, default=3.0)
+    parser.add_argument("--3d-view", choices=("isometric", "top", "front", "side"), default="isometric")
+    parser.add_argument("--3d-axes", dest="three_d_axes", action="store_true", default=True)
+    parser.add_argument("--no-3d-axes", dest="three_d_axes", action="store_false")
+    parser.add_argument("--3d-legend", dest="three_d_legend", action="store_true", default=True)
+    parser.add_argument("--no-3d-legend", dest="three_d_legend", action="store_false")
     parser.add_argument("--figure-width-mm", type=float, default=160.0)
     parser.add_argument("--figure-dpi", type=int, default=150)
     parser.add_argument("--figure-formats", nargs="+", choices=("png", "svg", "pdf"), default=("png",))
@@ -102,7 +109,10 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         ok, detail = render_calibration_pyvista_png(
             o_results, cams.calibration_handler, str(args.png),
-            width_mm=args.three_d_width_mm, dpi=args.three_d_dpi)
+            width_mm=args.three_d_width_mm, dpi=args.three_d_dpi,
+            theme_name=args.theme, background=args.three_d_background,
+            point_size=args.three_d_point_size, view=args.three_d_view,
+            axes=args.three_d_axes, show_legend=args.three_d_legend)
         if not ok:
             print(detail, file=sys.stderr)
             return 1
@@ -135,7 +145,11 @@ def main(argv: list[str] | None = None) -> int:
             figure_width_mm=args.figure_width_mm, figure_dpi=args.figure_dpi,
             figure_formats=tuple(args.figure_formats), matplotlib_only=args.matplotlib_only,
             figure_themes=tuple(args.figure_themes) if args.figure_themes else None,
-            provenance=str(args.camset), export_csv=args.export_csv)
+            provenance=str(args.camset), export_csv=args.export_csv,
+            three_d_background=args.three_d_background,
+            three_d_point_size=args.three_d_point_size,
+            three_d_view=args.three_d_view, three_d_axes=args.three_d_axes,
+            three_d_legend=args.three_d_legend)
     except Exception as exc:
         print(f"Could not draw the calibration: {exc}", file=sys.stderr)
         return 1

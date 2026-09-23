@@ -579,7 +579,42 @@ def per_camera_coverage(diagnostics: CalibrationDiagnostics) -> plt.Figure:
     return fig
 
 
-def reconstruction_scene(diagnostics: CalibrationDiagnostics) -> 'pv.Plotter':
+def _apply_3d_cosmetics(plotter, theme_name: str = "Light", background: str = "theme",
+                        point_size: float = 3.0, view: str = "isometric",
+                        axes: bool = True) -> None:
+    """Apply presentation-only PyVista options without touching scene arrays."""
+    from pyCamSet.gui.theme import THEME_TOKENS
+
+    if theme_name not in THEME_TOKENS:
+        raise ValueError(f"Unknown 3D theme: {theme_name}")
+    if background not in {"theme", "white", "charcoal"}:
+        raise ValueError("3D background must be theme, white or charcoal")
+    if not 1.0 <= float(point_size) <= 20.0:
+        raise ValueError("3D point size must be between 1 and 20")
+    if view not in {"isometric", "top", "front", "side"}:
+        raise ValueError("3D view must be isometric, top, front or side")
+    colour = (THEME_TOKENS[theme_name]["background"] if background == "theme"
+              else {"white": "#ffffff", "charcoal": "#242a32"}[background])
+    plotter.set_background(colour, all_renderers=True)
+    renderers = list(plotter.renderers)
+    columns = max(1, int(plotter.shape[1]))
+    for index in range(len(renderers)):
+        plotter.subplot(index // columns, index % columns)
+        if axes:
+            plotter.add_axes()
+        if view == "top":
+            plotter.view_xy()
+        elif view == "front":
+            plotter.view_xz()
+        elif view == "side":
+            plotter.view_yz()
+        else:
+            plotter.view_isometric()
+        plotter.reset_camera()
+
+
+def reconstruction_scene(diagnostics: CalibrationDiagnostics, point_size: float = 3.0,
+                         show_legend: bool = True) -> 'pv.Plotter':
     """
     The triangulated features where the cameras put them, with the cameras.
 
@@ -595,8 +630,9 @@ def reconstruction_scene(diagnostics: CalibrationDiagnostics) -> 'pv.Plotter':
     if len(diagnostics.scene_points):
         points = pv.PolyData(diagnostics.scene_points)
         points['Reprojection error (px)'] = diagnostics.point_error
-        plotter.add_mesh(points, render_points_as_spheres=True, point_size=2,
-                         clim=[0, diagnostics.e_lim])
+        plotter.add_mesh(points, render_points_as_spheres=True, point_size=point_size,
+                         clim=[0, diagnostics.e_lim], show_scalar_bar=show_legend,
+                         scalar_bar_args={"title": "Reprojection error (px)"})
     else:
         plotter.add_text("No points within outlier threshold",
                          position='lower_left', font_size=10, font='times')
@@ -605,6 +641,7 @@ def reconstruction_scene(diagnostics: CalibrationDiagnostics) -> 'pv.Plotter':
 
 def target_space_scene(diagnostics: CalibrationDiagnostics,
                        title: str = "Reconstructed Points in Target Coordinates",
+                       point_size: float = 3.0, show_legend: bool = True,
                        ) -> 'pv.Plotter':
     """
     The same features carried back into the target's own frame.
@@ -625,8 +662,9 @@ def target_space_scene(diagnostics: CalibrationDiagnostics,
                      position='lower_left', font_size=10, font='times')
     points = pv.PolyData(diagnostics.object_points)
     points['Reprojection Error (px)'] = diagnostics.point_error
-    plotter.add_mesh(points, render_points_as_spheres=True, point_size=4,
-                     clim=[0, diagnostics.e_lim])
+    plotter.add_mesh(points, render_points_as_spheres=True, point_size=point_size,
+                     clim=[0, diagnostics.e_lim], show_scalar_bar=show_legend,
+                     scalar_bar_args={"title": "Reprojection error (px)"})
     return plotter
 
 
@@ -769,6 +807,11 @@ def visualise_calibration(
         figure_themes: tuple[str, ...] | None = None,
         provenance: str | None = None,
         export_csv: bool = False,
+        three_d_background: str = "theme",
+        three_d_point_size: float = 3.0,
+        three_d_view: str = "isometric",
+        three_d_axes: bool = True,
+        three_d_legend: bool = True,
     ) -> list[Path]:
     """
     A function to draw and plot the errors in a calibration given the results.
@@ -837,9 +880,15 @@ def visualise_calibration(
             plt.close(figure)
 
     if not matplotlib_only:
-        for build, name in ((reconstruction_scene, "reconstruction"),
-                            (target_space_scene, "target_coordinates")):
-            written.append(finalise_plotter(build(diagnostics), name, show, save_dir))
+        scenes = ((lambda: reconstruction_scene(diagnostics, three_d_point_size, three_d_legend),
+                   "reconstruction"),
+                  (lambda: target_space_scene(diagnostics, point_size=three_d_point_size,
+                                               show_legend=three_d_legend), "target_coordinates"))
+        for build, name in scenes:
+            plotter = build()
+            _apply_3d_cosmetics(plotter, theme_name, three_d_background,
+                                three_d_point_size, three_d_view, three_d_axes)
+            written.append(finalise_plotter(plotter, name, show, save_dir))
 
     # special_plots opens and drives its own window, and its signature is part
     # of the parameter handler API that lives outside this repository, so it
@@ -1385,6 +1434,12 @@ def render_calibration_pyvista_png(
     output_path: str,
     width_mm: float = 160.0,
     dpi: int = 150,
+    theme_name: str = "Light",
+    background: str = "theme",
+    point_size: float = 3.0,
+    view: str = "isometric",
+    axes: bool = True,
+    show_legend: bool = True,
 ) -> tuple[bool, str]:
     """Render calibration assessment offscreen with PyVista and save to *output_path*.
 
@@ -1456,7 +1511,9 @@ def render_calibration_pyvista_png(
         if np.any(m):
             seen_pts = pv.PolyData(reconstructed[m])
             seen_pts['Reprojection error (px)'] = error_subset[m]
-            plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=2, clim=[0, e_lim])
+            plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=point_size,
+                             clim=[0, e_lim], show_scalar_bar=show_legend,
+                             scalar_bar_args={"title": "Reprojection error (px)"})
 
         # Subplot 1: target coordinates
         plotter.subplot(1)
@@ -1468,8 +1525,11 @@ def render_calibration_pyvista_png(
         if raw_obj_points:
             cube_locs = pv.PolyData(np.array(raw_obj_points))
             cube_locs['Reprojection Error (px)'] = errors_scene
-            plotter.add_mesh(cube_locs, render_points_as_spheres=True, point_size=4, clim=[0, e_lim])
+            plotter.add_mesh(cube_locs, render_points_as_spheres=True, point_size=point_size,
+                             clim=[0, e_lim], show_scalar_bar=show_legend,
+                             scalar_bar_args={"title": "Reprojection error (px)"})
 
+        _apply_3d_cosmetics(plotter, theme_name, background, point_size, view, axes)
         save_pyvista_screenshot(plotter, output_path, width_mm, dpi)
         plotter.close()
         return True, f"PyVista screenshot saved to {output_path}"

@@ -53,6 +53,7 @@ from pyCamSet.gui.shared_functions import (
     show_tab,
 )
 from pyCamSet.workflow import phase4 as phase4_workflow
+from pyCamSet.gui.three_d_style import ThreeDStyleControls
 from pyCamSet.workflow.params import (
     ParamError,
     as_int,
@@ -702,6 +703,8 @@ class Phase4DiagnosticsTab(QWidget):
             style_row.addWidget(theme_combo)
         style_row.addStretch()
         visual_layout.addLayout(style_row)
+        self._three_d_style = ThreeDStyleControls(self._visual_widget)
+        visual_layout.addWidget(self._three_d_style)
         # Shows which run/phase the most recent Assess Calibration click actually
         # resolved to -- lets a user comparing PyVista vs. Open3D (or comparing this
         # tab against Phase 3's own Assess Calibration tab) immediately see whether
@@ -840,9 +843,11 @@ class Phase4DiagnosticsTab(QWidget):
     def _on_backend_changed(self, btn) -> None:
         """Handle backend selector toggle — update Open3D output visibility."""
         if self._open3d_cb.isChecked():
+            self._three_d_style.setEnabled(False)
             self._open3d_output.setText("Click Assess Calibration to open an interactive Open3D window.")
             self._open3d_output.setVisible(True)
         else:
+            self._three_d_style.setEnabled(True)
             self._open3d_output.setVisible(False)
 
     def _on_pyvista_toggled(self, state: int) -> None:
@@ -867,9 +872,11 @@ class Phase4DiagnosticsTab(QWidget):
             # On Linux, EGL offscreen rendering is typically available, so we
             # can embed the Open3D view in the GUI. On Windows, EGL support is
             # missing so we fall back to a separate native Open3D window.
+            self._three_d_style.setEnabled(False)
             _open3d_widget = self._open3d_output if os.name != "nt" else None
             ok, msg = launch_visualise_calibration_open3d_for_run(chosen, output_widget=_open3d_widget)
         else:
+            self._three_d_style.setEnabled(True)
             app = QApplication.instance()
             active_theme = app.property("pycamsetTheme") if app else "Light"
             figure_themes = tuple(
@@ -877,7 +884,8 @@ class Phase4DiagnosticsTab(QWidget):
                 for theme in self._assessment_figure_themes
             )
             ok, msg = launch_visualise_calibration_for_run(
-                chosen, theme_name=active_theme, figure_themes=figure_themes)
+                chosen, theme_name=active_theme, figure_themes=figure_themes,
+                three_d_arguments=self._three_d_style.viewer_arguments())
         if not ok:
             QMessageBox.warning(self, "Assess Calibration", msg)
 
@@ -906,8 +914,11 @@ class Phase4DiagnosticsTab(QWidget):
             )
             from pathlib import Path
             width_mm, dpi = self._three_d_export_preset.currentData()
+            app = QApplication.instance()
+            active_theme = app.property("pycamsetTheme") if app else "Light"
             ok, msg = launch_save_pyvista_png_for_run(
-                chosen, Path(path), width_mm=width_mm, dpi=dpi)
+                chosen, Path(path), width_mm=width_mm, dpi=dpi, theme_name=active_theme,
+                three_d_arguments=self._three_d_style.viewer_arguments())
             if ok:
                 QMessageBox.information(self, "Save PNG", msg)
             else:

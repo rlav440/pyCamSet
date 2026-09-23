@@ -52,6 +52,30 @@ def find_not_colinear_pts(points):
     else:
         raise ValueError("No set of values that were not colinear were found in the provided data.")
 
+
+def _gauge_square_size(target) -> float:
+    """Return a target spacing in the same units as ``point_data``.
+
+    Several target classes keep their declared square size in millimetres
+    while storing point coordinates in metres.  The self-calibration gauge
+    compares distances from ``point_data``; using the declaration directly
+    therefore leaves no valid distance pairs and aborts Phase 4.
+    """
+    declared = float(getattr(target, "square_size", float("nan")))
+    points = np.asarray(getattr(target, "point_data", []), dtype=float).reshape(-1, 3)
+    sample = points[:10000]
+    if sample.shape[0] > 1:
+        adjacent = np.linalg.norm(np.diff(sample, axis=0), axis=1)
+        adjacent = adjacent[np.isfinite(adjacent) & (adjacent > 1e-12)]
+        if adjacent.size:
+            candidate = float(np.min(adjacent))
+            if not np.isfinite(declared) or not np.isclose(candidate, declared, rtol=0.1):
+                return candidate
+    if np.isfinite(declared) and declared > 1.0:
+        return declared / 1000.0
+    return declared
+
+
 class StandardBundlePrimitive:
     """
     A class that contains a set of base arrays.
@@ -391,7 +415,7 @@ class SelfBundleHandler(TemplateBundleHandler):
             inds = np.triu_indices(point_estimate[vm].shape[0], k=1)
             new_map = cdist(point_estimate[vm], point_estimate[vm])[inds]
             ref_map = cdist(ref_points[vm], ref_points[vm])[inds]
-            dt = self.target.square_size 
+            dt = _gauge_square_size(self.target)
             # dt = 0.0045 #hard coded for today
             mask = np.isclose(ref_map, dt)
             new_map = new_map[mask]

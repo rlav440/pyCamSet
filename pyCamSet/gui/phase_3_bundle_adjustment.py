@@ -1478,6 +1478,7 @@ class Phase3DiagnosticsTab(QWidget):
             f"D3.4 Per-image initial reprojection error ({run.get('run_id', '?')})",
             fig, FigureCanvasQTAgg, parent=self._initial_widget, min_height=320,
             canvas=canvas,
+            visual_id="diagnostic:phase3:d3.4-per-image-initial-reprojection",
             csv_export={
                 "columns": ["image_index", "initial_reprojection_error_px"],
                 "rows": [(i, float(value)) for i, value in enumerate(arr) if np.isfinite(value)],

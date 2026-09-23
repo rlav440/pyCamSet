@@ -11,7 +11,19 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "pycamset.visual-style"
-VERSION = 2
+VERSION = 3
+# This text registry is the citation source of truth for suggested presets.
+# The Science URL is retained verbatim from the prior UI; its current endpoint
+# was not independently verified, so the revision records provenance, not endorsement.
+SUGGESTED_PRESET_REGISTRY_VERSION = "figure-suggestions-v1"
+SUGGESTED_PRESET_CITATIONS = (
+    "Suggestions only; not journal compliance. Nature: Preparing figures, "
+    "https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/ "
+    "(accessed 2026-09-23). Science/AAAS: Guide to Preparing Figures (2022), "
+    "https://www.science.org/do/10.5555/page.2385610/full/author_figure_prep_guide_2022-1708116021087.pdf. "
+    "DejaVu Sans fallback: DejaVu Fonts licence, https://dejavu-fonts.github.io/License.html. "
+    "Cell and IEEE controls are generic starting points without verified journal-specific prescriptions."
+)
 _VISUAL_OVERRIDES = WeakKeyDictionary()
 
 
@@ -40,6 +52,7 @@ class VisualStyle:
     series_styles: dict[str, dict[str, Any]] = field(default_factory=dict)
     colormap: str | None = None
     suggested_preset: str | None = None
+    suggested_preset_registry: str | None = None
 
     def validate(self) -> None:
         """Reject unknown, malformed or out-of-range style state."""
@@ -87,6 +100,13 @@ class VisualStyle:
             raise ValueError("unsupported colormap")
         if self.suggested_preset is not None and self.suggested_preset not in {"Nature", "Science", "Cell", "IEEE"}:
             raise ValueError("unsupported suggested preset")
+        if self.suggested_preset is None and self.suggested_preset_registry is not None:
+            raise ValueError("preset registry requires a suggested preset")
+        if self.suggested_preset_registry is not None and (
+                not isinstance(self.suggested_preset_registry, str)
+                or not self.suggested_preset_registry
+                or len(self.suggested_preset_registry) > 80):
+            raise ValueError("invalid suggested preset registry revision")
         if self.grid_visible is not None and not isinstance(self.grid_visible, bool):
             raise ValueError("grid_visible must be boolean or null")
         if self.legend_visible is not None and not isinstance(self.legend_visible, bool):
@@ -119,7 +139,7 @@ def style_from_json(text: str, expected_visual_id: str | None = None) -> VisualS
         raise ValueError(f"Invalid style JSON: {exc}") from exc
     if not isinstance(document, dict) or set(document) != {"schema", "version", "visual_id", "style"}:
         raise ValueError("Style document has missing or unknown top-level keys")
-    if document["schema"] != SCHEMA or type(document["version"]) is not int or document["version"] not in {1, VERSION}:
+    if document["schema"] != SCHEMA or type(document["version"]) is not int or document["version"] not in {1, 2, VERSION}:
         raise ValueError("Unsupported style schema or version")
     if not isinstance(document["visual_id"], str) or not document["visual_id"]:
         raise ValueError("visual_id must be a non-empty string")
@@ -134,6 +154,9 @@ def style_from_json(text: str, expected_visual_id: str | None = None) -> VisualS
         values = {**values, "font_weight": None, "title_colour": None, "tick_colour": None,
                   "axes_colour": None, "legend_colour": None, "series_styles": {},
                   "colormap": None, "suggested_preset": None}
+    if document["version"] in {1, 2}:
+        # Older files keep their preset name; provenance is unknown rather than guessed.
+        values = {**values, "suggested_preset_registry": None}
     if set(values) != set(VisualStyle.__dataclass_fields__):
         raise ValueError("Style has missing or unknown keys")
     style = VisualStyle(**values)
@@ -439,13 +462,8 @@ class VisualStyleDialog:
                 self.preset.setCurrentIndex({None: 0, "Nature": 1, "Science": 2,
                                              "Cell": 3, "IEEE": 4}[style.suggested_preset])
                 form.addRow("Suggested appearance:", self.preset)
-                citation = QLabel(
-                    "Suggestions only; not journal compliance. Nature: Preparing figures, "
-                    "https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/ "
-                    "(accessed 2026-09-23). Science/AAAS: Guide to Preparing Figures (2022), "
-                    "https://www.science.org/do/10.5555/page.2385610/full/author_figure_prep_guide_2022-1708116021087.pdf. "
-                    "DejaVu Sans fallback: DejaVu Fonts licence, https://dejavu-fonts.github.io/License.html. "
-                    "Cell and IEEE controls are generic starting points without verified journal-specific prescriptions.")
+                citation = QLabel(SUGGESTED_PRESET_CITATIONS)
+                citation.setProperty("sourceRevision", SUGGESTED_PRESET_REGISTRY_VERSION)
                 citation.setWordWrap(True)
                 citation.setAccessibleName("Suggested figure-style sources and limitations")
                 root.addWidget(citation)
@@ -547,7 +565,10 @@ class VisualStyleDialog:
                     series_colours=series_colours, series_styles=series_styles,
                     colormap=(self.colormap.currentText() if self.colormap.currentIndex() else None),
                     suggested_preset=(None if self.preset.currentIndex() == 0
-                                      else ("Nature", "Science", "Cell", "IEEE")[self.preset.currentIndex() - 1]))
+                                      else ("Nature", "Science", "Cell", "IEEE")[self.preset.currentIndex() - 1]),
+                    suggested_preset_registry=(
+                        None if self.preset.currentIndex() == 0
+                        else SUGGESTED_PRESET_REGISTRY_VERSION))
 
             def _load_series_colour(self, *_):
                 stable_id = self.series_id.currentData()

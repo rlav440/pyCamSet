@@ -1064,6 +1064,7 @@ class Phase2DiagnosticsTab(QWidget):
             f"D2.6/D2.7 per-image reprojection error ({run.get('run_id', '?')})",
             fig, FigureCanvasQTAgg, parent=self._per_view_widget, min_height=320,
             canvas=canvas,
+            visual_id="diagnostic:phase2:d2.6-d2.7-per-image-reprojection",
             csv_export={
                 "columns": ["camera", "view_index", "rms_reprojection_error_px"],
                 "rows": csv_rows,

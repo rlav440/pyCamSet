@@ -16,6 +16,7 @@ from pyCamSet.gui.visual_style import (
     VisualStyle,
     apply_visual_style,
     scale_bar_unavailable,
+    SUGGESTED_PRESET_REGISTRY_VERSION,
     style_from_json,
     style_path_for_visual,
     style_to_json,
@@ -28,10 +29,13 @@ def test_style_json_round_trip_is_versioned_and_visual_specific():
                         font_weight="bold", title_colour="#111111",
                         series_colours={"line:0:error": "#123456"},
                         series_styles={"line:0:error": {"line_width": 3, "line_style": "--",
-                                                          "marker": "o"}})
+                                                          "marker": "o"}},
+                        suggested_preset="Science",
+                        suggested_preset_registry=SUGGESTED_PRESET_REGISTRY_VERSION)
     text = style_to_json(style, "phase2:view-errors")
-    assert json.loads(text)["version"] == 2
+    assert json.loads(text)["version"] == 3
     assert style_from_json(text, "phase2:view-errors") == style
+    assert json.loads(text)["style"]["suggested_preset_registry"] == SUGGESTED_PRESET_REGISTRY_VERSION
     with pytest.raises(ValueError, match="different visual"):
         style_from_json(text, "phase3:residuals")
 
@@ -54,13 +58,29 @@ def test_v1_style_document_migrates_without_losing_saved_values():
     old_document = json.loads(style_to_json(style, "view"))
     old_document["version"] = 1
     for key in ("font_weight", "title_colour", "tick_colour", "axes_colour", "legend_colour",
-                "series_styles", "colormap", "suggested_preset"):
+                "series_styles", "colormap", "suggested_preset", "suggested_preset_registry"):
         old_document["style"].pop(key)
     migrated = style_from_json(json.dumps(old_document), "view")
     assert migrated.font_family == style.font_family
     assert migrated.line_width == style.line_width
     assert migrated.series_colours == style.series_colours
     assert migrated.font_weight is None and migrated.series_styles == {}
+
+
+def test_v2_preset_name_survives_with_unknown_provenance_and_malformed_revision_fails():
+    document = json.loads(style_to_json(VisualStyle(
+        suggested_preset="Science",
+        suggested_preset_registry=SUGGESTED_PRESET_REGISTRY_VERSION), "view"))
+    document["version"] = 2
+    document["style"].pop("suggested_preset_registry")
+    migrated = style_from_json(json.dumps(document), "view")
+    assert migrated.suggested_preset == "Science"
+    assert migrated.suggested_preset_registry is None
+
+    document["version"] = 3
+    document["style"]["suggested_preset_registry"] = ""
+    with pytest.raises(ValueError, match="registry revision"):
+        style_from_json(json.dumps(document), "view")
 
 
 def test_style_paths_are_separate_and_visual_ids_do_not_collide(tmp_path):

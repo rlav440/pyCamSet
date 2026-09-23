@@ -235,6 +235,7 @@ class MatplotlibFigureCard(QWidget):
         csv_export: Optional[dict[str, Any]] = None,
         csv_disabled_reason: str = "CSV is unavailable: this visual has no tabular source adapter.",
         canvas=None,
+        visual_id: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._title = title
@@ -245,20 +246,26 @@ class MatplotlibFigureCard(QWidget):
         from pyCamSet.gui.visual_style import (
             VisualStyle, apply_visual_style, style_from_json, style_path_for_visual,
         )
-        self._visual_id = "figure:" + re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")
+        legacy_visual_id = "figure:" + re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")
+        self._visual_id = visual_id or legacy_visual_id
         from pyCamSet.gui.preferences import config_directory
         self._style_path = style_path_for_visual(config_directory(), self._visual_id)
         self._style = VisualStyle()
         application = QApplication.instance()
-        apply_matplotlib_theme(
-            fig, application.property("pycamsetTheme") if application else "Light")
-        if self._style_path.exists():
+        theme_name = (application.property("pycamsetTheme") if application else None) or "Light"
+        apply_matplotlib_theme(fig, theme_name)
+        style_source = self._style_path
+        legacy_style_path = style_path_for_visual(config_directory(), legacy_visual_id)
+        if not style_source.exists() and self._visual_id != legacy_visual_id and legacy_style_path.exists():
+            # Read the old run-specific sidecar in place; migrate only on explicit save.
+            style_source = legacy_style_path
+        if style_source.exists():
             try:
                 self._style = style_from_json(
-                    self._style_path.read_text(encoding="utf-8"), self._visual_id)
+                    style_source.read_text(encoding="utf-8"),
+                    legacy_visual_id if style_source == legacy_style_path else self._visual_id)
                 apply_visual_style(
-                    fig, self._style,
-                    application.property("pycamsetTheme") if application else "Light")
+                    fig, self._style, theme_name)
             except (OSError, ValueError):
                 # Invalid preference files are ignored, never partially applied.
                 self._style = VisualStyle()

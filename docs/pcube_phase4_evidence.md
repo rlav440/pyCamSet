@@ -51,9 +51,9 @@ The M_NEBULA five-square telecentric Phase 3 output was also run without
 changing the source images:
 
 - Phase 3 input run: `20260923_021835_70e2cc`
-- Phase 4 run: `20260923_031302_a336d4`
+- Phase 4 run: `20260923_031443_d5fb27`
 - machine-readable output: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_real_pcube5_telecentric.json`
-- reloaded CameraSet: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_telecentric_pcube5/.pycamset_workspace/phase4_runs/20260923_031302_a336d4/self_calibrated_cameras.camset`
+- reloaded CameraSet: `D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase3_telecentric_pcube5/.pycamset_workspace/phase4_runs/20260923_031443_d5fb27/self_calibrated_cameras.camset`
 - observed cameras: 8/8
 - observed images: 100, with no missing image indices
 - initial mean reprojection error: 12.734540 px
@@ -63,7 +63,12 @@ changing the source images:
 Its only blocking flag was `final reprojection error did not improve finitely`.
 This is the expected fail-closed outcome for a run that made the result worse:
 the presence of complete observation coverage does not turn non-improvement
-into a calibration success.
+into a calibration success. A repeat with `max_nfev=100` produced the same
+12.734540 -> 13.557749 px result as `max_nfev=300`; the reported camera
+intrinsic, distortion and extrinsic drift was zero for all eight cameras.
+That controlled repeat is evidence that simply allowing more iterations does
+not recover a useful Phase 4 solution for this telecentric corpus; it is not
+presented as an underdetermination theorem.
 
 ## Code and regression coverage
 
@@ -91,8 +96,9 @@ The missing-image gate and initial-error fallback each have regression tests.
 - Mutation test: solver-success guard killed; missing-image guard killed; restore
   verified by the mutation harness.
 - Real r_nebula runner: exit 0; quality disposition `incomplete` as reported above.
-- Real M_NEBULA telecentric runner: exit 0; quality disposition `incomplete` because
-  the final error increased.
+- Real M_NEBULA telecentric runner: exit 0 at `max_nfev=300`; quality disposition
+  `incomplete` because the final error increased. The `max_nfev=100` repeat had
+  the same disposition and metrics.
 
 The source image roots were not modified. Bulk run artefacts remain outside the
 repository.

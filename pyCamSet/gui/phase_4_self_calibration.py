@@ -860,7 +860,12 @@ class Phase4DiagnosticsTab(QWidget):
         else:
             app = QApplication.instance()
             active_theme = app.property("pycamsetTheme") if app else "Light"
-            ok, msg = launch_visualise_calibration_for_run(chosen, theme_name=active_theme)
+            figure_themes = tuple(
+                theme.currentText() if theme.currentText() != "Inherit" else active_theme
+                for theme in self._assessment_figure_themes
+            )
+            ok, msg = launch_visualise_calibration_for_run(
+                chosen, theme_name=active_theme, figure_themes=figure_themes)
         if not ok:
             QMessageBox.warning(self, "Assess Calibration", msg)
 

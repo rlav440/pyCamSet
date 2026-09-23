@@ -124,9 +124,49 @@ def test_assess_calibration_child_receives_selected_theme(monkeypatch, tmp_path)
     captured = {}
     monkeypatch.setattr(assess_calibration, "spawn_viewer",
                         lambda module, arguments: captured.update(module=module, arguments=arguments) or (True, ""))
-    assess_calibration.spawn_calibration_viewer(tmp_path / "run.camset", theme_name="Sepia")
+    assess_calibration.spawn_calibration_viewer(
+        tmp_path / "run.camset", theme_name="Sepia", figure_themes=("Light", "Sepia", "Dark"))
     assert captured["module"] == "pyCamSet.utils.visualise_camset"
-    assert captured["arguments"] == [str(tmp_path / "run.camset"), "--theme", "Sepia"]
+    assert captured["arguments"] == [
+        str(tmp_path / "run.camset"), "--theme", "Sepia",
+        "--figure-themes", "Light", "Sepia", "Dark",
+    ]
+
+
+@pytest.mark.parametrize("module_name,class_name", [
+    ("pyCamSet.gui.phase_3_bundle_adjustment", "Phase3DiagnosticsTab"),
+    ("pyCamSet.gui.phase_4_self_calibration", "Phase4DiagnosticsTab"),
+])
+def test_assess_calibration_action_forwards_per_figure_themes(
+    monkeypatch, qapp, module_name, class_name,
+):
+    import importlib
+    from types import SimpleNamespace
+
+    module = importlib.import_module(module_name)
+    selected_run = {"run_id": "run"}
+    captured = {}
+    monkeypatch.setattr(module, "select_latest_visualisation_run", lambda selected, runs: selected_run)
+    monkeypatch.setattr(
+        module, "launch_visualise_calibration_for_run",
+        lambda run, **kwargs: captured.update(run=run, kwargs=kwargs) or (True, ""),
+    )
+    qapp.setProperty("pycamsetTheme", "Dark")
+    tab = SimpleNamespace(
+        _run_selector=SimpleNamespace(get_selected=lambda: [selected_run]),
+        _all_runs=[selected_run],
+        _current_run_label=SimpleNamespace(setText=lambda text: None),
+        _open3d_cb=SimpleNamespace(isChecked=lambda: False),
+        _assessment_figure_themes=[
+            SimpleNamespace(currentText=lambda value=value: value)
+            for value in ("Light", "Inherit", "Sepia")
+        ],
+    )
+    getattr(getattr(module, class_name), "_run_visualise_target")(tab)
+    assert captured["run"] is selected_run
+    assert captured["kwargs"] == {
+        "theme_name": "Dark", "figure_themes": ("Light", "Dark", "Sepia"),
+    }
 
 
 def test_assessment_figure_batch_formats_sizes_and_refuses_overwrite(tmp_path):

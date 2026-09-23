@@ -132,7 +132,10 @@ def _build_o_results(cam_set: Any) -> Optional[dict[str, np.ndarray]]:
     return {"err": err_arr, "x": x_arr}
 
 
-def launch_visualise_calibration_for_run(run: dict, theme_name: str = "Light") -> tuple[bool, str]:
+def launch_visualise_calibration_for_run(
+    run: dict, theme_name: str = "Light",
+    figure_themes: tuple[str, str, str] | None = None,
+) -> tuple[bool, str]:
     """Launch native matplotlib/pyvista windows via visualise_calibration()."""
     if load_CameraSet is None or visualise_calibration is None:
         return False, "visualise_calibration dependencies are unavailable."
@@ -159,20 +162,29 @@ def launch_visualise_calibration_for_run(run: dict, theme_name: str = "Light") -
     # Everything above is checked here, in the GUI process, so the usual
     # failures still reach the user as a dialog.  The drawing itself is not:
     # see visualise_camset for why it cannot share a process with Qt.
-    ok, detail = spawn_calibration_viewer(camset_path, theme_name=theme_name)
+    ok, detail = spawn_calibration_viewer(
+        camset_path, theme_name=theme_name, figure_themes=figure_themes)
     if not ok:
         return False, detail
     return True, f"Opened Assess Calibration for run {run_id} in a new window."
 
 
-def spawn_calibration_viewer(camset_path: Path, theme_name: str = "Light") -> tuple[bool, str]:
+def spawn_calibration_viewer(
+    camset_path: Path, theme_name: str = "Light",
+    figure_themes: tuple[str, str, str] | None = None,
+) -> tuple[bool, str]:
     """
     Draw a calibration in a process of its own.
 
     :param camset_path: the ``.camset`` file to draw
     :return: whether the viewer was started, and what to say if it was not
     """
-    return spawn_viewer("pyCamSet.utils.visualise_camset", [str(camset_path), "--theme", theme_name])
+    arguments = [str(camset_path), "--theme", theme_name]
+    if figure_themes is not None:
+        if len(figure_themes) != 3:
+            raise ValueError("figure_themes must contain one theme per assessment figure")
+        arguments.extend(["--figure-themes", *figure_themes])
+    return spawn_viewer("pyCamSet.utils.visualise_camset", arguments)
 
 
 def launch_visualise_calibration_open3d_for_run(

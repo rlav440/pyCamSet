@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -81,7 +82,18 @@ class CreateTargetDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Create Target")
-        self.resize(620, 720)
+        screen = self.screen() or QApplication.primaryScreen()
+        available = screen.availableGeometry().size() if screen else None
+        if available is None:
+            self.setMinimumSize(480, 520)
+            self.resize(620, 720)
+        else:
+            # Keep this secondary form inside the usable display area while
+            # retaining a sensible minimum on ordinary-sized screens.
+            minimum_width = min(480, available.width())
+            minimum_height = min(520, available.height())
+            self.setMinimumSize(minimum_width, minimum_height)
+            self.resize(min(620, available.width()), min(720, available.height()))
         #: Set once the person has typed their own name into the field;
         #: :meth:`_sync_default_name` leaves it alone from then on.
         self._name_is_user_set = False
@@ -112,6 +124,7 @@ class CreateTargetDialog(QDialog):
         root.addLayout(form)
 
         self._format_combo = QComboBox()
+        self._format_combo.setAccessibleName("Target export format")
         self._format_combo.addItems(list(_EXPORT_CHOICES))
         self._format_combo.currentIndexChanged.connect(self._sync_default_name)
         form.addRow("Export format:", self._format_combo)
@@ -125,6 +138,7 @@ class CreateTargetDialog(QDialog):
 
         out_row = QHBoxLayout()
         self._out_dir_edit = QLineEdit(str(Path.cwd()))
+        self._out_dir_edit.setAccessibleName("Target output directory")
         browse_btn = QPushButton("Browse\u2026")
         browse_btn.setFixedWidth(70)
         browse_btn.clicked.connect(self._browse_output_dir)
@@ -133,6 +147,7 @@ class CreateTargetDialog(QDialog):
         form.addRow("Output directory:", out_row)
 
         self._name_edit = QLineEdit()
+        self._name_edit.setAccessibleName("Target output file name")
         self._name_edit.textEdited.connect(self._on_name_edited)
         form.addRow("Output file name:", self._name_edit)
 
@@ -140,15 +155,22 @@ class CreateTargetDialog(QDialog):
 
         root.addWidget(make_separator())
         btn_row = QHBoxLayout()
-        btn_row.addWidget(make_blue_button("Save Target", self._save_target))
-        btn_row.addWidget(make_blue_button("Visualise Target", self._visualise_target))
+        save_button = make_blue_button("Save Target", self._save_target)
+        save_button.setAccessibleName("Save calibration target")
+        btn_row.addWidget(save_button)
+        visualise_button = make_blue_button("Visualise Target", self._visualise_target)
+        visualise_button.setAccessibleName("Visualise calibration target")
+        btn_row.addWidget(visualise_button)
         btn_row.addStretch()
         close_btn = QPushButton("Close")
+        close_btn.setAccessibleName("Close target dialog")
         close_btn.clicked.connect(self.close)
         btn_row.addWidget(close_btn)
         root.addLayout(btn_row)
 
         self._status = QLabel("")
+        self._status.setAccessibleName("Target generation status")
+        self._status.setAccessibleDescription("Save and visualisation feedback for the target")
         self._status.setStyleSheet("color: #2e7d32;")
         root.addWidget(self._status)
 

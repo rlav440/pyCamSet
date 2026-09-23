@@ -190,6 +190,7 @@ class Phase0Tab(QWidget):
 
         recent_row = QHBoxLayout()
         self._recent_combo = QComboBox()
+        self._recent_combo.setAccessibleName("Recent image folders")
         self._recent_combo.setToolTip(
             "Image folders this machine has calibrated before.  Picking one "
             "fills in the folder below, which populates every later phase "
@@ -197,6 +198,7 @@ class Phase0Tab(QWidget):
         )
         self._recent_combo.activated.connect(self._on_recent_selected)
         recent_forget_btn = QPushButton("Forget")
+        recent_forget_btn.setAccessibleName("Forget selected recent folder")
         recent_forget_btn.setFixedWidth(70)
         recent_forget_btn.setToolTip("Remove the selected folder from this list.")
         recent_forget_btn.clicked.connect(self._forget_selected_recent)
@@ -206,10 +208,12 @@ class Phase0Tab(QWidget):
 
         floc_row = QHBoxLayout()
         self._floc_edit = QLineEdit()
+        self._floc_edit.setAccessibleName("Image folder (f_loc)")
         self._floc_edit.setPlaceholderText("Root folder with per-camera sub-folders")
         self._floc_edit.setToolTip(IMAGE_FOLDER_SCHEMATIC)
         self._floc_edit.textChanged.connect(self._on_floc_change)
         floc_btn = QPushButton("Browse…")
+        floc_btn.setAccessibleName("Browse for image folder")
         floc_btn.setFixedWidth(70)
         floc_btn.setToolTip(IMAGE_FOLDER_SCHEMATIC)
         floc_btn.clicked.connect(self._browse_floc)
@@ -218,6 +222,7 @@ class Phase0Tab(QWidget):
         form.addRow("Image folder (f_loc):", floc_row)
 
         self._ws_edit = QLineEdit()
+        self._ws_edit.setAccessibleName("Workspace folder")
         self._ws_edit.setPlaceholderText("<f_loc>/.pycamset_workspace")
         self._ws_edit.setToolTip(
             "Workspace is fixed to <image_folder>/.pycamset_workspace."
@@ -228,6 +233,7 @@ class Phase0Tab(QWidget):
 
         btn_row = QHBoxLayout()
         self._confirm_btn = make_blue_button("Confirm Image Folder Validity", self._confirm_image_folder_validity)
+        self._confirm_btn.setAccessibleName("Confirm image folder validity")
         self._confirm_btn.setToolTip(
             "Validate that camera subfolders are present and each has "
             "the same non-zero image count."
@@ -239,6 +245,7 @@ class Phase0Tab(QWidget):
         btn_row.addWidget(self._ok_lbl)
 
         self._continue_btn = make_continue_button(self._continue_to_next)
+        self._continue_btn.setAccessibleName("Continue to Phase 1")
         self._continue_btn.setToolTip(
             "Proceed to Phase 1 after successful folder validation."
         )
@@ -248,6 +255,8 @@ class Phase0Tab(QWidget):
         form.addRow(btn_row)
 
         self._status_lbl = QLabel("")
+        self._status_lbl.setAccessibleName("Image folder validation status")
+        self._status_lbl.setAccessibleDescription("Validation feedback for the selected image folder")
         self._status_lbl.setStyleSheet("color: #2e7d32; font-size: 11px;")
         self._status_lbl.setWordWrap(True)
         form.addRow("", self._status_lbl)

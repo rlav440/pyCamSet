@@ -20,11 +20,12 @@ import re
 from dataclasses import replace
 from typing import Any, Callable, Optional
 
-from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtCore import QEvent, QObject, QThread, Signal, Qt
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QAbstractSpinBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
@@ -81,6 +82,23 @@ TAB_EXPORT_CALIBRATION = "Export Calibration"
 # ---------------------------------------------------------------------------
 
 BUTTON_ROLES = {"orange": "secondary", "green": "success", "blue": "primary"}
+
+
+class WheelMutationGuard(QObject):
+    """Ignore wheel changes on numeric/choice controls unless they have focus.
+
+    An unfocused wheel gesture is normally an attempt to scroll the page, not
+    to silently alter a calibration setting. Consuming it here avoids
+    re-posting wheel events (and the resulting scroll-recursion risk).
+    """
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
+        if event.type() == QEvent.Type.Wheel and isinstance(
+                obj, (QAbstractSpinBox, QComboBox)):
+            if not obj.hasFocus():
+                event.accept()
+                return True
+        return False
 
 # ---------------------------------------------------------------------------
 # Section label factory
@@ -413,6 +431,7 @@ def build_parameter_widget(meta) -> QWidget:
         elif meta.dtype == "json_vector":
             widget.setPlaceholderText("e.g. [k1,k2,p1,p2,k3] or blank")
     widget.setFixedWidth(220)
+    widget.setAccessibleName(meta.label)
     widget.setToolTip(build_parameter_tooltip(meta))
     return widget
 

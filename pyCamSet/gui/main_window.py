@@ -38,6 +38,7 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE4,
     TAB_PHASE4_DIAG,
     WorkspaceManager,
+    WheelMutationGuard,
     make_blue_button,
 )
 
@@ -80,8 +81,15 @@ class PyCamSetApp(QMainWindow):
             theme_name = "Light"
         apply_theme(QApplication.instance(), theme_name)
 
+        # Protect every tab's parameter controls from stray wheel changes.
+        # The filter consumes only unfocused wheel events and never re-posts
+        # them into the scroll hierarchy.
+        self._wheel_mutation_guard = WheelMutationGuard(self)
+        QApplication.instance().installEventFilter(self._wheel_mutation_guard)
+
         # Shared state injected into child tabs
         self._info_cb = QCheckBox("Enable Informational Windows")
+        self._info_cb.setAccessibleName("Enable informational tooltips")
         self._info_cb.setChecked(True)
         self._info_cb.stateChanged.connect(self._on_info_toggle)
 
@@ -91,6 +99,7 @@ class PyCamSetApp(QMainWindow):
         QApplication.instance().installEventFilter(self._tooltip_filter)
 
         self._terminal_cb = QCheckBox("Show Terminal Output")
+        self._terminal_cb.setAccessibleName("Show terminal output")
         self._terminal_cb.setChecked(True)
 
         self._theme_combo = QComboBox()

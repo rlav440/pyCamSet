@@ -244,6 +244,21 @@ def style_path_for_visual(app_config_dir: Path, visual_id: str) -> Path:
     return app_config_dir / "visual-styles" / f"{digest}.json"
 
 
+def _validate_user_style_filename(path: str) -> None:
+    """Reject filenames that Windows reserves, regardless of the current OS."""
+    if "\0" in path:
+        raise ValueError("The filename must not contain a NUL character.")
+    # QFileDialog returns native paths; split both separators so validation
+    # remains consistent when a style path was selected on another platform.
+    basename = path.replace("\\", "/").rsplit("/", 1)[-1]
+    device_name = basename.split(".", 1)[0].rstrip(" .").casefold()
+    reserved = {"con", "prn", "aux", "nul"}
+    reserved.update(f"{prefix}{number}" for prefix in ("com", "lpt")
+                    for number in "123456789¹²³")
+    if device_name in reserved:
+        raise ValueError(f"'{basename}' is a reserved filename on Windows.")
+
+
 class VisualStyleDialog:
     """Small optional-import Qt editor with preview, reset, and JSON import/export."""
 
@@ -418,6 +433,7 @@ class VisualStyleDialog:
                                                       "JSON files (*.json)")
                 if path:
                     try:
+                        _validate_user_style_filename(path)
                         self.current = self._read()
                         Path(path).write_text(style_to_json(self.current, visual_id), encoding="utf-8")
                     except (OSError, ValueError) as exc:

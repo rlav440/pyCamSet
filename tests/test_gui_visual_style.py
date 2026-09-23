@@ -19,6 +19,7 @@ from pyCamSet.gui.visual_style import (
     style_from_json,
     style_path_for_visual,
     style_to_json,
+    _validate_user_style_filename,
 )
 
 
@@ -49,6 +50,21 @@ def test_style_paths_are_separate_and_visual_ids_do_not_collide(tmp_path):
     assert first.parent == second.parent == tmp_path / "visual-styles"
     assert first != second
     assert first.suffix == ".json"
+
+
+@pytest.mark.parametrize("filename", [
+    "CON", "prn.txt", "Aux.backup.json", "NUL.txt", "COM1.log", "LPT9.data",
+    "COM¹.txt", "LPT².json", "folder\\NUL.txt",
+])
+def test_user_style_filename_rejects_windows_reserved_names(filename):
+    with pytest.raises(ValueError, match="reserved filename"):
+        _validate_user_style_filename(filename)
+
+
+def test_user_style_filename_rejects_nul_and_accepts_ordinary_names():
+    with pytest.raises(ValueError, match="NUL character"):
+        _validate_user_style_filename("style\0.json")
+    _validate_user_style_filename("ordinary-style.json")
 
 
 def test_apply_style_preserves_data_limits_colormap_and_axes_state():

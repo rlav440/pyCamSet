@@ -28,11 +28,15 @@ from pyCamSet.optimisation.find_target import (
 )
 from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
+from scipy.spatial.transform import Rotation
+from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+
 from conftest import make_camera
 
 # The pose solver needs at least 8 points in a view, so the grid is 5x5.
 GRID = 5
 SPACING = 0.02
+REF_MAGNIFICATION = 30000.0  # px per metre
 
 
 class StubTarget(AbstractTarget):
@@ -126,6 +130,86 @@ def test_fix_all_cameras_carries_distortion_inside_int(rig):
 
     assert set(entry) == {"ext", "int"}
     assert np.allclose(entry["int"][4:], [-0.2, 0.05, 1e-3, -1e-3, 0.01])
+
+
+def make_telecentric_camera(name, rotation):
+    """A telecentric camera with no identifiable translation."""
+    extrinsic = np.eye(4)
+    extrinsic[:3, :3] = Rotation.from_rotvec(np.asarray(rotation)).as_matrix()
+    return TelecentricCamera(
+        extrinsic=extrinsic, intrinsic=np.array([
+            [REF_MAGNIFICATION, 0.0, 640.0],
+            [0.0, REF_MAGNIFICATION, 480.0],
+            [0.0, 0.0, 1.0],
+        ]), res=[1280, 960], distortion_coefs=np.array([0.1]),
+        telecentricity=0.4, name=name)
+
+
+@pytest.fixture
+def telecentric_rig():
+    """Three telecentric cameras at different orientations."""
+    return CameraSet(
+        camera_dict={
+            name: make_telecentric_camera(name, rot)
+            for name, rot in [
+                ("left", (0.0, 0.0, 0.0)),
+                ("centre", (0.0, 0.45, 0.0)),
+                ("right", (-0.40, 0.0, 0.25)),
+            ]
+        }
+    )
+
+
+def test_fix_all_cameras_packs_telecentric_width_order_and_eps(telecentric_rig):
+    """The fixed blocks are rotation-only and [mx, cx, my, cy, k, eps]."""
+    fixed = fix_all_cameras(telecentric_rig)
+    assert set(fixed) == set(telecentric_rig.get_names())
+    for name in telecentric_rig.get_names():
+        entry = fixed[name]
+        assert entry["ext"].shape == (3,)
+        assert entry["int"].shape == (6,)
+        np.testing.assert_allclose(
+            entry["int"],
+            [30000.0, 640.0, 30000.0, 480.0, 0.1, 0.4],
+        )
+
+
+class SolidStubTarget(StubTarget):
+    """Give the target shallow depth to resolve telecentric planar ambiguity."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        flat = self.point_data.reshape(-1, 3)
+        x, y = flat[:, 0], flat[:, 1]
+        extent = np.abs(x).max()
+        flat[:, 2] = (
+            0.4 * SPACING * np.cos(3.0 * x / extent)
+            * np.sin(2.0 * y / extent)
+        )
+        self._process_data()
+
+
+@pytest.mark.slow
+def test_telecentric_pose_recovery_keeps_fixed_camera_parameters(telecentric_rig):
+    """Exercise the real solver entry point and verify fixed-camera invariance."""
+    target = SolidStubTarget()
+    before = {
+        cam.name: (cam.extrinsic.copy(), cam.intrinsic.copy(),
+                   cam.distortion_coefs.copy(), cam.telecentricity)
+        for cam in telecentric_rig
+    }
+    images = {name: _frame() for name in telecentric_rig.get_names()}
+
+    got = find_target_pose_at_timestep(images, target, telecentric_rig)
+
+    assert got.shape == (4, 4)
+    np.testing.assert_allclose(got, np.eye(4), atol=1e-6)
+    for cam in telecentric_rig:
+        ext, intrinsic, distortion, eps = before[cam.name]
+        np.testing.assert_allclose(cam.extrinsic, ext)
+        np.testing.assert_allclose(cam.intrinsic, intrinsic)
+        np.testing.assert_allclose(cam.distortion_coefs, distortion)
+        assert cam.telecentricity == eps
 
 
 # --------------------------------------------------------------------------

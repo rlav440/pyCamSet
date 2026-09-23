@@ -50,8 +50,17 @@ def canonical_phase_tag(phase: Optional[str]) -> str:
     return str(phase).strip().lower()
 
 
-def resolve_run_camset_artifact(run: dict) -> Optional[Path]:
-    """Return the first existing camset path from a run's artifacts."""
+def resolve_run_camset_artifact(
+    run: dict, *, accepted_only: bool = False
+) -> Optional[Path]:
+    """Return a run camset, optionally requiring an accepted Phase 4 result.
+
+    Diagnostic views may inspect incomplete Phase 4 outputs; export/handoff
+    callers must request accepted-only resolution.
+    """
+    if (accepted_only and run.get("phase") == "phase4"
+            and run.get("status") != "complete"):
+        return None
     artifacts = run.get("artifacts") or {}
     for key in (
         "self_calibrated_camset",

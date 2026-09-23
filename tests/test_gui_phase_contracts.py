@@ -424,6 +424,7 @@ def test_a_whole_calibration_runs_from_the_window(session_data_dir, tmp_path,
 
         # ---- phase 4: self-calibration -----------------------------------
         tab = window.phase4_tab
+        assert tab._max_nfev_spin.value() == 1000
         tab._floc_edit.setText(str(images))
         tab._max_nfev_spin.setValue(10)
         tab._run_phase4()

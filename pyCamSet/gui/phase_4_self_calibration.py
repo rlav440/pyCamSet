@@ -185,13 +185,13 @@ class Phase4Tab(QWidget):
 
         self._max_nfev_spin = QSpinBox()
         self._max_nfev_spin.setRange(5, 5000)
-        self._max_nfev_spin.setValue(300)
+        self._max_nfev_spin.setValue(1000)
         self._max_nfev_spin.setFixedWidth(110)
         self._max_nfev_spin.setToolTip(
             "Concept: maximum cost-function evaluations for the solver.\n\n"
-            "Default: 300\n"
+            "Default: 1000\n"
             "Range: 5–5000\n"
-            "Guidance: increase to 1000 if the solver reports non-convergence.\n"
+            "Guidance: increase above 1000 if the solver reports non-convergence.\n"
             "Self-calibration is sensitive; prefer more evaluations over fewer."
         )
         opts_form.addRow("max_nfev:", self._max_nfev_spin)

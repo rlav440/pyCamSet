@@ -218,10 +218,15 @@ class ExportCalibrationTab(QWidget):
                 self._terminal.append_line(f"SKIP {run_id}: unsupported phase '{phase}'.")
                 continue
 
-            camset_path = resolve_run_camset_artifact(run)
+            camset_path = resolve_run_camset_artifact(run, accepted_only=True)
             if camset_path is None:
                 failures += 1
-                self._terminal.append_line(f"FAIL {run_id}: no camset artifact found.")
+                if phase == "phase4" and run.get("status") != "complete":
+                    self._terminal.append_line(
+                        f"FAIL {run_id}: Phase 4 status is not complete; "
+                        "incomplete results are diagnostic-only.")
+                else:
+                    self._terminal.append_line(f"FAIL {run_id}: no camset artifact found.")
                 continue
 
             run_dir = Path(ws) / f"{phase}_runs" / run_id

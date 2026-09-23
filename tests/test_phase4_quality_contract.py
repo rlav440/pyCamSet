@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from pyCamSet.workflow import phase4
 from pyCamSet.workflow.workspace import WorkspaceManager, workspace_path_for
@@ -52,6 +53,7 @@ def test_phase4_quality_gate_records_gauge_and_coverage_contract():
         _optimisation(), _Handler(),
         {"success": True}, np.ones((4, 2)),
         initial_euclid=10.0, final_euclid=2.0, observation_count=4,
+        phase3_status="complete", phase3_run_id="p3",
     )
 
     assert gate["status"] == "complete"
@@ -70,6 +72,7 @@ def test_phase4_quality_gate_blocks_nonfinite_or_unsuccessful_solve():
         _optimisation(success=False, finite=False), _Handler(),
         {"success": False}, np.ones((4, 2)),
         initial_euclid=10.0, final_euclid=2.0, observation_count=4,
+        phase3_status="complete", phase3_run_id="p3",
     )
 
     assert gate["status"] == "incomplete"
@@ -88,6 +91,7 @@ def test_phase4_quality_gate_blocks_unobserved_image_indices():
         _optimisation(), _SparseHandler(),
         {"success": True}, np.ones((4, 2)),
         initial_euclid=10.0, final_euclid=2.0, observation_count=4,
+        phase3_status="complete", phase3_run_id="p3",
     )
 
     assert gate["image_coverage"] is False
@@ -138,11 +142,54 @@ def test_phase4_quality_gate_distinguishes_objective_from_mean_error():
             "final_reprojection_cost": 5.0,
         }, np.ones((4, 2)),
         initial_euclid=2.0, final_euclid=3.0, observation_count=4,
+        phase3_status="complete", phase3_run_id="p3",
     )
 
     assert gate["objective_cost_reduced"] is True
     assert gate["error_reduced"] is False
     assert "final reprojection error did not improve finitely" in gate["blocking_flags"]
+
+
+@pytest.mark.parametrize(
+    "phase3_status,phase3_run_id",
+    [(None, None), (None, "p3"), ("complete", None), ("failed", "p3")],
+)
+def test_phase4_provenance_must_be_identified_and_complete(
+    phase3_status, phase3_run_id
+):
+    gate = phase4._quality_gate(
+        _optimisation(), _Handler(), {"success": True}, np.ones((4, 2)),
+        initial_euclid=10.0, final_euclid=2.0, observation_count=4,
+        phase3_status=phase3_status, phase3_run_id=phase3_run_id,
+    )
+    assert gate["status"] == "incomplete"
+    assert not gate["phase3_provenance_complete"]
+    assert "Phase 3 input lacks an identified run with complete status" in gate["blocking_flags"]
+
+
+def test_phase4_provenance_accepts_identified_complete_run():
+    gate = phase4._quality_gate(
+        _optimisation(), _Handler(), {"success": True}, np.ones((4, 2)),
+        initial_euclid=10.0, final_euclid=2.0, observation_count=4,
+        phase3_status="complete", phase3_run_id="p3",
+    )
+    assert gate["status"] == "complete"
+    assert gate["phase3_provenance_complete"]
+
+
+def test_incomplete_phase4_alias_is_diagnostic_only(tmp_path):
+    from pyCamSet.gui.assess_calibration import resolve_run_camset_artifact
+
+    camset = tmp_path / "incomplete.camset"
+    camset.write_text("diagnostic", encoding="utf-8")
+    run = {
+        "phase": "phase4",
+        "status": "incomplete",
+        "artifacts": {"optimised_camset": str(camset)},
+    }
+
+    assert resolve_run_camset_artifact(run) == camset
+    assert resolve_run_camset_artifact(run, accepted_only=True) is None
 
 
 def test_phase4_run_persists_quality_gate_disposition(tmp_path, monkeypatch):
@@ -164,6 +211,32 @@ def test_phase4_run_persists_quality_gate_disposition(tmp_path, monkeypatch):
     assert metadata["status"] == "incomplete"
     assert metadata["inputs"]["phase3_run_id"] == "p3"
     assert workspace.find_run("phase4", metadata["run_id"])["status"] == "incomplete"
+
+
+@pytest.mark.parametrize("options,expected", [({}, 100), ({"max_nfev": 37}, 37)])
+def test_phase4_api_default_is_100_and_explicit_value_is_preserved(
+    tmp_path, monkeypatch, options, expected
+):
+    detection = SimpleNamespace(cam_names=["cam0"])
+    previous_handler = SimpleNamespace(target=object(), detection=detection)
+    previous_cams = SimpleNamespace(
+        calibration_handler=previous_handler,
+        get_names=lambda: ["cam0"],
+    )
+    monkeypatch.setattr(phase4, "load_CameraSet", lambda _path: previous_cams)
+    captured = {}
+
+    def stop_after_option_capture(*args, options, **kwargs):
+        captured.update(options)
+        raise RuntimeError("stop after checking options")
+
+    monkeypatch.setattr(phase4, "solve", stop_after_option_capture)
+    with pytest.raises(RuntimeError, match="stop after checking options"):
+        phase4._solve(
+            {"problem_options": options}, tmp_path, tmp_path / "phase3.camset",
+            {"run_id": "p3", "status": "complete"}, lambda _line: None,
+        )
+    assert captured["max_nfev"] == expected
 
 
 def test_self_calibration_gauge_uses_target_point_data_units():

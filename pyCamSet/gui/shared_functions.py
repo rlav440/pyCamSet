@@ -246,9 +246,8 @@ class MatplotlibFigureCard(QWidget):
             VisualStyle, apply_visual_style, style_from_json, style_path_for_visual,
         )
         self._visual_id = "figure:" + re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")
-        self._style_path = style_path_for_visual(
-            Path(QStandardPaths.writableLocation(
-                QStandardPaths.StandardLocation.AppConfigLocation)), self._visual_id)
+        from pyCamSet.gui.preferences import config_directory
+        self._style_path = style_path_for_visual(config_directory(), self._visual_id)
         self._style = VisualStyle()
         application = QApplication.instance()
         apply_matplotlib_theme(
@@ -280,6 +279,8 @@ class MatplotlibFigureCard(QWidget):
         self._preset.addItem("Publication single-column template · 85 mm · 300 dpi", (85.0, 300))
         self._preset.addItem("Publication double-column template · 180 mm · 300 dpi", (180.0, 300))
         self._preset.setToolTip("Generic sizing templates only; not a claim of compliance with any named journal.")
+        from pyCamSet.gui.preferences import bind_export_preset
+        bind_export_preset(self._preset, self._visual_id)
         header.addWidget(self._preset)
         for fmt in ("SVG", "PDF"):
             vector_btn = QPushButton(f"Save {fmt}")

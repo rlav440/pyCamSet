@@ -1068,6 +1068,8 @@ class Phase3DiagnosticsTab(QWidget):
         self._three_d_export_preset.addItem("3D double-column · 180 mm · 300 dpi", (180.0, 300))
         self._three_d_export_preset.setToolTip(
             "PNG pixel dimensions follow this generic width/DPI preset; no journal compliance is implied.")
+        from pyCamSet.gui.preferences import bind_export_preset
+        bind_export_preset(self._three_d_export_preset, "phase3:3d-export")
         visual_btn_row.addWidget(self._three_d_export_preset)
         export_3d_btn = QPushButton("Export 3D geometry…")
         export_3d_btn.setToolTip("PyVista: GLTF scene, OBJ geometry, or PLY target-frame point cloud.")
@@ -1078,6 +1080,7 @@ class Phase3DiagnosticsTab(QWidget):
         self._assessment_export_preset.addItem("Single-column template · 85 mm · 300 dpi", (85.0, 300))
         self._assessment_export_preset.addItem("Double-column template · 180 mm · 300 dpi", (180.0, 300))
         self._assessment_export_preset.setToolTip("Generic templates; no named-journal compliance is implied.")
+        bind_export_preset(self._assessment_export_preset, "phase3:assessment-export")
         visual_btn_row.addWidget(self._assessment_export_preset)
         save_2d_btn = QPushButton("Save 2D assessment exports…")
         save_2d_btn.setToolTip("Save the three child-process Matplotlib figures as PNG, SVG and PDF.")

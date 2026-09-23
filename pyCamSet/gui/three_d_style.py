@@ -9,7 +9,6 @@ import json
 import math
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QMessageBox,
     QPushButton, QWidget,
@@ -23,13 +22,10 @@ _VIEWS = {"isometric", "top", "front", "side"}
 
 def _style_path(visual_id: str) -> Path:
     """Hash the fixed visual identity so paths cannot escape app config."""
+    from pyCamSet.gui.preferences import config_directory
+
     digest = hashlib.sha256(visual_id.encode("utf-8")).hexdigest()[:16]
-    location = QStandardPaths.writableLocation(
-        QStandardPaths.StandardLocation.AppConfigLocation)
-    if not location:
-        raise ValueError("The application configuration directory is unavailable")
-    config_dir = Path(location)
-    return config_dir / "visual-styles" / f"3d-{digest}.json"
+    return config_directory() / "visual-styles" / f"3d-{digest}.json"
 
 
 def _validated_style(document: object, visual_id: str) -> dict:

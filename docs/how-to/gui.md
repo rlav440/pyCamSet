@@ -36,6 +36,22 @@ Neither theme nor presentation styles recolour plotted data, overlays, or
 scientific colormaps. Open3D retains its native interactive view and does not
 support these managed 3D style controls.
 
+These presentation choices are remembered for the current operating-system
+user: the theme remains in Qt's existing per-user settings, while tooltip and
+terminal visibility, export presets, and saved visual styles live under Qt's
+pyCamSet application-config directory. On Windows this is under the user's
+local application data (`%LOCALAPPDATA%/pyCamSet/pyCamSet`); on macOS use
+`~/Library/Preferences/pyCamSet`, and on Linux use
+`$XDG_CONFIG_HOME/pyCamSet` or `~/.config/pyCamSet`. The JSON file is
+`preferences.json`; reset those
+choices by closing pyCamSet and deleting that file. The `visual-styles`
+directory contains the existing per-visual style files and can be reset
+separately. Neither location is a project or run directory. A malformed
+preferences file is left intact and defaults are used; the original is copied
+to `preferences.json.corrupt` if a later preference edit replaces it.
+An explicit `PYCAMSET_CONFIG_DIR` environment override takes precedence over
+Qt's standard location, for isolated or portable setups.
+
 The persistent action row below each phase's parameters keeps its run,
 diagnostics, and available continue/assessment actions in reach while expanded
 settings scroll independently. At smaller window sizes, use the parameter

@@ -70,6 +70,9 @@ class PyCamSetApp(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        from pyCamSet.gui.preferences import get_preferences, initialise_application_identity
+        initialise_application_identity(QApplication.instance())
+        self._preferences = get_preferences()
         self.setWindowTitle("pyCamSet — Multi-Camera Calibration")
         self.resize(1140, 820)
         self.setMinimumSize(860, 640)
@@ -91,7 +94,7 @@ class PyCamSetApp(QMainWindow):
         # Shared state injected into child tabs
         self._info_cb = QCheckBox("Enable Informational Windows")
         self._info_cb.setAccessibleName("Enable informational tooltips")
-        self._info_cb.setChecked(True)
+        self._info_cb.setChecked(self._preferences.values["info_enabled"])
         self._info_cb.stateChanged.connect(self._on_info_toggle)
 
         # Install an application-level event filter that blocks hover tooltip
@@ -101,7 +104,8 @@ class PyCamSetApp(QMainWindow):
 
         self._terminal_cb = QCheckBox("Show Terminal Output")
         self._terminal_cb.setAccessibleName("Show terminal output")
-        self._terminal_cb.setChecked(True)
+        self._terminal_cb.setChecked(self._preferences.values["terminal_visible"])
+        self._terminal_cb.stateChanged.connect(self._on_terminal_toggle)
 
         self._theme_combo = QComboBox()
         self._theme_combo.setObjectName("themeSelector")
@@ -121,6 +125,10 @@ class PyCamSetApp(QMainWindow):
 
         self._build_ui()
         self._on_info_toggle()  # apply initial tooltip state
+        if self._preferences.load_error:
+            self.statusBar().showMessage(
+                "Saved GUI preferences are invalid; defaults are active and the original file is preserved.",
+                15000)
 
     # ------------------------------------------------------------------
 
@@ -596,6 +604,23 @@ class PyCamSetApp(QMainWindow):
         QApplication.instance().setProperty(
             "tooltipsEnabled", self._info_cb.isChecked()
         )
+        if self._preferences.values["info_enabled"] != self._info_cb.isChecked():
+            self._persist_preference("info_enabled", self._info_cb.isChecked())
+
+    def _on_terminal_toggle(self) -> None:
+        """Persist the visibility choice for per-tab terminal panes."""
+        self._persist_preference("terminal_visible", self._terminal_cb.isChecked())
+
+    def _persist_preference(self, key: str, value: bool) -> None:
+        """Keep the UI usable and report a failed per-user settings write."""
+        try:
+            self._preferences.set(key, value)
+        except OSError as exc:
+            self.statusBar().showMessage(f"GUI preference was not saved: {exc}", 10000)
+            checkbox = self._info_cb if key == "info_enabled" else self._terminal_cb
+            checkbox.blockSignals(True)
+            checkbox.setChecked(self._preferences.values[key])
+            checkbox.blockSignals(False)
 
     def _on_theme_changed(self, theme_name: str) -> None:
         """Apply and persist the selected presentation theme."""
@@ -605,6 +630,8 @@ class PyCamSetApp(QMainWindow):
         refresh_matplotlib_theme(theme_name)
         self._theme_settings.setValue("appearance/theme", theme_name)
         self._theme_settings.sync()
+        if self._theme_settings.status() != QSettings.Status.NoError:
+            self.statusBar().showMessage("Colour theme is active but could not be saved.", 10000)
 
     def switch_to_tab(self, name: str) -> None:
         """Switch to the named tab by its display text."""

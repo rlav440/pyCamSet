@@ -844,6 +844,8 @@ class Phase1DiagnosticsTab(QWidget):
         self._montage_export_preset.addItem("Single-column · 85 mm · 300 dpi", (85.0, 300))
         self._montage_export_preset.addItem("Double-column · 180 mm · 300 dpi", (180.0, 300))
         self._montage_export_preset.setToolTip("Generic width/DPI templates; no journal compliance is implied.")
+        from pyCamSet.gui.preferences import bind_export_preset
+        bind_export_preset(self._montage_export_preset, "phase1:detection-montage")
         nav_bar.addWidget(self._montage_export_preset)
         self._draw_csv_btn = QPushButton("Save coordinates CSV")
         self._draw_csv_btn.setEnabled(False)
@@ -1419,13 +1421,12 @@ class Phase1DiagnosticsTab(QWidget):
             "mpimg": mpimg,
         }
         # Load only the validated presentation sidecar; science/run files stay untouched.
-        from PySide6.QtCore import QStandardPaths
+        from pyCamSet.gui.preferences import config_directory
         from pyCamSet.gui.visual_style import (
             style_from_json, style_path_for_visual, apply_visual_style,
         )
         style_id = "phase1:detection-overlay"
-        sidecar = style_path_for_visual(Path(QStandardPaths.writableLocation(
-            QStandardPaths.StandardLocation.AppConfigLocation)), style_id)
+        sidecar = style_path_for_visual(config_directory(), style_id)
         try:
             saved_style = style_from_json(sidecar.read_text(encoding="utf-8"), style_id)
             self._draw_state["style"] = saved_style
@@ -1445,16 +1446,15 @@ class Phase1DiagnosticsTab(QWidget):
         """Edit only rendered detections, never their source points or image."""
         if not self._draw_state:
             return
-        from PySide6.QtCore import QStandardPaths
         from PySide6.QtWidgets import QApplication, QMessageBox
+        from pyCamSet.gui.preferences import config_directory
         from pyCamSet.gui.visual_style import (
             VisualStyle, VisualStyleDialog, apply_visual_style,
             style_from_json, style_path_for_visual, style_to_json,
         )
 
         visual_id = "phase1:detection-overlay"
-        config_dir = Path(QStandardPaths.writableLocation(
-            QStandardPaths.StandardLocation.AppConfigLocation))
+        config_dir = config_directory()
         style_path = style_path_for_visual(config_dir, visual_id)
         current = VisualStyle()
         try:

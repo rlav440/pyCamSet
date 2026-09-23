@@ -177,3 +177,41 @@ def test_self_calibration_gauge_uses_target_point_data_units():
     )
 
     assert np.isclose(_gauge_square_size(target), 0.0042857143)
+
+
+def test_fixed_camera_warm_start_keeps_only_free_parameters():
+    from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler, TemplateBundleHandler
+
+    class _Primitive:
+        def __init__(self, *, extr_unfixed):
+            self.intr = np.array([[10.0, 11.0], [20.0, 21.0]])
+            self.extr = np.array([[30.0, 31.0, 32.0], [40.0, 41.0, 42.0]])
+            self.poses = np.array([[50.0, 51.0, 52.0, 53.0, 54.0, 55.0]])
+            self.bundle_pts = np.array([[60.0, 61.0, 62.0]])
+            self.intr_unfixed = np.array([False, False])
+            self.extr_unfixed = np.asarray(extr_unfixed, dtype=bool)
+            self.poses_unfixed = np.array([True])
+            self.bdpt_unfixed = np.array([True])
+            self.pose_end = 3 * int(self.extr_unfixed.sum()) + 6
+            self.bdpt_end = self.pose_end + 3
+
+        def return_bundle_primitives(self, _params):
+            return self.intr, self.extr, self.poses, self.bundle_pts
+
+    previous_handler = TemplateBundleHandler.__new__(TemplateBundleHandler)
+    previous_handler.missing_poses = None
+    previous_handler.target = SimpleNamespace(point_data=np.array([[[1.0, 2.0, 3.0]]]))
+    previous_handler.bundlePrimitive = _Primitive(extr_unfixed=[True, True])
+    previous_cams = SimpleNamespace(
+        calibration_handler=previous_handler,
+        calibration_params=np.arange(15.0),
+    )
+
+    current_handler = TemplateBundleHandler.__new__(TemplateBundleHandler)
+    current_handler.bundlePrimitive = _Primitive(extr_unfixed=[False, True])
+    current_handler.feat_unfixed = np.array([True, True, True])
+
+    SelfBundleHandler.set_from_templated_camset(current_handler, previous_cams)
+
+    assert current_handler.initial_params.shape == (12,)
+    assert current_handler.initial_params[:9].tolist() == [40.0, 41.0, 42.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0]

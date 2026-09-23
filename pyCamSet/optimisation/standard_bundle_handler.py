@@ -386,7 +386,7 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         prev_primitive = prev_handler.bundlePrimitive
         prev_params = np.asarray(prev_cams.calibration_params, dtype=float)
-        if prev_params.shape[0] != prev_primitive.pose_end:
+        if prev_params.shape[0] < prev_primitive.pose_end:
             raise ValueError(
                 f"The previous calibration's {prev_params.shape[0]} parameters "
                 f"do not fill its own intrinsic, extrinsic and pose blocks, "
@@ -400,7 +400,8 @@ class SelfBundleHandler(TemplateBundleHandler):
         # held fixed from the arrays it fixed them in, so every camera and
         # pose comes back whole however that solve was parameterised.
         prev_intr, prev_extr, prev_poses = (
-            np.copy(a) for a in prev_primitive.return_bundle_primitives(prev_params))
+            np.copy(a) for a in prev_primitive.return_bundle_primitives(
+                prev_params[:prev_primitive.pose_end]))
 
         bundle = self.bundlePrimitive
         for name, prev_vals, vals, unfixed in (
@@ -472,6 +473,7 @@ class SelfBundleHandler(TemplateBundleHandler):
         # which features are solvable, and which may take the gauge, both
         # follow from the detections that are left
         self._setup_free_points()
+
 
     def get_initial_params(self) -> np.ndarray:
         """

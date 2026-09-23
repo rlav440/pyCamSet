@@ -84,6 +84,33 @@ target points and reference pose; it does not invent an unobservable
 telecentric camera translation. This is a model-level limitation, not a
 silent camera or image drop.
 
+## Controlled parameter-lock probes
+
+The Phase 4 entry point also had a real fixed-parameter warm-start defect:
+`set_from_templated_camset` copied the longer Phase 3 flat vector directly into
+the shorter Phase 4 vector. The implementation now rehydrates the primitive
+arrays and repacks only the parameters that remain free; this is covered by a
+regression test. The fix was exercised against the same eight-camera
+telecentric Phase 3 artefact rather than only a synthetic handler.
+
+Three controlled probes then tested whether pinning the telecentric camera
+extrinsics, intrinsics, or both could produce a good result:
+
+| fixed parameters | final mean error (px) | objective cost | solver |
+| --- | ---: | ---: | --- |
+| extrinsics | 13.539554 | 8,603,475.4008 | successful, 16 evaluations |
+| intrinsics | 13.639066 | 8,817,958.2747 | successful, 9 evaluations |
+| both | 13.433844 | 8,936,825.8943 | successful, 8 evaluations |
+
+All three start at 12.734540 px and reduce the objective while worsening the
+mean error. The complete machine-readable probe output is
+`D:/Hermes/profiles/rebels/cache/scratch/pcube_p16x2_evidence/phase4_telecentric_fixed_variants.json`.
+This rules out the simplest camera-parameter warm-start explanation without
+weakening the quality gate. Together with the repeated all-free run and the
+rotation-only telecentric extrinsic model, the current evidence supports a
+model/data-level limitation for this telecentric corpus rather than a reason to
+accept its Phase 4 result.
+
 ## Code and regression coverage
 
 The implementation adds:
@@ -102,7 +129,7 @@ The missing-image gate and initial-error fallback each have regression tests.
 
 ## Verification
 
-- Phase 4 contract: 8 passed.
+- Phase 4 contract: 9 passed.
 - Workflow backend seam and phase tests plus Phase 4 contract: 153 passed.
 - GUI phase contracts (offscreen): 95 passed.
 - Bundle-handler tests: 43 passed, 13 pre-existing numerical/plot warnings.
@@ -110,6 +137,8 @@ The missing-image gate and initial-error fallback each have regression tests.
 - `git diff --check`: passed.
 - Mutation test: solver-success guard killed; missing-image guard killed; restore
   verified by the mutation harness.
+- Fixed-camera warm-start regression: passed; the real telecentric lock probes
+  completed for extrinsics, intrinsics, and both together.
 - Real r_nebula runner: exit 0; quality disposition `incomplete` as reported above.
 - Real M_NEBULA telecentric runner: exit 0 at `max_nfev=100`; quality disposition
   `incomplete` because the final mean error increased despite objective-cost

@@ -17,6 +17,8 @@ Conventions
 from __future__ import annotations
 
 import re
+import csv
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -221,7 +223,7 @@ def _continue_clicked(btn: QPushButton, callback: Callable) -> None:
 
 
 class MatplotlibFigureCard(QWidget):
-    """A labelled matplotlib card with per-figure Expand and Save PNG buttons."""
+    """A managed Matplotlib visual with presentation and source-data exports."""
 
     def __init__(
         self,
@@ -230,11 +232,15 @@ class MatplotlibFigureCard(QWidget):
         canvas_cls,
         parent: Optional[QWidget] = None,
         min_height: int = 300,
+        csv_export: Optional[dict[str, Any]] = None,
+        csv_disabled_reason: str = "CSV is unavailable: this visual has no tabular source adapter.",
+        canvas=None,
     ) -> None:
         super().__init__(parent)
         self._title = title
         self._fig = fig
         self._canvas_cls = canvas_cls
+        self._csv_export = csv_export
         from pyCamSet.gui.theme import apply_matplotlib_theme
         from pyCamSet.gui.visual_style import (
             VisualStyle, apply_visual_style, style_from_json, style_path_for_visual,
@@ -266,8 +272,25 @@ class MatplotlibFigureCard(QWidget):
         header.addStretch()
         save_btn = QPushButton("Save PNG")
         save_btn.setFixedWidth(82)
+        save_btn.setAccessibleName(f"Save PNG for {title}")
         save_btn.clicked.connect(self._save_png)
         header.addWidget(save_btn)
+        self._preset = QComboBox()
+        self._preset.addItem("Screen template · 160 mm · 150 dpi", (160.0, 150))
+        self._preset.addItem("Publication single-column template · 85 mm · 300 dpi", (85.0, 300))
+        self._preset.addItem("Publication double-column template · 180 mm · 300 dpi", (180.0, 300))
+        self._preset.setToolTip("Generic sizing templates only; not a claim of compliance with any named journal.")
+        header.addWidget(self._preset)
+        for fmt in ("SVG", "PDF"):
+            vector_btn = QPushButton(f"Save {fmt}")
+            vector_btn.clicked.connect(lambda _checked=False, output_format=fmt: self._save_vector(output_format))
+            header.addWidget(vector_btn)
+        self._csv_btn = QPushButton("Save CSV")
+        has_csv_rows = csv_export is not None and bool(csv_export.get("rows"))
+        self._csv_btn.setEnabled(has_csv_rows)
+        self._csv_btn.setToolTip("Export source-backed numeric data." if has_csv_rows else csv_disabled_reason)
+        self._csv_btn.clicked.connect(self._save_csv)
+        header.addWidget(self._csv_btn)
         style_btn = QPushButton("Style…")
         style_btn.setAccessibleName(f"Figure style options for {title}")
         style_btn.clicked.connect(self._edit_style)
@@ -278,7 +301,7 @@ class MatplotlibFigureCard(QWidget):
         header.addWidget(expand_btn)
         layout.addLayout(header)
 
-        self._canvas = self._canvas_cls(self._fig)
+        self._canvas = canvas if canvas is not None else self._canvas_cls(self._fig)
         self._canvas.setMinimumHeight(min_height)
         self._canvas.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         # Expose the figure's visible heading to assistive technology without
@@ -295,8 +318,64 @@ class MatplotlibFigureCard(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Figure as PNG", f"{safe_title}.png", "PNG Files (*.png)"
         )
-        if path:
-            self._fig.savefig(path, dpi=150, bbox_inches="tight")
+        if not path:
+            return
+        try:
+            from pyCamSet.gui.visual_style import _validate_user_style_filename
+            _validate_user_style_filename(Path(path).name)
+            width_mm, dpi = self._preset.currentData()
+            original_size = self._fig.get_size_inches().copy()
+            width_inches = width_mm / 25.4
+            height_inches = width_inches * float(original_size[1]) / float(original_size[0])
+            pixel_width = round(width_inches * dpi)
+            pixel_height = round(height_inches * dpi)
+            self._fig.set_size_inches(pixel_width / dpi, pixel_height / dpi, forward=False)
+            try:
+                self._fig.savefig(path, dpi=int(dpi), format="png")
+            finally:
+                self._fig.set_size_inches(original_size, forward=False)
+        except Exception as exc:
+            QMessageBox.warning(self, "PNG export failed", f"The figure could not be saved.\n\nTechnical detail: {exc}")
+
+    def _save_vector(self, output_format: str) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Save Figure as {output_format}", f"figure.{output_format.lower()}",
+            f"{output_format} Files (*.{output_format.lower()})")
+        if not path:
+            return
+        try:
+            from pyCamSet.gui.visual_style import _validate_user_style_filename
+            _validate_user_style_filename(Path(path).name)
+            width_mm, dpi = self._preset.currentData()
+            original_size = self._fig.get_size_inches().copy()
+            width_inches = width_mm / 25.4
+            height_inches = width_inches * float(original_size[1]) / float(original_size[0])
+            self._fig.set_size_inches(width_inches, height_inches, forward=False)
+            try:
+                self._fig.savefig(path, format=output_format.lower(), dpi=int(dpi))
+            finally:
+                self._fig.set_size_inches(original_size, forward=False)
+        except Exception as exc:
+            QMessageBox.warning(self, f"{output_format} export failed",
+                                f"The figure could not be saved.\n\nTechnical detail: {exc}")
+
+    def _save_csv(self) -> None:
+        if self._csv_export is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save source data as CSV", "figure-data.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            from pyCamSet.gui.visual_style import _validate_user_style_filename
+            _validate_user_style_filename(Path(path).name)
+            adapter = self._csv_export
+            with open(path, "w", newline="", encoding="utf-8") as stream:
+                stream.write("# metadata: " + json.dumps(adapter["metadata"], ensure_ascii=False) + "\n")
+                writer = csv.writer(stream)
+                writer.writerow(adapter["columns"])
+                writer.writerows(adapter["rows"])
+        except Exception as exc:
+            QMessageBox.warning(self, "CSV export failed", f"Source data could not be saved.\n\nTechnical detail: {exc}")
 
     def _edit_style(self) -> None:
         """Preview a visual-only style and persist it outside scientific runs."""

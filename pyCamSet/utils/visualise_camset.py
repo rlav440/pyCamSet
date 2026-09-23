@@ -36,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
         description="Show the calibration saved in a .camset file.",
     )
     parser.add_argument("camset", type=Path, help="the .camset file to show")
+    parser.add_argument("--theme", choices=("Light", "Dark", "Sepia"), default="Light",
+                        help="Matplotlib chrome theme propagated from the GUI")
     parser.add_argument(
         "--save-dir", type=Path, default=None,
         help="write the figures here as PNGs as well")
@@ -46,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
         "--png", type=Path, default=None,
         help="render the offscreen three-panel assessment to this file "
              "instead of drawing the figures")
+    parser.add_argument("--figure-width-mm", type=float, default=160.0)
+    parser.add_argument("--figure-dpi", type=int, default=150)
+    parser.add_argument("--figure-formats", nargs="+", choices=("png", "svg", "pdf"), default=("png",))
+    parser.add_argument("--matplotlib-only", action="store_true",
+                        help="skip PyVista scenes for a 2D-only export request")
     args = parser.parse_args(argv)
 
     if not args.camset.is_file():
@@ -90,8 +97,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        cams.visualise_calibration(
-            show=not args.no_show, save_dir=args.save_dir)
+        from pyCamSet.utils.visualisation import visualise_calibration
+        results = {"x": cams.calibration_params, "err": cams.calibration_result}
+        visualise_calibration(
+            results, cams.calibration_handler, show=not args.no_show,
+            save_dir=args.save_dir, theme_name=args.theme,
+            figure_width_mm=args.figure_width_mm, figure_dpi=args.figure_dpi,
+            figure_formats=tuple(args.figure_formats), matplotlib_only=args.matplotlib_only)
     except Exception as exc:
         print(f"Could not draw the calibration: {exc}", file=sys.stderr)
         return 1

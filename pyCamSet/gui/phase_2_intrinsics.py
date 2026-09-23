@@ -1053,8 +1053,30 @@ class Phase2DiagnosticsTab(QWidget):
 
         create_btn.clicked.connect(_on_create)
 
+        csv_rows = []
+        for camera_name, camera_values in d26.items():
+            view_indices, view_errors, _, _, _ = _normalise_per_view_series(camera_values)
+            csv_rows.extend((camera_name, int(view_index), float(error))
+                            for view_index, error in zip(view_indices, view_errors)
+                            if not np.isnan(error))
         self._per_view_layout.addWidget(ctrl)
-        self._per_view_layout.addWidget(canvas)
+        self._per_view_layout.addWidget(MatplotlibFigureCard(
+            f"D2.6/D2.7 per-image reprojection error ({run.get('run_id', '?')})",
+            fig, FigureCanvasQTAgg, parent=self._per_view_widget, min_height=320,
+            canvas=canvas,
+            csv_export={
+                "columns": ["camera", "view_index", "rms_reprojection_error_px"],
+                "rows": csv_rows,
+                "metadata": {
+                    "run_id": run.get("run_id"), "phase": "phase2",
+                    "diagnostic": "D2.6_per_view_reprojection",
+                    "data_kind": "observed diagnostic values from run diagnostics",
+                    "units": {"view_index": "index", "rms_reprojection_error_px": "px"},
+                    "x_axis": "view_index", "y_axis": "rms_reprojection_error_px",
+                    "threshold_line": "interactive display-only threshold; not included in exported source values",
+                },
+            },
+        ))
 
     def _create_phase2_run_from_threshold(
         self,
@@ -1200,6 +1222,7 @@ class Phase2DiagnosticsTab(QWidget):
         n_cols = 2
         n_rows = int(math.ceil(n / n_cols))
         fig = Figure(figsize=(12.0, max(4.0, 4.2 * n_rows)), tight_layout=True)
+        distortion_csv_rows = []
         for i, cam in enumerate(cams, start=1):
             res = np.array(cam.res).astype(int).reshape(-1)
             w = int(res[0]) if res.size >= 2 else 1280
@@ -1247,6 +1270,10 @@ class Phase2DiagnosticsTab(QWidget):
             u = pts_distorted[:, 0] - pts_ideal[:, 0]
             v = pts_distorted[:, 1] - pts_ideal[:, 1]
             mag = np.hypot(u, v)
+            distortion_csv_rows.extend(
+                (cam.name, float(x), float(y), float(dx), float(dy), float(magnitude))
+                for x, y, dx, dy, magnitude in zip(pts_ideal[:, 0], pts_ideal[:, 1], u, v, mag)
+            )
 
             ax = fig.add_subplot(n_rows, n_cols, i)
             sc = ax.quiver(pts_ideal[:, 0], pts_ideal[:, 1], u, -v, mag,
@@ -1267,6 +1294,17 @@ class Phase2DiagnosticsTab(QWidget):
                 FigureCanvasQTAgg,
                 parent=self._distortion_widget,
                 min_height=460,
+                csv_export={
+                    "columns": ["camera", "ideal_x_px", "ideal_y_px", "distortion_dx_px", "distortion_dy_px", "displacement_magnitude_px"],
+                    "rows": distortion_csv_rows,
+                    "metadata": {
+                        "run_id": run.get("run_id"), "phase": "phase2",
+                        "diagnostic": "D2.8 forward distortion field",
+                        "data_kind": "derived model output computed from selected camset intrinsics/distortion; not observed detections",
+                        "units": {"coordinates": "px", "displacement": "px"},
+                        "x_axis": "ideal_x_px", "y_axis": "ideal_y_px",
+                    },
+                },
             )
         )
 

@@ -195,7 +195,14 @@ Each also shows an **Upstream Run Chain** for the selected run — the phase 2 i
 started from, the phase 1 that fed that — so a result can be traced back to the
 detections that produced it.
 
-Figures are matplotlib cards with **Expand**, **Save PNG**, and **Style…** buttons. The
+Managed Matplotlib figure cards offer **Expand**, **Save PNG**, **Save SVG**, **Save PDF**,
+**Save CSV** when a source-backed numeric adapter exists, and **Style…**. PNG sizing
+templates expose screen (160 mm / 150 dpi), generic single-column (85 mm / 300 dpi),
+and generic double-column (180 mm / 300 dpi) choices. These are templates, not
+claims of compliance with a named journal. CSV exports include JSON metadata comments
+for source/run, data kind, axes and units where those are known; raster screenshots
+are never converted into fabricated data.
+The
 style editor previews typography, figure/axes chrome, line and marker widths,
 legend/grid visibility, and stable-ID series colours. Detection montages also
 offer overlay marker-size and colour controls; the source image and detection
@@ -205,8 +212,16 @@ saved to or loaded from versioned JSON. Reset returns to theme defaults. Unknown
 or malformed style fields are rejected rather than partially applied. A scale
 bar remains unavailable unless a calibrated pixel-to-world transform and units
 are supplied; no physical length is inferred. This presentation editor applies
-to Matplotlib cards and the Phase 1 detection montage; child-process Assess
-Calibration figures and 3D views are not covered here.
+to Matplotlib cards and the Phase 1 detection montage; the montage has a frame PNG
+and observed-coordinate CSV action. Phase 2 per-view plots and Phase 3 error,
+residual and camera-pose plots are hosted in cards. Assess Calibration remains in
+a child process: the selected application theme is propagated to its Matplotlib
+chrome and **Save 2D assessment exports…** writes its three 2D diagnostics (not
+the 3D scenes) as PNG, SVG and PDF using a generic screen/single-/double-column width/DPI template.
+Per-figure style controls and source-backed CSV are not yet available on that
+path. See [visual export coverage](visual-export.md)
+for the surface-by-surface traceability and remaining gaps. Three-dimensional
+views are handled separately; target printable SVG/PDF generation remains unchanged.
 
 Phase 3 and Phase 4 additionally offer **Assess Calibration**, which opens the full-size
 reconstruction and residual views in native matplotlib and PyVista windows

@@ -18,6 +18,7 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -88,6 +89,7 @@ from pyCamSet.gui.assess_calibration import (
     launch_visualise_calibration_for_run,
     launch_visualise_calibration_open3d_for_run,
     launch_save_pyvista_png_for_run,
+    launch_save_assessment_pngs_for_run,
     merge_phase3_phase4_runs,
     select_latest_visualisation_run,
 )
@@ -1058,6 +1060,16 @@ class Phase3DiagnosticsTab(QWidget):
         self._save_png_btn.setToolTip("Save the current visualisation as PNG.")
         self._save_png_btn.clicked.connect(self._save_visualisation_png)
         visual_btn_row.addWidget(self._save_png_btn)
+        self._assessment_export_preset = QComboBox()
+        self._assessment_export_preset.addItem("Screen template · 160 mm · 150 dpi", (160.0, 150))
+        self._assessment_export_preset.addItem("Single-column template · 85 mm · 300 dpi", (85.0, 300))
+        self._assessment_export_preset.addItem("Double-column template · 180 mm · 300 dpi", (180.0, 300))
+        self._assessment_export_preset.setToolTip("Generic templates; no named-journal compliance is implied.")
+        visual_btn_row.addWidget(self._assessment_export_preset)
+        save_2d_btn = QPushButton("Save 2D assessment exports…")
+        save_2d_btn.setToolTip("Save the three child-process Matplotlib figures as PNG, SVG and PDF.")
+        save_2d_btn.clicked.connect(self._save_assessment_2d_pngs)
+        visual_btn_row.addWidget(save_2d_btn)
         visual_btn_row.addStretch()
         visual_layout.addLayout(visual_btn_row)
         # Shows which run/phase the most recent Assess Calibration click actually
@@ -1432,7 +1444,22 @@ class Phase3DiagnosticsTab(QWidget):
         create_btn.clicked.connect(_on_create)
 
         self._initial_layout.addWidget(ctrl)
-        self._initial_layout.addWidget(canvas)
+        self._initial_layout.addWidget(MatplotlibFigureCard(
+            f"D3.4 Per-image initial reprojection error ({run.get('run_id', '?')})",
+            fig, FigureCanvasQTAgg, parent=self._initial_widget, min_height=320,
+            canvas=canvas,
+            csv_export={
+                "columns": ["image_index", "initial_reprojection_error_px"],
+                "rows": [(i, float(value)) for i, value in enumerate(arr) if np.isfinite(value)],
+                "metadata": {
+                    "run_id": run.get("run_id"), "phase": "phase3",
+                    "diagnostic": "D3.3_per_image_initial_reprojection",
+                    "data_kind": "observed per-image diagnostic; thresholds are display/interaction overlays",
+                    "units": {"image_index": "index", "initial_reprojection_error_px": "px"},
+                    "x_axis": "image_index", "y_axis": "initial_reprojection_error_px",
+                },
+            },
+        ))
 
     def _create_phase3_run_from_threshold(
         self,
@@ -1559,6 +1586,16 @@ class Phase3DiagnosticsTab(QWidget):
                 FigureCanvasQTAgg,
                 parent=self._residual_widget,
                 min_height=360,
+                csv_export={
+                    "columns": ["camera", "mean_reprojection_error_px"],
+                    "rows": [(cam, float(per_cam[cam])) for cam in cams],
+                    "metadata": {
+                        "run_id": run.get("run_id"), "phase": "phase3",
+                        "diagnostic": "D3.12_per_camera_mean_reprojection",
+                        "data_kind": "observed diagnostic summary", "units": {"mean_reprojection_error_px": "px"},
+                        "x_axis": "camera", "y_axis": "mean_reprojection_error_px",
+                    },
+                },
             )
         )
 
@@ -1588,6 +1625,16 @@ class Phase3DiagnosticsTab(QWidget):
                             FigureCanvasQTAgg,
                             parent=self._residual_widget,
                             min_height=360,
+                            csv_export={
+                                "columns": ["residual_x_px", "residual_y_px"],
+                                "rows": [(float(x), float(y)) for x, y in res_arr],
+                                "metadata": {
+                                    "run_id": run.get("run_id"), "phase": "phase3",
+                                    "diagnostic": "D3.11_residual_xy_scatter",
+                                    "data_kind": "observed residual coordinates", "units": {"residual_x_px": "px", "residual_y_px": "px"},
+                                    "x_axis": "residual_x_px", "y_axis": "residual_y_px",
+                                },
+                            },
                         )
                     )
             except Exception:
@@ -1658,7 +1705,23 @@ class Phase3DiagnosticsTab(QWidget):
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance()
         apply_matplotlib_theme(fig, app.property("pycamsetTheme") if app else "Light")
-        self._poses_layout.addWidget(FigureCanvasQTAgg(fig))
+        pose_rows = [(cam.name, *[float(v) for v in np.asarray(cam.position).reshape(-1)[:3]])
+                     for cam in cams if np.asarray(cam.position).size >= 3]
+        self._poses_layout.addWidget(MatplotlibFigureCard(
+            f"D3.13 Camera extrinsic positions ({run.get('run_id', '?')})",
+            fig, FigureCanvasQTAgg, parent=self._poses_widget, min_height=360,
+            csv_export={
+                "columns": ["camera", "x", "y", "z"], "rows": pose_rows,
+                "metadata": {
+                    "run_id": run.get("run_id"), "phase": "phase3",
+                    "diagnostic": "camera position derived from selected camset extrinsics",
+                    "data_kind": "derived model output, not observed image coordinates",
+                    "coordinate_frame": "camset world frame",
+                    "units": "not declared by source camset; values retain camset coordinate units",
+                    "x_axis": "camera", "y_axis": "x,y,z position components",
+                },
+            },
+        ))
 
     def _on_backend_changed(self, btn) -> None:
         """Handle backend selector toggle — update Open3D output visibility."""
@@ -1693,7 +1756,9 @@ class Phase3DiagnosticsTab(QWidget):
             _open3d_widget = self._open3d_output if os.name != "nt" else None
             ok, msg = launch_visualise_calibration_open3d_for_run(chosen, output_widget=_open3d_widget)
         else:
-            ok, msg = launch_visualise_calibration_for_run(chosen)
+            app = QApplication.instance()
+            active_theme = app.property("pycamsetTheme") if app else "Light"
+            ok, msg = launch_visualise_calibration_for_run(chosen, theme_name=active_theme)
         if not ok:
             QMessageBox.warning(self, "Assess Calibration", msg)
 
@@ -1726,6 +1791,25 @@ class Phase3DiagnosticsTab(QWidget):
                 QMessageBox.information(self, "Save PNG", msg)
             else:
                 QMessageBox.warning(self, "Save PNG", f"Could not save PNG:\n{msg}")
+
+    def _save_assessment_2d_pngs(self) -> None:
+        """Save the child process's numerical 2D assessment figures as PNGs."""
+        directory = QFileDialog.getExistingDirectory(self, "Save 2D Assessment Figures")
+        if not directory:
+            return
+        selected = self._run_selector.get_selected()
+        chosen = select_latest_visualisation_run(selected, getattr(self, "_all_runs", []))
+        if chosen is None:
+            QMessageBox.warning(self, "Assess Calibration", "Select at least one run first.")
+            return
+        app = QApplication.instance()
+        theme_name = app.property("pycamsetTheme") if app else "Light"
+        width_mm, dpi = self._assessment_export_preset.currentData()
+        ok, message = launch_save_assessment_pngs_for_run(chosen, Path(directory), theme_name, width_mm, dpi)
+        if ok:
+            QMessageBox.information(self, "Assess Calibration", message or "Saved 2D assessment PNGs.")
+        else:
+            QMessageBox.warning(self, "Assess Calibration", f"Could not save 2D assessment PNGs:\n{message}")
 
     def visualise_from_primary(self) -> None:
         self._sub_tabs.setCurrentWidget(self._visual_widget)

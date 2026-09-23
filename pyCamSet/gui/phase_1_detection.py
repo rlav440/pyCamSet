@@ -835,6 +835,15 @@ class Phase1DiagnosticsTab(QWidget):
         self._draw_expand_btn.setFixedWidth(70)
         self._draw_expand_btn.clicked.connect(self._expand_draw_figure)
         nav_bar.addWidget(self._draw_expand_btn)
+        self._draw_save_btn = QPushButton("Save PNG")
+        self._draw_save_btn.setEnabled(False)
+        self._draw_save_btn.clicked.connect(self._save_detection_montage_png)
+        nav_bar.addWidget(self._draw_save_btn)
+        self._draw_csv_btn = QPushButton("Save coordinates CSV")
+        self._draw_csv_btn.setEnabled(False)
+        self._draw_csv_btn.setToolTip("Export observed detected pixel coordinates for the displayed image index.")
+        self._draw_csv_btn.clicked.connect(self._save_detection_coordinates_csv)
+        nav_bar.addWidget(self._draw_csv_btn)
         self._draw_style_btn = QPushButton("Style…")
         self._draw_style_btn.setAccessibleName("Detection overlay style options")
         self._draw_style_btn.setEnabled(False)
@@ -995,10 +1004,32 @@ class Phase1DiagnosticsTab(QWidget):
                     fontsize=7,
                 )
 
-            canvas = FigureCanvasQTAgg(fig)
-            canvas.setMinimumSize(500, 330)
+            diagnostic_keys = {
+                "D1.1": "D1.1_total_detections", "D1.2": "D1.2_detection_rate",
+                "D1.3": "D1.3_board_completeness", "D1.6": "D1.6_spatial_coverage",
+                "D1.7": "D1.7_min_features",
+            }
+            metric_key = diagnostic_keys[title[:4]]
+            source_rows = []
+            for run_id, value, source_run in zip(run_ids, vals, runs):
+                diagnostics = source_run.get("diagnostics", {})
+                source_value = diagnostics.get(metric_key)
+                if source_value is None or source_value == {} or source_value == []:
+                    continue
+                source_rows.append((run_id, title, float(value), ylab))
 
-            card = MatplotlibFigureCard(title, fig, FigureCanvasQTAgg, parent=plots_host, min_height=330)
+            card = MatplotlibFigureCard(
+                title, fig, FigureCanvasQTAgg, parent=plots_host, min_height=330,
+                csv_export={
+                    "columns": ["run_id", "metric", "value", "unit"],
+                    "rows": source_rows,
+                    "metadata": {
+                        "phase": "phase1", "diagnostic": title,
+                        "data_kind": "run diagnostic summary values (mean/total aggregation as labelled)",
+                        "units": {"value": ylab}, "x_axis": "run_id", "y_axis": "value",
+                    },
+                },
+            )
 
             r = i // n_cols
             c = i % n_cols
@@ -1169,6 +1200,18 @@ class Phase1DiagnosticsTab(QWidget):
             FigureCanvasQTAgg,
             parent=self._heatmap_widget,
             min_height=360,
+            csv_export={
+                "columns": ["image_index", "camera", "features_detected"],
+                "rows": [(image_index, cam_names[camera_index] if camera_index < len(cam_names)
+                          else f"camera_{camera_index}", matrix_data[image_index, camera_index].item())
+                         for image_index in range(n_ims) for camera_index in range(n_cams)],
+                "metadata": {
+                    "run_id": selected_run.get("run_id"), "phase": "phase1",
+                    "diagnostic": "D1.4_features_matrix", "data_kind": "observed detection counts",
+                    "units": {"image_index": "index", "features_detected": "count"},
+                    "x_axis": "camera", "y_axis": "image_index", "value": "features_detected",
+                },
+            },
         )
         self._heatmap_layout.addWidget(card)
 
@@ -1358,6 +1401,7 @@ class Phase1DiagnosticsTab(QWidget):
         self._draw_state = {
             "fig": fig,
             "canvas": canvas,
+            "run_id": chosen.get("run_id"),
             "cams": cams,
             "cam_images": cam_images,
             "cam_points": cam_points,
@@ -1386,6 +1430,8 @@ class Phase1DiagnosticsTab(QWidget):
             # Fail closed: malformed preferences leave the theme defaults active.
             pass
         self._draw_style_btn.setEnabled(True)
+        self._draw_save_btn.setEnabled(True)
+        self._draw_csv_btn.setEnabled(True)
         self._draw_index = 0
         self._update_draw_frame()
 
@@ -1486,6 +1532,58 @@ class Phase1DiagnosticsTab(QWidget):
             apply_visual_style(self._draw_state["fig"], style,
                                app.property("pycamsetTheme") if app else "Light")
         self._draw_state["canvas"].draw_idle()
+
+    def _save_detection_montage_png(self) -> None:
+        """Save the currently displayed detection montage without changing source images."""
+        if not self._draw_state:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save Detection Montage", "detections.png", "PNG Files (*.png)")
+        if not path:
+            return
+        try:
+            from pyCamSet.gui.visual_style import _validate_user_style_filename
+            _validate_user_style_filename(Path(path).name)
+            self._draw_state["fig"].savefig(path, dpi=150, bbox_inches="tight", format="png")
+        except Exception as exc:
+            QMessageBox.warning(self, "PNG export failed", f"The montage could not be saved.\n\nTechnical detail: {exc}")
+
+    def _save_detection_coordinates_csv(self) -> None:
+        """Export observed detected pixel coordinates for the currently displayed image index."""
+        if not self._draw_state:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save Detection Coordinates", "detection-coordinates.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            import csv
+            import json
+            from pyCamSet.gui.visual_style import _validate_user_style_filename
+            _validate_user_style_filename(Path(path).name)
+            state = self._draw_state
+            image_index = self._draw_index
+            with open(path, "w", newline="", encoding="utf-8") as stream:
+                stream.write("# " + json.dumps({
+                    "run_id": state.get("run_id"), "phase": "phase1",
+                    "diagnostic": "D1.5 observed detections",
+                    "data_kind": "observed detected image pixel coordinates",
+                    "units": {"x_px": "px", "y_px": "px"},
+                    "montage_frame_index": image_index,
+                    "image_index_semantics": "row value is each camera's selected local image index",
+                    "coordinate_origin": "image coordinate convention used by detector",
+                }, ensure_ascii=False) + "\n")
+                writer = csv.writer(stream)
+                writer.writerow(["camera", "image_index", "image_name", "x_px", "y_px"])
+                for camera in state["cams"]:
+                    images = state["cam_images"].get(camera, [])
+                    if not images:
+                        continue
+                    camera_image_index = image_index % len(images)
+                    image_name = images[camera_image_index].name
+                    points = state["cam_points"].get(camera, {}).get(camera_image_index, state["empty"])
+                    writer.writerows((camera, camera_image_index, image_name,
+                                      float(point[0]), float(point[1])) for point in points)
+        except Exception as exc:
+            QMessageBox.warning(self, "CSV export failed", f"Coordinates could not be saved.\n\nTechnical detail: {exc}")
 
     def _resolve_private_pickle_path_for_run(self, run: dict) -> Optional[Path]:
         """This run's own detected_datapoints.pickle -- never a shared slot.

@@ -132,7 +132,7 @@ def _build_o_results(cam_set: Any) -> Optional[dict[str, np.ndarray]]:
     return {"err": err_arr, "x": x_arr}
 
 
-def launch_visualise_calibration_for_run(run: dict) -> tuple[bool, str]:
+def launch_visualise_calibration_for_run(run: dict, theme_name: str = "Light") -> tuple[bool, str]:
     """Launch native matplotlib/pyvista windows via visualise_calibration()."""
     if load_CameraSet is None or visualise_calibration is None:
         return False, "visualise_calibration dependencies are unavailable."
@@ -159,20 +159,20 @@ def launch_visualise_calibration_for_run(run: dict) -> tuple[bool, str]:
     # Everything above is checked here, in the GUI process, so the usual
     # failures still reach the user as a dialog.  The drawing itself is not:
     # see visualise_camset for why it cannot share a process with Qt.
-    ok, detail = spawn_calibration_viewer(camset_path)
+    ok, detail = spawn_calibration_viewer(camset_path, theme_name=theme_name)
     if not ok:
         return False, detail
     return True, f"Opened Assess Calibration for run {run_id} in a new window."
 
 
-def spawn_calibration_viewer(camset_path: Path) -> tuple[bool, str]:
+def spawn_calibration_viewer(camset_path: Path, theme_name: str = "Light") -> tuple[bool, str]:
     """
     Draw a calibration in a process of its own.
 
     :param camset_path: the ``.camset`` file to draw
     :return: whether the viewer was started, and what to say if it was not
     """
-    return spawn_viewer("pyCamSet.utils.visualise_camset", [str(camset_path)])
+    return spawn_viewer("pyCamSet.utils.visualise_camset", [str(camset_path), "--theme", theme_name])
 
 
 def launch_visualise_calibration_open3d_for_run(
@@ -246,3 +246,18 @@ def launch_save_pyvista_png_for_run(run: dict, file_path: Path) -> tuple[bool, s
     if not ok:
         return False, detail
     return True, detail or f"Saved {file_path}."
+
+
+def launch_save_assessment_pngs_for_run(
+    run: dict, directory: Path, theme_name: str = "Light",
+    width_mm: float = 160.0, dpi: int = 150,
+) -> tuple[bool, str]:
+    """Save the child viewer's three Matplotlib diagnostic figures and vectors."""
+    camset_path = resolve_run_camset_artifact(run)
+    if camset_path is None:
+        return False, "Selected run has no readable camset artifact."
+    return run_viewer("pyCamSet.utils.visualise_camset", [
+        str(camset_path), "--save-dir", str(directory), "--no-show", "--theme", theme_name,
+        "--figure-width-mm", str(width_mm), "--figure-dpi", str(dpi),
+        "--figure-formats", "png", "svg", "pdf", "--matplotlib-only",
+    ])

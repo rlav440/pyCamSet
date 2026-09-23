@@ -15,6 +15,7 @@ from typing import Callable, Optional
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -68,6 +69,7 @@ from pyCamSet.gui.assess_calibration import (
     launch_visualise_calibration_for_run,
     launch_visualise_calibration_open3d_for_run,
     launch_save_pyvista_png_for_run,
+    launch_save_assessment_pngs_for_run,
     merge_phase3_phase4_runs,
     select_latest_visualisation_run,
 )
@@ -665,6 +667,16 @@ class Phase4DiagnosticsTab(QWidget):
         self._save_png_btn.setToolTip("Save the current visualisation as PNG.")
         self._save_png_btn.clicked.connect(self._save_visualisation_png)
         visual_btn_row.addWidget(self._save_png_btn)
+        self._assessment_export_preset = QComboBox()
+        self._assessment_export_preset.addItem("Screen template · 160 mm · 150 dpi", (160.0, 150))
+        self._assessment_export_preset.addItem("Single-column template · 85 mm · 300 dpi", (85.0, 300))
+        self._assessment_export_preset.addItem("Double-column template · 180 mm · 300 dpi", (180.0, 300))
+        self._assessment_export_preset.setToolTip("Generic templates; no named-journal compliance is implied.")
+        visual_btn_row.addWidget(self._assessment_export_preset)
+        save_2d_btn = QPushButton("Save 2D assessment exports…")
+        save_2d_btn.setToolTip("Save the three child-process Matplotlib figures as PNG, SVG and PDF.")
+        save_2d_btn.clicked.connect(self._save_assessment_2d_pngs)
+        visual_btn_row.addWidget(save_2d_btn)
         visual_btn_row.addStretch()
         visual_layout.addLayout(visual_btn_row)
         # Shows which run/phase the most recent Assess Calibration click actually
@@ -835,7 +847,9 @@ class Phase4DiagnosticsTab(QWidget):
             _open3d_widget = self._open3d_output if os.name != "nt" else None
             ok, msg = launch_visualise_calibration_open3d_for_run(chosen, output_widget=_open3d_widget)
         else:
-            ok, msg = launch_visualise_calibration_for_run(chosen)
+            app = QApplication.instance()
+            active_theme = app.property("pycamsetTheme") if app else "Light"
+            ok, msg = launch_visualise_calibration_for_run(chosen, theme_name=active_theme)
         if not ok:
             QMessageBox.warning(self, "Assess Calibration", msg)
 
@@ -868,6 +882,25 @@ class Phase4DiagnosticsTab(QWidget):
                 QMessageBox.information(self, "Save PNG", msg)
             else:
                 QMessageBox.warning(self, "Save PNG", f"Could not save PNG:\n{msg}")
+
+    def _save_assessment_2d_pngs(self) -> None:
+        """Save the child process's numerical 2D assessment figures as PNGs."""
+        directory = QFileDialog.getExistingDirectory(self, "Save 2D Assessment Figures")
+        if not directory:
+            return
+        selected = self._run_selector.get_selected()
+        chosen = select_latest_visualisation_run(selected, getattr(self, "_all_runs", []))
+        if chosen is None:
+            QMessageBox.warning(self, "Assess Calibration", "Select at least one run first.")
+            return
+        app = QApplication.instance()
+        theme_name = app.property("pycamsetTheme") if app else "Light"
+        width_mm, dpi = self._assessment_export_preset.currentData()
+        ok, message = launch_save_assessment_pngs_for_run(chosen, Path(directory), theme_name, width_mm, dpi)
+        if ok:
+            QMessageBox.information(self, "Assess Calibration", message or "Saved 2D assessment PNGs.")
+        else:
+            QMessageBox.warning(self, "Assess Calibration", f"Could not save 2D assessment PNGs:\n{message}")
 
     def visualise_from_primary(self) -> None:
         self._sub_tabs.setCurrentWidget(self._visual_widget)

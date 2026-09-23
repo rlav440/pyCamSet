@@ -112,7 +112,8 @@ def finalise_figure(figure, name: str, show: bool = True,
 
 
 def save_figure(figure, name: str,
-                save_dir: Path | str | None) -> Path | None:
+                save_dir: Path | str | None, *, width_mm: float | None = None,
+                dpi: int = 150, formats: tuple[str, ...] = ("png",)) -> Path | None:
     """
     Write a figure into a directory and leave it open.
 
@@ -122,14 +123,36 @@ def save_figure(figure, name: str,
 
     :param figure: the figure to write
     :param name: the file stem to write it under
-    :param save_dir: a directory to write ``<name>.png`` into, or None
+    :param save_dir: a directory to write the requested formats into, or None
     :return: where it was written, if it was
     """
     if save_dir is None:
         return None
     written = Path(save_dir) / f"{name}.png"
     written.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(written, dpi=150, bbox_inches="tight")
+    targets = [Path(save_dir) / f"{name}.{output_format}" for output_format in formats]
+    existing = [str(target) for target in targets if target.exists()]
+    if existing:
+        raise FileExistsError("Refusing to overwrite existing figure export(s): " + ", ".join(existing))
+    original_size = figure.get_size_inches().copy()
+    if width_mm is None:
+        output_size = original_size
+    else:
+        width_inches = float(width_mm) / 25.4
+        height_inches = width_inches * float(original_size[1]) / float(original_size[0])
+        output_size = (width_inches, height_inches)
+    if width_mm is not None and "png" in formats:
+        pixel_size = (round(width_inches * dpi) / dpi,
+                      round(height_inches * dpi) / dpi)
+        output_size = pixel_size
+    if width_mm is not None:
+        figure.set_size_inches(*output_size, forward=False)
+    try:
+        for output_format, target in zip(formats, targets):
+            figure.savefig(target, dpi=int(dpi), format=output_format,
+                           bbox_inches=(None if width_mm is not None else "tight"))
+    finally:
+        figure.set_size_inches(original_size, forward=False)
     return written
 
 
@@ -633,6 +656,11 @@ def visualise_calibration(
         param_handler,#: AbstractParamHandler
         show: bool = True,
         save_dir: Path | str | None = None,
+        theme_name: str = "Light",
+        figure_width_mm: float = 160.0,
+        figure_dpi: int = 150,
+        figure_formats: tuple[str, ...] = ("png",),
+        matplotlib_only: bool = False,
     ) -> list[Path]:
     """
     A function to draw and plot the errors in a calibration given the results.
@@ -645,6 +673,11 @@ def visualise_calibration(
     :param param_handler: The parameter handler that organised the optimisation.
     :param show: open the figures in windows
     :param save_dir: a directory to write the figures into
+    :param theme_name: application theme for Matplotlib chrome only
+    :param figure_width_mm: output width for saved Matplotlib figures
+    :param figure_dpi: raster DPI for PNG output
+    :param figure_formats: Matplotlib output formats, e.g. PNG/SVG/PDF
+    :param matplotlib_only: skip 3D scene generation for a 2D-only export request
     :return: the files written, if any
     """
     if not _PYVISTA_OK:
@@ -661,18 +694,25 @@ def visualise_calibration(
         (per_camera_coverage(diagnostics), "per_camera_coverage"),
         (accuracy_precision_plot(diagnostics), "accuracy_precision"),
     ]
+    # Apply GUI chrome in this isolated process without recolouring data series.
+    from pyCamSet.gui.theme import apply_matplotlib_theme
+    for figure, _ in figures:
+        apply_matplotlib_theme(figure, theme_name)
     # plt.show() is global -- one call draws every figure that is still open --
     # so they are written first and then disposed of together
-    written += [save_figure(figure, name, save_dir) for figure, name in figures]
+    written += [save_figure(figure, name, save_dir, width_mm=figure_width_mm,
+                            dpi=figure_dpi, formats=figure_formats)
+                for figure, name in figures]
     if show:
         plt.show()
     else:
         for figure, _ in figures:
             plt.close(figure)
 
-    for build, name in ((reconstruction_scene, "reconstruction"),
-                        (target_space_scene, "target_coordinates")):
-        written.append(finalise_plotter(build(diagnostics), name, show, save_dir))
+    if not matplotlib_only:
+        for build, name in ((reconstruction_scene, "reconstruction"),
+                            (target_space_scene, "target_coordinates")):
+            written.append(finalise_plotter(build(diagnostics), name, show, save_dir))
 
     # special_plots opens and drives its own window, and its signature is part
     # of the parameter handler API that lives outside this repository, so it

@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.gui.shared_functions import (
     CollapsibleSection,
     DETECTOR_INHERIT,
@@ -183,6 +185,8 @@ class Phase2Tab(QWidget):
 
         form_widget = QWidget()
         form_root = QVBoxLayout(form_widget)
+        # Pack sections at the top; spare height must not open gaps between them.
+        form_root.setAlignment(Qt.AlignmentFlag.AlignTop)
         form_root.setContentsMargins(0, 0, 0, 0)
         form_root.setSpacing(4)
         form_scroll = QScrollArea()
@@ -210,7 +214,8 @@ class Phase2Tab(QWidget):
         )
         self._floc_edit.textChanged.connect(self._sync_workspace_from_floc)
         floc_btn = QPushButton("Browse…")
-        floc_btn.setFixedWidth(70)
+        floc_btn.setMinimumWidth(70)
+        floc_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         floc_btn.setToolTip("Choose the image root folder manually.")
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
@@ -225,7 +230,8 @@ class Phase2Tab(QWidget):
         )
         self._phase1_run_combo.currentIndexChanged.connect(self._on_phase1_source_changed)
         src_refresh_btn = QPushButton("Refresh")
-        src_refresh_btn.setFixedWidth(70)
+        src_refresh_btn.setMinimumWidth(70)
+        src_refresh_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         src_refresh_btn.setToolTip("Reload available Phase 1 runs from workspace.")
         src_refresh_btn.clicked.connect(self._refresh_phase1_sources)
         src_row.addWidget(self._phase1_run_combo)
@@ -241,11 +247,13 @@ class Phase2Tab(QWidget):
         )
         self._det_pickle_edit.textChanged.connect(lambda _: self._update_detection_source_label())
         det_browse_btn = QPushButton("Browse…")
-        det_browse_btn.setFixedWidth(70)
+        det_browse_btn.setMinimumWidth(70)
+        det_browse_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         det_browse_btn.setToolTip("Select a specific detected_datapoints.pickle file.")
         det_browse_btn.clicked.connect(self._browse_detection_pickle)
         det_clear_btn = QPushButton("Clear")
-        det_clear_btn.setFixedWidth(55)
+        det_clear_btn.setMinimumWidth(55)
+        det_clear_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         det_clear_btn.setToolTip("Clear manual override and return to auto source resolution.")
         det_clear_btn.clicked.connect(lambda: self._det_pickle_edit.setText(""))
         det_row.addWidget(self._det_pickle_edit)
@@ -254,7 +262,7 @@ class Phase2Tab(QWidget):
         paths_sect.addRow("Detection source path:", det_row)
 
         self._phase1_lbl = QLabel("Detection source: auto")
-        self._phase1_lbl.setStyleSheet("color: #666;")
+        set_text_role(self._phase1_lbl, "muted")
         self._phase1_lbl.setWordWrap(True)
         paths_sect.addRow("", self._phase1_lbl)
 
@@ -817,7 +825,7 @@ class Phase2DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select one or more runs to compare diagnostics.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._summary_layout.addWidget(lbl)
             return
@@ -825,7 +833,7 @@ class Phase2DiagnosticsTab(QWidget):
         for run in runs:
             d = run.get("diagnostics", {})
             hdr = QLabel(f"Run: {run.get('run_id', 'unknown')}")
-            hdr.setStyleSheet("font-weight: bold; margin-top: 8px;")
+            set_text_role(hdr, "subheading")
             self._summary_layout.addWidget(hdr)
 
             form = QFormLayout()
@@ -868,7 +876,7 @@ class Phase2DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select a run to view per-image reprojection errors.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._per_view_layout.addWidget(lbl)
             return
@@ -1184,7 +1192,7 @@ class Phase2DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select a run to view the distortion field.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._distortion_layout.addWidget(lbl)
             return

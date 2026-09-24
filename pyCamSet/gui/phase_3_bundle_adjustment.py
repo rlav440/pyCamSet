@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -39,6 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.workflow import phase3 as phase3_workflow
 from pyCamSet.gui.three_d_style import ThreeDStyleControls
 from pyCamSet.workflow.params import (
@@ -146,6 +148,8 @@ class Phase3Tab(QWidget):
 
         form_widget = QWidget()
         form_root = QVBoxLayout(form_widget)
+        # Pack sections at the top; spare height must not open gaps between them.
+        form_root.setAlignment(Qt.AlignmentFlag.AlignTop)
         form_root.setContentsMargins(0, 0, 0, 0)
         form_root.setSpacing(4)
         form_scroll = QScrollArea()
@@ -170,7 +174,8 @@ class Phase3Tab(QWidget):
         self._floc_edit.setToolTip(IMAGE_FOLDER_SCHEMATIC)
         self._floc_edit.textChanged.connect(self._sync_workspace_from_floc)
         floc_btn = QPushButton("Browse…")
-        floc_btn.setFixedWidth(70)
+        floc_btn.setMinimumWidth(70)
+        floc_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
         floc_row.addWidget(floc_btn)
@@ -184,7 +189,8 @@ class Phase3Tab(QWidget):
         )
         self._phase2_run_combo.currentIndexChanged.connect(self._on_phase2_source_changed)
         src_refresh_btn = QPushButton("Refresh")
-        src_refresh_btn.setFixedWidth(70)
+        src_refresh_btn.setMinimumWidth(70)
+        src_refresh_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         src_refresh_btn.setToolTip("Reload available Phase 2 runs from workspace.")
         src_refresh_btn.clicked.connect(self._refresh_phase2_sources)
         src_row.addWidget(self._phase2_run_combo)
@@ -193,7 +199,7 @@ class Phase3Tab(QWidget):
 
         self._src_lbl = QLabel("Inputs: auto Phase 2 + linked Phase 1")
         self._src_lbl.setWordWrap(True)
-        self._src_lbl.setStyleSheet("color: #666;")
+        set_text_role(self._src_lbl, "muted")
         paths_sect.addRow("Input runs:", self._src_lbl)
 
         # ── Calibration Target (collapsible) ───────────────────────────
@@ -256,6 +262,8 @@ class Phase3Tab(QWidget):
 
         self._outliers_combo = QComboBox()
         self._outliers_combo.setObjectName("outliers_combo")
+        # Size to its short choices, like the numeric fields beside it.
+        self._outliers_combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._outliers_combo.addItems(["y", "n", "ask"])
         self._outliers_combo.setCurrentText("n")
         self._outliers_combo.setToolTip(
@@ -337,7 +345,8 @@ class Phase3Tab(QWidget):
         )
         self._lockbox_source_edit.textChanged.connect(self._reset_edited_lockbox_copy)
         source_btn = QPushButton("Browse…")
-        source_btn.setFixedWidth(70)
+        source_btn.setMinimumWidth(70)
+        source_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         source_btn.clicked.connect(self._browse_lockbox_source)
         source_row.addWidget(self._lockbox_source_edit)
         source_row.addWidget(source_btn)
@@ -361,12 +370,12 @@ class Phase3Tab(QWidget):
 
         self._lockbox_status_lbl = QLabel("Using original source")
         self._lockbox_status_lbl.setWordWrap(True)
-        self._lockbox_status_lbl.setStyleSheet("color: #666;")
+        set_text_role(self._lockbox_status_lbl, "muted")
         lockbox_sect.addRow("Status:", self._lockbox_status_lbl)
 
         lockbox_banner = QLabel("Editing lockbox prior centres only. Original source camset will not be modified.")
         lockbox_banner.setWordWrap(True)
-        lockbox_banner.setStyleSheet("font-weight: bold; color: #9a5b00;")
+        set_text_role(lockbox_banner, "warning")
         lockbox_sect.addRow("Guardrail:", lockbox_banner)
 
         self._lockbox_warm_start_cb = QCheckBox("Warm-start constrained extrinsics from source camset")
@@ -1108,12 +1117,12 @@ class Phase3DiagnosticsTab(QWidget):
         # they are looking at two different camsets/runs on purpose, rather than
         # mistaking a run-selection mismatch for a rendering disagreement.
         self._current_run_label = QLabel("")
-        self._current_run_label.setStyleSheet("color: #888; font-style: italic;")
+        set_text_role(self._current_run_label, "muted")
         visual_layout.addWidget(self._current_run_label)
         self._open3d_output = QLabel("")
         self._open3d_output.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._open3d_output.setMinimumHeight(400)
-        self._open3d_output.setStyleSheet("background: #1a1a2e; color: #666;")
+        self._open3d_output.setObjectName("viewportPlaceholder")
         self._open3d_output.setText("Select Open3D backend and click Assess Calibration to render here.")
         self._open3d_output.setWordWrap(True)
         self._open3d_output.setVisible(False)
@@ -1201,7 +1210,7 @@ class Phase3DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select one or more runs to compare diagnostics.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._summary_layout.addWidget(lbl)
             return
@@ -1210,7 +1219,7 @@ class Phase3DiagnosticsTab(QWidget):
             phase = str(run.get("phase", "phase3"))
             d = run.get("diagnostics", {})
             hdr = QLabel(f"Run: {run.get('run_id', 'unknown')} ({phase})")
-            hdr.setStyleSheet("font-weight: bold; margin-top: 8px;")
+            set_text_role(hdr, "subheading")
             self._summary_layout.addWidget(hdr)
 
             form = QFormLayout()
@@ -1219,11 +1228,10 @@ class Phase3DiagnosticsTab(QWidget):
                 form.addRow("Note:", QLabel("This run is from Phase 4; D3 metrics are not available."))
             else:
                 status = str(run.get("status", "unknown"))
-                status_label = QLabel(status)
-                status_label.setStyleSheet(
-                    "font-weight: bold; color: "
-                    + ("#228b22" if status == "complete" else "#b22222")
-                )
+                # The mark and the word carry the outcome; colour only reinforces it.
+                complete = status == "complete"
+                status_label = QLabel(("✓ " if complete else "✗ ") + status)
+                set_text_role(status_label, "success" if complete else "danger")
                 form.addRow("Disposition:", status_label)
                 form.addRow("D3.1 missing poses:", QLabel(str(d.get("D3.1_n_missing_poses", "—"))))
                 form.addRow("D3.2 outlier-removed poses:", QLabel(str(d.get("D3.2_n_outlier_removed", "—"))))
@@ -1251,7 +1259,7 @@ class Phase3DiagnosticsTab(QWidget):
                 if flags:
                     gate_label = QLabel("\n".join(str(flag) for flag in flags))
                     gate_label.setWordWrap(True)
-                    gate_label.setStyleSheet("color: #b22222;")
+                    set_text_role(gate_label, "danger")
                     form.addRow("Quality gate:", gate_label)
 
             if run.get("error"):

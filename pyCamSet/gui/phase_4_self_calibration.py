@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.gui.shared_functions import (
     CollapsibleSection,
     IMAGE_FOLDER_SCHEMATIC,
@@ -119,6 +121,8 @@ class Phase4Tab(QWidget):
 
         form_widget = QWidget()
         form_root = QVBoxLayout(form_widget)
+        # Pack sections at the top; spare height must not open gaps between them.
+        form_root.setAlignment(Qt.AlignmentFlag.AlignTop)
         form_root.setContentsMargins(0, 0, 0, 0)
         form_root.setSpacing(4)
         form_scroll = QScrollArea()
@@ -137,7 +141,8 @@ class Phase4Tab(QWidget):
         self._floc_edit.setToolTip(IMAGE_FOLDER_SCHEMATIC)
         self._floc_edit.textChanged.connect(self._sync_workspace_from_floc)
         floc_btn = QPushButton("Browse…")
-        floc_btn.setFixedWidth(70)
+        floc_btn.setMinimumWidth(70)
+        floc_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
         floc_row.addWidget(floc_btn)
@@ -158,7 +163,8 @@ class Phase4Tab(QWidget):
         self._phase3_camset_edit.setPlaceholderText("Optional override: optimised phase3 camset")
         self._phase3_camset_edit.textChanged.connect(self._update_source_label)
         p3cam_btn = QPushButton("Browse…")
-        p3cam_btn.setFixedWidth(70)
+        p3cam_btn.setMinimumWidth(70)
+        p3cam_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         p3cam_btn.clicked.connect(self._browse_phase3_camset)
         p3cam_clear = QPushButton("Clear")
         p3cam_clear.setFixedWidth(55)
@@ -170,7 +176,7 @@ class Phase4Tab(QWidget):
 
         self._source_lbl = QLabel("Source: auto")
         self._source_lbl.setWordWrap(True)
-        self._source_lbl.setStyleSheet("color: #666;")
+        set_text_role(self._source_lbl, "muted")
         paths_sect.addRow("", self._source_lbl)
 
         # ── Self-Calibration Options ───────────────────────────────────
@@ -255,6 +261,8 @@ class Phase4Tab(QWidget):
 
         self._outliers_combo = QComboBox()
         self._outliers_combo.setObjectName("outliers_combo")
+        # Size to its short choices, like the numeric fields beside it.
+        self._outliers_combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._outliers_combo.addItems(["n", "y"])
         self._outliers_combo.setCurrentText("n")
         self._outliers_combo.setToolTip(
@@ -323,7 +331,7 @@ class Phase4Tab(QWidget):
         btn_row.addStretch()
         root.addLayout(btn_row)
         self._status_lbl = QLabel("Ready")
-        self._status_lbl.setStyleSheet("color: #666;")
+        set_text_role(self._status_lbl, "muted")
         root.addWidget(self._status_lbl)
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
@@ -715,12 +723,12 @@ class Phase4DiagnosticsTab(QWidget):
         # they are looking at two different camsets/runs on purpose, rather than
         # mistaking a run-selection mismatch for a rendering disagreement.
         self._current_run_label = QLabel("")
-        self._current_run_label.setStyleSheet("color: #888; font-style: italic;")
+        set_text_role(self._current_run_label, "muted")
         visual_layout.addWidget(self._current_run_label)
         self._open3d_output = QLabel("")
         self._open3d_output.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._open3d_output.setMinimumHeight(400)
-        self._open3d_output.setStyleSheet("background: #1a1a2e; color: #666;")
+        self._open3d_output.setObjectName("viewportPlaceholder")
         self._open3d_output.setText("Select Open3D backend and click Assess Calibration to render here.")
         self._open3d_output.setWordWrap(True)
         self._open3d_output.setVisible(False)
@@ -767,7 +775,7 @@ class Phase4DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select one or more runs to inspect diagnostics.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._summary_layout.addWidget(lbl)
             return
@@ -775,7 +783,7 @@ class Phase4DiagnosticsTab(QWidget):
         for run in runs:
             phase = str(run.get("phase", "unknown"))
             hdr = QLabel(f"Run: {run.get('run_id', 'unknown')} ({phase})")
-            hdr.setStyleSheet("font-weight: bold; margin-top: 8px;")
+            set_text_role(hdr, "subheading")
             self._summary_layout.addWidget(hdr)
             form = QFormLayout()
             form.setContentsMargins(16, 0, 0, 0)
@@ -785,10 +793,10 @@ class Phase4DiagnosticsTab(QWidget):
                 d = run.get("diagnostics", {})
                 gate = d.get("quality_gate") or {}
                 status = str(run.get("status", "unknown"))
-                status_label = QLabel(status)
-                status_label.setStyleSheet(
-                    "color: #2e7d32; font-weight: bold;" if status == "complete"
-                    else "color: #c62828; font-weight: bold;")
+                # The mark and the word carry the outcome; colour only reinforces it.
+                complete = status == "complete"
+                status_label = QLabel(("✓ " if complete else "✗ ") + status)
+                set_text_role(status_label, "success" if complete else "danger")
                 form.addRow("Disposition:", status_label)
                 flags = gate.get("blocking_flags", [])
                 form.addRow(
@@ -821,7 +829,8 @@ class Phase4DiagnosticsTab(QWidget):
                         best_val = valid[best_cam]
                         worst_lbl = QLabel(f"worst={worst_cam} ({worst_val:.2f} px), best={best_cam} ({best_val:.2f} px)")
                         if worst_val > 3 * best_val and best_val > 0:
-                            worst_lbl.setStyleSheet("color: red; font-weight: bold;")
+                            worst_lbl.setText("✗ " + worst_lbl.text() + " — worst is over 3× the best")
+                            set_text_role(worst_lbl, "danger")
                         form.addRow("D4.12 per-camera reprojection:", worst_lbl)
                         for cam_name in sorted(d412.keys()):
                             val = d412[cam_name]

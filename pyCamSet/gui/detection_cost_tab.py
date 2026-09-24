@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.gui.shared_functions import (
     DETECTOR_NONE,
     PhaseWorker,
@@ -230,11 +231,13 @@ class DetectionCostTab(QWidget):
         try:
             options = self._options()
         except Exception as exc:
-            self._status.setText(f"<span style='color:#c62828'>{exc}</span>")
+            self._status.setText(str(exc))
+            set_text_role(self._status, "danger")
             return
 
         self._run_button.setEnabled(False)
         self._status.setText("Measuring\u2026")
+        set_text_role(self._status, None)
         self._summary.setPlainText("")
 
         def work(append) -> dict:
@@ -250,9 +253,8 @@ class DetectionCostTab(QWidget):
             self._run_button.setEnabled(True)
             report = (result or {}).get("report")
             if report is None:
-                self._status.setText(
-                    "<span style='color:#c62828'>"
-                    "The measurement produced no report.</span>")
+                self._status.setText("The measurement produced no report.")
+                set_text_role(self._status, "danger")
                 return
             self._report = report
             self._summary.setPlainText(engine.summarise(report))
@@ -263,8 +265,8 @@ class DetectionCostTab(QWidget):
 
         def failed(message: str) -> None:
             self._run_button.setEnabled(True)
-            self._status.setText(
-                f"<span style='color:#c62828'>{message}</span>")
+            self._status.setText(message)
+            set_text_role(self._status, "danger")
 
         worker = PhaseWorker(work, parent=self)
         worker.line_ready.connect(lambda line: self._summary.append(line))

@@ -216,7 +216,7 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
                     "linestyles": collection.get_linestyles() if hasattr(collection, "get_linestyles") else None,
                     "alpha": collection.get_alpha() if hasattr(collection, "get_alpha") else None,
                 }
-    figure.set_facecolor(style.figure_background or tokens["background"])
+    figure.set_facecolor(style.figure_background or tokens["surface"])
     for axes_index, axes in enumerate(figure.axes):
         axes.set_facecolor(style.axes_background or tokens["surface"])
         axes.title.set_color(style.text_colour or tokens["text"])

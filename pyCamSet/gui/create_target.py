@@ -32,10 +32,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.calibration_targets.core.target_registry import build_target, target_class
 from pyCamSet.gui.viewer_process import run_viewer, spawn_viewer
 from pyCamSet.gui.three_d_style import ThreeDStyleControls
@@ -142,7 +144,8 @@ class CreateTargetDialog(QDialog):
         self._out_dir_edit = QLineEdit(str(Path.cwd()))
         self._out_dir_edit.setAccessibleName("Target output directory")
         browse_btn = QPushButton("Browse\u2026")
-        browse_btn.setFixedWidth(70)
+        browse_btn.setMinimumWidth(70)
+        browse_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         browse_btn.clicked.connect(self._browse_output_dir)
         out_row.addWidget(self._out_dir_edit)
         out_row.addWidget(browse_btn)
@@ -182,7 +185,7 @@ class CreateTargetDialog(QDialog):
         self._status = QLabel("")
         self._status.setAccessibleName("Target generation status")
         self._status.setAccessibleDescription("Save and visualisation feedback for the target")
-        self._status.setStyleSheet("color: #2e7d32;")
+        set_text_role(self._status, "success")
         root.addWidget(self._status)
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)

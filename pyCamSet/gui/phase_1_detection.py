@@ -40,12 +40,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.gui.shared_functions import (
     CollapsibleSection,
     DETECTOR_CHOOSE,
@@ -184,7 +186,7 @@ class Phase1Tab(QWidget):
         self._cam_checkboxes.clear()
         if not camera_names:
             lbl = QLabel("(no cameras found)")
-            lbl.setStyleSheet("color: gray; font-size: 10px;")
+            set_text_role(lbl, "hint")
             self._cameras_area_layout.addWidget(lbl)
             self._cameras_area.setMinimumHeight(lbl.sizeHint().height())
             self._rebuilding_cameras = False
@@ -218,6 +220,8 @@ class Phase1Tab(QWidget):
 
         form_widget = QWidget()
         form_root = QVBoxLayout(form_widget)
+        # Pack sections at the top; spare height must not open gaps between them.
+        form_root.setAlignment(Qt.AlignmentFlag.AlignTop)
         form_root.setContentsMargins(0, 0, 0, 0)
         form_root.setSpacing(2)
         form_scroll = QScrollArea()  # Keep long parameter forms usable when collapsible sections expand.
@@ -242,7 +246,8 @@ class Phase1Tab(QWidget):
         self._floc_edit.setToolTip(IMAGE_FOLDER_SCHEMATIC)
         self._floc_edit.textChanged.connect(self._on_floc_changed)
         floc_btn = QPushButton("Browse…")
-        floc_btn.setFixedWidth(70)
+        floc_btn.setMinimumWidth(70)
+        floc_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         floc_btn.setToolTip("Select the root folder that contains one subfolder per camera.")
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
@@ -263,7 +268,8 @@ class Phase1Tab(QWidget):
         )
         self._recent_target_combo.activated.connect(self._on_recent_target_selected)
         forget_btn = QPushButton("Forget")
-        forget_btn.setFixedWidth(70)
+        forget_btn.setMinimumWidth(70)
+        forget_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         forget_btn.setToolTip("Remove the selected target from this list.")
         forget_btn.clicked.connect(self._forget_selected_target)
         recent_row.addWidget(self._recent_target_combo)
@@ -409,8 +415,9 @@ class Phase1Tab(QWidget):
         self._cameras_area_layout = QVBoxLayout(self._cameras_area)
         self._cameras_area_layout.setContentsMargins(0, 0, 0, 0)
         self._cameras_area_layout.setSpacing(2)
-        self._cameras_placeholder = QLabel("(set image folder in Phase 0 to populate)")
-        self._cameras_placeholder.setStyleSheet("color: gray; font-size: 10px;")
+        self._cameras_placeholder = QLabel(
+            "No cameras yet: confirm an image folder in Phase 0 first.")
+        set_text_role(self._cameras_placeholder, "muted")
         self._cameras_area_layout.addWidget(self._cameras_placeholder)
         cam_scroll = QScrollArea()
         cam_scroll.setWidgetResizable(True)
@@ -420,6 +427,8 @@ class Phase1Tab(QWidget):
         cam_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         cam_scroll.setWidget(self._cameras_area)
         form_root.addWidget(cam_scroll)
+        # Spare height collects below the form, not between its rows.
+        form_root.addStretch(1)
 
         # ── Action buttons ─────────────────────────────────────────────
         btn_row = QHBoxLayout()
@@ -556,7 +565,7 @@ class Phase1Tab(QWidget):
             if meta.priority and meta.priority != active_priority:
                 active_priority = meta.priority
                 heading = QLabel(f"Priority {meta.priority}")
-                heading.setStyleSheet("color: #1976d2; font-weight: bold;")
+                set_text_role(heading, "subheading")
                 self._detection_opts_section.addRow(heading)
             widget = build_parameter_widget(meta)
             if (meta.key in self._detection_option_edited
@@ -819,22 +828,25 @@ class Phase1DiagnosticsTab(QWidget):
         self._draw_prev_btn = QPushButton("◀")
         self._draw_prev_btn.setAccessibleName("Previous detection image")
         self._draw_prev_btn.setToolTip("Show the previous detection image")
-        self._draw_prev_btn.setFixedWidth(36)
+        self._draw_prev_btn.setMinimumWidth(36)
+        self._draw_prev_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self._draw_prev_btn.clicked.connect(lambda: self._step_draw_image(-1))
         nav_bar.addWidget(self._draw_prev_btn)
         self._draw_next_btn = QPushButton("▶")
         self._draw_next_btn.setAccessibleName("Next detection image")
         self._draw_next_btn.setToolTip("Show the next detection image")
-        self._draw_next_btn.setFixedWidth(36)
+        self._draw_next_btn.setMinimumWidth(36)
+        self._draw_next_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self._draw_next_btn.clicked.connect(lambda: self._step_draw_image(+1))
         nav_bar.addWidget(self._draw_next_btn)
         self._draw_status_lbl = QLabel("—")
         self._draw_status_lbl.setFixedWidth(80)
-        self._draw_status_lbl.setStyleSheet("font-family: monospace;")
+        set_text_role(self._draw_status_lbl, "mono")
         nav_bar.addWidget(self._draw_status_lbl)
         nav_bar.addStretch()
         self._draw_expand_btn = QPushButton("Expand")
-        self._draw_expand_btn.setFixedWidth(70)
+        self._draw_expand_btn.setMinimumWidth(70)
+        self._draw_expand_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self._draw_expand_btn.clicked.connect(self._expand_draw_figure)
         nav_bar.addWidget(self._draw_expand_btn)
         self._draw_save_btn = QPushButton("Save PNG")
@@ -852,6 +864,7 @@ class Phase1DiagnosticsTab(QWidget):
         bind_export_preset(self._montage_export_preset, "phase1:detection-montage")
         nav_bar.addWidget(self._montage_export_preset)
         self._draw_csv_btn = QPushButton("Save coordinates CSV")
+        set_action_icon(self._draw_csv_btn, "chart")
         self._draw_csv_btn.setEnabled(False)
         self._draw_csv_btn.setToolTip("Export observed detected pixel coordinates for the displayed image index.")
         self._draw_csv_btn.clicked.connect(self._save_detection_coordinates_csv)
@@ -873,7 +886,7 @@ class Phase1DiagnosticsTab(QWidget):
         self._canvas_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         _placeholder = QLabel("Select a run and click 'Draw Detections' to render detected feature points.")
         _placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _placeholder.setStyleSheet("color: gray;")
+        set_text_role(_placeholder, "muted")
         _placeholder.setWordWrap(True)
         self._canvas_scroll.setWidget(_placeholder)
         montage_layout.addWidget(self._canvas_scroll, stretch=1)
@@ -932,7 +945,7 @@ class Phase1DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select one or more runs (up to 5) from the list to compare.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._summary_layout.addWidget(lbl)
             return
@@ -944,7 +957,7 @@ class Phase1DiagnosticsTab(QWidget):
             from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
         except ImportError:
             lbl = QLabel("matplotlib not available — cannot render summary plots.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._summary_layout.addWidget(lbl)
             return
@@ -1063,7 +1076,7 @@ class Phase1DiagnosticsTab(QWidget):
             cov_dict = d.get("D1.6_spatial_coverage", {}) or {}
 
             hdr = QLabel(f"Run: {run_id}")
-            hdr.setStyleSheet("font-weight: bold; margin-top: 8px;")
+            set_text_role(hdr, "subheading")
             self._summary_layout.addWidget(hdr)
 
             # A run that failed has no detections to summarise, and every
@@ -1074,7 +1087,8 @@ class Phase1DiagnosticsTab(QWidget):
             if failure:
                 why = QLabel(f"This run failed: {failure}")
                 why.setWordWrap(True)
-                why.setStyleSheet("color: #c0392b; margin-left: 16px;")
+                set_text_role(why, "danger")
+                why.setIndent(16)
                 self._summary_layout.addWidget(why)
 
             # Top summary lines (same content, compact style)
@@ -1108,7 +1122,7 @@ class Phase1DiagnosticsTab(QWidget):
                     ("D1.6 Coverage %", 1),
                 ]:
                     lbl = QLabel(text)
-                    lbl.setStyleSheet("font-weight: bold;")
+                    set_text_role(lbl, "subheading")
                     head.addWidget(lbl, stretch=stretch)
                 self._summary_layout.addLayout(head)
 
@@ -1139,7 +1153,7 @@ class Phase1DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select a run to view the detection heatmap.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._heatmap_layout.addWidget(lbl)
             return
@@ -1151,7 +1165,7 @@ class Phase1DiagnosticsTab(QWidget):
             from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
         except ImportError:
             lbl = QLabel("matplotlib not available — cannot render heatmap.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             self._heatmap_layout.addWidget(lbl)
             return
 
@@ -1170,7 +1184,7 @@ class Phase1DiagnosticsTab(QWidget):
             lbl = QLabel(
                 "No heatmap data in selected run(s).\nRe-run Phase 1 to generate it."
             )
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._heatmap_layout.addWidget(lbl)
             return
@@ -1185,7 +1199,7 @@ class Phase1DiagnosticsTab(QWidget):
                 "Check Phase 1 detection results; this run produced zero "
                 "detected features across all cameras."
             )
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._heatmap_layout.addWidget(lbl)
             return

@@ -281,7 +281,10 @@ def test_detection_overlay_theme_defaults_refresh_but_explicit_colours_win():
     light_face = overlay.get_facecolors().copy()
     apply_visual_style(figure, VisualStyle(), "Dark")
     assert overlay.get_facecolors().tolist() != light_face.tolist()
-    assert overlay.get_facecolors()[0].tolist() == pytest.approx([118 / 255, 183 / 255, 1.0, 1.0])
+    from matplotlib.colors import to_rgba
+    from pyCamSet.gui.theme import THEME_TOKENS
+    # The theme default for detection overlays is the accent colour.
+    assert overlay.get_facecolors()[0].tolist() == pytest.approx(list(to_rgba(THEME_TOKENS["Dark"]["accent"])))
     explicit = VisualStyle(overlay_colour="#123456", overlay_edge_colour="#654321")
     apply_visual_style(figure, explicit, "Sepia")
     assert overlay.get_facecolors()[0].tolist() == pytest.approx([18 / 255, 52 / 255, 86 / 255, 1.0])

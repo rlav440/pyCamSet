@@ -118,41 +118,57 @@ def test_svg_and_pdf_exports_are_written(tmp_path, monkeypatch, qapp):
         assert target.is_file() and target.stat().st_size > 100
 
 
-def test_action_icons_preserve_labels_accessibility_and_click_signals(tmp_path, monkeypatch, qapp):
-    """Icons decorate the corresponding controls without replacing their actions."""
+@pytest.mark.parametrize("glyphs", [True, False], ids=["shared-glyph", "vector-fallback"])
+def test_action_icons_preserve_labels_accessibility_and_click_signals(tmp_path, monkeypatch, qapp, glyphs):
+    """Compact icon buttons keep their action, label and accessibility on every host.
+
+    Both branches are forced so the contract holds whether or not the host has
+    an emoji/symbol font: the shared optical-mapping glyph where one exists,
+    the painted vector mark where it does not.
+    """
     from PySide6.QtCore import QSize
     from PySide6.QtWidgets import QPushButton
 
-    from pyCamSet.gui.action_icons import set_action_icon
+    from pyCamSet.gui import action_icons
+    from pyCamSet.gui.action_icons import ACTION_GLYPHS, ICON_BUTTON_SIZE, set_action_icon
 
+    monkeypatch.setattr(action_icons, "glyphs_renderable", lambda: glyphs)
     observed = []
     for semantic, label in (("options", "Style…"), ("snapshot", "Save PNG"), ("chart", "Save CSV")):
         button = QPushButton(label)
         button.setAccessibleName(f"Accessible {label}")
         button.clicked.connect(lambda _checked=False, value=label: observed.append(value))
         set_action_icon(button, semantic)
-        assert button.text() == label
+        assert button.property("actionLabel") == label
+        assert button.toolTip() == label
         assert button.accessibleName() == f"Accessible {label}"
         assert button.focusPolicy() != button.focusPolicy().NoFocus
-        assert not button.icon().isNull()
-        for extent in (18, 27, 36):
-            image = button.icon().pixmap(QSize(extent, extent)).toImage()
-            assert image.size().width() == extent
-            assert image.size().height() == extent
-            assert len({image.pixelColor(x, y).rgba()
-                        for x in range(extent) for y in range(extent)}) > 10
-            assert image.pixelColor(0, 0).alpha() == 0
+        assert button.size() == QSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+        if glyphs:
+            assert button.text() == ACTION_GLYPHS[semantic]
+            assert button.icon().isNull()
+        else:
+            assert button.text() == ""
+            assert not button.icon().isNull()
+            for extent in (18, 27, 36):
+                image = button.icon().pixmap(QSize(extent, extent)).toImage()
+                assert image.size().width() == extent
+                assert image.size().height() == extent
+                assert len({image.pixelColor(x, y).rgba()
+                            for x in range(extent) for y in range(extent)}) > 10
+                assert image.pixelColor(0, 0).alpha() == 0
         button.click()
 
     assert observed == ["Style…", "Save PNG", "Save CSV"]
 
     card = _card(qapp, {"columns": ["value"], "rows": [(1,)], "metadata": {}})
-    buttons = {button.text(): button for button in card.findChildren(QPushButton)}
+    buttons = {button.property("actionLabel") or button.text(): button
+               for button in card.findChildren(QPushButton)}
     assert buttons["Save PNG"].accessibleName() == "Save PNG for Test figure"
     assert buttons["Style…"].accessibleName() == "Figure style options for Test figure"
     for label in ("Save PNG", "Save CSV", "Style…"):
-        assert not buttons[label].icon().isNull()
-    assert buttons["Save SVG"].icon().isNull()
+        assert buttons[label].property("designRole") == "icon"
+    assert buttons["Save SVG"].property("designRole") is None
     target = tmp_path / "icon-wired.png"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(target), "PNG"))
     buttons["Save PNG"].click()
@@ -164,12 +180,13 @@ def test_action_icons_preserve_labels_accessibility_and_click_signals(tmp_path, 
     assert csv_target.is_file()
 
 
-def test_action_icon_uses_disabled_palette_role(qapp):
+def test_action_icon_uses_disabled_palette_role(qapp, monkeypatch):
     """Disabled marks follow Qt's disabled ButtonText role."""
     from PySide6.QtCore import QSize
     from PySide6.QtGui import QIcon, QPalette
     from PySide6.QtWidgets import QPushButton
 
+    from pyCamSet.gui import action_icons
     from pyCamSet.gui.action_icons import set_action_icon
 
     button = QPushButton("Save PNG")
@@ -181,6 +198,8 @@ def test_action_icon_uses_disabled_palette_role(qapp):
     palette.setColor(QPalette.ColorGroup.Active, QPalette.ColorRole.ButtonText, active)
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled)
     button.setPalette(palette)
+    # The painted mark is the no-glyph-font fallback; force that branch.
+    monkeypatch.setattr(action_icons, "glyphs_renderable", lambda: False)
     set_action_icon(button, "snapshot")
 
     def rendered_colours(mode):

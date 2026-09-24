@@ -44,11 +44,13 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.calibration_targets.core.parameters import (
     Choice,
     Parameter,
@@ -118,10 +120,11 @@ def make_section_label(text: str) -> QLabel:
 
 
 def make_separator() -> QFrame:
-    """Return a horizontal separator line."""
+    """Return a themed one-pixel horizontal hairline separator."""
     sep = QFrame()
-    sep.setFrameShape(QFrame.Shape.HLine)
-    sep.setFrameShadow(QFrame.Shadow.Sunken)
+    sep.setObjectName("hairline")
+    sep.setFrameShape(QFrame.Shape.NoFrame)
+    sep.setFixedHeight(1)
     return sep
 
 
@@ -278,12 +281,11 @@ class MatplotlibFigureCard(QWidget):
         header.addWidget(make_section_label(title))
         header.addStretch()
         save_btn = QPushButton("Save PNG")
+        save_btn.setToolTip("Save PNG (at the selected size template)")
         from pyCamSet.gui.action_icons import set_action_icon
         set_action_icon(save_btn, "snapshot")
-        save_btn.setFixedWidth(82)
         save_btn.setAccessibleName(f"Save PNG for {title}")
         save_btn.clicked.connect(self._save_png)
-        header.addWidget(save_btn)
         self._preset = QComboBox()
         self._preset.addItem("Screen template · 160 mm · 150 dpi", (160.0, 150))
         self._preset.addItem("Publication single-column template · 85 mm · 300 dpi", (85.0, 300))
@@ -291,11 +293,22 @@ class MatplotlibFigureCard(QWidget):
         self._preset.setToolTip("Generic sizing templates only; not a claim of compliance with any named journal.")
         from pyCamSet.gui.preferences import bind_export_preset
         bind_export_preset(self._preset, self._visual_id)
+        # Grouped: the size preset, then the three picture exports it sizes,
+        # then style and data export (gear before chart, as in the optical-
+        # mapping app), then expand.
         header.addWidget(self._preset)
+        header.addWidget(save_btn)
         for fmt in ("SVG", "PDF"):
             vector_btn = QPushButton(f"Save {fmt}")
             vector_btn.clicked.connect(lambda _checked=False, output_format=fmt: self._save_vector(output_format))
             header.addWidget(vector_btn)
+        header.addSpacing(10)
+        style_btn = QPushButton("Style…")
+        style_btn.setToolTip("Figure style options: fonts, colours, grid and legend")
+        set_action_icon(style_btn, "options")
+        style_btn.setAccessibleName(f"Figure style options for {title}")
+        style_btn.clicked.connect(self._edit_style)
+        header.addWidget(style_btn)
         self._csv_btn = QPushButton("Save CSV")
         set_action_icon(self._csv_btn, "chart")
         has_csv_rows = csv_export is not None and bool(csv_export.get("rows"))
@@ -303,13 +316,9 @@ class MatplotlibFigureCard(QWidget):
         self._csv_btn.setToolTip("Export source-backed numeric data." if has_csv_rows else csv_disabled_reason)
         self._csv_btn.clicked.connect(self._save_csv)
         header.addWidget(self._csv_btn)
-        style_btn = QPushButton("Style…")
-        set_action_icon(style_btn, "options")
-        style_btn.setAccessibleName(f"Figure style options for {title}")
-        style_btn.clicked.connect(self._edit_style)
-        header.addWidget(style_btn)
         expand_btn = QPushButton("Expand")
-        expand_btn.setFixedWidth(78)
+        expand_btn.setMinimumWidth(78)
+        expand_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         expand_btn.clicked.connect(self._open_expanded)
         header.addWidget(expand_btn)
         layout.addLayout(header)
@@ -475,8 +484,13 @@ def make_scrollable_tab() -> tuple[QWidget, QVBoxLayout, QScrollArea]:
 # ---------------------------------------------------------------------------
 
 
-class CollapsibleSection(QWidget):
-    """A labelled section with a toggle header button and collapsible QFormLayout body.
+class CollapsibleSection(QFrame):
+    """A labelled card with a toggle header button and collapsible QFormLayout body.
+
+    The card chrome (tinted surface, hairline border, rounded corners) and the
+    header's look come from the application stylesheet through the
+    ``collapsibleSection`` and ``sectionToggle`` object names, so the section
+    follows live theme switches.
 
     Usage::
 
@@ -487,25 +501,25 @@ class CollapsibleSection(QWidget):
 
     def __init__(self, title: str, expanded: bool = True, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self.setObjectName("collapsibleSection")
+        # Never grow past the content: a collapsed card is one header tall.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self._title = title
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 2, 0, 2)
+        root.setContentsMargins(2, 2, 2, 2)
         root.setSpacing(0)
 
         self._btn = QPushButton()
+        self._btn.setObjectName("sectionToggle")
+        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn.setCheckable(True)
         self._btn.setChecked(expanded)
-        self._btn.setStyleSheet(
-            "QPushButton { text-align: left; font-weight: bold; color: #1976d2;"
-            " background: transparent; border: none; padding: 2px 0px; font-size: 10pt; }"
-            "QPushButton:hover { color: #0d47a1; }"
-        )
         self._btn.clicked.connect(self._on_toggle)
         root.addWidget(self._btn)
 
         self._body = QWidget()
         self._form = QFormLayout(self._body)
-        self._form.setContentsMargins(4, 0, 0, 4)
+        self._form.setContentsMargins(10, 2, 10, 8)
         self._form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         root.addWidget(self._body)
 
@@ -516,6 +530,11 @@ class CollapsibleSection(QWidget):
     def _update_label(self, expanded: bool) -> None:
         arrow = "▼" if expanded else "▶"
         self._btn.setText(f"{arrow}  {self._title}")
+        # Screen readers get the title and state in words, not the arrow glyph.
+        self._btn.setAccessibleName(self._title)
+        self._btn.setAccessibleDescription(
+            "Expanded section; press Space to collapse" if expanded
+            else "Collapsed section; press Space to expand")
 
     def _on_toggle(self, checked: bool) -> None:
         self._body.setVisible(checked)
@@ -871,7 +890,7 @@ class TargetSettingsForm(QWidget):
                     "Phase 1.")
                 form.addRow(self._backend_label, self._inherited_backend_label)
             self._backend_status = QLabel()
-            self._backend_status.setStyleSheet("font-size: 10px;")
+            set_text_role(self._backend_status, "hint")
             form.addRow("", self._backend_status)
 
         self._rows = QWidget()
@@ -1056,9 +1075,8 @@ class TargetSettingsForm(QWidget):
         if shown:
             backend = self.backend()
             self._backend_status.setText(marker_backend_availability_text(backend))
-            self._backend_status.setStyleSheet(
-                "font-size: 10px; color: "
-                + ("#2a7a2a;" if marker_backend_available(backend) else "#8a4a00;"))
+            set_text_role(self._backend_status,
+                          "success" if marker_backend_available(backend) else "warning")
 
     def _on_backend_selected(self, index: int) -> None:
         """The detector combo moved: a choice, unless the form moved it."""
@@ -1611,7 +1629,7 @@ def render_predecessor_chain_section(layout, workspace_mgr: WorkspaceManager, ru
         phase = str(pred.get("phase", "unknown"))
         rid = str(pred.get("run_id", "unknown"))
         pred_hdr = QLabel(f"  {phase}  |  {rid}")
-        pred_hdr.setStyleSheet("font-weight: bold; margin-top: 4px; color: #555;")
+        set_text_role(pred_hdr, "subheading")
         layout.addWidget(pred_hdr)
 
         form = QFormLayout()
@@ -1628,7 +1646,7 @@ def render_predecessor_chain_section(layout, workspace_mgr: WorkspaceManager, ru
             )
             plbl = QLabel(param_txt)
             plbl.setWordWrap(True)
-            plbl.setStyleSheet("color: #444; font-size: 9pt;")
+            set_text_role(plbl, "muted")
             form.addRow("params:", plbl)
 
         diag = pred.get("diagnostics") or {}
@@ -1636,12 +1654,11 @@ def render_predecessor_chain_section(layout, workspace_mgr: WorkspaceManager, ru
             short_key = key.split("_", 1)[-1] if "_" in key else key
             dlbl = QLabel(str(val)[:120])
             dlbl.setWordWrap(True)
-            dlbl.setStyleSheet("font-size: 9pt;")
             form.addRow(f"{short_key}:", dlbl)
 
         if pred.get("error"):
             err_lbl = QLabel(str(pred["error"])[:200])
-            err_lbl.setStyleSheet("color: red; font-size: 9pt;")
+            set_text_role(err_lbl, "danger")
             err_lbl.setWordWrap(True)
             form.addRow("error:", err_lbl)
 

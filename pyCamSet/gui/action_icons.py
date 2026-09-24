@@ -1,5 +1,6 @@
-'''Purpose: Draw accessible, scalable action icons for the pyCamSet GUI.
-Status: Active; original Qt-painted semantics for options, snapshots and charts.
+'''Purpose: Give figure actions the lab's shared compact icon buttons.
+Status: Active; options, snapshot and CSV actions use the same glyphs as the
+    optical-mapping GUI, with Qt-painted vector marks where no glyph font exists.
 Future: Add an action only when the GUI has a matching operation.
 '''
 from __future__ import annotations
@@ -8,8 +9,25 @@ import math
 import weakref
 
 from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QIcon, QIconEngine, QPainter, QPainterPath, QPalette, QPen, QPixmap
+from PySide6.QtGui import (
+    QFont, QFontDatabase, QFontMetrics, QIcon, QIconEngine, QImage, QPainter, QPainterPath,
+    QPalette, QPen, QPixmap,
+)
 from PySide6.QtWidgets import QApplication, QPushButton
+
+#: Glyphs shared with the optical-mapping GUI, so both lab tools read alike.
+#: They are Unicode code points drawn by the host's own symbol/emoji font;
+#: no image asset or font file is shipped.
+ACTION_GLYPHS = {
+    "options": "⚙",       # gear: per-visual style options
+    "snapshot": "\U0001F4F7",  # camera: save the visual as an image
+    "chart": "\U0001F4CA",     # bar chart: save the visual's data as CSV
+}
+
+#: Fixed side of a compact icon button, in logical pixels (as in the OM GUI).
+ICON_BUTTON_SIZE = 28
+#: Glyph size inside the button, in pixels, independent of the UI font size.
+ICON_GLYPH_PX = 13
 
 
 class _ActionIconEngine(QIconEngine):
@@ -110,13 +128,102 @@ class _ActionIconEngine(QIconEngine):
         painter.drawLine(18.0, 17.0, 18.0, 5.0)
 
 
-def set_action_icon(button: QPushButton, semantic: str) -> None:
-    """Set original Qt vector geometry without changing button semantics.
+#: Answer of the render probe, kept once a QApplication exists.
+_GLYPHS_RENDERABLE: bool | None = None
 
-    The icon geometry is project-authored under pyCamSet's Apache-2.0 licence.
-    No OM artwork, third-party asset, emoji, or external font is loaded.
+#: An unassigned code point: whatever a font draws for it is its "missing
+#: glyph" (usually an empty box), the shape a real glyph must not match.
+_MISSING_CODEPOINT = 0x0378
+
+
+def _render_probe(font: QFont, codepoint: int) -> QImage:
+    """Paint one code point with *font* into a small transparent image."""
+    image = QImage(32, 32, QImage.Format.Format_ARGB32)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    painter.setFont(font)
+    painter.setPen(Qt.GlobalColor.black)
+    painter.drawText(QRect(0, 0, 32, 32), Qt.AlignmentFlag.AlignCenter, chr(codepoint))
+    painter.end()
+    return image
+
+
+def _has_ink(image: QImage) -> bool:
+    """Whether any pixel of *image* is not fully transparent."""
+    return any(image.pixelColor(x, y).alpha()
+               for y in range(image.height()) for x in range(image.width()))
+
+
+def glyphs_renderable() -> bool:
+    """Whether this host has a font that really draws every shared action glyph.
+
+    Qt falls back across installed fonts for a missing code point, so the
+    primary UI font is the wrong thing to ask.  Instead look for one symbol
+    or emoji family (Segoe UI Emoji on Windows, Apple Color Emoji on macOS,
+    Noto Color Emoji on most Linux desktops) that covers all three glyphs.
+    Coverage in the font's character map is not enough: some FreeType builds
+    list a colour-bitmap emoji yet paint nothing or a box.  So each glyph is
+    also rendered, and must leave ink that differs from the font's rendering
+    of an unassigned code point.  Where no family passes, the painted vector
+    marks are used instead.
+
+    The answer is cached only once a QApplication exists; asked earlier, the
+    function answers False without remembering it.
     """
-    if semantic not in {"options", "snapshot", "chart"}:
+    global _GLYPHS_RENDERABLE
+    if _GLYPHS_RENDERABLE is not None:
+        return _GLYPHS_RENDERABLE
+    if QApplication.instance() is None:
+        return False
+    codepoints = [ord(glyph) for glyph in ACTION_GLYPHS.values()]
+    found = False
+    for family in QFontDatabase.families():
+        folded = family.casefold()
+        if "emoji" not in folded and "symbol" not in folded:
+            continue
+        font = QFont(family)
+        font.setPixelSize(ICON_GLYPH_PX * 2)
+        metrics = QFontMetrics(font)
+        if not all(metrics.inFontUcs4(codepoint) for codepoint in codepoints):
+            continue
+        missing = _render_probe(font, _MISSING_CODEPOINT)
+        if all(_has_ink(image := _render_probe(font, codepoint)) and image != missing
+               for codepoint in codepoints):
+            found = True
+            break
+    _GLYPHS_RENDERABLE = found
+    return found
+
+
+def set_action_icon(button: QPushButton, semantic: str) -> None:
+    """Turn *button* into a compact icon button for a figure action.
+
+    The button keeps its click signal and focusability.  Its old text label
+    moves to the tooltip (unless one is set) and the accessible name (unless
+    one is set), and is kept in the ``actionLabel`` property so code and tests
+    can still find the action by what it does.
+    """
+    if semantic not in ACTION_GLYPHS:
         raise ValueError(f"Unsupported action icon semantic: {semantic!r}")
-    button.setIcon(QIcon(_ActionIconEngine(button, semantic)))
-    button.setIconSize(QSize(18, 18))
+    label = button.property("actionLabel") or button.text()
+    button.setProperty("actionLabel", label)
+    button.setProperty("designRole", "icon")
+    if not button.toolTip():
+        button.setToolTip(label)
+    if not button.accessibleName():
+        button.setAccessibleName(label)
+    button.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    if glyphs_renderable():
+        button.setIcon(QIcon())
+        button.setText(ACTION_GLYPHS[semantic])
+        font = QFont(button.font())
+        font.setPixelSize(ICON_GLYPH_PX)
+        button.setFont(font)
+    else:
+        button.setText("")
+        button.setIcon(QIcon(_ActionIconEngine(button, semantic)))
+        button.setIconSize(QSize(18, 18))
+    style = button.style()
+    style.unpolish(button)
+    style.polish(button)

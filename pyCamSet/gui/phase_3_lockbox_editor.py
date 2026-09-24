@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.workflow.lockbox_geometry import (
     CameraEditRecord,
     PlaneGroup,
@@ -360,7 +361,7 @@ class Phase3LockboxEditor(QDialog):
         """Build the three-panel editor layout."""
         root = QVBoxLayout(self)
         banner = QLabel("Editing lockbox prior centres only. Original source camset will not be modified.")
-        banner.setStyleSheet("font-weight: bold; color: #9a5b00;")
+        set_text_role(banner, "warning")
         root.addWidget(banner)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)

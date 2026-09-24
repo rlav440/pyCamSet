@@ -128,7 +128,8 @@ def test_cosmetic_scene_controls_leave_coordinates_and_error_scalars_unchanged(a
     plotter = reconstruction_scene(diagnostics, point_size=7.0, show_legend=False)
     try:
         _apply_3d_cosmetics(plotter, "Sepia", "theme", 7.0, "top", True)
-        assert plotter.background_color == "#f3ecdf"
+        from pyCamSet.gui.theme import THEME_TOKENS
+        assert plotter.background_color == THEME_TOKENS["Sepia"]["background"]
         assert np.array_equal(diagnostics.scene_points, points)
         assert np.array_equal(diagnostics.point_error, errors)
         actor = next(actor for actor in plotter.renderer.actors.values()

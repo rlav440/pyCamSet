@@ -10,17 +10,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QSettings
+from PySide6.QtCore import QEvent, QObject, QSettings, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QFrame,
+    QPushButton,
     QHBoxLayout,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QSpinBox,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidgetAction,
     QWidget,
@@ -40,7 +42,6 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE4_DIAG,
     WorkspaceManager,
     WheelMutationGuard,
-    make_blue_button,
 )
 
 
@@ -151,13 +152,18 @@ class PyCamSetApp(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(4, 4, 4, 4)
-        root_layout.setSpacing(4)
+        root_layout.setContentsMargins(8, 6, 8, 8)
+        root_layout.setSpacing(6)
 
         # ── Global actions ────────────────────────────────────────────
+        # A neutral button: the filled primary colour is kept for each
+        # phase's own call to action, so it is never ambiguous which button
+        # runs the current step.
         ctrl_row = QHBoxLayout()
-        ctrl_row.addWidget(make_blue_button(
-            "Create Target…", self._open_create_target))
+        create_target_button = QPushButton("Create Target…")
+        create_target_button.setToolTip("Design and save a new calibration target")
+        create_target_button.clicked.connect(self._open_create_target)
+        ctrl_row.addWidget(create_target_button)
         ctrl_row.addStretch()
         root_layout.addLayout(ctrl_row)
 
@@ -178,16 +184,23 @@ class PyCamSetApp(QMainWindow):
         theme_control.setDefaultWidget(self._theme_combo)
         settings_menu.addAction(theme_control)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setFrameShadow(QFrame.Shadow.Sunken)
-        root_layout.addWidget(sep)
-
         # ── Tab widget ─────────────────────────────────────────────────
         ws = self._workspace_mgr
 
         self._notebook = QTabWidget()
         root_layout.addWidget(self._notebook)
+        # At narrow widths the tab bar scrolls and later tabs slide out of
+        # view; this corner menu names every reachable tab so none is hidden.
+        tabs_button = QToolButton()
+        tabs_button.setObjectName("allTabsButton")
+        tabs_button.setText("All tabs ▾")
+        tabs_button.setToolTip("Jump to any tab, including ones scrolled out of view")
+        tabs_button.setAccessibleName("Show all tabs")
+        tabs_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        tabs_menu = QMenu(tabs_button)
+        tabs_menu.aboutToShow.connect(lambda: self._populate_tabs_menu(tabs_menu))
+        tabs_button.setMenu(tabs_menu)
+        self._notebook.setCornerWidget(tabs_button, Qt.Corner.TopRightCorner)
 
         self.phase0_tab = Phase0Tab(
             notebook=self._notebook,
@@ -347,6 +360,9 @@ class PyCamSetApp(QMainWindow):
         # Enforce binary outlier selection for outlier-related combo controls.
         self._normalize_outlier_combos(self.phase2_tab)
         self._normalize_outlier_combos(self.phase3_tab)
+        # Phase 4 too: otherwise a visited session saves "No" while a fresh
+        # start still lists "n"/"y", and every saved parameter is rejected.
+        self._normalize_outlier_combos(self.phase4_tab)
 
         self._notebook.currentChanged.connect(self._on_tab_changed)
         self._apply_phase3_handoff()
@@ -637,6 +653,18 @@ class PyCamSetApp(QMainWindow):
         self._theme_settings.sync()
         if self._theme_settings.status() != QSettings.Status.NoError:
             self.statusBar().showMessage("Colour theme is active but could not be saved.", 10000)
+
+    def _populate_tabs_menu(self, menu: QMenu) -> None:
+        """List the currently visible tabs, marking the open one."""
+        menu.clear()
+        for index in range(self._notebook.count()):
+            if not self._notebook.isTabVisible(index):
+                continue
+            action = menu.addAction(self._notebook.tabText(index))
+            action.setCheckable(True)
+            action.setChecked(index == self._notebook.currentIndex())
+            action.triggered.connect(
+                lambda _checked=False, i=index: self._notebook.setCurrentIndex(i))
 
     def switch_to_tab(self, name: str) -> None:
         """Switch to the named tab by its display text."""

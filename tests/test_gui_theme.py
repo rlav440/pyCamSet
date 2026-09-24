@@ -126,7 +126,7 @@ def test_matplotlib_theme_changes_chrome_without_changing_scientific_data(applic
     assert gridlines and all(gridline.get_visible() for gridline in gridlines)
     for theme_name in ("Light", "Dark", "Sepia"):
         apply_matplotlib_theme(figure, theme_name)
-        assert figure.get_facecolor() == to_rgba(THEME_TOKENS[theme_name]["background"])
+        assert figure.get_facecolor() == to_rgba(THEME_TOKENS[theme_name]["surface"])
         assert axes.get_facecolor() == to_rgba(THEME_TOKENS[theme_name]["surface"])
         assert themed_placeholder.get_color() == THEME_TOKENS[theme_name]["text"]
         assert contrast_ratio(themed_placeholder.get_color(), THEME_TOKENS[theme_name]["surface"]) >= 4.5
@@ -158,7 +158,7 @@ def test_matplotlib_theme_changes_chrome_without_changing_scientific_data(applic
     figure.savefig(export_path, dpi=40)
     from PIL import Image
     with Image.open(export_path) as exported:
-        assert exported.getpixel((0, 0))[:3] == (243, 236, 223)
+        assert exported.getpixel((0, 0))[:3] == tuple(int(THEME_TOKENS["Sepia"]["surface"][i:i + 2], 16) for i in (1, 3, 5))
 
 
 def test_token_validator_rejects_missing_or_extra_keys():
@@ -198,7 +198,7 @@ def test_main_window_theme_selector_switches_and_persists(tmp_path, monkeypatch)
         window._theme_combo.setCurrentText("Sepia")
         assert QApplication.instance().property("pycamsetTheme") == "Sepia"
         assert settings.value("appearance/theme") == "Sepia"
-        assert figure.get_facecolor() == to_rgba(THEME_TOKENS["Sepia"]["background"])
+        assert figure.get_facecolor() == to_rgba(THEME_TOKENS["Sepia"]["surface"])
         assert axes.get_lines()[0].get_color() == "#d62728"
         window.close()
         restored_window = main_window_module.PyCamSetApp()

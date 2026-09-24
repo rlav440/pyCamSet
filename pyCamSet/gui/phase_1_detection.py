@@ -1413,6 +1413,8 @@ class Phase1DiagnosticsTab(QWidget):
                 horizontalalignment="center", verticalalignment="center",
                 wrap=True,
             )
+            # Opt this presentation placeholder into theme foreground updates.
+            unreadable_art[cam].set_gid("phase1:unreadable-placeholder")
             unreadable_art[cam].set_visible(False)
 
         # Replace only the canvas area — the control bar stays unchanged

@@ -116,6 +116,9 @@ def test_matplotlib_theme_changes_chrome_without_changing_scientific_data(applic
     axes.set_title("Diagnostic")
     axes.set_xlabel("View")
     axes.set_ylabel("Error (px)")
+    scientific_annotation = axes.text(0.5, 0.5, "scientific label", color="#7a2e8e")
+    themed_placeholder = axes.text(0.5, 0.6, "placeholder", color="#000000")
+    themed_placeholder.set_gid("phase1:unreadable-placeholder")
     axes.legend()
     original_x = line.get_xdata().copy()
     original_y = line.get_ydata().copy()
@@ -125,6 +128,9 @@ def test_matplotlib_theme_changes_chrome_without_changing_scientific_data(applic
         apply_matplotlib_theme(figure, theme_name)
         assert figure.get_facecolor() == to_rgba(THEME_TOKENS[theme_name]["background"])
         assert axes.get_facecolor() == to_rgba(THEME_TOKENS[theme_name]["surface"])
+        assert themed_placeholder.get_color() == THEME_TOKENS[theme_name]["text"]
+        assert contrast_ratio(themed_placeholder.get_color(), THEME_TOKENS[theme_name]["surface"]) >= 4.5
+        assert scientific_annotation.get_color() == "#7a2e8e"
         assert line.get_color() == "#d62728"
         assert line.get_xdata().tolist() == original_x.tolist()
         assert line.get_ydata().tolist() == original_y.tolist()
@@ -145,6 +151,8 @@ def test_matplotlib_theme_changes_chrome_without_changing_scientific_data(applic
     apply_theme(application, "Sepia")
     refresh_matplotlib_theme("Sepia")
     assert axes.title.get_color() == THEME_TOKENS["Sepia"]["text"]
+    assert themed_placeholder.get_color() == THEME_TOKENS["Sepia"]["text"]
+    assert scientific_annotation.get_color() == "#7a2e8e"
     assert line.get_ydata().tolist() == original_y.tolist()
     export_path = tmp_path / "sepia-figure.png"
     figure.savefig(export_path, dpi=40)

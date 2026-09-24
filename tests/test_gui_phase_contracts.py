@@ -1771,6 +1771,7 @@ def test_phase1_montage_keeps_corrupt_producer_indices_navigable(tmp_path, monke
 
     from pyCamSet.gui import phase_1_detection
     from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.gui.theme import THEME_TOKENS, apply_theme, contrast_ratio, refresh_matplotlib_theme
     from pyCamSet.calibration_targets.core.target_detections import ImageDetection, TargetDetection
     from pyCamSet.workflow.detections import save_detections
     from pyCamSet.workflow.workspace import WorkspaceManager
@@ -1806,7 +1807,8 @@ def test_phase1_montage_keeps_corrupt_producer_indices_navigable(tmp_path, monke
     save_detections(artifact, detections)
     artifact_digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
 
-    QApplication.instance() or QApplication([])
+    application = QApplication.instance() or QApplication([])
+    apply_theme(application, "Dark")
     tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))
     try:
         # Baseline fails here if the corrupt first producer image aborts montage construction.
@@ -1826,6 +1828,21 @@ def test_phase1_montage_keeps_corrupt_producer_indices_navigable(tmp_path, monke
         assert "unreadable" in state["axes"]["camA"].get_title().lower()
         assert "a1.png" in state["unreadable_art"]["camA"].get_text()
         assert len(state["sc_art"]["camA"].get_offsets()) == 0
+        placeholder = state["unreadable_art"]["camA"]
+        assert placeholder.get_gid() == "phase1:unreadable-placeholder"
+        assert placeholder.get_visible()
+        assert placeholder.get_color() == THEME_TOKENS["Dark"]["text"]
+        assert contrast_ratio(placeholder.get_color(), THEME_TOKENS["Dark"]["surface"]) >= 4.5
+
+        # Theme refresh follows the tagged chrome text but leaves ordinary Axes.text alone.
+        annotation = state["axes"]["camA"].text(0.1, 0.1, "scientific annotation", color="#7a2e8e")
+        for theme_name in ("Light", "Dark", "Sepia"):
+            apply_theme(application, theme_name)
+            refresh_matplotlib_theme(theme_name)
+            assert placeholder.get_color() == THEME_TOKENS[theme_name]["text"]
+            assert contrast_ratio(placeholder.get_color(), THEME_TOKENS[theme_name]["surface"]) >= 4.5
+            assert annotation.get_color() == "#7a2e8e"
+            assert placeholder.get_visible()
 
         tab._step_draw_image(1)
         assert tab._draw_index == 1
@@ -1851,6 +1868,21 @@ def test_phase1_montage_keeps_corrupt_producer_indices_navigable(tmp_path, monke
         tab._save_detection_montage_png()
         with Image.open(png_path) as exported:
             assert exported.width > 0 and exported.height > 0
+        # Also export a corrupt frame and verify themed foreground pixels render.
+        apply_theme(application, "Dark")
+        refresh_matplotlib_theme("Dark")
+        tab._draw_index = 0
+        tab._update_draw_frame()
+        corrupt_png = tmp_path / "corrupt-montage.png"
+        monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName",
+                            lambda *args: (str(corrupt_png), "PNG"))
+        tab._save_detection_montage_png()
+        with Image.open(corrupt_png) as exported:
+            pixels = np.asarray(exported.convert("RGB"))
+            foreground = tuple(int(THEME_TOKENS["Dark"]["text"][i:i + 2], 16) for i in (1, 3, 5))
+            assert np.count_nonzero(np.all(pixels == foreground, axis=2)) > 0
+        tab._draw_index = 1
+        tab._update_draw_frame()
         monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName",
                             lambda *args: (str(csv_path), "CSV"))
         tab._save_detection_coordinates_csv()

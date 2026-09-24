@@ -210,6 +210,11 @@ def apply_matplotlib_theme(figure, theme_name: str | None = None) -> None:
         text.set_color(tokens["text"])
     for axes in figure.axes:
         axes.set_facecolor(tokens["surface"])
+        # Only explicitly tagged presentation labels are themed; arbitrary
+        # Axes.text annotations may encode scientific meaning or data.
+        for text in axes.texts:
+            if text.get_gid() == "phase1:unreadable-placeholder":
+                text.set_color(tokens["text"])
         axes.title.set_color(tokens["text"])
         axes.xaxis.label.set_color(tokens["text"])
         axes.yaxis.label.set_color(tokens["text"])

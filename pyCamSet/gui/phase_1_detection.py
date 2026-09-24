@@ -87,7 +87,6 @@ from pyCamSet.workflow.recent_targets import (
     forget_target, load_recent_targets, remember_target)
 from pyCamSet.workflow.targets import describe_target, TARGET_KEY
 from pyCamSet.workflow.workspace import (
-    IMAGE_EXTS as _IMAGE_EXTS,
     WorkspaceManager,
     as_io_path,
     get_camera_subfolders,
@@ -1357,12 +1356,11 @@ class Phase1DiagnosticsTab(QWidget):
         max_images = 0
 
         from natsort import natsorted
+        from pyCamSet.utils.general_utils import glob_ims
         for cam in cams:
             # Detection row indices are assigned after natural sorting in the producer.
-            ims = natsorted(
-                [p for p in cam_folders[cam].iterdir()
-                 if p.is_file() and p.suffix.lower() in _IMAGE_EXTS]
-            )
+            # Reuse the producer's recursive, suffix-filtered, resolved image list.
+            ims = natsorted(glob_ims(cam_folders[cam]))
             cam_images[cam] = ims
             max_images = max(max_images, len(ims))
             per_im: dict[int, np.ndarray] = {}

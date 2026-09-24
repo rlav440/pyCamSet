@@ -1642,8 +1642,9 @@ def test_phase1_overlay_style_roundtrip_keeps_producer_frame_mapping_and_png(tmp
     from pyCamSet.workflow.workspace import WorkspaceManager
 
     cam_names = ["camA", "camB"]
-    frame_sets = {"camA": ("frame1.png", "frame2.png", "frame10.png"),
-                  "camB": ("frame1.png", "frame10.png")}
+    # The nested m/frame2 path sorts between root a1 and z10 producer frames.
+    frame_sets = {"camA": ("a1.png", "m/frame2.png", "z10.png"),
+                  "camB": ("a1.png", "m/frame2.png", "z10.png")}
     image_values = {}
     for cam_idx, cam in enumerate(cam_names):
         folder = tmp_path / cam
@@ -1651,11 +1652,13 @@ def test_phase1_overlay_style_roundtrip_keeps_producer_frame_mapping_and_png(tmp
         for image_idx, name in enumerate(frame_sets[cam]):
             value = 35 + cam_idx * 70 + image_idx * 20
             image_values[(cam, name)] = value
-            assert cv2.imwrite(str(folder / name), np.full((18, 18, 3), value, dtype=np.uint8))
+            image_path = folder / name
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            assert cv2.imwrite(str(image_path), np.full((18, 18, 3), value, dtype=np.uint8))
 
     points = {
         "camA": np.array([[0, 0, 2, 3], [0, 1, 4, 5], [0, 2, 6, 7]], dtype=float),
-        "camB": np.array([[1, 0, 8, 9], [1, 1, 10, 11]], dtype=float),
+        "camB": np.array([[1, 0, 8, 9], [1, 1, 10, 11], [1, 2, 12, 13]], dtype=float),
     }
     detections = TargetDetection(cam_names)
     for cam in cam_names:
@@ -1687,6 +1690,15 @@ def test_phase1_overlay_style_roundtrip_keeps_producer_frame_mapping_and_png(tmp
                                    image_values[(cam, expected_name)] / 255)
                 assert tab._draw_state["sc_art"][cam].get_offsets().tolist() == [
                     points[cam][im_idx, -2:].tolist()]
+
+        tab._draw_index = 0
+        tab._update_draw_frame()
+        tab._step_draw_image(1)
+        assert tab._draw_index == 1
+        assert np.allclose(tab._draw_state["im_art"]["camA"].get_array(),
+                           image_values[("camA", frame_sets["camA"][1])] / 255)
+        tab._step_draw_image(-1)
+        assert tab._draw_index == 0
 
         monkeypatch.setattr("pyCamSet.gui.preferences.config_directory", lambda: tmp_path)
         loaded_sizes = []

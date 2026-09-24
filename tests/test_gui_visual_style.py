@@ -606,8 +606,8 @@ def test_raw_detection_image_keeps_colormap_and_scale_bar_controls_disabled():
     axes.imshow([[0, 1], [2, 3]], cmap="gray")
     dialog = VisualStyleDialog(figure, "phase1:detection-overlay", VisualStyle(), "Light")
     assert not dialog.colormap.isEnabled()
-    scale_row = dialog.layout().itemAt(0).layout()
-    assert scale_row is not None
+    from PySide6.QtWidgets import QScrollArea
+    assert dialog.findChild(QScrollArea) is not None
     scale_controls = [widget for widget in dialog.findChildren(type(dialog.grid))
                       if widget.text() == "Enable scale bar"]
     assert len(scale_controls) == 1 and not scale_controls[0].isEnabled()

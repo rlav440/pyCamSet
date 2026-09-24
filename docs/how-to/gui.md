@@ -52,6 +52,20 @@ to `preferences.json.corrupt` if a later preference edit replaces it.
 An explicit `PYCAMSET_CONFIG_DIR` environment override takes precedence over
 Qt's standard location, for isolated or portable setups.
 
+Editable parameter inputs on Phase 0–4, Export Calibration, Optimisation and
+Detection Cost are saved in a separate `parameters.json` in that same per-user
+directory when the main window closes. They return on the next launch, including
+the Phase 3 `max_nfev` value (factory default: **1000**), target settings and
+detector options. Use **Reset Parameters to Default** on any tab to restore only
+that tab's factory input values; the reset is saved immediately. Run selectors,
+diagnostic selections, camera selection and target settings inherited from a
+selected Phase 1/2 run are not restored as global parameters: select the run or
+confirm the image folder again before processing. Generated calibration results
+are never restored as parameters. A malformed settings file is preserved as
+`parameters.json.corrupt` before a new settings file replaces it. No parameter
+settings are written into a reconstruction workspace or the source repository
+by default (unless `PYCAMSET_CONFIG_DIR` explicitly points there).
+
 The persistent action row below each phase's parameters keeps its run,
 diagnostics, and available continue/assessment actions in reach while expanded
 settings scroll independently. At smaller window sizes, use the parameter

@@ -124,11 +124,16 @@ class PyCamSetApp(QMainWindow):
         self._workspace_mgr = WorkspaceManager(None)
 
         self._build_ui()
+        from pyCamSet.gui.parameter_preferences import ParameterPreferences
+        self._parameter_preferences = ParameterPreferences(self)
         self._on_info_toggle()  # apply initial tooltip state
         if self._preferences.load_error:
             self.statusBar().showMessage(
                 "Saved GUI preferences are invalid; defaults are active and the original file is preserved.",
                 15000)
+        if self._parameter_preferences.load_error:
+            self.statusBar().showMessage(
+                "Saved GUI parameters are invalid; check or reset the affected inputs.", 15000)
 
     # ------------------------------------------------------------------
 
@@ -639,6 +644,16 @@ class PyCamSetApp(QMainWindow):
             if self._notebook.tabText(i) == name:
                 self._notebook.setCurrentIndex(i)
                 return
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        """Persist editable inputs before the user closes the window."""
+        try:
+            self._parameter_preferences.save()
+        except (OSError, ValueError, TypeError) as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Parameters not saved",
+                                f"The current inputs could not be saved.\n\nTechnical detail: {exc}")
+        super().closeEvent(event)
 
 
 def main_window() -> None:

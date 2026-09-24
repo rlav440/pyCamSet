@@ -1307,9 +1307,8 @@ def _runs(n):
 
 
 @pytest.mark.gui
-def test_run_selector_default_preselect_is_still_three():
-    """Every existing caller relies on the default -- changing it would be
-    a silent behaviour change for phases that never asked for one."""
+def test_run_selector_default_preselects_only_latest():
+    """All diagnostics open with the latest run selected by default."""
     from PySide6.QtWidgets import QApplication
 
     from pyCamSet.gui.shared_functions import RunSelectorWidget
@@ -1317,7 +1316,7 @@ def test_run_selector_default_preselect_is_still_three():
     QApplication.instance() or QApplication([])
     widget = RunSelectorWidget(_runs(5))
     try:
-        assert len(widget.get_selected()) == 3
+        assert [run["run_id"] for run in widget.get_selected()] == ["r4"]
     finally:
         widget.deleteLater()
 

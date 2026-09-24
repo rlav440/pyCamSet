@@ -405,6 +405,8 @@ class MatplotlibFigureCard(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         candidate = dialog.current
+        if candidate == self._style:
+            return
         temporary_path = None
         try:
             candidate.validate()
@@ -1419,7 +1421,7 @@ class RunSelectorWidget(QWidget):
         self,
         runs: list[dict],
         parent: Optional[QWidget] = None,
-        preselect: int = 3,
+        preselect: int = 1,
     ) -> None:
         super().__init__(parent)
         self._preselect = preselect

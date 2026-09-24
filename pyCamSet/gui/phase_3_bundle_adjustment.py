@@ -228,15 +228,15 @@ class Phase3Tab(QWidget):
 
         self._max_nfev_spin = QSpinBox()
         self._max_nfev_spin.setRange(5, 5000)
-        self._max_nfev_spin.setValue(300)
+        self._max_nfev_spin.setValue(1000)
         self._max_nfev_spin.setFixedWidth(110)
         self._max_nfev_spin.setToolTip(
             "Concept: maximum number of cost-function evaluations the\n"
             "Levenberg-Marquardt solver is allowed to perform.\n\n"
-            "Default: 300\n"
+            "Default: 1000\n"
             "Range: 5–5000\n"
             "Guidance: if the solver reports it did not converge, try\n"
-            "increasing to 1000.  Values > 2000 rarely improve results\n"
+            "increasing above 1000.  Values > 2000 rarely improve results\n"
             "and greatly increase runtime."
         )
         opts_form.addRow("max_nfev:", self._max_nfev_spin)

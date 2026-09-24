@@ -24,10 +24,10 @@ def test_run_selector_explains_empty_and_populated_states():
         assert widget._list.count() == 2
         assert not widget._list.isHidden()
         assert widget._empty_lbl.isHidden()
-        assert "2 of 2 runs selected" in widget._selection_summary.text()
-
-        widget._list.item(0).setSelected(False)
         assert "1 of 2 runs selected" in widget._selection_summary.text()
+
+        widget._list.item(1).setSelected(False)
+        assert "0 of 2 runs selected" in widget._selection_summary.text()
         assert widget._list.accessibleName() == "Saved runs"
         assert "diagnostics" in widget._list.accessibleDescription()
     finally:

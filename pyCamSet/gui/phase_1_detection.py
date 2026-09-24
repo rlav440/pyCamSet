@@ -278,12 +278,9 @@ class Phase1Tab(QWidget):
 
         # ── Detection options ──────────────────────────────────────────
         form_root.addWidget(make_separator())
-        form_root.addWidget(make_section_label("pyCamSet Detection Options"))
-
-        detect_form = QFormLayout()
-        detect_form.setContentsMargins(0, 0, 0, 0)
-        detect_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        form_root.addLayout(detect_form)
+        detect_sect = CollapsibleSection("pyCamSet Detection Options", expanded=False)
+        form_root.addWidget(detect_sect)
+        detect_form = detect_sect.form()
 
         self._cache_cb = QCheckBox("Cache detections (caching)")
         self._cache_cb.setChecked(True)

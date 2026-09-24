@@ -432,7 +432,7 @@ class VisualStyleDialog:
         from PySide6.QtWidgets import (
             QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
             QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-            QVBoxLayout, QWidget,
+            QScrollArea, QVBoxLayout, QWidget,
         )
         from PySide6.QtGui import QFontDatabase
 
@@ -448,9 +448,12 @@ class VisualStyleDialog:
                 self.original_override = _VISUAL_OVERRIDES.get(figure)
                 self.theme_name = theme_name
                 self.on_preview = on_preview
+                self._preview_applied = False
                 root = QVBoxLayout(self)
+                content = QWidget(self)
+                content_layout = QVBoxLayout(content)
                 form = QFormLayout()
-                root.addLayout(form)
+                content_layout.addLayout(form)
                 self.font = QComboBox()
                 self.font.addItems(["Sans Serif"] + sorted(QFontDatabase.families()))
                 self.font.setEditable(True)
@@ -545,7 +548,7 @@ class VisualStyleDialog:
                 scale_note = QLabel("Numeric limits, units, colourbar labels, heatmap palettes and signed/error-map encodings are fixed by the scientific producer. Range controls stay unavailable unless a producer explicitly supplies non-semantic presentation limits.")
                 scale_note.setWordWrap(True)
                 scale_note.setAccessibleName("Scientific colour-scale limits are protected")
-                root.addWidget(scale_note)
+                content_layout.addWidget(scale_note)
                 self.preset = QComboBox()
                 self.preset.addItems(["Custom", "Nature suggestion", "Science suggestion",
                                       "Cell suggestion", "IEEE suggestion"])
@@ -556,7 +559,7 @@ class VisualStyleDialog:
                 citation.setProperty("sourceRevision", SUGGESTED_PRESET_REGISTRY_VERSION)
                 citation.setWordWrap(True)
                 citation.setAccessibleName("Suggested figure-style sources and limitations")
-                root.addWidget(citation)
+                content_layout.addWidget(citation)
                 self.preset.currentIndexChanged.connect(self._apply_suggested_preset)
                 self.grid = QCheckBox("Override grid visibility")
                 self.grid.setChecked(style.grid_visible is not None)
@@ -575,7 +578,19 @@ class VisualStyleDialog:
                 note = QLabel("Scale bars require a known pixel-to-world transform and unit. "
                               "Raw-image overlays remain unmodified.")
                 note.setWordWrap(True)
-                root.addWidget(note)
+                content_layout.addWidget(note)
+                scroll = QScrollArea(self)
+                scroll.setWidgetResizable(True)
+                scroll.setWidget(content)
+                root.addWidget(scroll, stretch=1)
+                # Keep Cancel and the save controls outside the scrolling area.
+                # Bound the modal to the usable screen even at high DPI.
+                screen = self.screen()
+                if screen is not None:
+                    available = screen.availableGeometry()
+                    self.setMaximumHeight(max(320, available.height() - 80))
+                    self.resize(min(680, available.width() - 60),
+                                min(available.height() - 80, 780))
                 row = QHBoxLayout()
                 root.addLayout(row)
                 save = QPushButton("Save JSON…")
@@ -693,11 +708,15 @@ class VisualStyleDialog:
                 self.axes_colour.clear()
                 self.legend_colour.clear()
 
-            def _preview(self, *_):
+            def _preview(self, *_, force=False):
                 try:
-                    self.current = self._read()
-                    self.current.validate()
-                    apply_visual_style(figure, self.current, self.theme_name)
+                    candidate = self._read()
+                    candidate.validate()
+                    if candidate == self.current and not force:
+                        return
+                    self.current = candidate
+                    apply_visual_style(figure, candidate, self.theme_name)
+                    self._preview_applied = True
                     if self.on_preview:
                         self.on_preview(self.current)
                 except ValueError:
@@ -733,7 +752,7 @@ class VisualStyleDialog:
                 self.preset.setCurrentIndex(0)
                 self.grid.setChecked(False)
                 self.legend.setChecked(False)
-                self._preview()
+                self._preview(force=True)
 
             def _save(self):
                 from PySide6.QtWidgets import QMessageBox
@@ -813,11 +832,11 @@ class VisualStyleDialog:
                 finally:
                     for control, was_blocked in zip(controls, blocked):
                         control.blockSignals(was_blocked)
-                self._preview()
+                self._preview(force=True)
 
             def exec(self):
                 result = super().exec()
-                if result != QDialog.DialogCode.Accepted:
+                if result != QDialog.DialogCode.Accepted and self._preview_applied:
                     _restore_presentation_state(figure, self.original_artist_state)
                     if self.original_override is None:
                         _VISUAL_OVERRIDES.pop(figure, None)

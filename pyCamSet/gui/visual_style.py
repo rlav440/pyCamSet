@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "pycamset.visual-style"
-VERSION = 3
+VERSION = 4
 # This text registry is the citation source of truth for suggested presets.
 # The 2025 Science guide was inspected via its 2026-07-30 Wayback PDF snapshot;
 # direct access to the publisher PDF returned 403 during verification.
@@ -47,8 +47,12 @@ class VisualStyle:
     grid_visible: bool | None = None
     legend_visible: bool | None = None
     overlay_size: float | None = None
+    overlay_marker: str | None = None
     overlay_colour: str | None = None
     overlay_edge_colour: str | None = None
+    overlay_line_width: float | None = None
+    overlay_line_style: str | None = None
+    overlay_opacity: float | None = None
     series_colours: dict[str, str] = field(default_factory=dict)
     series_styles: dict[str, dict[str, Any]] = field(default_factory=dict)
     colormap: str | None = None
@@ -70,10 +74,23 @@ class VisualStyle:
                 not isinstance(self.line_width, (int, float))
                 or isinstance(self.line_width, bool) or not 0.2 <= self.line_width <= 12):
             raise ValueError("line_width must be between 0.2 and 12")
+        if self.overlay_line_width is not None and (
+                not isinstance(self.overlay_line_width, (int, float))
+                or isinstance(self.overlay_line_width, bool)
+                or not 0.2 <= self.overlay_line_width <= 12):
+            raise ValueError("overlay_line_width must be between 0.2 and 12")
         for name in ("text_colour", "title_colour", "tick_colour", "axes_colour",
                      "legend_colour", "figure_background", "axes_background",
                      "overlay_colour", "overlay_edge_colour"):
             _validate_colour(getattr(self, name), name)
+        if self.overlay_marker is not None and self.overlay_marker not in {"o", "s", "^", "v", "D", "+", "x", "."}:
+            raise ValueError("unsupported detection overlay marker")
+        if self.overlay_line_style is not None and self.overlay_line_style not in {"-", "--", "-.", ":"}:
+            raise ValueError("unsupported detection overlay line style")
+        if self.overlay_opacity is not None and (
+                not isinstance(self.overlay_opacity, (int, float))
+                or isinstance(self.overlay_opacity, bool) or not 0 <= self.overlay_opacity <= 1):
+            raise ValueError("overlay_opacity must be between 0 and 1")
         if len(self.series_colours) > 128:
             raise ValueError("too many series colour overrides")
         for series_id, colour in self.series_colours.items():
@@ -140,7 +157,7 @@ def style_from_json(text: str, expected_visual_id: str | None = None) -> VisualS
         raise ValueError(f"Invalid style JSON: {exc}") from exc
     if not isinstance(document, dict) or set(document) != {"schema", "version", "visual_id", "style"}:
         raise ValueError("Style document has missing or unknown top-level keys")
-    if document["schema"] != SCHEMA or type(document["version"]) is not int or document["version"] not in {1, 2, VERSION}:
+    if document["schema"] != SCHEMA or type(document["version"]) is not int or document["version"] not in {1, 2, 3, VERSION}:
         raise ValueError("Unsupported style schema or version")
     if not isinstance(document["visual_id"], str) or not document["visual_id"]:
         raise ValueError("visual_id must be a non-empty string")
@@ -154,10 +171,16 @@ def style_from_json(text: str, expected_visual_id: str | None = None) -> VisualS
         # until a user explicitly saves the upgraded style.
         values = {**values, "font_weight": None, "title_colour": None, "tick_colour": None,
                   "axes_colour": None, "legend_colour": None, "series_styles": {},
-                  "colormap": None, "suggested_preset": None}
+                  "colormap": None, "suggested_preset": None, "overlay_marker": None,
+                  "overlay_line_width": None, "overlay_line_style": None, "overlay_opacity": None}
     if document["version"] in {1, 2}:
         # Older files keep their preset name; provenance is unknown rather than guessed.
-        values = {**values, "suggested_preset_registry": None}
+        values = {**values, "suggested_preset_registry": None,
+                  "overlay_marker": None, "overlay_line_width": None,
+                  "overlay_line_style": None, "overlay_opacity": None}
+    if document["version"] == 3:
+        values = {**values, "overlay_marker": None, "overlay_line_width": None,
+                  "overlay_line_style": None, "overlay_opacity": None}
     if set(values) != set(VisualStyle.__dataclass_fields__):
         raise ValueError("Style has missing or unknown keys")
     style = VisualStyle(**values)
@@ -219,10 +242,20 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
             if gid.startswith("detection-overlay:"):
                 if style.overlay_size is not None and hasattr(collection, "set_sizes"):
                     collection.set_sizes([style.overlay_size ** 2])
-                if style.overlay_colour is not None and hasattr(collection, "set_facecolor"):
-                    collection.set_facecolor(style.overlay_colour)
-                if style.overlay_edge_colour is not None and hasattr(collection, "set_edgecolor"):
-                    collection.set_edgecolor(style.overlay_edge_colour)
+                if hasattr(collection, "set_facecolor"):
+                    collection.set_facecolor(style.overlay_colour or tokens["accent"])
+                if hasattr(collection, "set_edgecolor"):
+                    collection.set_edgecolor(style.overlay_edge_colour or tokens["border_strong"])
+                if style.overlay_marker is not None and hasattr(collection, "set_paths"):
+                    from matplotlib.markers import MarkerStyle
+                    marker = MarkerStyle(style.overlay_marker)
+                    collection.set_paths([marker.get_path().transformed(marker.get_transform())])
+                if style.overlay_line_width is not None and hasattr(collection, "set_linewidths"):
+                    collection.set_linewidths([style.overlay_line_width])
+                if style.overlay_line_style is not None and hasattr(collection, "set_linestyle"):
+                    collection.set_linestyle(style.overlay_line_style)
+                if style.overlay_opacity is not None:
+                    collection.set_alpha(style.overlay_opacity)
         legend = axes.get_legend()
         if legend is not None:
             if style.legend_visible is not None:
@@ -279,7 +312,11 @@ def _capture_presentation_state(figure: Any) -> dict[str, Any]:
             "collections": [(collection,
                              collection.get_sizes().copy() if hasattr(collection, "get_sizes") else None,
                              collection.get_facecolors().copy() if hasattr(collection, "get_facecolors") else None,
-                             collection.get_edgecolors().copy() if hasattr(collection, "get_edgecolors") else None)
+                             collection.get_edgecolors().copy() if hasattr(collection, "get_edgecolors") else None,
+                             collection.get_paths() if hasattr(collection, "get_paths") else None,
+                             collection.get_linewidths().copy() if hasattr(collection, "get_linewidths") else None,
+                             collection.get_linestyles() if hasattr(collection, "get_linestyles") else None,
+                             collection.get_alpha() if hasattr(collection, "get_alpha") else None)
                             for collection in axes.collections
                             if (collection.get_gid() or "").startswith("detection-overlay:")],
             "grid": [(gridline, gridline.get_visible())
@@ -308,13 +345,20 @@ def _restore_presentation_state(figure: Any, state: dict[str, Any]) -> None:
             line.set_marker(marker)
         for image, cmap in axes_state["images"]:
             image.set_cmap(cmap)
-        for collection, sizes, face, edge in axes_state["collections"]:
+        for collection, sizes, face, edge, paths, linewidths, linestyles, alpha in axes_state["collections"]:
             if sizes is not None:
                 collection.set_sizes(sizes)
             if face is not None:
                 collection.set_facecolor(face)
             if edge is not None:
                 collection.set_edgecolor(edge)
+            if paths is not None:
+                collection.set_paths(paths)
+            if linewidths is not None:
+                collection.set_linewidths(linewidths)
+            if linestyles is not None:
+                collection.set_linestyles(linestyles)
+            collection.set_alpha(alpha)
         for gridline, visible in axes_state["grid"]:
             gridline.set_visible(visible)
         legend = axes_state["legend"]
@@ -417,11 +461,36 @@ class VisualStyleDialog:
                 self.axes_background = _colour(QLineEdit, style.axes_background)
                 form.addRow("Axes background:", self.axes_background)
                 self.overlay_size = _number(QDoubleSpinBox, style.overlay_size, 6, 1, 24)
+                self.overlay_size.setAccessibleName("Detection marker size")
                 form.addRow("Detection marker size:", self.overlay_size)
+                self.overlay_marker = QComboBox()
+                self.overlay_marker.addItem("Theme default", "")
+                for label, marker in (("Circle", "o"), ("Square", "s"), ("Triangle up", "^"),
+                                      ("Triangle down", "v"), ("Diamond", "D"),
+                                      ("Plus", "+"), ("Cross", "x"), ("Point", ".")):
+                    self.overlay_marker.addItem(label, marker)
+                self.overlay_marker.setCurrentIndex(max(0, self.overlay_marker.findData(style.overlay_marker or "")))
+                self.overlay_marker.setAccessibleName("Detection marker shape")
+                form.addRow("Detection marker shape:", self.overlay_marker)
                 self.overlay_colour = _colour(QLineEdit, style.overlay_colour)
+                self.overlay_colour.setAccessibleName("Detection marker fill colour")
                 form.addRow("Detection marker colour:", self.overlay_colour)
                 self.overlay_edge_colour = _colour(QLineEdit, style.overlay_edge_colour)
+                self.overlay_edge_colour.setAccessibleName("Detection marker edge colour")
                 form.addRow("Detection marker edge colour:", self.overlay_edge_colour)
+                self.overlay_line_width = _number(QDoubleSpinBox, style.overlay_line_width, 0.4, 0.2, 12)
+                self.overlay_line_width.setAccessibleName("Detection marker edge width")
+                form.addRow("Detection marker edge width:", self.overlay_line_width)
+                self.overlay_line_style = QComboBox()
+                self.overlay_line_style.addItems(["Theme default", "Solid", "Dashed", "Dash-dot", "Dotted"])
+                self.overlay_line_style.setCurrentIndex({None: 0, "-": 1, "--": 2, "-.": 3, ":": 4}[style.overlay_line_style])
+                self.overlay_line_style.setAccessibleName("Detection marker edge line style")
+                form.addRow("Detection marker edge style:", self.overlay_line_style)
+                self.overlay_opacity = _number(QDoubleSpinBox, style.overlay_opacity, 1.0, 0.0, 1.0)
+                self.overlay_opacity.setDecimals(3)
+                self.overlay_opacity.setSingleStep(0.05)
+                self.overlay_opacity.setAccessibleName("Detection marker opacity")
+                form.addRow("Detection marker opacity:", self.overlay_opacity)
                 self.series_id = QComboBox()
                 self.series_id.addItem("No series override", "")
                 for axes_index, axes in enumerate(figure.axes):
@@ -501,7 +570,8 @@ class VisualStyleDialog:
                 for widget in (self.font, self.font_weight, self.font_size, self.line_width, self.marker_size,
                                self.text_colour, self.title_colour, self.tick_colour, self.axes_colour,
                                self.legend_colour, self.figure_background, self.axes_background,
-                               self.overlay_size, self.overlay_colour, self.overlay_edge_colour,
+                               self.overlay_size, self.overlay_marker, self.overlay_colour, self.overlay_edge_colour,
+                               self.overlay_line_width, self.overlay_line_style, self.overlay_opacity,
                                self.series_id, self.series_colour, self.series_width,
                                self.series_dash, self.series_marker, self.colormap, self.preset,
                                self.grid, self.grid_value,
@@ -561,8 +631,15 @@ class VisualStyleDialog:
                     legend_visible=self.legend_value.isChecked() if self.legend.isChecked() else None,
                     overlay_size=(self.overlay_size.value()
                                   if self.overlay_size.value() != 6 else None),
+                    overlay_marker=self.overlay_marker.currentData() or None,
                     overlay_colour=_optional(self.overlay_colour.text()),
                     overlay_edge_colour=_optional(self.overlay_edge_colour.text()),
+                    overlay_line_width=(self.overlay_line_width.value()
+                                        if self.overlay_line_width.value() != 0.4 else None),
+                    overlay_line_style=(None if self.overlay_line_style.currentIndex() == 0
+                                        else ("-", "-", "--", "-.", ":")[self.overlay_line_style.currentIndex()]),
+                    overlay_opacity=(self.overlay_opacity.value()
+                                     if self.overlay_opacity.value() != 1.0 else None),
                     series_colours=series_colours, series_styles=series_styles,
                     colormap=(self.colormap.currentText() if self.colormap.currentIndex() else None),
                     suggested_preset=(None if self.preset.currentIndex() == 0
@@ -621,8 +698,12 @@ class VisualStyleDialog:
                 self.figure_background.clear()
                 self.axes_background.clear()
                 self.overlay_size.setValue(6)
+                self.overlay_marker.setCurrentIndex(0)
                 self.overlay_colour.clear()
                 self.overlay_edge_colour.clear()
+                self.overlay_line_width.setValue(0.4)
+                self.overlay_line_style.setCurrentIndex(0)
+                self.overlay_opacity.setValue(1.0)
                 self.series_id.setCurrentIndex(0)
                 self.series_colour.clear()
                 self.series_width.setValue(1.5)
@@ -665,7 +746,8 @@ class VisualStyleDialog:
                 controls = (self.font, self.font_weight, self.font_size, self.line_width, self.marker_size,
                             self.text_colour, self.title_colour, self.tick_colour, self.axes_colour,
                             self.legend_colour, self.figure_background, self.axes_background,
-                            self.overlay_size, self.overlay_colour, self.overlay_edge_colour,
+                            self.overlay_size, self.overlay_marker, self.overlay_colour, self.overlay_edge_colour,
+                            self.overlay_line_width, self.overlay_line_style, self.overlay_opacity,
                             self.series_id, self.series_colour, self.series_width, self.series_dash,
                             self.series_marker, self.colormap, self.preset, self.grid, self.grid_value,
                             self.legend, self.legend_value)
@@ -684,8 +766,12 @@ class VisualStyleDialog:
                     self.figure_background.setText(candidate.figure_background or "")
                     self.axes_background.setText(candidate.axes_background or "")
                     self.overlay_size.setValue(candidate.overlay_size or 6)
+                    self.overlay_marker.setCurrentIndex(max(0, self.overlay_marker.findData(candidate.overlay_marker or "")))
                     self.overlay_colour.setText(candidate.overlay_colour or "")
                     self.overlay_edge_colour.setText(candidate.overlay_edge_colour or "")
+                    self.overlay_line_width.setValue(candidate.overlay_line_width or 0.4)
+                    self.overlay_line_style.setCurrentIndex({None: 0, "-": 1, "--": 2, "-.": 3, ":": 4}[candidate.overlay_line_style])
+                    self.overlay_opacity.setValue(candidate.overlay_opacity if candidate.overlay_opacity is not None else 1.0)
                     self.series_id.setCurrentIndex(0)
                     self.series_colour.clear()
                     self.series_width.setValue(1.5)

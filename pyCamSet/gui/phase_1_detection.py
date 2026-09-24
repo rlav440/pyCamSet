@@ -1398,7 +1398,8 @@ class Phase1DiagnosticsTab(QWidget):
             img0 = mpimg.imread(ims[0])
             im_artist = ax.imshow(img0, cmap="gray" if getattr(img0, "ndim", 3) == 2 else None)
             sc_artist = ax.scatter([], [], s=10, c="lime", marker="o", linewidths=0.4)
-            sc_artist.set_gid(f"detection-overlay:{cam}")
+            # Stable camera-scoped identity lets presentation settings follow this renderer.
+            sc_artist.set_gid(f"detection-overlay:phase1:{cam}")
             ax.axis("off")
             im_art[cam] = im_artist
             sc_art[cam] = sc_artist
@@ -1423,19 +1424,21 @@ class Phase1DiagnosticsTab(QWidget):
         # Load only the validated presentation sidecar; science/run files stay untouched.
         from pyCamSet.gui.preferences import config_directory
         from pyCamSet.gui.visual_style import (
-            style_from_json, style_path_for_visual, apply_visual_style,
+            VisualStyle, style_from_json, style_path_for_visual, apply_visual_style,
         )
         style_id = "phase1:detection-overlay"
         sidecar = style_path_for_visual(config_directory(), style_id)
+        saved_style = VisualStyle()
         try:
             saved_style = style_from_json(sidecar.read_text(encoding="utf-8"), style_id)
-            self._draw_state["style"] = saved_style
-            apply_visual_style(fig, saved_style, app.property("pycamsetTheme") if app else "Light")
         except FileNotFoundError:
             pass
         except (OSError, ValueError):
             # Fail closed: malformed preferences leave the theme defaults active.
             pass
+        self._draw_state["style"] = saved_style
+        apply_visual_style(fig, saved_style,
+                           (app.property("pycamsetTheme") if app else None) or "Light")
         self._draw_style_btn.setEnabled(True)
         self._draw_save_btn.setEnabled(True)
         self._draw_csv_btn.setEnabled(True)
@@ -1463,7 +1466,7 @@ class Phase1DiagnosticsTab(QWidget):
         except (OSError, ValueError):
             current = VisualStyle()
         app = QApplication.instance()
-        theme = app.property("pycamsetTheme") if app else "Light"
+        theme = (app.property("pycamsetTheme") if app else None) or "Light"
         figure = self._draw_state["fig"]
         dialog = VisualStyleDialog(figure, visual_id, current, theme, self,
                                    self._draw_state["canvas"].draw_idle)
@@ -1531,12 +1534,12 @@ class Phase1DiagnosticsTab(QWidget):
         app = QApplication.instance()
         apply_matplotlib_theme(
             self._draw_state["fig"],
-            app.property("pycamsetTheme") if app else "Light")
+            (app.property("pycamsetTheme") if app else None) or "Light")
         style = self._draw_state.get("style")
         if style is not None:
             from pyCamSet.gui.visual_style import apply_visual_style
             apply_visual_style(self._draw_state["fig"], style,
-                               app.property("pycamsetTheme") if app else "Light")
+                               (app.property("pycamsetTheme") if app else None) or "Light")
         self._draw_state["canvas"].draw_idle()
 
     def _save_detection_montage_png(self) -> None:

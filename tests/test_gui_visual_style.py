@@ -34,7 +34,7 @@ def test_style_json_round_trip_is_versioned_and_visual_specific():
                         suggested_preset="Science",
                         suggested_preset_registry=SUGGESTED_PRESET_REGISTRY_VERSION)
     text = style_to_json(style, "phase2:view-errors")
-    assert json.loads(text)["version"] == 3
+    assert json.loads(text)["version"] == 4
     assert style_from_json(text, "phase2:view-errors") == style
     assert json.loads(text)["style"]["suggested_preset_registry"] == SUGGESTED_PRESET_REGISTRY_VERSION
     with pytest.raises(ValueError, match="different visual"):
@@ -69,7 +69,8 @@ def test_v1_style_document_migrates_without_losing_saved_values():
     old_document = json.loads(style_to_json(style, "view"))
     old_document["version"] = 1
     for key in ("font_weight", "title_colour", "tick_colour", "axes_colour", "legend_colour",
-                "series_styles", "colormap", "suggested_preset", "suggested_preset_registry"):
+                "series_styles", "colormap", "suggested_preset", "suggested_preset_registry",
+                "overlay_marker", "overlay_line_width", "overlay_line_style", "overlay_opacity"):
         old_document["style"].pop(key)
     migrated = style_from_json(json.dumps(old_document), "view")
     assert migrated.font_family == style.font_family
@@ -83,12 +84,16 @@ def test_v2_preset_name_survives_with_unknown_provenance_and_malformed_revision_
         suggested_preset="Science",
         suggested_preset_registry=SUGGESTED_PRESET_REGISTRY_VERSION), "view"))
     document["version"] = 2
-    document["style"].pop("suggested_preset_registry")
+    for key in ("suggested_preset_registry", "overlay_marker", "overlay_line_width",
+                "overlay_line_style", "overlay_opacity"):
+        document["style"].pop(key)
     migrated = style_from_json(json.dumps(document), "view")
     assert migrated.suggested_preset == "Science"
     assert migrated.suggested_preset_registry is None
 
-    document["version"] = 3
+    document["version"] = 4
+    for key in ("overlay_marker", "overlay_line_width", "overlay_line_style", "overlay_opacity"):
+        document["style"][key] = None
     document["style"]["suggested_preset_registry"] = ""
     with pytest.raises(ValueError, match="registry revision"):
         style_from_json(json.dumps(document), "view")
@@ -187,6 +192,80 @@ def test_unsupported_colour_map_and_series_controls_fail_closed():
         VisualStyle(series_styles={"id": {"visible": False}}).validate()
 
 
+def test_v3_style_migrates_overlay_defaults_without_changing_existing_preset_provenance():
+    style = VisualStyle(suggested_preset="Science",
+                        suggested_preset_registry=SUGGESTED_PRESET_REGISTRY_VERSION)
+    document = json.loads(style_to_json(style, "view"))
+    document["version"] = 3
+    for key in ("overlay_marker", "overlay_line_width", "overlay_line_style", "overlay_opacity"):
+        document["style"].pop(key)
+    migrated = style_from_json(json.dumps(document), "view")
+    assert migrated.suggested_preset_registry == SUGGESTED_PRESET_REGISTRY_VERSION
+    assert migrated.overlay_marker is None and migrated.overlay_opacity is None
+
+
+def test_detection_overlay_customisation_preserves_detection_and_source_image_and_exports(tmp_path):
+    import numpy as np
+
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    source_pixels = np.arange(100, dtype=np.uint8).reshape(10, 10)
+    image = axes.imshow(source_pixels, cmap="gray")
+    marker_xy = np.array([[2.0, 3.0], [7.0, 8.0]])
+    # Representative producer adapter: raw get_data points feed the displayed scatter offsets.
+    class DetectionAdapter:
+        def get_data(self):
+            return np.column_stack((marker_xy, [11, 12]))
+
+    observed = DetectionAdapter().get_data()
+    overlay = axes.scatter(observed[:, 0], observed[:, 1], s=100, c="lime", linewidths=0.4)
+    overlay.set_gid("detection-overlay:phase1:camera-0")
+    before = (observed.copy(), overlay.get_offsets().copy(), image.get_array().copy(),
+              image.get_cmap().name, axes.get_xlim(), axes.get_ylim())
+    style = VisualStyle(overlay_marker="s", overlay_size=12, overlay_colour="#123456",
+                        overlay_edge_colour="#fedcba", overlay_line_width=2,
+                        overlay_line_style="--", overlay_opacity=0.35)
+    apply_visual_style(figure, style, "Dark")
+    assert len(overlay.get_paths()[0].vertices) == 5
+    assert overlay.get_sizes().tolist() == [144]
+    assert overlay.get_alpha() == 0.35
+    assert overlay.get_linestyles()[0][1] != [1.0]
+    assert np.array_equal(DetectionAdapter().get_data(), before[0])
+    assert np.array_equal(overlay.get_offsets(), before[1])
+    assert np.array_equal(image.get_array(), before[2])
+    assert image.get_cmap().name == before[3] == "gray"
+    assert axes.get_xlim() == before[4] and axes.get_ylim() == before[5]
+    figure.savefig(tmp_path / "styled-montage.png", format="png")
+    assert (tmp_path / "styled-montage.png").stat().st_size > 0
+
+
+@pytest.mark.parametrize("style", [
+    VisualStyle(overlay_marker="invalid"),
+    VisualStyle(overlay_opacity=1.1),
+    VisualStyle(overlay_line_style="dotted"),
+    VisualStyle(overlay_line_width=0.1),
+])
+def test_detection_overlay_invalid_controls_fail_closed(style):
+    with pytest.raises(ValueError):
+        style.validate()
+
+
+def test_detection_overlay_theme_defaults_refresh_but_explicit_colours_win():
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    overlay = axes.scatter([1], [2])
+    overlay.set_gid("detection-overlay:phase1:camera-0")
+    apply_visual_style(figure, VisualStyle(), "Light")
+    light_face = overlay.get_facecolors().copy()
+    apply_visual_style(figure, VisualStyle(), "Dark")
+    assert overlay.get_facecolors().tolist() != light_face.tolist()
+    assert overlay.get_facecolors()[0].tolist() == pytest.approx([118 / 255, 183 / 255, 1.0, 1.0])
+    explicit = VisualStyle(overlay_colour="#123456", overlay_edge_colour="#654321")
+    apply_visual_style(figure, explicit, "Sepia")
+    assert overlay.get_facecolors()[0].tolist() == pytest.approx([18 / 255, 52 / 255, 86 / 255, 1.0])
+    assert overlay.get_edgecolors()[0].tolist() == pytest.approx([101 / 255, 67 / 255, 33 / 255, 1.0])
+
+
 def test_theme_defaults_and_explicit_overrides_coexist_on_theme_switch():
     from pyCamSet.gui.theme import apply_matplotlib_theme, refresh_matplotlib_theme
 
@@ -241,6 +320,10 @@ def test_style_dialog_preview_and_cancel_restore_the_figure():
                 [grid.get_visible() for grid in axes.xaxis.get_gridlines()],
                 legend.get_visible(), overlay.get_sizes().copy(),
                 overlay.get_facecolors().copy(), overlay.get_edgecolors().copy())
+    original_overlay_paths = [path.vertices.copy() for path in overlay.get_paths()]
+    original_overlay_widths = overlay.get_linewidths().copy()
+    original_overlay_styles = overlay.get_linestyles()
+    original_overlay_alpha = overlay.get_alpha()
     dialog = VisualStyleDialog(figure, "test:visual", VisualStyle(), "Light")
     dialog.axes_background.setText("#fafafa")
     dialog.line_width.setValue(4)
@@ -252,6 +335,10 @@ def test_style_dialog_preview_and_cancel_restore_the_figure():
     dialog.legend_value.setChecked(False)
     dialog.overlay_size.setValue(12)
     dialog.overlay_colour.setText("#abcdef")
+    dialog.overlay_marker.setCurrentIndex(dialog.overlay_marker.findData("s"))
+    dialog.overlay_line_width.setValue(2.0)
+    dialog.overlay_line_style.setCurrentIndex(2)
+    dialog.overlay_opacity.setValue(0.25)
     dialog.font_weight.setCurrentIndex(2)
     assert axes.get_facecolor() != original[1]
     assert all(artist.get_fontweight() == "bold" for artist in text_artists)
@@ -268,6 +355,12 @@ def test_style_dialog_preview_and_cancel_restore_the_figure():
     assert overlay.get_sizes().tolist() == original[8].tolist()
     assert overlay.get_facecolors().tolist() == original[9].tolist()
     assert overlay.get_edgecolors().tolist() == original[10].tolist()
+    assert [path.vertices.tolist() for path in overlay.get_paths()] == [path.tolist() for path in original_overlay_paths]
+    assert overlay.get_linewidths().tolist() == original_overlay_widths.tolist()
+    assert overlay.get_linestyles() == original_overlay_styles
+    assert overlay.get_alpha() == original_overlay_alpha
+    assert dialog.overlay_marker.accessibleName() == "Detection marker shape"
+    assert dialog.overlay_opacity.accessibleName() == "Detection marker opacity"
     assert [artist.get_fontweight() for artist in text_artists] == original_weights
 
 
@@ -314,6 +407,10 @@ def test_style_dialog_reset_clears_overlay_and_series_overrides():
     assert reset.overlay_size is None
     assert reset.overlay_colour is None
     assert reset.overlay_edge_colour is None
+    assert reset.overlay_marker is None
+    assert reset.overlay_line_width is None
+    assert reset.overlay_line_style is None
+    assert reset.overlay_opacity is None
     assert reset.series_colours == {}
 
 
@@ -330,7 +427,8 @@ def test_style_dialog_json_load_populates_every_serialised_control(tmp_path, mon
                             figure_background="#222222", axes_background="#333333",
                             line_width=2.5, marker_size=8, grid_visible=True,
                             legend_visible=False, overlay_size=11, overlay_colour="#444444",
-                            overlay_edge_colour="#555555",
+                            overlay_marker="D", overlay_edge_colour="#555555",
+                            overlay_line_width=1.2, overlay_line_style=":", overlay_opacity=0.6,
                             series_colours={"stable:series": "#666666"})
     path = tmp_path / "style.json"
     path.write_text(style_to_json(candidate, "test:visual"), encoding="utf-8")
@@ -338,3 +436,21 @@ def test_style_dialog_json_load_populates_every_serialised_control(tmp_path, mon
     dialog = VisualStyleDialog(figure, "test:visual", VisualStyle(), "Light")
     dialog._load()
     assert dialog._read() == candidate
+
+
+def test_raw_detection_image_keeps_colormap_and_scale_bar_controls_disabled():
+    from PySide6.QtWidgets import QApplication
+    from pyCamSet.gui.visual_style import VisualStyleDialog
+
+    QApplication.instance() or QApplication([])
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    axes.imshow([[0, 1], [2, 3]], cmap="gray")
+    dialog = VisualStyleDialog(figure, "phase1:detection-overlay", VisualStyle(), "Light")
+    assert not dialog.colormap.isEnabled()
+    scale_row = dialog.layout().itemAt(0).layout()
+    assert scale_row is not None
+    scale_controls = [widget for widget in dialog.findChildren(type(dialog.grid))
+                      if widget.text() == "Enable scale bar"]
+    assert len(scale_controls) == 1 and not scale_controls[0].isEnabled()
+    assert "pixel-to-world" in scale_controls[0].toolTip()

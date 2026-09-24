@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+import tempfile
 from typing import Any, Callable, Optional
 import pickle
 
@@ -29,6 +30,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -819,10 +821,14 @@ class Phase1DiagnosticsTab(QWidget):
         # Permanent navigation bar — created once, never rebuilt
         nav_bar = QHBoxLayout()
         self._draw_prev_btn = QPushButton("◀")
+        self._draw_prev_btn.setAccessibleName("Previous detection image")
+        self._draw_prev_btn.setToolTip("Show the previous detection image")
         self._draw_prev_btn.setFixedWidth(36)
         self._draw_prev_btn.clicked.connect(lambda: self._step_draw_image(-1))
         nav_bar.addWidget(self._draw_prev_btn)
         self._draw_next_btn = QPushButton("▶")
+        self._draw_next_btn.setAccessibleName("Next detection image")
+        self._draw_next_btn.setToolTip("Show the next detection image")
         self._draw_next_btn.setFixedWidth(36)
         self._draw_next_btn.clicked.connect(lambda: self._step_draw_image(+1))
         nav_bar.addWidget(self._draw_next_btn)
@@ -1350,8 +1356,10 @@ class Phase1DiagnosticsTab(QWidget):
         cam_points: dict[str, dict[int, np.ndarray]] = {}
         max_images = 0
 
+        from natsort import natsorted
         for cam in cams:
-            ims = sorted(
+            # Detection row indices are assigned after natural sorting in the producer.
+            ims = natsorted(
                 [p for p in cam_folders[cam].iterdir()
                  if p.is_file() and p.suffix.lower() in _IMAGE_EXTS]
             )
@@ -1469,14 +1477,31 @@ class Phase1DiagnosticsTab(QWidget):
         theme = (app.property("pycamsetTheme") if app else None) or "Light"
         figure = self._draw_state["fig"]
         dialog = VisualStyleDialog(figure, visual_id, current, theme, self,
-                                   self._draw_state["canvas"].draw_idle)
+                                   lambda *_: self._draw_state["canvas"].draw_idle())
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        temporary_path = None
         try:
             dialog.current.validate()
             style_path.parent.mkdir(parents=True, exist_ok=True)
-            style_path.write_text(style_to_json(dialog.current, visual_id), encoding="utf-8")
+            # Stage beside the sidecar so replacement is atomic on the same filesystem.
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=style_path.parent,
+                prefix=f".{style_path.name}.", suffix=".tmp", delete=False,
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+                temporary_file.write(style_to_json(dialog.current, visual_id))
+            temporary_path.replace(style_path)
         except (OSError, ValueError) as exc:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            # A failed save must restore the durable style, not leave an accepted preview visible.
+            self._draw_state["style"] = current
+            apply_visual_style(figure, current, theme)
+            self._draw_state["canvas"].draw_idle()
             QMessageBox.warning(self, "Overlay style not saved",
                                 f"The style could not be saved.\n\nTechnical detail: {exc}")
             return

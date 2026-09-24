@@ -1630,6 +1630,112 @@ class _FakeDetections:
 
 
 @pytest.mark.gui
+def test_phase1_overlay_style_roundtrip_keeps_producer_frame_mapping_and_png(tmp_path, monkeypatch):
+    import cv2
+    from PIL import Image
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget, QDialog
+
+    from pyCamSet.gui import phase_1_detection, visual_style
+    from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.workflow.detections import save_detections
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    cam_names = ["camA", "camB"]
+    frame_sets = {"camA": ("frame1.png", "frame2.png", "frame10.png"),
+                  "camB": ("frame1.png", "frame10.png")}
+    image_values = {}
+    for cam_idx, cam in enumerate(cam_names):
+        folder = tmp_path / cam
+        folder.mkdir()
+        for image_idx, name in enumerate(frame_sets[cam]):
+            value = 35 + cam_idx * 70 + image_idx * 20
+            image_values[(cam, name)] = value
+            assert cv2.imwrite(str(folder / name), np.full((18, 18, 3), value, dtype=np.uint8))
+
+    points = {
+        "camA": np.array([[0, 0, 2, 3], [0, 1, 4, 5], [0, 2, 6, 7]], dtype=float),
+        "camB": np.array([[1, 0, 8, 9], [1, 1, 10, 11]], dtype=float),
+    }
+    artifact = tmp_path / "run-detections.pickle"
+    save_detections(artifact, _FakeDetections(cam_names, points))
+
+    app = QApplication.instance() or QApplication([])
+    tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))
+    try:
+        tab._draw_detections_for_run({"run_id": "style-integration", "params": {
+            "f_loc": str(tmp_path)}, "artifacts": {"detected_datapoints_pickle": str(artifact)}},
+            show_errors=False)
+        assert tab._draw_state
+        tab._sub_tabs.setCurrentIndex(2)
+        for index in range(3):
+            tab._draw_index = index
+            tab._update_draw_frame()
+            for cam in cam_names:
+                im_idx = index % len(frame_sets[cam])
+                expected_name = frame_sets[cam][im_idx]
+                assert np.allclose(tab._draw_state["im_art"][cam].get_array(),
+                                   image_values[(cam, expected_name)] / 255)
+                assert tab._draw_state["sc_art"][cam].get_offsets().tolist() == [
+                    points[cam][im_idx, -2:].tolist()]
+
+        monkeypatch.setattr("pyCamSet.gui.preferences.config_directory", lambda: tmp_path)
+        loaded_sizes = []
+        make_dialog = visual_style.VisualStyleDialog
+
+        def accept_style(*args, update=False, **kwargs):
+            dialog = make_dialog(*args, **kwargs)
+            loaded_sizes.append(dialog.overlay_size.value())
+            if update:
+                dialog.overlay_size.setValue(14)
+                dialog.overlay_colour.setText("#ff00ff")
+
+            def accept():
+                dialog._preview()
+                return QDialog.DialogCode.Accepted
+
+            dialog.exec = accept
+            return dialog
+
+        monkeypatch.setattr(visual_style, "VisualStyleDialog",
+                            lambda *args, **kwargs: accept_style(*args, update=True, **kwargs))
+        original_points = {cam: points[cam].copy() for cam in cam_names}
+        tab._edit_detection_style()
+        style_path = visual_style.style_path_for_visual(tmp_path, "phase1:detection-overlay")
+        saved_style = visual_style.style_from_json(
+            style_path.read_text(encoding="utf-8"), "phase1:detection-overlay")
+        assert saved_style.overlay_size == 14 and saved_style.overlay_colour == "#ff00ff"
+
+        monkeypatch.setattr(visual_style, "VisualStyleDialog",
+                            lambda *args, **kwargs: accept_style(*args, update=False, **kwargs))
+        tab._edit_detection_style()
+        assert loaded_sizes == [10, 14]
+        assert tab._draw_state["style"] == saved_style
+        tab._draw_index = 1
+        tab._update_draw_frame()
+        for cam in cam_names:
+            im_idx = 1 % len(frame_sets[cam])
+            expected_name = frame_sets[cam][im_idx]
+            assert tab._draw_state["sc_art"][cam].get_sizes().tolist() == [196]
+            assert tab._draw_state["sc_art"][cam].get_offsets().tolist() == [
+                original_points[cam][im_idx, -2:].tolist()]
+            assert np.allclose(tab._draw_state["im_art"][cam].get_array(),
+                               image_values[(cam, expected_name)] / 255)
+            assert np.array_equal(points[cam], original_points[cam])
+
+        output = tmp_path / "styled-montage.png"
+        monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName",
+                            lambda *args: (str(output), "PNG"))
+        tab._montage_export_preset.setCurrentIndex(0)
+        tab._save_detection_montage_png()
+        with Image.open(output) as exported:
+            pixels = np.asarray(exported.convert("RGB"))
+            assert exported.width > 0 and exported.height > 0
+            assert np.count_nonzero(np.all(pixels == [255, 0, 255], axis=2)) > 0
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
 def test_draw_detections_never_shows_another_runs_overwritten_cache(tmp_path):
     """Round-9 review, P1: the last-resort image-folder cache is a slot a
     concurrent Phase 1 run can overwrite at any moment, so

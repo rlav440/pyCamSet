@@ -397,10 +397,8 @@ def _restore_presentation_state(figure: Any, state: dict[str, Any]) -> None:
 
 
 def scale_bar_unavailable(pixel_to_world: Any = None, unit: str | None = None) -> str | None:
-    """Return the disabling explanation unless a physical transform and unit exist."""
-    if pixel_to_world is None or not unit or not str(unit).strip():
-        return "Scale bar unavailable: calibrated pixel-to-world transform and units are required."
-    return None
+    """Keep scale bars unavailable until a typed, view-specific calibration contract exists."""
+    return "Scale bar unavailable: a supported view-specific pixel-to-world calibration contract is not defined."
 
 
 def style_path_for_visual(app_config_dir: Path, visual_id: str) -> Path:

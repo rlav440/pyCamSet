@@ -326,10 +326,96 @@ def test_theme_defaults_and_explicit_overrides_coexist_on_theme_switch():
     assert line.get_linewidth() == 2.0
 
 
-def test_scale_bar_fails_closed_without_calibration_transform_and_units():
-    reason = scale_bar_unavailable()
+@pytest.mark.parametrize("transform, unit", [
+    (None, "mm"),
+    ([[0.1, 0], [0, 0.1]], "mm"),
+    (object(), "mm"),
+    ([[float("nan"), 0], [0, 1]], "mm"),
+    ([[1, 0, 0], [0, 1, 0]], "mm"),
+    ([[1, 0], [0, 1]], ""),
+])
+def test_scale_bar_fails_closed_without_a_supported_calibration_contract(transform, unit):
+    reason = scale_bar_unavailable(transform, unit)
     assert reason and "pixel-to-world" in reason
-    assert scale_bar_unavailable([[0.1, 0], [0, 0.1]], "mm") is None
+
+
+def test_phase1_failed_style_write_restores_saved_style_and_reports_error(tmp_path, monkeypatch):
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget, QDialog
+    from pyCamSet.gui import visual_style
+    from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    app = QApplication.instance() or QApplication([])
+    tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    overlay = axes.scatter([2.0], [3.0], s=100, c="#123456")
+    overlay.set_gid("detection-overlay:phase1:camera-0")
+    canvas = FigureCanvasAgg(figure)
+    committed = VisualStyle(overlay_size=8, overlay_colour="#123456")
+    visual_id = "phase1:detection-overlay"
+    style_path = visual_style.style_path_for_visual(tmp_path, visual_id)
+    style_path.parent.mkdir(parents=True)
+    original_sidecar = visual_style.style_to_json(committed, visual_id)
+    style_path.write_text(original_sidecar, encoding="utf-8")
+    visual_style.apply_visual_style(figure, committed, "Light")
+    tab._draw_state = {"fig": figure, "canvas": canvas, "style": committed}
+    errors = []
+    monkeypatch.setattr("pyCamSet.gui.preferences.config_directory", lambda: tmp_path)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.warning",
+                        lambda *args: errors.append(args[2]))
+
+    make_dialog = visual_style.VisualStyleDialog
+
+    def accepted_preview(*args, **kwargs):
+        dialog = make_dialog(*args, **kwargs)
+
+        def accept_with_preview():
+            dialog.overlay_size.setValue(16)
+            dialog.overlay_colour.setText("#abcdef")
+            dialog._preview()
+            return QDialog.DialogCode.Accepted
+
+        dialog.exec = accept_with_preview
+        return dialog
+
+    monkeypatch.setattr(visual_style, "VisualStyleDialog", accepted_preview)
+    real_replace = type(style_path).replace
+
+    def fail_sidecar_replace(path, *args, **kwargs):
+        if path.name.startswith(f".{style_path.name}."):
+            raise OSError("injected persistence failure")
+        return real_replace(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(style_path), "replace", fail_sidecar_replace)
+    try:
+        tab._edit_detection_style()
+        assert overlay.get_sizes().tolist() == [64]
+        assert overlay.get_facecolors()[0].tolist() == [18 / 255, 52 / 255, 86 / 255, 1]
+        assert tab._draw_state["style"] == committed
+        assert visual_style._VISUAL_OVERRIDES[figure] == committed
+        assert style_path.read_text(encoding="utf-8") == original_sidecar
+        assert list(style_path.parent.iterdir()) == [style_path]
+        assert errors and "injected persistence failure" in errors[0]
+    finally:
+        tab.deleteLater()
+
+
+def test_phase1_montage_navigation_buttons_have_accessible_names():
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+    from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    app = QApplication.instance() or QApplication([])
+    tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))
+    try:
+        assert tab._draw_prev_btn.accessibleName() == "Previous detection image"
+        assert tab._draw_prev_btn.toolTip() == "Show the previous detection image"
+        assert tab._draw_next_btn.accessibleName() == "Next detection image"
+        assert tab._draw_next_btn.toolTip() == "Show the next detection image"
+    finally:
+        tab.deleteLater()
 
 
 def test_style_dialog_preview_and_cancel_restore_the_figure():

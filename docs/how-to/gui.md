@@ -228,7 +228,14 @@ configuration directory, separately from scientific run artefacts, and can be
 saved to or loaded from versioned JSON. Reset returns to theme defaults. Unknown
 or malformed style fields are rejected rather than partially applied. A scale
 bar remains unavailable unless a calibrated pixel-to-world transform and units
-are supplied; no physical length is inferred. This presentation editor applies
+are supplied; no physical length is inferred. Error bars remain unavailable:
+the GUI has no source-backed uncertainty producer or error-bar control, so
+fail-closed behaviour for unavailable uncertainty cannot yet be
+tested. The Nature/Science styles are suggestions, not journal-compliance
+presets. The Science link cites the 2025 *Guide to Preparing Figures*; its PDF
+was inspected in a 30 July 2026 archive snapshot because a direct publisher
+fetch returned 403. The separate 2026 *Science Advances* guide is not the
+source for this Science suggestion. This presentation editor applies
 to Matplotlib cards and the Phase 1 detection montage; the montage has a frame PNG
 and observed-coordinate CSV action. Phase 2 per-view plots and Phase 3 error,
 residual and camera-pose plots are hosted in cards. Assess Calibration remains in

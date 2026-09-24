@@ -14,6 +14,7 @@ from matplotlib.figure import Figure
 
 from pyCamSet.gui.visual_style import (
     VisualStyle,
+    SUGGESTED_PRESET_CITATIONS,
     apply_visual_style,
     scale_bar_unavailable,
     SUGGESTED_PRESET_REGISTRY_VERSION,
@@ -38,6 +39,16 @@ def test_style_json_round_trip_is_versioned_and_visual_specific():
     assert json.loads(text)["style"]["suggested_preset_registry"] == SUGGESTED_PRESET_REGISTRY_VERSION
     with pytest.raises(ValueError, match="different visual"):
         style_from_json(text, "phase3:residuals")
+
+
+def test_science_suggestion_cites_reviewed_2025_guide_not_old_pdf():
+    assert SUGGESTED_PRESET_REGISTRY_VERSION == "figure-suggestions-v2"
+    assert "Science/AAAS: Guide to Preparing Figures (2025)" in SUGGESTED_PRESET_CITATIONS
+    assert "67f37ac8-4d02-4625-8a05-230568cb8323/author_prep_guide_2025.pdf" in SUGGESTED_PRESET_CITATIONS
+    assert "archived PDF inspected" in SUGGESTED_PRESET_CITATIONS
+    assert "not journal compliance" in SUGGESTED_PRESET_CITATIONS
+    assert "author_figure_prep_guide_2022" not in SUGGESTED_PRESET_CITATIONS
+    assert "sciadv_guide_to_preparing_figures_2026" not in SUGGESTED_PRESET_CITATIONS
 
 
 def test_style_json_rejects_malformed_unknown_and_invalid_values():

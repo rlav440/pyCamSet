@@ -13,14 +13,15 @@ from typing import Any
 SCHEMA = "pycamset.visual-style"
 VERSION = 3
 # This text registry is the citation source of truth for suggested presets.
-# The Science URL is retained verbatim from the prior UI; its current endpoint
-# was not independently verified, so the revision records provenance, not endorsement.
-SUGGESTED_PRESET_REGISTRY_VERSION = "figure-suggestions-v1"
+# The 2025 Science guide was inspected via its 2026-07-30 Wayback PDF snapshot;
+# direct access to the publisher PDF returned 403 during verification.
+SUGGESTED_PRESET_REGISTRY_VERSION = "figure-suggestions-v2"
 SUGGESTED_PRESET_CITATIONS = (
     "Suggestions only; not journal compliance. Nature: Preparing figures, "
     "https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/ "
-    "(accessed 2026-09-23). Science/AAAS: Guide to Preparing Figures (2022), "
-    "https://www.science.org/do/10.5555/page.2385610/full/author_figure_prep_guide_2022-1708116021087.pdf. "
+    "(accessed 2026-09-23). Science/AAAS: Guide to Preparing Figures (2025), "
+    "https://www.science.org/cms/asset/67f37ac8-4d02-4625-8a05-230568cb8323/author_prep_guide_2025.pdf "
+    "(archived PDF inspected 2026-07-30; direct publisher fetch returned 403). "
     "DejaVu Sans fallback: DejaVu Fonts licence, https://dejavu-fonts.github.io/License.html. "
     "Cell and IEEE controls are generic starting points without verified journal-specific prescriptions."
 )

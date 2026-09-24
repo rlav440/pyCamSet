@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 import csv
 import json
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -389,22 +390,43 @@ class MatplotlibFigureCard(QWidget):
         """Preview a visual-only style and persist it outside scientific runs."""
         from PySide6.QtWidgets import QMessageBox
         from pyCamSet.gui.visual_style import (
-            VisualStyle, VisualStyleDialog, apply_visual_style, style_to_json,
+            VisualStyle, VisualStyleDialog, _VISUAL_OVERRIDES,
+            _restore_presentation_state, apply_visual_style, style_to_json,
         )
 
         application = QApplication.instance()
         theme_name = application.property("pycamsetTheme") if application else "Light"
         dialog = VisualStyleDialog(self._fig, self._visual_id, self._style,
-                                   theme_name, self, self._canvas.draw_idle)
+                                   theme_name, self, lambda *_: self._canvas.draw_idle())
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         candidate = dialog.current
+        temporary_path = None
         try:
             candidate.validate()
             self._style_path.parent.mkdir(parents=True, exist_ok=True)
-            self._style_path.write_text(
-                style_to_json(candidate, self._visual_id), encoding="utf-8")
+            # Stage beside the sidecar so promotion is atomic on the same filesystem.
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self._style_path.parent,
+                prefix=f".{self._style_path.name}.", suffix=".tmp", delete=False,
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+                temporary_file.write(style_to_json(candidate, self._visual_id))
+            temporary_path.replace(self._style_path)
         except (OSError, ValueError) as exc:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            # Restore the exact pre-dialog artist and override states after a failed save.
+            self._style = dialog.original
+            _restore_presentation_state(self._fig, dialog.original_artist_state)
+            if dialog.original_override is None:
+                _VISUAL_OVERRIDES.pop(self._fig, None)
+            else:
+                _VISUAL_OVERRIDES[self._fig] = dialog.original_override
+            self._canvas.draw_idle()
             QMessageBox.warning(self, "Figure style not saved",
                                 f"The style could not be saved.\n\nTechnical detail: {exc}")
             return

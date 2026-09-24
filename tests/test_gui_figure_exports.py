@@ -118,6 +118,81 @@ def test_svg_and_pdf_exports_are_written(tmp_path, monkeypatch, qapp):
         assert target.is_file() and target.stat().st_size > 100
 
 
+def test_action_icons_preserve_labels_accessibility_and_click_signals(tmp_path, monkeypatch, qapp):
+    """Icons decorate the corresponding controls without replacing their actions."""
+    from PySide6.QtCore import QSize
+    from PySide6.QtWidgets import QPushButton
+
+    from pyCamSet.gui.action_icons import set_action_icon
+
+    observed = []
+    for semantic, label in (("options", "Style…"), ("snapshot", "Save PNG"), ("chart", "Save CSV")):
+        button = QPushButton(label)
+        button.setAccessibleName(f"Accessible {label}")
+        button.clicked.connect(lambda _checked=False, value=label: observed.append(value))
+        set_action_icon(button, semantic)
+        assert button.text() == label
+        assert button.accessibleName() == f"Accessible {label}"
+        assert button.focusPolicy() != button.focusPolicy().NoFocus
+        assert not button.icon().isNull()
+        for extent in (18, 27, 36):
+            image = button.icon().pixmap(QSize(extent, extent)).toImage()
+            assert image.size().width() == extent
+            assert image.size().height() == extent
+            assert len({image.pixelColor(x, y).rgba()
+                        for x in range(extent) for y in range(extent)}) > 10
+            assert image.pixelColor(0, 0).alpha() == 0
+        button.click()
+
+    assert observed == ["Style…", "Save PNG", "Save CSV"]
+
+    card = _card(qapp, {"columns": ["value"], "rows": [(1,)], "metadata": {}})
+    buttons = {button.text(): button for button in card.findChildren(QPushButton)}
+    assert buttons["Save PNG"].accessibleName() == "Save PNG for Test figure"
+    assert buttons["Style…"].accessibleName() == "Figure style options for Test figure"
+    for label in ("Save PNG", "Save CSV", "Style…"):
+        assert not buttons[label].icon().isNull()
+    assert buttons["Save SVG"].icon().isNull()
+    target = tmp_path / "icon-wired.png"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(target), "PNG"))
+    buttons["Save PNG"].click()
+    assert target.is_file()
+    csv_target = tmp_path / "icon-wired.csv"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *args: (str(csv_target), "CSV"))
+    buttons["Save CSV"].click()
+    assert csv_target.is_file()
+
+
+def test_action_icon_uses_disabled_palette_role(qapp):
+    """Disabled marks follow Qt's disabled ButtonText role."""
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QIcon, QPalette
+    from PySide6.QtWidgets import QPushButton
+
+    from pyCamSet.gui.action_icons import set_action_icon
+
+    button = QPushButton("Save PNG")
+    palette = button.palette()
+    active = palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.ButtonText)
+    disabled = palette.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText)
+    active.setRgb(17, 31, 47)
+    disabled.setRgb(181, 193, 207)
+    palette.setColor(QPalette.ColorGroup.Active, QPalette.ColorRole.ButtonText, active)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled)
+    button.setPalette(palette)
+    set_action_icon(button, "snapshot")
+
+    def rendered_colours(mode):
+        image = button.icon().pixmap(QSize(72, 72), mode).toImage()
+        return {image.pixelColor(x, y).rgba() for x in range(image.width())
+                for y in range(image.height()) if image.pixelColor(x, y).alpha()}
+
+    assert active.rgba() in rendered_colours(QIcon.Mode.Normal)
+    assert disabled.rgba() in rendered_colours(QIcon.Mode.Disabled)
+    assert active.rgba() not in rendered_colours(QIcon.Mode.Disabled)
+
+
 def test_assess_calibration_child_receives_selected_theme(monkeypatch, tmp_path):
     from pyCamSet.gui import assess_calibration
 

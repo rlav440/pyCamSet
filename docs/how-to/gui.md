@@ -57,6 +57,24 @@ diagnostics, and available continue/assessment actions in reach while expanded
 settings scroll independently. At smaller window sizes, use the parameter
 panel's scroll area to reach the remaining settings.
 
+### Action icon meanings
+
+Icons supplement, rather than replace, the visible button text and accessible
+name. They are painted as original Qt vector paths and use the button's
+`ButtonText` palette role, including its disabled role. The matching optical-
+mapping (OM) actions establish the semantics; pyCamSet does not import OM
+artwork, fonts, or emoji glyphs.
+
+| pyCamSet action | Icon meaning | OM source action | pyCamSet behaviour |
+| --- | --- | --- | --- |
+| Managed figure and detection-overlay `Style…` | Gear / options | `src/ui/figure_style.py:5,1817` (“⚙ Options”) | Opens the visual-style controls. |
+| Managed figure and detection-montage `Save PNG` | Camera / snapshot | `src/ui/figure_export.py:5–7,88,910–914` (camera button) | Saves the rendered figure or montage as PNG. |
+| Managed figure `Save CSV` | Bar chart / tabular data | `src/ui/figure_export.py:9–16,941,1019–1023` (table button on graph canvases) | Saves source-backed numeric figure data; disabled when no rows are available. |
+
+No icon is assigned to playback or ROI controls: these are not equivalent to
+the cited OM figure actions. SVG/PDF exports retain text-only labels because
+they are vector-file formats, not the OM chart-data action.
+
 The following controls are global to the workflow:
 
 **Create Target…**

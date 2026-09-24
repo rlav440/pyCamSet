@@ -841,6 +841,8 @@ class Phase1DiagnosticsTab(QWidget):
         self._draw_expand_btn.clicked.connect(self._expand_draw_figure)
         nav_bar.addWidget(self._draw_expand_btn)
         self._draw_save_btn = QPushButton("Save PNG")
+        from pyCamSet.gui.action_icons import set_action_icon
+        set_action_icon(self._draw_save_btn, "snapshot")
         self._draw_save_btn.setEnabled(False)
         self._draw_save_btn.clicked.connect(self._save_detection_montage_png)
         nav_bar.addWidget(self._draw_save_btn)
@@ -858,6 +860,7 @@ class Phase1DiagnosticsTab(QWidget):
         self._draw_csv_btn.clicked.connect(self._save_detection_coordinates_csv)
         nav_bar.addWidget(self._draw_csv_btn)
         self._draw_style_btn = QPushButton("Style…")
+        set_action_icon(self._draw_style_btn, "options")
         self._draw_style_btn.setAccessibleName("Detection overlay style options")
         self._draw_style_btn.setEnabled(False)
         self._draw_style_btn.clicked.connect(self._edit_detection_style)

@@ -250,6 +250,28 @@ def test_detection_overlay_invalid_controls_fail_closed(style):
         style.validate()
 
 
+def test_detection_overlay_clear_restores_captured_producer_defaults():
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    # Phase 1 producer uses s=10, a circle, and 0.4 edge width.
+    overlay = axes.scatter([1, 2], [3, 4], s=10, marker="o", linewidths=0.4,
+                           linestyles="-", alpha=None)
+    overlay.set_gid("detection-overlay:phase1:camera-0")
+    baseline = (overlay.get_sizes().copy(), [path.vertices.copy() for path in overlay.get_paths()],
+                overlay.get_linewidths().copy(), overlay.get_linestyles(), overlay.get_alpha())
+
+    apply_visual_style(figure, VisualStyle(overlay_marker="s", overlay_size=12,
+                                            overlay_line_width=2, overlay_line_style="--",
+                                            overlay_opacity=0.35), "Dark")
+    apply_visual_style(figure, VisualStyle(), "Light")
+
+    assert overlay.get_sizes().tolist() == baseline[0].tolist() == [10]
+    assert [path.vertices.tolist() for path in overlay.get_paths()] == [path.tolist() for path in baseline[1]]
+    assert overlay.get_linewidths().tolist() == baseline[2].tolist() == pytest.approx([0.4])
+    assert overlay.get_linestyles() == baseline[3]
+    assert overlay.get_alpha() is baseline[4] is None
+
+
 def test_detection_overlay_theme_defaults_refresh_but_explicit_colours_win():
     figure = Figure()
     axes = figure.add_subplot(111)
@@ -264,6 +286,26 @@ def test_detection_overlay_theme_defaults_refresh_but_explicit_colours_win():
     apply_visual_style(figure, explicit, "Sepia")
     assert overlay.get_facecolors()[0].tolist() == pytest.approx([18 / 255, 52 / 255, 86 / 255, 1.0])
     assert overlay.get_edgecolors()[0].tolist() == pytest.approx([101 / 255, 67 / 255, 33 / 255, 1.0])
+
+
+def test_detection_overlay_theme_refresh_keeps_overrides_then_reset_restores_baseline():
+    from pyCamSet.gui.theme import apply_matplotlib_theme, refresh_matplotlib_theme
+
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    overlay = axes.scatter([1], [2], s=10, marker="o", linewidths=0.4, alpha=None)
+    overlay.set_gid("detection-overlay:phase1:camera-0")
+    apply_visual_style(figure, VisualStyle(overlay_marker="s", overlay_size=12,
+                                            overlay_line_width=2, overlay_opacity=0.35), "Light")
+    apply_matplotlib_theme(figure, "Dark")
+    refresh_matplotlib_theme("Dark")
+    assert overlay.get_sizes().tolist() == [144]
+    assert overlay.get_alpha() == 0.35
+    apply_visual_style(figure, VisualStyle(), "Dark")
+    assert overlay.get_sizes().tolist() == [10]
+    assert len(overlay.get_paths()[0].vertices) == 26
+    assert overlay.get_linewidths().tolist() == pytest.approx([0.4])
+    assert overlay.get_alpha() is None
 
 
 def test_theme_defaults_and_explicit_overrides_coexist_on_theme_switch():
@@ -396,6 +438,8 @@ def test_style_dialog_reset_clears_overlay_and_series_overrides():
     app = QApplication.instance() or QApplication([])
     figure = Figure()
     axes = figure.add_subplot(111)
+    overlay = axes.scatter([1], [2], s=100, marker="o", linewidths=0.4, alpha=None)
+    overlay.set_gid("detection-overlay:phase1:camera-0")
     line, = axes.plot([0, 1], [1, 3], label="series")
     line.set_gid("stable:series")
     style = VisualStyle(overlay_size=9, overlay_colour="#123456",
@@ -412,6 +456,34 @@ def test_style_dialog_reset_clears_overlay_and_series_overrides():
     assert reset.overlay_line_style is None
     assert reset.overlay_opacity is None
     assert reset.series_colours == {}
+    assert overlay.get_sizes().tolist() == [100]
+    assert len(overlay.get_paths()[0].vertices) == 26  # Matplotlib's producer circle path.
+    assert overlay.get_linewidths().tolist() == pytest.approx([0.4])
+    assert overlay.get_alpha() is None
+
+
+def test_style_dialog_size_six_is_an_explicit_override_and_cancel_restores_default():
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+    from pyCamSet.gui.visual_style import VisualStyleDialog
+
+    QApplication.instance() or QApplication([])
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    overlay = axes.scatter([1], [2], s=100, marker="o", linewidths=0.4, alpha=None)
+    overlay.set_gid("detection-overlay:phase1:camera-0")
+    dialog = VisualStyleDialog(figure, "phase1:overlay", VisualStyle(), "Light")
+    assert dialog.overlay_size.value() == 10
+    dialog.overlay_size.setValue(6)
+    assert dialog.current.overlay_size == 6
+    assert overlay.get_sizes().tolist() == [36]
+    dialog._reset()
+    assert dialog.current.overlay_size is None
+    assert overlay.get_sizes().tolist() == [100]
+    dialog.overlay_size.setValue(6)
+    QTimer.singleShot(0, dialog.reject)
+    assert dialog.exec() != 1
+    assert overlay.get_sizes().tolist() == [100]
 
 
 def test_style_dialog_json_load_populates_every_serialised_control(tmp_path, monkeypatch):

@@ -26,6 +26,7 @@ SUGGESTED_PRESET_CITATIONS = (
     "Cell and IEEE controls are generic starting points without verified journal-specific prescriptions."
 )
 _VISUAL_OVERRIDES = WeakKeyDictionary()
+_DETECTION_OVERLAY_BASELINES = WeakKeyDictionary()
 
 
 @dataclass
@@ -201,6 +202,20 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
         raise ValueError("No image explicitly supports a cosmetic colormap override")
     _VISUAL_OVERRIDES[figure] = style
     tokens = THEME_TOKENS[theme_name]
+    # Keep each producer's original marker geometry/style so clearing an
+    # override restores that figure's real baseline rather than guessed defaults.
+    overlay_baselines = _DETECTION_OVERLAY_BASELINES.setdefault(figure, WeakKeyDictionary())
+    for axes in figure.axes:
+        for collection in axes.collections:
+            if (collection.get_gid() or "").startswith("detection-overlay:") \
+                    and collection not in overlay_baselines:
+                overlay_baselines[collection] = {
+                    "sizes": collection.get_sizes().copy() if hasattr(collection, "get_sizes") else None,
+                    "paths": collection.get_paths() if hasattr(collection, "get_paths") else None,
+                    "linewidths": collection.get_linewidths().copy() if hasattr(collection, "get_linewidths") else None,
+                    "linestyles": collection.get_linestyles() if hasattr(collection, "get_linestyles") else None,
+                    "alpha": collection.get_alpha() if hasattr(collection, "get_alpha") else None,
+                }
     figure.set_facecolor(style.figure_background or tokens["background"])
     for axes_index, axes in enumerate(figure.axes):
         axes.set_facecolor(style.axes_background or tokens["surface"])
@@ -240,22 +255,29 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
         for collection in axes.collections:
             gid = collection.get_gid() or ""
             if gid.startswith("detection-overlay:"):
-                if style.overlay_size is not None and hasattr(collection, "set_sizes"):
-                    collection.set_sizes([style.overlay_size ** 2])
+                baseline = overlay_baselines[collection]
+                if hasattr(collection, "set_sizes"):
+                    collection.set_sizes([style.overlay_size ** 2] if style.overlay_size is not None
+                                         else baseline["sizes"])
                 if hasattr(collection, "set_facecolor"):
                     collection.set_facecolor(style.overlay_colour or tokens["accent"])
                 if hasattr(collection, "set_edgecolor"):
                     collection.set_edgecolor(style.overlay_edge_colour or tokens["border_strong"])
-                if style.overlay_marker is not None and hasattr(collection, "set_paths"):
-                    from matplotlib.markers import MarkerStyle
-                    marker = MarkerStyle(style.overlay_marker)
-                    collection.set_paths([marker.get_path().transformed(marker.get_transform())])
-                if style.overlay_line_width is not None and hasattr(collection, "set_linewidths"):
-                    collection.set_linewidths([style.overlay_line_width])
-                if style.overlay_line_style is not None and hasattr(collection, "set_linestyle"):
-                    collection.set_linestyle(style.overlay_line_style)
-                if style.overlay_opacity is not None:
-                    collection.set_alpha(style.overlay_opacity)
+                if hasattr(collection, "set_paths"):
+                    if style.overlay_marker is None:
+                        collection.set_paths(baseline["paths"])
+                    else:
+                        from matplotlib.markers import MarkerStyle
+                        marker = MarkerStyle(style.overlay_marker)
+                        collection.set_paths([marker.get_path().transformed(marker.get_transform())])
+                if hasattr(collection, "set_linewidths"):
+                    collection.set_linewidths([style.overlay_line_width]
+                                              if style.overlay_line_width is not None
+                                              else baseline["linewidths"])
+                if hasattr(collection, "set_linestyle"):
+                    collection.set_linestyles(style.overlay_line_style or baseline["linestyles"])
+                collection.set_alpha(style.overlay_opacity if style.overlay_opacity is not None
+                                     else baseline["alpha"])
         legend = axes.get_legend()
         if legend is not None:
             if style.legend_visible is not None:
@@ -460,7 +482,7 @@ class VisualStyleDialog:
                 form.addRow("Figure background:", self.figure_background)
                 self.axes_background = _colour(QLineEdit, style.axes_background)
                 form.addRow("Axes background:", self.axes_background)
-                self.overlay_size = _number(QDoubleSpinBox, style.overlay_size, 6, 1, 24)
+                self.overlay_size = _number(QDoubleSpinBox, style.overlay_size, 10, 1, 24)
                 self.overlay_size.setAccessibleName("Detection marker size")
                 form.addRow("Detection marker size:", self.overlay_size)
                 self.overlay_marker = QComboBox()
@@ -630,7 +652,7 @@ class VisualStyleDialog:
                     grid_visible=self.grid_value.isChecked() if self.grid.isChecked() else None,
                     legend_visible=self.legend_value.isChecked() if self.legend.isChecked() else None,
                     overlay_size=(self.overlay_size.value()
-                                  if self.overlay_size.value() != 6 else None),
+                                  if self.overlay_size.value() != 10 else None),
                     overlay_marker=self.overlay_marker.currentData() or None,
                     overlay_colour=_optional(self.overlay_colour.text()),
                     overlay_edge_colour=_optional(self.overlay_edge_colour.text()),
@@ -697,7 +719,7 @@ class VisualStyleDialog:
                 self.legend_colour.clear()
                 self.figure_background.clear()
                 self.axes_background.clear()
-                self.overlay_size.setValue(6)
+                self.overlay_size.setValue(10)
                 self.overlay_marker.setCurrentIndex(0)
                 self.overlay_colour.clear()
                 self.overlay_edge_colour.clear()
@@ -765,7 +787,7 @@ class VisualStyleDialog:
                     self.legend_colour.setText(candidate.legend_colour or "")
                     self.figure_background.setText(candidate.figure_background or "")
                     self.axes_background.setText(candidate.axes_background or "")
-                    self.overlay_size.setValue(candidate.overlay_size or 6)
+                    self.overlay_size.setValue(candidate.overlay_size if candidate.overlay_size is not None else 10)
                     self.overlay_marker.setCurrentIndex(max(0, self.overlay_marker.findData(candidate.overlay_marker or "")))
                     self.overlay_colour.setText(candidate.overlay_colour or "")
                     self.overlay_edge_colour.setText(candidate.overlay_edge_colour or "")

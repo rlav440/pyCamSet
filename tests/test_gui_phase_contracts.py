@@ -1637,6 +1637,7 @@ def test_phase1_overlay_style_roundtrip_keeps_producer_frame_mapping_and_png(tmp
 
     from pyCamSet.gui import phase_1_detection, visual_style
     from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.calibration_targets.core.target_detections import ImageDetection, TargetDetection
     from pyCamSet.workflow.detections import save_detections
     from pyCamSet.workflow.workspace import WorkspaceManager
 
@@ -1656,8 +1657,16 @@ def test_phase1_overlay_style_roundtrip_keeps_producer_frame_mapping_and_png(tmp
         "camA": np.array([[0, 0, 2, 3], [0, 1, 4, 5], [0, 2, 6, 7]], dtype=float),
         "camB": np.array([[1, 0, 8, 9], [1, 1, 10, 11]], dtype=float),
     }
+    detections = TargetDetection(cam_names)
+    for cam in cam_names:
+        for row in points[cam]:
+            detections.add_detection(
+                cam, int(row[1]),
+                ImageDetection(keys=np.array([int(row[1])]),
+                               image_points=row[-2:].reshape(1, 2)),
+            )
     artifact = tmp_path / "run-detections.pickle"
-    save_detections(artifact, _FakeDetections(cam_names, points))
+    save_detections(artifact, detections)
 
     app = QApplication.instance() or QApplication([])
     tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))

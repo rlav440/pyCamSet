@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 
 from pyCamSet.calibration_targets.core.target_registry import build_target, target_class
 from pyCamSet.gui.viewer_process import run_viewer, spawn_viewer
+from pyCamSet.gui.three_d_style import ThreeDStyleControls
 from pyCamSet.gui.shared_functions import (
     DETECTOR_NONE,
     TargetSettingsForm,
@@ -186,6 +187,15 @@ class CreateTargetDialog(QDialog):
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
+        self._three_d_style = ThreeDStyleControls(
+            self, visual_id="create-target:pyvista", show_open3d_note=False)
+        self._three_d_style.setToolTip(
+            "Presentation-only PyVista target view options; saved PNG uses the same settings.")
+        self._three_d_style.legend.setChecked(False)
+        self._three_d_style.legend.setVisible(False)
+        root.addWidget(self._three_d_style)
+        self._three_d_style.setVisible(
+            "return_scene" in inspect.signature(self._target_class().plot).parameters)
 
     def _browse_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select output directory")
@@ -208,6 +218,9 @@ class CreateTargetDialog(QDialog):
         self._export_rows.setVisible(bool(self._export_widgets))
         self._save_geometry_button.setEnabled(
             "return_scene" in inspect.signature(self._target_class().plot).parameters)
+        if hasattr(self, "_three_d_style"):
+            self._three_d_style.setVisible(
+                "return_scene" in inspect.signature(self._target_class().plot).parameters)
         self._sync_default_name()
 
     def _export_kind(self) -> str:
@@ -337,7 +350,8 @@ class CreateTargetDialog(QDialog):
 
         ok, detail = spawn_viewer(
             "pyCamSet.utils.visualise_target",
-            [json.dumps(collected["spec"], default=str)],
+            [json.dumps(collected["spec"], default=str),
+             *self._three_d_arguments()],
         )
         if not ok:
             QMessageBox.critical(self, "Visualise Failed", detail)
@@ -366,6 +380,7 @@ class CreateTargetDialog(QDialog):
             if answer != QMessageBox.StandardButton.Yes:
                 return
         arguments = [json.dumps(collected["spec"], default=str)]
+        arguments.extend(self._three_d_arguments())
         flag = "--save-png" if extension == ".png" else "--save-geometry"
         arguments.extend([flag, str(output_path), "--overwrite"])
         self._status.setText(f"Saving target visualisation to {output_path}…")
@@ -386,3 +401,11 @@ class CreateTargetDialog(QDialog):
     def _save_target_geometry(self) -> None:
         """Save supported scene meshes; Matplotlib-only targets disable this action."""
         self._export_target_view(".obj", "Export Target Geometry")
+
+    def _three_d_arguments(self) -> list[str]:
+        """Pass PyVista cosmetics only to target renderers that expose a scene."""
+        if "return_scene" not in inspect.signature(self._target_class().plot).parameters:
+            return []
+        application = QApplication.instance()
+        theme_name = (application.property("pycamsetTheme") if application else None) or "Light"
+        return [*self._three_d_style.viewer_arguments(), "--3d-theme", str(theme_name)]

@@ -241,6 +241,7 @@ def test_create_target_png_action_confirms_overwrite_and_uses_renderer(tmp_path,
     dialog = types.SimpleNamespace(
         _collect=lambda: {"spec": {"type": "Ccube", "n_points": 4},
                           "out_dir": tmp_path, "file_name": "target"},
+        _three_d_arguments=lambda: [],
         _status=Status(),
         _terminal=types.SimpleNamespace(append_line=lambda line: calls.update(terminal=line)),
     )

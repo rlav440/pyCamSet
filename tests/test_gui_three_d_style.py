@@ -4,6 +4,7 @@ Future: Add native multi-platform rendering checks when available.
 '''
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -172,3 +173,50 @@ def test_invalid_cosmetic_options_fail_closed(kwargs):
             _apply_3d_cosmetics(plotter, **kwargs)
     finally:
         plotter.close()
+
+
+def test_create_target_adapter_uses_shared_cosmetics_and_rejects_scalar_legend(monkeypatch):
+    from pyCamSet.utils import visualise_target
+    from pyCamSet.utils import visualisation
+
+    calls = []
+    monkeypatch.setattr(visualisation, "_apply_3d_cosmetics",
+                        lambda *args: calls.append(args))
+    scene = object()
+    visualise_target._apply_target_style(scene, {
+        "background": "white", "point_size": 6.0,
+        "view": "top", "axes": False, "legend": False,
+    })
+    assert calls == [(scene, "Light", "white", 6.0, "top", False)]
+    with pytest.raises(ValueError, match="no scalar legend"):
+        visualise_target._apply_target_style(scene, {"legend": True})
+
+
+def test_phase3_open3d_style_round_trip_and_fail_closed(tmp_path, monkeypatch):
+    from pyCamSet.gui.phase_3_lockbox_editor import Phase3LockboxEditor
+
+    editor = Phase3LockboxEditor.__new__(Phase3LockboxEditor)
+    editor._o3d_visual_settings = {
+        "view_mode": "Planetary", "box_picking": False, "show_skybox": False,
+        "show_ground": True, "ground_plane": "XZ floor", "show_axes": True,
+        "background": "Dark calibration", "lighting": "Medium shadows",
+        "show_lockbox": False,
+    }
+    style_path = tmp_path / "visual-styles" / "open3d-style.json"
+    monkeypatch.setattr(editor, "_open3d_style_path", lambda: style_path)
+    monkeypatch.setattr(editor, "_set_open3d_export_status", lambda _message: None)
+    editor._o3d_visual_settings.update({
+        "view_mode": "Arcball", "background": "Light studio", "show_axes": False,
+    })
+    editor._save_open3d_style()
+    editor._o3d_visual_settings["background"] = "Dark calibration"
+    loaded = editor._load_saved_open3d_style()
+    assert loaded["background"] == "Light studio"
+    assert loaded["view_mode"] == "Arcball"
+    assert loaded["show_axes"] is False
+    assert loaded["box_picking"] is False
+
+    document = json.loads(style_path.read_text(encoding="utf-8"))
+    document["style"]["point_size"] = 9.0
+    style_path.write_text(json.dumps(document), encoding="utf-8")
+    assert editor._load_saved_open3d_style()["background"] == "Dark calibration"

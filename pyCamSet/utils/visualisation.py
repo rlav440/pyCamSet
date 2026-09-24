@@ -602,6 +602,12 @@ def _apply_3d_cosmetics(plotter, theme_name: str = "Light", background: str = "t
         plotter.subplot(index // columns, index % columns)
         if axes:
             plotter.add_axes()
+        for actor in plotter.renderer.actors.values():
+            mapper = actor.GetMapper() if hasattr(actor, "GetMapper") else None
+            dataset = mapper.GetInput() if mapper is not None else None
+            if (dataset is not None and dataset.GetNumberOfCells() == 0
+                    and dataset.GetNumberOfPoints() > 0):
+                actor.GetProperty().SetPointSize(float(point_size))
         if view == "top":
             plotter.view_xy()
         elif view == "front":

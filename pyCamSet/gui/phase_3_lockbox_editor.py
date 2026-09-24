@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -224,6 +225,7 @@ class Phase3LockboxEditor(QDialog):
             'lighting': 'Medium shadows',
             'show_lockbox': False,
         }
+        self._o3d_visual_settings = self._load_saved_open3d_style()
 
         self._initialise_states()
         self._build_ui()
@@ -1114,9 +1116,22 @@ class Phase3LockboxEditor(QDialog):
         save_view_button.set_on_clicked(self._open_open3d_png_dialog)
         self._o3d_panel.add_child(save_view_button)
 
+        style_row = _o3d_gui.Horiz(0.3 * em, tight)
+        save_style_button = _o3d_gui.Button("Save view style")
+        save_style_button.set_on_clicked(self._save_open3d_style)
+        load_style_button = _o3d_gui.Button("Load saved style")
+        load_style_button.set_on_clicked(self._load_open3d_style_from_ui)
+        style_row.add_child(save_style_button)
+        style_row.add_child(load_style_button)
+        self._o3d_panel.add_child(style_row)
+
         # ── View Settings (collapsed by default — saves vertical space) ─
         vis_sect = _o3d_gui.CollapsableVert("View Settings", 0.15 * em, margins)
         vis_sect.set_is_open(False)
+        vis_sect.add_child(_o3d_gui.Label(
+            "Native Open3D supports background, ground, axes, lighting and mouse mode here. "
+            "Managed point/line size, scalar legend and camera presets are unavailable."
+        ))
 
         self._o3d_view_mode_combo = _o3d_gui.Combobox()
         for item in ["Planetary", "Arcball", "Fly", "Model", "Sun", "Environment"]:
@@ -1357,6 +1372,68 @@ class Phase3LockboxEditor(QDialog):
         scene.show_axes(bool(self._o3d_visual_settings['show_axes']))
         scene.set_lighting(lighting_map[self._o3d_visual_settings['lighting']], np.asarray([0.577, -0.577, -0.577], dtype=np.float32))
         self._o3d_scene_widget.set_view_controls(view_map[self._o3d_visual_settings['view_mode']])
+
+    def _open3d_style_path(self) -> Path:
+        """Return the per-visual style location outside the source workspace."""
+        from pyCamSet.gui.preferences import config_directory
+
+        visual_id = "phase3:lockbox-open3d"
+        digest = hashlib.sha256(visual_id.encode("utf-8")).hexdigest()[:16]
+        return config_directory() / "visual-styles" / f"open3d-{digest}.json"
+
+    def _load_saved_open3d_style(self) -> dict:
+        """Load only native Open3D options; reject PyVista-only fields explicitly."""
+        path = self._open3d_style_path()
+        if not path.is_file():
+            return self._o3d_visual_settings
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+            if (not isinstance(document, dict)
+                    or set(document) != {"schema", "version", "visual_id", "style"}
+                    or document["schema"] != "pycamset.open3d-view-style"
+                    or isinstance(document["version"], bool)
+                    or document["version"] != 1
+                    or document["visual_id"] != "phase3:lockbox-open3d"):
+                raise ValueError("Unsupported Open3D style document")
+            style = document["style"]
+            allowed = {"view_mode", "show_skybox", "show_ground", "ground_plane",
+                       "show_axes", "background", "lighting", "show_lockbox"}
+            if not isinstance(style, dict) or set(style) != allowed:
+                raise ValueError("Open3D style has unsupported or missing settings")
+            if (style["view_mode"] not in {"Planetary", "Arcball", "Fly", "Model", "Sun", "Environment"}
+                    or style["ground_plane"] not in {"XZ floor", "XY backplane", "YZ sideplane"}
+                    or style["background"] not in {"Dark calibration", "Neutral grey", "Light studio"}
+                    or style["lighting"] not in {"Medium shadows", "Soft shadows", "Hard shadows", "Dark shadows", "No shadows"}
+                    or any(not isinstance(style[key], bool) for key in
+                           ("show_skybox", "show_ground", "show_axes", "show_lockbox"))):
+                raise ValueError("Open3D style contains an unsupported value")
+            return {**self._o3d_visual_settings, **style}
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return self._o3d_visual_settings
+
+    def _save_open3d_style(self) -> None:
+        """Persist only the native renderer's supported presentation settings."""
+        from pyCamSet.gui.preferences import config_directory
+
+        style = {key: self._o3d_visual_settings[key] for key in (
+            "view_mode", "show_skybox", "show_ground", "ground_plane",
+            "show_axes", "background", "lighting", "show_lockbox")}
+        path = self._open3d_style_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            document = {"schema": "pycamset.open3d-view-style", "version": 1,
+                        "visual_id": "phase3:lockbox-open3d", "style": style}
+            path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n",
+                            encoding="utf-8")
+            self._set_open3d_export_status("Saved Open3D view style.")
+        except OSError as exc:
+            self._set_open3d_export_status(f"Open3D style not saved: {exc}")
+
+    def _load_open3d_style_from_ui(self) -> None:
+        """Reload the per-visual style and refresh the same scene used by PNG capture."""
+        self._o3d_visual_settings = self._load_saved_open3d_style()
+        self._apply_open3d_visual_settings()
+        self._refresh_open3d_native_view(reset_camera=False)
 
     def _refresh_open3d_native_view(self, reset_camera: bool = False) -> None:
         if self._o3d_scene_widget is None:

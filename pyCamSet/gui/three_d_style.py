@@ -59,7 +59,8 @@ def _validated_style(document: object, visual_id: str) -> dict:
 class ThreeDStyleControls(QWidget):
     """Compact 3D cosmetics editor; values never enter calibration parameters."""
 
-    def __init__(self, parent=None, visual_id: str = "assessment:phase3"):
+    def __init__(self, parent=None, visual_id: str = "assessment:phase3",
+                 show_open3d_note: bool = True):
         super().__init__(parent)
         if not isinstance(visual_id, str) or not visual_id.strip():
             raise ValueError("visual_id must be a non-empty string")
@@ -105,10 +106,12 @@ class ThreeDStyleControls(QWidget):
         self.reset_style.setToolTip("Remove this visual's saved style and inherit theme defaults.")
         self.reset_style.clicked.connect(self._reset_style)
         layout.addWidget(self.reset_style)
-        layout.addWidget(QLabel(
+        self._open3d_note = QLabel(
             "Open3D limitation: managed background, point size, view, axes and legend controls are unavailable; "
             "use the native viewer's interactive camera controls."
-        ))
+        )
+        self._open3d_note.setVisible(show_open3d_note)
+        layout.addWidget(self._open3d_note)
         self._load_style(silent=True)
 
     def _style_values(self) -> dict:

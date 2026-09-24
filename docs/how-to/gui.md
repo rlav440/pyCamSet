@@ -73,21 +73,26 @@ panel's scroll area to reach the remaining settings.
 
 ### Action icon meanings
 
-Icons supplement, rather than replace, the visible button text and accessible
-name. They are painted as original Qt vector paths and use the button's
-`ButtonText` palette role, including its disabled role. The matching optical-
-mapping (OM) actions establish the semantics; pyCamSet does not import OM
-artwork, fonts, or emoji glyphs.
+pyCamSet shares its figure-action icons with the lab's optical-mapping (OM)
+GUI, so the same action looks the same in both tools. Each is a compact
+28 × 28 px button; hover it for the action's name, which is also its
+accessible name for screen readers and keyboard users.
 
-| pyCamSet action | Icon meaning | OM source action | pyCamSet behaviour |
-| --- | --- | --- | --- |
-| Managed figure and detection-overlay `Style…` | Gear / options | `src/ui/figure_style.py:5,1817` (“⚙ Options”) | Opens the visual-style controls. |
-| Managed figure and detection-montage `Save PNG` | Camera / snapshot | `src/ui/figure_export.py:5–7,88,910–914` (camera button) | Saves the rendered figure or montage as PNG. |
-| Managed figure `Save CSV` | Bar chart / tabular data | `src/ui/figure_export.py:9–16,941,1019–1023` (table button on graph canvases) | Saves source-backed numeric figure data; disabled when no rows are available. |
+| pyCamSet action | Icon | Code point | OM source action | pyCamSet behaviour |
+| --- | --- | --- | --- | --- |
+| Figure and detection-overlay style | ⚙ | U+2699 | `src/ui/figure_style.py:1817` (“⚙ Options”) | Opens the visual-style controls. |
+| Save figure or montage as PNG | 📷 | U+1F4F7 | `src/ui/figure_export.py:88` (camera button) | Saves the rendered figure or montage as PNG. |
+| Save figure data as CSV | 📊 | U+1F4CA | `src/ui/figure_export.py:941` (table button) | Saves source-backed numeric data; disabled when no rows are available. |
+
+The icons are Unicode characters drawn by the operating system's own symbol or
+emoji font; pyCamSet ships no icon image or font for them. On a system with no
+such font (common on minimal Linux installs), pyCamSet draws an equivalent
+gear, camera or bar-chart outline instead, so a button never shows an empty
+box.
 
 No icon is assigned to playback or ROI controls: these are not equivalent to
-the cited OM figure actions. SVG/PDF exports retain text-only labels because
-they are vector-file formats, not the OM chart-data action.
+the cited OM figure actions. SVG/PDF exports keep text labels because they are
+vector-file formats, not the OM chart-data action.
 
 The following controls are global to the workflow:
 
@@ -106,9 +111,15 @@ The following controls are global to the workflow:
     is where a phase's output appears while it runs. This toggle is in
     **Settings**.
 
-Behind the tab bar there are eleven tabs, of which seven are visible: the five
-phases, Export Calibration, and Optimisation. The other four are diagnostics
-companions, one per phase, hidden until that phase has produced a run.
+Behind the tab bar there are twelve tabs, of which eight are visible: the five
+phases, Export Calibration, Optimisation, and Detection Cost. The other four
+are diagnostics companions, one per phase, hidden until that phase has produced
+a run.
+
+In a narrow window the tab bar scrolls, and tabs at the end slide out of view
+behind two small arrows. The **All tabs ▾** menu at the right-hand end of the
+tab bar always lists every visible tab, with the open one ticked; choose a tab
+there to jump to it.
 
 ---
 
@@ -303,9 +314,7 @@ the validation follow the target rather than being written out per target.
 The dialog asks for no detector: a ChArUco1 or ChArUco1 ccube prints identically
 for ArUco 1 and ArUco 2, so the same printed board can be read with either, and
 the other targets have only one detector. The detector is chosen in Phase 1
-instead. The screenshot above predates this:
-it still shows a Detector row, and "Ccube" where the dialog now says
-"ChArUco1 ccube".
+instead.
 
 The labels are the names the GUI shows; saved settings and scripts use the class
 names, which are unchanged: ChArUco1 is `ChArUco`, ChArUco1 ccube is `Ccube`,
@@ -333,8 +342,7 @@ Sweeps the detector's settings, scores the calibrations that result, and retains
 the best. The settings offered are the ones the selected target's detector says
 it can be swept over. A study runs detections of its own, so this tab keeps a
 **Detector** choice, which behaves as it does in Phase 1. The work runs on a
-background thread, so the window stays responsive. The screenshot above predates
-the new target names, and shows "Ccube" where the tab now says "ChArUco1 ccube".
+background thread, so the window stays responsive.
 
 This tab needs Optuna, which is optional. Without it the tab still appears, but
 **Start** is disabled with a tooltip saying why:
@@ -354,6 +362,8 @@ the GUI changes:
 python scripts/capture_gui_screenshots.py
 ```
 
-It renders each tab offscreen with a pinned style and palette, in both light and
-dark, so the output does not depend on the machine or the desktop theme it was
-run on.
+It renders each tab offscreen in the application's own Light and Dark themes,
+with a throwaway settings directory, so the output depends neither on the
+desktop theme nor on the theme, folders or parameters of whoever ran it. On
+Windows, where the offscreen renderer has no fonts, run it with
+`QT_QPA_PLATFORM=windows`; nothing is shown on screen either way.

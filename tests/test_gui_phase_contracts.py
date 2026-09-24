@@ -1759,6 +1759,118 @@ def test_phase1_overlay_style_roundtrip_keeps_producer_frame_mapping_and_png(tmp
 
 
 @pytest.mark.gui
+def test_phase1_montage_keeps_corrupt_producer_indices_navigable(tmp_path, monkeypatch):
+    """Unreadable producer frames stay indexed without hiding valid frames."""
+    import csv
+    import hashlib
+    import json
+
+    import cv2
+    from PIL import Image
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.gui import phase_1_detection
+    from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.calibration_targets.core.target_detections import ImageDetection, TargetDetection
+    from pyCamSet.workflow.detections import save_detections
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    cam_names = ["camA", "camB"]
+    frame_names = ("a1.png", "nested/frame2.png", "z10.png")
+    image_bytes = {}
+    frame_values = {}
+    for cam_index, camera in enumerate(cam_names):
+        folder = tmp_path / camera
+        folder.mkdir()
+        for image_index, name in enumerate(frame_names):
+            image_path = folder / name
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            if image_index in (0, 2):
+                payload = b"not a decodable PNG; producer still indexes this suffix"
+                image_path.write_bytes(payload)
+            else:
+                value = 45 + cam_index * 70
+                assert cv2.imwrite(str(image_path), np.full((18, 18, 3), value, dtype=np.uint8))
+                payload = image_path.read_bytes()
+                frame_values[camera] = value
+            image_bytes[(camera, name)] = hashlib.sha256(payload).hexdigest()
+
+    detections = TargetDetection(cam_names)
+    for cam_index, camera in enumerate(cam_names):
+        detections.add_detection(
+            camera, 1,
+            ImageDetection(keys=np.array([1]), image_points=np.array([[4 + cam_index, 6 + cam_index]])),
+        )
+    original_rows = detections.get_data().copy()
+    artifact = tmp_path / "detections.pickle"
+    save_detections(artifact, detections)
+    artifact_digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+
+    QApplication.instance() or QApplication([])
+    tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))
+    try:
+        # Baseline fails here if the corrupt first producer image aborts montage construction.
+        tab._draw_detections_for_run({"run_id": "corrupt-frames", "params": {
+            "f_loc": str(tmp_path)}, "artifacts": {"detected_datapoints_pickle": str(artifact)}},
+            show_errors=False)
+        assert tab._draw_state is not None
+        state = tab._draw_state
+        assert [path.relative_to(tmp_path / "camA").as_posix()
+                for path in state["cam_images"]["camA"]] == list(frame_names)
+        assert state["cam_points"]["camA"].keys() == {1}
+        assert state["cam_points"]["camB"].keys() == {1}
+        tab._sub_tabs.setCurrentIndex(2)
+
+        tab._draw_index = 0
+        tab._update_draw_frame()
+        assert "unreadable" in state["axes"]["camA"].get_title().lower()
+        assert "a1.png" in state["unreadable_art"]["camA"].get_text()
+        assert len(state["sc_art"]["camA"].get_offsets()) == 0
+
+        tab._step_draw_image(1)
+        assert tab._draw_index == 1
+        assert np.allclose(state["im_art"]["camA"].get_array(), frame_values["camA"] / 255)
+        assert state["sc_art"]["camA"].get_offsets().tolist() == [[4.0, 6.0]]
+        assert "1 pts" in state["axes"]["camA"].get_title()
+
+        tab._step_draw_image(1)
+        assert tab._draw_index == 2
+        assert "unreadable" in state["axes"]["camA"].get_title().lower()
+        assert "z10.png" in state["unreadable_art"]["camA"].get_text()
+        tab._step_draw_image(1)
+        assert tab._draw_index == 0
+        assert "unreadable" in state["axes"]["camB"].get_title().lower()
+
+        # Export at a valid frame: PNG remains renderable and CSV retains its producer-local index.
+        tab._draw_index = 1
+        tab._update_draw_frame()
+        png_path = tmp_path / "montage.png"
+        csv_path = tmp_path / "coordinates.csv"
+        monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName",
+                            lambda *args: (str(png_path), "PNG"))
+        tab._save_detection_montage_png()
+        with Image.open(png_path) as exported:
+            assert exported.width > 0 and exported.height > 0
+        monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName",
+                            lambda *args: (str(csv_path), "CSV"))
+        tab._save_detection_coordinates_csv()
+        lines = csv_path.read_text(encoding="utf-8").splitlines()
+        assert json.loads(lines[0][2:])["montage_frame_index"] == 1
+        with csv_path.open(encoding="utf-8", newline="") as stream:
+            rows = list(csv.DictReader(line for line in stream if not line.startswith("#")))
+        assert [(row["camera"], row["image_index"], row["image_name"])
+                for row in rows] == [("camA", "1", "frame2.png"),
+                                     ("camB", "1", "frame2.png")]
+
+        assert np.array_equal(detections.get_data(), original_rows)
+        assert hashlib.sha256(artifact.read_bytes()).hexdigest() == artifact_digest
+        for (camera, name), digest in image_bytes.items():
+            assert hashlib.sha256((tmp_path / camera / name).read_bytes()).hexdigest() == digest
+    finally:
+        tab.deleteLater()
+
+
+@pytest.mark.gui
 def test_draw_detections_never_shows_another_runs_overwritten_cache(tmp_path):
     """Round-9 review, P1: the last-resort image-folder cache is a slot a
     concurrent Phase 1 run can overwrite at any moment, so

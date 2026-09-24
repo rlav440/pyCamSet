@@ -1389,8 +1389,9 @@ class Phase1DiagnosticsTab(QWidget):
         canvas = FigureCanvasQTAgg(fig)
 
         axes: dict[str, object] = {}
-        im_art: dict[str, object] = {}
+        im_art: dict[str, object | None] = {}
         sc_art: dict[str, object] = {}
+        unreadable_art: dict[str, object] = {}
         empty = np.empty((0, 2))
 
         for i, cam in enumerate(cams, start=1):
@@ -1401,14 +1402,18 @@ class Phase1DiagnosticsTab(QWidget):
                 ax.set_title(f"{cam} (no images)")
                 ax.axis("off")
                 continue
-            img0 = mpimg.imread(ims[0])
-            im_artist = ax.imshow(img0, cmap="gray" if getattr(img0, "ndim", 3) == 2 else None)
             sc_artist = ax.scatter([], [], s=10, c="lime", marker="o", linewidths=0.4)
             # Stable camera-scoped identity lets presentation settings follow this renderer.
             sc_artist.set_gid(f"detection-overlay:phase1:{cam}")
             ax.axis("off")
-            im_art[cam] = im_artist
+            im_art[cam] = None
             sc_art[cam] = sc_artist
+            unreadable_art[cam] = ax.text(
+                0.5, 0.5, "Image unreadable", transform=ax.transAxes,
+                horizontalalignment="center", verticalalignment="center",
+                wrap=True,
+            )
+            unreadable_art[cam].set_visible(False)
 
         # Replace only the canvas area — the control bar stays unchanged
         self._canvas_scroll.setWidget(canvas)
@@ -1423,6 +1428,7 @@ class Phase1DiagnosticsTab(QWidget):
             "axes": axes,
             "im_art": im_art,
             "sc_art": sc_art,
+            "unreadable_art": unreadable_art,
             "max_images": max_images,
             "empty": empty,
             "mpimg": mpimg,
@@ -1528,6 +1534,7 @@ class Phase1DiagnosticsTab(QWidget):
         axes = self._draw_state["axes"]
         im_art = self._draw_state["im_art"]
         sc_art = self._draw_state["sc_art"]
+        unreadable_art = self._draw_state["unreadable_art"]
         max_images = int(self._draw_state["max_images"])
         empty = self._draw_state["empty"]
         mpimg = self._draw_state["mpimg"]
@@ -1543,8 +1550,30 @@ class Phase1DiagnosticsTab(QWidget):
                 continue
 
             im_idx = idx % len(ims)
-            img = mpimg.imread(ims[im_idx])
-            im_art[cam].set_data(img)
+            try:
+                img = mpimg.imread(ims[im_idx])
+            except (OSError, ValueError, SyntaxError) as exc:
+                # Keep the producer's original index; never borrow pixels from a neighbouring frame.
+                if im_art[cam] is not None:
+                    im_art[cam].remove()
+                    im_art[cam] = None
+                unreadable_art[cam].set_text(
+                    f"Image unreadable\n{ims[im_idx].name}\n{type(exc).__name__}"
+                )
+                unreadable_art[cam].set_visible(True)
+                sc_art[cam].set_offsets(empty)
+                sc_art[cam].set_visible(False)
+                ax.set_title(f"{cam} | im {im_idx} | unreadable image")
+                continue
+
+            if im_art[cam] is None:
+                im_art[cam] = ax.imshow(
+                    img, cmap="gray" if getattr(img, "ndim", 3) == 2 else None
+                )
+            else:
+                im_art[cam].set_data(img)
+            unreadable_art[cam].set_visible(False)
+            sc_art[cam].set_visible(True)
 
             pts = cam_points.get(cam, {}).get(im_idx, empty)
             sc_art[cam].set_offsets(pts if len(pts) else empty)

@@ -1665,6 +1665,7 @@ def test_phase1_overlay_style_roundtrip_keeps_producer_frame_mapping_and_png(tmp
                 ImageDetection(keys=np.array([int(row[1])]),
                                image_points=row[-2:].reshape(1, 2)),
             )
+    original_detection_rows = detections.get_data().copy()
     artifact = tmp_path / "run-detections.pickle"
     save_detections(artifact, detections)
 
@@ -1740,6 +1741,7 @@ def test_phase1_overlay_style_roundtrip_keeps_producer_frame_mapping_and_png(tmp
             pixels = np.asarray(exported.convert("RGB"))
             assert exported.width > 0 and exported.height > 0
             assert np.count_nonzero(np.all(pixels == [255, 0, 255], axis=2)) > 0
+        assert np.array_equal(detections.get_data(), original_detection_rows)
     finally:
         tab.deleteLater()
 

@@ -214,6 +214,7 @@ class Phase3LockboxEditor(QDialog):
         self._o3d_label_ids: list[object] = []
         self._o3d_box_targets: dict[str, dict[str, np.ndarray]] = {}
         self._o3d_apply_requested = False
+        self._o3d_syncing_style_controls = False
         self._o3d_visual_settings = {
             'view_mode': 'Planetary',
             'box_picking': False,  # left-click = S (select), right-click = R (reference)
@@ -1432,8 +1433,25 @@ class Phase3LockboxEditor(QDialog):
     def _load_open3d_style_from_ui(self) -> None:
         """Reload the per-visual style and refresh the same scene used by PNG capture."""
         self._o3d_visual_settings = self._load_saved_open3d_style()
+        self._sync_open3d_style_controls()
         self._apply_open3d_visual_settings()
         self._refresh_open3d_native_view(reset_camera=False)
+
+    def _sync_open3d_style_controls(self) -> None:
+        """Reflect persisted style values in the controls without firing edits."""
+        self._o3d_syncing_style_controls = True
+        try:
+            settings = self._o3d_visual_settings
+            self._o3d_view_mode_combo.selected_text = settings['view_mode']
+            self._o3d_ground_cb.checked = bool(settings['show_ground'])
+            self._o3d_ground_combo.selected_text = settings['ground_plane']
+            self._o3d_skybox_cb.checked = bool(settings['show_skybox'])
+            self._o3d_axes_cb.checked = bool(settings['show_axes'])
+            self._o3d_lockbox_cb.checked = bool(settings['show_lockbox'])
+            self._o3d_background_combo.selected_text = settings['background']
+            self._o3d_lighting_combo.selected_text = settings['lighting']
+        finally:
+            self._o3d_syncing_style_controls = False
 
     def _refresh_open3d_native_view(self, reset_camera: bool = False) -> None:
         if self._o3d_scene_widget is None:
@@ -1541,6 +1559,8 @@ class Phase3LockboxEditor(QDialog):
         self.plane_edit.setText(self._o3d_plane_edit.text_value)
 
     def _on_o3d_view_mode_changed(self, text: str, index: int) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         del index
         self._o3d_visual_settings['view_mode'] = text
         self._apply_open3d_visual_settings()
@@ -1550,37 +1570,51 @@ class Phase3LockboxEditor(QDialog):
         self._o3d_visual_settings['box_picking'] = bool(checked)
 
     def _on_o3d_show_ground_changed(self, checked: bool) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         self._o3d_visual_settings['show_ground'] = bool(checked)
         self._apply_open3d_visual_settings()
         self._o3d_window.post_redraw()
 
     def _on_o3d_ground_plane_changed(self, text: str, index: int) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         del index
         self._o3d_visual_settings['ground_plane'] = text
         self._apply_open3d_visual_settings()
         self._o3d_window.post_redraw()
 
     def _on_o3d_show_skybox_changed(self, checked: bool) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         self._o3d_visual_settings['show_skybox'] = bool(checked)
         self._apply_open3d_visual_settings()
         self._o3d_window.post_redraw()
 
     def _on_o3d_show_axes_changed(self, checked: bool) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         self._o3d_visual_settings['show_axes'] = bool(checked)
         self._apply_open3d_visual_settings()
         self._o3d_window.post_redraw()
 
     def _on_o3d_show_lockbox_changed(self, checked: bool) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         self._o3d_visual_settings['show_lockbox'] = bool(checked)
         self._refresh_open3d_native_view()
 
     def _on_o3d_background_changed(self, text: str, index: int) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         del index
         self._o3d_visual_settings['background'] = text
         self._apply_open3d_visual_settings()
         self._o3d_window.post_redraw()
 
     def _on_o3d_lighting_changed(self, text: str, index: int) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         del index
         self._o3d_visual_settings['lighting'] = text
         self._apply_open3d_visual_settings()

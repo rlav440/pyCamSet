@@ -220,3 +220,152 @@ def test_phase3_open3d_style_round_trip_and_fail_closed(tmp_path, monkeypatch):
     document["style"]["point_size"] = 9.0
     style_path.write_text(json.dumps(document), encoding="utf-8")
     assert editor._load_saved_open3d_style()["background"] == "Dark calibration"
+
+
+def test_phase3_load_saved_open3d_style_syncs_controls_without_edit_callbacks(tmp_path, monkeypatch):
+    from pyCamSet.gui import phase_3_lockbox_editor as lockbox_editor
+    from pyCamSet.gui.phase_3_lockbox_editor import Phase3LockboxEditor
+
+    class Control:
+        """Small widget double that emits callbacks for programmatic changes."""
+
+        def __init__(self, value, selection=False):
+            self._value = value
+            self._callback = None
+            self._selection = selection
+
+        @property
+        def selected_text(self):
+            return self._value
+
+        @selected_text.setter
+        def selected_text(self, value):
+            self._value = value
+            if self._selection and self._callback:
+                self._callback(value, 0)
+
+        @property
+        def checked(self):
+            return self._value
+
+        @checked.setter
+        def checked(self, value):
+            self._value = value
+            if not self._selection and self._callback:
+                self._callback(value)
+
+    class Scene:
+        """Capture renderer calls made by the actual Open3D style applier."""
+
+        def __init__(self):
+            self.calls = {}
+
+        def set_background(self, value):
+            self.calls["background"] = value
+
+        def show_skybox(self, value):
+            self.calls["skybox"] = value
+
+        def show_ground_plane(self, enabled, plane):
+            self.calls["ground"] = (enabled, plane)
+
+        def show_axes(self, value):
+            self.calls["axes"] = value
+
+        def set_lighting(self, profile, direction):
+            self.calls["lighting"] = profile
+
+    class SceneWidget:
+        def __init__(self):
+            self.scene = Scene()
+
+        def set_view_controls(self, value):
+            self.scene.calls["view_mode"] = value
+
+    monkeypatch.setattr(lockbox_editor, "_o3d_rendering", SimpleNamespace(
+        Scene=SimpleNamespace(GroundPlane=SimpleNamespace(XZ="xz", XY="xy", YZ="yz")),
+        Open3DScene=SimpleNamespace(LightingProfile=SimpleNamespace(
+            MED_SHADOWS="medium", SOFT_SHADOWS="soft", HARD_SHADOWS="hard",
+            DARK_SHADOWS="dark", NO_SHADOWS="none")),
+    ))
+    monkeypatch.setattr(lockbox_editor, "_o3d_gui", SimpleNamespace(
+        SceneWidget=SimpleNamespace(Controls=SimpleNamespace(
+            ROTATE_CAMERA_SPHERE="planetary", ROTATE_CAMERA="arcball", FLY="fly",
+            ROTATE_MODEL="model", ROTATE_SUN="sun", ROTATE_IBL="environment")),
+    ))
+
+    editor = Phase3LockboxEditor.__new__(Phase3LockboxEditor)
+    saved = {
+        "view_mode": "Arcball", "box_picking": True, "show_skybox": True,
+        "show_ground": False, "ground_plane": "YZ sideplane", "show_axes": False,
+        "background": "Light studio", "lighting": "No shadows", "show_lockbox": True,
+    }
+    editor._o3d_visual_settings = dict(saved)
+    style_path = tmp_path / "visual-styles" / "open3d-style.json"
+    monkeypatch.setattr(editor, "_open3d_style_path", lambda: style_path)
+    monkeypatch.setattr(editor, "_set_open3d_export_status", lambda _message: None)
+    editor._save_open3d_style()
+
+    callbacks = {
+        "_o3d_view_mode_combo": "_on_o3d_view_mode_changed",
+        "_o3d_ground_combo": "_on_o3d_ground_plane_changed",
+        "_o3d_background_combo": "_on_o3d_background_changed",
+        "_o3d_lighting_combo": "_on_o3d_lighting_changed",
+        "_o3d_ground_cb": "_on_o3d_show_ground_changed",
+        "_o3d_skybox_cb": "_on_o3d_show_skybox_changed",
+        "_o3d_axes_cb": "_on_o3d_show_axes_changed",
+        "_o3d_lockbox_cb": "_on_o3d_show_lockbox_changed",
+    }
+    controls = {}
+    for name, callback_name in callbacks.items():
+        selection = name.endswith("_combo")
+        initial = "stale" if selection else not saved[{
+            "_o3d_ground_cb": "show_ground", "_o3d_skybox_cb": "show_skybox",
+            "_o3d_axes_cb": "show_axes", "_o3d_lockbox_cb": "show_lockbox",
+        }[name]]
+        control = Control(initial, selection=selection)
+        control._callback = getattr(editor, callback_name)
+        controls[name] = control
+        setattr(editor, name, control)
+    editor._o3d_pick_cb = Control(False)
+    editor._o3d_scene_widget = SceneWidget()
+    editor._o3d_syncing_style_controls = False
+    editor._refresh_open3d_native_view = lambda reset_camera=False: None
+    editor._o3d_visual_settings["box_picking"] = False
+    editor.states = {"camera": object()}
+    editor.working_camset = object()
+    states_before = editor.states
+    camset_before = editor.working_camset
+
+    editor._o3d_visual_settings.update({
+        "view_mode": "Fly", "show_skybox": False, "show_ground": True,
+        "ground_plane": "XY backplane", "show_axes": True,
+        "background": "Dark calibration", "lighting": "Hard shadows",
+        "show_lockbox": False,
+    })
+    before_non_style = editor._o3d_visual_settings["box_picking"]
+    editor._load_open3d_style_from_ui()
+
+    assert {key: editor._o3d_visual_settings[key] for key in saved if key != "box_picking"} == {
+        key: value for key, value in saved.items() if key != "box_picking"
+    }
+    assert controls["_o3d_view_mode_combo"].selected_text == saved["view_mode"]
+    assert controls["_o3d_ground_combo"].selected_text == saved["ground_plane"]
+    assert controls["_o3d_background_combo"].selected_text == saved["background"]
+    assert controls["_o3d_lighting_combo"].selected_text == saved["lighting"]
+    assert controls["_o3d_ground_cb"].checked is saved["show_ground"]
+    assert controls["_o3d_skybox_cb"].checked is saved["show_skybox"]
+    assert controls["_o3d_axes_cb"].checked is saved["show_axes"]
+    assert controls["_o3d_lockbox_cb"].checked is saved["show_lockbox"]
+    assert editor._o3d_pick_cb.checked is False
+    assert editor._o3d_visual_settings["box_picking"] == before_non_style
+    assert editor.states is states_before
+    assert editor.working_camset is camset_before
+    assert editor._o3d_syncing_style_controls is False
+    assert editor._o3d_scene_widget.scene.calls["background"] == [0.82, 0.84, 0.88, 1.0]
+    assert editor._o3d_scene_widget.scene.calls["skybox"] is True
+    assert editor._o3d_scene_widget.scene.calls["ground"][0] is False
+    assert editor._o3d_scene_widget.scene.calls["ground"][1] == "yz"
+    assert editor._o3d_scene_widget.scene.calls["axes"] is False
+    assert editor._o3d_scene_widget.scene.calls["lighting"] == "none"
+    assert editor._o3d_scene_widget.scene.calls["view_mode"] == "arcball"

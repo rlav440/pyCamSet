@@ -7,6 +7,10 @@ hover states, underlined tabs and slim scrollbars.  Values that failed this
 module's stricter contrast gate (disabled text, white text on green or amber
 fills) were darkened rather than the gate relaxed.
 
+Qt is imported only inside the functions that drive widgets, so the tokens
+and the Matplotlib theming also serve processes without a GUI toolkit, such as
+the out-of-process viewers on a lean install.
+
 Three layers are applied in a fixed order by :func:`apply_theme`: the Fusion
 widget style (Qt's flat, cross-platform style, which renders stylesheet
 colours exactly as declared instead of through a native bitmap skin), then a
@@ -17,7 +21,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from weakref import WeakSet
 
-from PySide6.QtGui import QColor, QFont, QPalette
 
 THEME_TOKENS: dict[str, dict[str, str]] = {
     "Light": {
@@ -187,7 +190,7 @@ _INDICATOR_ASSET_VERSION = 2
 def _paint_indicator(kind: str, colour: str):
     """Paint one indicator image (chevron, tick or dot) at 4x display size."""
     from PySide6.QtCore import QPointF, Qt
-    from PySide6.QtGui import QBrush, QImage, QPainter, QPen
+    from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen
 
     image = QImage(36, 36, QImage.Format.Format_ARGB32)
     image.fill(Qt.GlobalColor.transparent)
@@ -520,6 +523,8 @@ def set_text_role(label, role: str | None) -> None:
 
 def apply_theme(application, theme_name: str) -> None:
     """Apply the named theme to a QApplication without changing application data."""
+    from PySide6.QtGui import QColor, QFont, QPalette
+
     validate_theme_tokens(THEME_TOKENS)
     if theme_name not in THEME_TOKENS:
         raise ValueError(f"Unknown theme: {theme_name}")

@@ -10,12 +10,14 @@ window unless asked.
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
+from pyCamSet.utils import gui_safety
 from pyCamSet.utils.visualisation import finalise_figure, finalise_plotter
 
 
@@ -131,7 +133,10 @@ class TestFinalisePlotter:
 
         assert plotter.off_screen is True
 
-    def test_showing_leaves_the_window_on_screen(self, tmp_path):
+    def test_showing_leaves_the_window_on_screen(self, tmp_path, monkeypatch):
+        # The stand-in plotter opens no native window, so the macOS guard
+        # against windows inside a running Qt application is not under test.
+        monkeypatch.setattr(gui_safety, "qt_application_is_running", lambda: False)
         plotter = _Plotter()
 
         finalise_plotter(plotter, "reconstruction", show=True,
@@ -139,8 +144,9 @@ class TestFinalisePlotter:
 
         assert plotter.off_screen is False
 
-    def test_showing_binds_the_screenshot_key(self, tmp_path):
+    def test_showing_binds_the_screenshot_key(self, tmp_path, monkeypatch):
         """The reason to open a window is to find a view worth keeping."""
+        monkeypatch.setattr(gui_safety, "qt_application_is_running", lambda: False)
         plotter = _Plotter()
 
         finalise_plotter(plotter, "reconstruction", show=True, save_dir=tmp_path)
@@ -317,6 +323,11 @@ def test_a_cube_target_renders_a_scene(name, no_new_figures):
         # without aruco2.
         pytest.skip("aruco2 is not installed")
 
+    if sys.platform == "darwin" and gui_safety.qt_application_is_running():
+        # An earlier GUI test left a QApplication in this process, and a real
+        # VTK render beside it is the macOS crash the guard exists to refuse.
+        # Linux and Windows still run this, as does macOS without Qt loaded.
+        pytest.skip("a Qt application is running; macOS refuses VTK rendering beside it")
     scene = target_class(name)().plot(return_scene=True)
     scene.off_screen = True
     try:

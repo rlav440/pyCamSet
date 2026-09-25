@@ -212,6 +212,7 @@ def test_accepted_phase4_requires_a_phase4_output_artifact(tmp_path):
 def test_exporter_rejects_incomplete_or_unknown_phase4_alias(
     tmp_path, monkeypatch, phase4_status
 ):
+    pytest.importorskip("PySide6")  # the lean install has no GUI toolkit
     from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
 
     from pyCamSet.gui import export_calibration_tab as export_module
@@ -245,6 +246,7 @@ def test_exporter_rejects_incomplete_or_unknown_phase4_alias(
 def test_exporter_rejects_complete_phase4_without_output_artifact(
     tmp_path, monkeypatch
 ):
+    pytest.importorskip("PySide6")  # the lean install has no GUI toolkit
     from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
 
     from pyCamSet.gui import export_calibration_tab as export_module

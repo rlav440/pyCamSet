@@ -6,6 +6,7 @@ Future: Add native Open3D window capture only after a supported renderer API is 
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 def test_target_export_saves_figure_png(tmp_path):
@@ -69,6 +70,7 @@ def test_pyvista_png_initialises_actual_renderer_before_capture(tmp_path):
 
 
 def test_lockbox_csv_has_provenance_and_does_not_mutate_coordinates(tmp_path):
+    pytest.importorskip("PySide6")  # the lean install has no GUI toolkit
     from pyCamSet.gui.phase_3_lockbox_editor import Phase3LockboxEditor, _CameraRowState
 
     editor = Phase3LockboxEditor.__new__(Phase3LockboxEditor)
@@ -105,6 +107,7 @@ def test_lockbox_csv_has_provenance_and_does_not_mutate_coordinates(tmp_path):
 
 
 def test_lockbox_png_dialog_uses_explicit_filename_workflow(tmp_path, monkeypatch):
+    pytest.importorskip("PySide6")  # the lean install has no GUI toolkit
     import types
 
     import pyCamSet.gui.phase_3_lockbox_editor as editor_module
@@ -153,6 +156,7 @@ def test_lockbox_png_dialog_uses_explicit_filename_workflow(tmp_path, monkeypatc
 
 
 def test_open3d_lockbox_png_uses_scene_render_and_refuses_overwrite(tmp_path, monkeypatch):
+    pytest.importorskip("PySide6")  # the lean install has no GUI toolkit
     import types
 
     import pyCamSet.gui.phase_3_lockbox_editor as editor_module
@@ -206,6 +210,7 @@ def test_open3d_lockbox_png_uses_scene_render_and_refuses_overwrite(tmp_path, mo
 
 
 def test_create_target_window_surfaces_png_and_supported_geometry_actions():
+    pytest.importorskip("PySide6")  # the lean install has no GUI toolkit
     import inspect
     from pyCamSet.gui import create_target
 
@@ -217,6 +222,7 @@ def test_create_target_window_surfaces_png_and_supported_geometry_actions():
 
 
 def test_create_target_png_action_confirms_overwrite_and_uses_renderer(tmp_path, monkeypatch):
+    pytest.importorskip("PySide6")  # the lean install has no GUI toolkit
     import types
 
     from pyCamSet.gui import create_target

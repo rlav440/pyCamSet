@@ -55,15 +55,34 @@ def load_pickle(filename):
     return object_n
 
 
+#: Modules that have moved, by the path a saved file may still record.  A
+#: camset names the module of its target and handler; the target packages
+#: were flattened into modules, so every file saved before that names a path
+#: that no longer imports, and would load without its calibration.
+MOVED_MODULES = {
+    "pyCamSet.calibration_targets.ccube.target": "pyCamSet.calibration_targets.ccube",
+    "pyCamSet.calibration_targets.ccube2.target": "pyCamSet.calibration_targets.ccube2",
+    "pyCamSet.calibration_targets.charuco.target": "pyCamSet.calibration_targets.charuco",
+    "pyCamSet.calibration_targets.charuco2.target": "pyCamSet.calibration_targets.charuco2",
+    "pyCamSet.calibration_targets.puzzleboard.target": "pyCamSet.calibration_targets.puzzleboard",
+    "pyCamSet.calibration_targets.puzzleboard_cube.target":
+        "pyCamSet.calibration_targets.puzzleboard_cube",
+    "pyCamSet.cameras.zhang_calibration": "pyCamSet.calibration.zhang",
+    "pyCamSet.cameras.telecentric_calibration": "pyCamSet.calibration.telecentric",
+}
+
+
 def instance_obj(class_module, class_name, **kwargs):
     """
     A function to instantiate an object from a module and class name
 
-    :param class_module: The module name
+    :param class_module: The module name, as recorded; a module that has
+        since moved is found at its new path (see ``MOVED_MODULES``)
     :param class_name: The class name
     :param kwargs: The keyword arguments to pass to the class
     :return:
     """
+    class_module = MOVED_MODULES.get(class_module, class_module)
     class_var = getattr(importlib.import_module(class_module), class_name)
     return class_var(**kwargs)
 

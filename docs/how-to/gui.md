@@ -36,6 +36,11 @@ Neither theme nor presentation styles recolour plotted data, overlays, or
 scientific colormaps. Open3D retains its native interactive view and does not
 support these managed 3D style controls.
 
+The window's own title bar follows the theme as well. On Windows 11 it takes
+the theme's exact colours, so it reads as one strip with the menu bar; on
+Windows 10 and macOS it switches between the system's light and dark frames.
+On Linux the desktop's window manager draws the frame and decides.
+
 These presentation choices are remembered for the current operating-system
 user: the theme remains in Qt's existing per-user settings, while tooltip and
 terminal visibility, export presets, and saved visual styles live under Qt's
@@ -263,10 +268,30 @@ claims of compliance with a named journal. CSV exports include JSON metadata com
 for source/run, data kind, axes and units where those are known; raster screenshots
 are never converted into fabricated data.
 The
-style editor previews typography, figure/axes chrome, line and marker widths,
-legend/grid visibility, and stable-ID series colours. Detection montages also
-offer overlay marker-size and colour controls; the source image and detection
-coordinates are not edited. Styles are kept per visual in the application
+style editor (⚙) previews every change on the figure as you make it. It is
+arranged in groups:
+
+- **Suggested appearance**: a starting preset (see below).
+- **Text** and **Figure**: typeface, weight, size, text and title colours,
+  figure and plot backgrounds, the width of all lines and the size of all line
+  markers, and grid and legend visibility.
+- **Lines, thresholds, bars and points**: one row per element of the figure,
+  each with its own colour, width, line style, marker shape, fill (filled or
+  hollow) and size. Only the controls that apply to an element are enabled:
+  bars have no line style, for example. "Original" keeps the look the figure
+  was drawn with. Thresholds and reference lines are separate rows from data,
+  so a preset never recolours them unless you do.
+- **Detection markers** (detection montages): colour, shape, fill, size,
+  outline width and opacity. A hollow circle or square leaves the detected
+  corner visible inside it; plus, cross and point shapes are outlines only.
+- **Advanced** (collapsed): tick, axis-label and legend text colours, detection
+  outline colour and style, a single-series editor addressed by ID, and the
+  colour map of images that allow one.
+
+Every colour control opens a palette of named colours — neutrals, the
+colour-blind-safe Okabe–Ito set, and common journal colours — plus "Theme
+default" and **Custom colour… (exact RGB)** for a precise value. The source
+image and detection coordinates are never edited. Styles are kept per visual in the application
 configuration directory, separately from scientific run artefacts, and can be
 saved to or loaded from versioned JSON. Unknown or malformed style fields are
 rejected rather than partially applied.

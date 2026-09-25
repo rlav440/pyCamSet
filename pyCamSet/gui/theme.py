@@ -275,6 +275,9 @@ def _indicator_rules(t: Mapping[str, str]) -> str:
             image: url("{images['up_disabled']}"); }}
         QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{
             image: url("{images['down_disabled']}"); }}
+        QToolButton#colourPickerButton::menu-indicator {{ image: url("{images['down']}");
+            subcontrol-origin: padding; subcontrol-position: right center;
+            width: 9px; height: 9px; right: 8px; }}
         QCheckBox::indicator:checked {{ image: url("{images['tick']}"); }}
         QRadioButton::indicator:checked {{ image: url("{images['dot']}"); }}
     """
@@ -381,6 +384,17 @@ def _stylesheet(tokens: Mapping[str, str]) -> str:
         QTabBar QToolButton {{ background-color: {t['surface']}; border: 1px solid {t['border_strong']};
                                border-radius: 4px; margin: 2px 1px; }}
         QTabBar QToolButton:hover {{ background-color: {t['accent_tint']}; border-color: {t['accent']}; }}
+        /* Colour picker: an input-like swatch button. */
+        QToolButton#colourPickerButton {{ background-color: {t['surface']};
+            border: 1px solid {t['border_strong']}; border-radius: 6px;
+            padding: 3px 26px 3px 6px; text-align: left; }}
+        QToolButton#colourPickerButton:hover {{ border-color: {t['accent']}; }}
+        QToolButton#colourPickerButton:focus {{ border: 1.5px solid {t['focus']}; }}
+        QToolButton#colourPickerButton:disabled {{ background-color: {t['surface_alt']};
+            border-color: {t['border']}; color: {t['text_disabled']}; }}
+        QToolButton#colourSwatch {{ border: 1px solid transparent; border-radius: 4px; padding: 2px; }}
+        QToolButton#colourSwatch:hover, QToolButton#colourSwatch:focus {{
+            border-color: {t['accent']}; background-color: {t['accent_tint']}; }}
         QToolButton#allTabsButton {{ background-color: transparent; color: {t['text_muted']};
             border: 1px solid transparent; border-radius: 6px; padding: 4px 8px; margin: 0 0 3px 6px; }}
         QToolButton#allTabsButton:hover {{ background-color: {t['accent_tint']}; color: {t['accent_pressed']};
@@ -570,6 +584,10 @@ def apply_theme(application, theme_name: str) -> None:
     if application.styleSheet() != sheet:
         application.setStyleSheet(sheet)
     application.setProperty("pycamsetTheme", theme_name)
+    # The native title bar follows too: exact colours on Windows 11,
+    # light/dark elsewhere (see window_chrome).
+    from pyCamSet.gui.window_chrome import refresh_window_chrome
+    refresh_window_chrome(application, theme_name)
 
 
 def apply_matplotlib_theme(figure, theme_name: str | None = None) -> None:

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "pycamset.visual-style"
-VERSION = 5
+VERSION = 6
 # This text registry is the citation source of truth for suggested presets.
 # The 2025 Science guide was inspected via its 2026-07-30 Wayback PDF snapshot;
 # direct access to the publisher PDF returned 403 during verification.
@@ -69,6 +69,23 @@ PRESETS: dict[str, dict[str, Any]] = {
 DEFAULT_VISUAL_ID = "default:all-figures"
 _VISUAL_OVERRIDES = WeakKeyDictionary()
 _DETECTION_OVERLAY_BASELINES = WeakKeyDictionary()
+_ELEMENT_BASELINES = WeakKeyDictionary()
+
+#: Marker shapes offered for detections and scatter points, shared with the
+#: optical-mapping GUI's vocabulary.  "+", "x" and "." are drawn as strokes, so
+#: they have no fill; every other shape can be filled or hollow.
+MARKER_SHAPES = (("Circle", "o"), ("Square", "s"), ("Diamond", "D"), ("Triangle up", "^"),
+                 ("Triangle down", "v"), ("Plus", "+"), ("Cross", "x"), ("Point", "."))
+STROKE_MARKERS = frozenset({"+", "x", "."})
+LINE_STYLES = (("Solid", "-"), ("Dashed", "--"), ("Dash-dot", "-."), ("Dotted", ":"))
+
+#: Per-element controls: which keys each kind of element accepts.
+ELEMENT_KEYS = {
+    "line": {"colour", "line_width", "line_style", "marker", "size", "opacity"},
+    "reference": {"colour", "line_width", "line_style", "opacity"},
+    "bars": {"colour", "edge_colour", "line_width", "opacity"},
+    "points": {"colour", "edge_colour", "line_width", "marker", "size", "filled", "opacity"},
+}
 _LINE_COLOUR_BASELINES = WeakKeyDictionary()
 
 
@@ -97,6 +114,7 @@ class VisualStyle:
     overlay_line_width: float | None = None
     overlay_line_style: str | None = None
     overlay_opacity: float | None = None
+    overlay_filled: bool | None = None
     series_colours: dict[str, str] = field(default_factory=dict)
     series_styles: dict[str, dict[str, Any]] = field(default_factory=dict)
     colormap: str | None = None
@@ -132,6 +150,8 @@ class VisualStyle:
             raise ValueError("unsupported detection overlay marker")
         if self.overlay_line_style is not None and self.overlay_line_style not in {"-", "--", "-.", ":"}:
             raise ValueError("unsupported detection overlay line style")
+        if self.overlay_filled is not None and not isinstance(self.overlay_filled, bool):
+            raise ValueError("overlay_filled must be boolean or null")
         if self.overlay_opacity is not None and (
                 not isinstance(self.overlay_opacity, (int, float))
                 or isinstance(self.overlay_opacity, bool) or not 0 <= self.overlay_opacity <= 1):
@@ -148,7 +168,11 @@ class VisualStyle:
         for series_id, values in self.series_styles.items():
             if not isinstance(series_id, str) or not series_id or len(series_id) > 160 or not isinstance(values, dict):
                 raise ValueError("series style entries require stable IDs and objects")
-            if set(values) - {"line_width", "line_style", "marker", "colour"}:
+            # Element IDs carry their kind ("reference:0:#1", "bars:0:#1", ...);
+            # anything else is a data line, as before.
+            kind = series_id.split(":", 1)[0]
+            allowed = ELEMENT_KEYS.get(kind, ELEMENT_KEYS["line"])
+            if set(values) - allowed:
                 raise ValueError("unsupported per-series style control")
             if "line_width" in values and (not isinstance(values["line_width"], (int, float))
                     or isinstance(values["line_width"], bool) or not 0.2 <= values["line_width"] <= 12):
@@ -157,8 +181,17 @@ class VisualStyle:
                 raise ValueError("unsupported series line_style")
             if values.get("marker", "") not in {"", "o", "s", "^", "v", "D", "+", "x", "."}:
                 raise ValueError("unsupported series marker")
-            if "colour" in values:
-                _validate_colour(values["colour"], f"series_styles[{series_id!r}].colour")
+            if "size" in values and (not isinstance(values["size"], (int, float))
+                    or isinstance(values["size"], bool) or not 1 <= values["size"] <= 48):
+                raise ValueError("series size must be between 1 and 48")
+            if "opacity" in values and (not isinstance(values["opacity"], (int, float))
+                    or isinstance(values["opacity"], bool) or not 0 <= values["opacity"] <= 1):
+                raise ValueError("series opacity must be between 0 and 1")
+            if "filled" in values and not isinstance(values["filled"], bool):
+                raise ValueError("series filled must be true or false")
+            for key in ("colour", "edge_colour"):
+                if key in values:
+                    _validate_colour(values[key], f"series_styles[{series_id!r}].{key}")
         if self.colormap is not None and self.colormap not in {"viridis", "plasma", "inferno", "magma", "cividis", "coolwarm", "RdBu_r"}:
             raise ValueError("unsupported colormap")
         if self.suggested_preset is not None and self.suggested_preset not in PRESETS:
@@ -207,7 +240,7 @@ def style_from_json(text: str, expected_visual_id: str | None = None) -> VisualS
         raise ValueError(f"Invalid style JSON: {exc}") from exc
     if not isinstance(document, dict) or set(document) != {"schema", "version", "visual_id", "style"}:
         raise ValueError("Style document has missing or unknown top-level keys")
-    if document["schema"] != SCHEMA or type(document["version"]) is not int or document["version"] not in {1, 2, 3, 4, VERSION}:
+    if document["schema"] != SCHEMA or type(document["version"]) is not int or document["version"] not in {1, 2, 3, 4, 5, VERSION}:
         raise ValueError("Unsupported style schema or version")
     if not isinstance(document["visual_id"], str) or not document["visual_id"]:
         raise ValueError("visual_id must be a non-empty string")
@@ -233,11 +266,171 @@ def style_from_json(text: str, expected_visual_id: str | None = None) -> VisualS
                   "overlay_line_style": None, "overlay_opacity": None}
     if document["version"] < 5:
         values = {**values, "series_palette": None}
+    if document["version"] < 6:
+        values = {**values, "overlay_filled": None}
     if set(values) != set(VisualStyle.__dataclass_fields__):
         raise ValueError("Style has missing or unknown keys")
     style = VisualStyle(**values)
     style.validate()
     return style
+
+
+def _plain_label(artist: Any) -> str | None:
+    """A user-given label, or None for Matplotlib's automatic '_child0' names."""
+    label = artist.get_label() if hasattr(artist, "get_label") else None
+    return label if label and not str(label).startswith("_") else None
+
+
+def _axes_elements(axes: Any, axes_index: int) -> list[tuple[str, str, str, Any]]:
+    """List one axes' styleable elements as (id, kind, display name, artist).
+
+    IDs are stable across sessions for the same figure: a producer's gid if it
+    set one, else the element's label, else its position among unlabelled
+    elements of its kind.  Data lines keep the "line:<axes>:<label>" IDs that
+    earlier style files used.
+    """
+    from matplotlib.container import BarContainer
+    from matplotlib.collections import PathCollection
+
+    elements = []
+    counters = {"line": 0, "reference": 0, "bars": 0, "points": 0}
+
+    def element_id(kind, artist, label):
+        counters[kind] += 1
+        gid = artist.get_gid() if hasattr(artist, "get_gid") else None
+        if gid:
+            return gid
+        return f"{kind}:{axes_index}:{label}" if label else f"{kind}:{axes_index}:#{counters[kind]}"
+
+    for line in axes.lines:
+        label = _plain_label(line)
+        kind = "line" if line.get_transform() is axes.transData else "reference"
+        name = label or ("Line" if kind == "line" else "Reference line")
+        elements.append((element_id(kind, line, label), kind, name, line))
+    for container in axes.containers:
+        if isinstance(container, BarContainer):
+            label = _plain_label(container)
+            elements.append((element_id("bars", container, label), "bars", label or "Bars", container))
+    for collection in axes.collections:
+        if isinstance(collection, PathCollection) and not (collection.get_gid() or "").startswith("detection-overlay:"):
+            label = _plain_label(collection)
+            elements.append((element_id("points", collection, label), "points", label or "Points", collection))
+    # Unlabelled elements of one kind get numbered names so rows are distinct.
+    seen: dict[str, int] = {}
+    named = []
+    for element_id_, kind, name, artist in elements:
+        seen[name] = seen.get(name, 0) + 1
+        named.append((element_id_, kind, name, artist))
+    totals = {name: count for name, count in seen.items()}
+    running: dict[str, int] = {}
+    result = []
+    for element_id_, kind, name, artist in named:
+        if totals[name] > 1:
+            running[name] = running.get(name, 0) + 1
+            name = f"{name} {running[name]}"
+        result.append((element_id_, kind, name, artist))
+    return result
+
+
+def styleable_elements(figure: Any) -> list[dict[str, Any]]:
+    """Every element a user can restyle, for the style dialog's element table."""
+    rows = []
+    multiple_axes = len(figure.axes) > 1
+    for axes_index, axes in enumerate(figure.axes):
+        for element_id, kind, name, artist in _axes_elements(axes, axes_index):
+            title = axes.get_title() if multiple_axes else ""
+            rows.append({"id": element_id, "kind": kind, "artist": artist,
+                         "name": f"{name} ({title})" if title else name})
+    if any((collection.get_gid() or "").startswith("detection-overlay:")
+           for axes in figure.axes for collection in axes.collections):
+        rows.append({"id": "detections", "kind": "detections", "artist": None,
+                     "name": "Detection markers"})
+    return rows
+
+
+def _element_baseline(figure: Any, artist: Any) -> dict[str, Any]:
+    """Capture an element's producer appearance once, for restoring later."""
+    store = _ELEMENT_BASELINES.setdefault(figure, WeakKeyDictionary())
+    key = artist.patches[0] if hasattr(artist, "patches") and artist.patches else artist
+    if key not in store:
+        if hasattr(artist, "patches"):
+            store[key] = {"patches": [(patch, patch.get_facecolor(), patch.get_edgecolor(),
+                                       patch.get_linewidth(), patch.get_alpha())
+                                      for patch in artist.patches]}
+        elif hasattr(artist, "get_sizes"):
+            store[key] = {"face": artist.get_facecolors().copy(), "edge": artist.get_edgecolors().copy(),
+                          "sizes": artist.get_sizes().copy(), "paths": artist.get_paths(),
+                          "linewidths": artist.get_linewidths().copy(), "alpha": artist.get_alpha()}
+        else:
+            store[key] = {"colour": artist.get_color(), "width": artist.get_linewidth(),
+                          "style": artist.get_linestyle(), "alpha": artist.get_alpha(),
+                          "marker_size": artist.get_markersize()}
+    return store[key]
+
+
+def _marker_path(marker: str):
+    from matplotlib.markers import MarkerStyle
+
+    shape = MarkerStyle(marker)
+    return shape.get_path().transformed(shape.get_transform())
+
+
+def _style_markers(collection: Any, *, colour: str | None, edge: str | None, filled: bool | None,
+                   marker: str | None, size: float | None, width: float | None,
+                   alpha: float | None, baseline: dict[str, Any],
+                   default_face: Any, default_edge: Any) -> None:
+    """Style a marker collection; hollow and stroke shapes are outlined in the main colour."""
+    collection.set_paths([_marker_path(marker)] if marker else baseline["paths"])
+    collection.set_sizes([size ** 2] if size is not None else baseline["sizes"])
+    face = colour or default_face
+    stroke = marker in STROKE_MARKERS
+    if stroke or filled is False:
+        # No fill: the outline carries the colour, and must be wide enough to see.
+        collection.set_facecolor("none")
+        collection.set_edgecolor(colour or (default_face if isinstance(default_face, str) else baseline["face"]))
+        collection.set_linewidths([width] if width is not None
+                                  else [max(1.2, float(max(baseline["linewidths"], default=0.0)))])
+    else:
+        collection.set_facecolor(face)
+        collection.set_edgecolor(edge or default_edge)
+        collection.set_linewidths([width] if width is not None else baseline["linewidths"])
+    collection.set_alpha(alpha if alpha is not None else baseline["alpha"])
+
+
+def _style_elements(figure: Any, axes: Any, axes_index: int, style: VisualStyle) -> None:
+    """Apply per-element settings to reference lines, bars and scatter points.
+
+    An element without settings is returned to its producer's appearance, so
+    clearing a setting in the dialog really removes it.
+    """
+    for element_id, kind, _name, artist in _axes_elements(axes, axes_index):
+        if kind == "line":
+            continue  # data lines are styled with the series controls
+        settings = style.series_styles.get(element_id, {})
+        if kind == "reference" and not settings:
+            # Older style files addressed labelled reference lines as data lines.
+            settings = style.series_styles.get(f"line:{axes_index}:{_plain_label(artist)}", {})
+        baseline = _element_baseline(figure, artist)
+        if kind == "reference":
+            artist.set_color(settings.get("colour", baseline["colour"]))
+            if "line_width" in settings:
+                artist.set_linewidth(settings["line_width"])
+            elif style.line_width is None:
+                artist.set_linewidth(baseline["width"])
+            artist.set_linestyle(settings.get("line_style", baseline["style"]))
+            artist.set_alpha(settings.get("opacity", baseline["alpha"]))
+        elif kind == "bars":
+            for patch, face, edge, width, alpha in baseline["patches"]:
+                patch.set_facecolor(settings.get("colour", face))
+                patch.set_edgecolor(settings.get("edge_colour", edge))
+                patch.set_linewidth(settings.get("line_width", width))
+                patch.set_alpha(settings.get("opacity", alpha))
+        elif kind == "points":
+            _style_markers(artist, colour=settings.get("colour"), edge=settings.get("edge_colour"),
+                           filled=settings.get("filled"), marker=settings.get("marker") or None,
+                           size=settings.get("size"), width=settings.get("line_width"),
+                           alpha=settings.get("opacity"), baseline=baseline,
+                           default_face=baseline["face"], default_edge=baseline["edge"])
 
 
 def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light") -> None:
@@ -271,6 +464,8 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
     figure.set_facecolor(style.figure_background or tokens["surface"])
     for axes_index, axes in enumerate(figure.axes):
         data_line_index = 0
+        line_ids = {artist: element_id for element_id, kind, _name, artist
+                    in _axes_elements(axes, axes_index) if kind == "line"}
         axes.set_facecolor(style.axes_background or tokens["surface"])
         axes.title.set_color(style.text_colour or tokens["text"])
         if style.title_colour is not None:
@@ -291,9 +486,7 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
                 line.set_linewidth(style.line_width)
             if style.marker_size is not None:
                 line.set_markersize(style.marker_size)
-            series_id = line.get_gid()
-            if series_id is None and line.get_label() and not line.get_label().startswith("_"):
-                series_id = f"line:{axes_index}:{line.get_label()}"
+            series_id = line_ids.get(line)
             # A preset palette recolours data series only: lines drawn in data
             # coordinates.  Reference lines (axhline/axvline thresholds use a
             # blended transform) keep their meaning-carrying colours, and
@@ -315,34 +508,24 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
                 line.set_marker(series["marker"] or "None")
             if "colour" in series:
                 line.set_color(series["colour"])
+            if "size" in series:
+                line.set_markersize(series["size"])
+            if series_id is not None and line.get_transform() is axes.transData:
+                line.set_alpha(series.get("opacity", _element_baseline(figure, line)["alpha"]))
+        _style_elements(figure, axes, axes_index, style)
         # Detection overlays opt in through a stable gid and are styled without
         # touching the underlying image or detection coordinate arrays.
         for collection in axes.collections:
             gid = collection.get_gid() or ""
             if gid.startswith("detection-overlay:"):
-                baseline = overlay_baselines[collection]
-                if hasattr(collection, "set_sizes"):
-                    collection.set_sizes([style.overlay_size ** 2] if style.overlay_size is not None
-                                         else baseline["sizes"])
-                if hasattr(collection, "set_facecolor"):
-                    collection.set_facecolor(style.overlay_colour or tokens["accent"])
-                if hasattr(collection, "set_edgecolor"):
-                    collection.set_edgecolor(style.overlay_edge_colour or tokens["border_strong"])
-                if hasattr(collection, "set_paths"):
-                    if style.overlay_marker is None:
-                        collection.set_paths(baseline["paths"])
-                    else:
-                        from matplotlib.markers import MarkerStyle
-                        marker = MarkerStyle(style.overlay_marker)
-                        collection.set_paths([marker.get_path().transformed(marker.get_transform())])
-                if hasattr(collection, "set_linewidths"):
-                    collection.set_linewidths([style.overlay_line_width]
-                                              if style.overlay_line_width is not None
-                                              else baseline["linewidths"])
-                if hasattr(collection, "set_linestyle"):
-                    collection.set_linestyles(style.overlay_line_style or baseline["linestyles"])
-                collection.set_alpha(style.overlay_opacity if style.overlay_opacity is not None
-                                     else baseline["alpha"])
+                baseline = {**overlay_baselines[collection],
+                            "face": collection.get_facecolors().copy()}
+                _style_markers(collection, colour=style.overlay_colour, edge=style.overlay_edge_colour,
+                               filled=style.overlay_filled, marker=style.overlay_marker,
+                               size=style.overlay_size, width=style.overlay_line_width,
+                               alpha=style.overlay_opacity, baseline=baseline,
+                               default_face=tokens["accent"], default_edge=tokens["border_strong"])
+                collection.set_linestyles(style.overlay_line_style or baseline["linestyles"])
         legend = axes.get_legend()
         if legend is not None:
             _sync_legend_swatches(axes, legend)
@@ -415,8 +598,12 @@ def _capture_presentation_state(figure: Any) -> dict[str, Any]:
             "axes_object": axes,
             "axes": axes.get_facecolor(),
             "lines": [(line, line.get_linewidth(), line.get_markersize(), line.get_color(),
-                       line.get_linestyle(), line.get_marker())
+                       line.get_linestyle(), line.get_marker(), line.get_alpha())
                       for line in axes.lines],
+            "patches": [(patch, patch.get_facecolor(), patch.get_edgecolor(),
+                         patch.get_linewidth(), patch.get_alpha())
+                        for container in axes.containers if hasattr(container, "patches")
+                        for patch in container.patches],
             "images": [(image, image.get_cmap().copy()) for image in axes.images],
             "collections": [(collection,
                              collection.get_sizes().copy() if hasattr(collection, "get_sizes") else None,
@@ -427,7 +614,7 @@ def _capture_presentation_state(figure: Any) -> dict[str, Any]:
                              collection.get_linestyles() if hasattr(collection, "get_linestyles") else None,
                              collection.get_alpha() if hasattr(collection, "get_alpha") else None)
                             for collection in axes.collections
-                            if (collection.get_gid() or "").startswith("detection-overlay:")],
+                            if hasattr(collection, "get_sizes")],
             "grid": [(gridline, gridline.get_visible())
                      for gridline in axes.xaxis.get_gridlines() + axes.yaxis.get_gridlines()],
             "legend": axes.get_legend(),
@@ -446,12 +633,18 @@ def _restore_presentation_state(figure: Any, state: dict[str, Any]) -> None:
     for axes_state in state["axes"]:
         axes = axes_state["axes_object"]
         axes.set_facecolor(axes_state["axes"])
-        for line, width, marker_size, colour, linestyle, marker in axes_state["lines"]:
+        for line, width, marker_size, colour, linestyle, marker, alpha in axes_state["lines"]:
             line.set_linewidth(width)
             line.set_markersize(marker_size)
             line.set_color(colour)
             line.set_linestyle(linestyle)
             line.set_marker(marker)
+            line.set_alpha(alpha)
+        for patch, face, edge, width, alpha in axes_state["patches"]:
+            patch.set_facecolor(face)
+            patch.set_edgecolor(edge)
+            patch.set_linewidth(width)
+            patch.set_alpha(alpha)
         for image, cmap in axes_state["images"]:
             image.set_cmap(cmap)
         for collection, sizes, face, edge, paths, linewidths, linestyles, alpha in axes_state["collections"]:
@@ -581,11 +774,14 @@ class VisualStyleDialog:
 
     def __new__(cls, figure, visual_id: str, style: VisualStyle, theme_name: str,
                 parent=None, on_preview=None):
+        from PySide6.QtCore import Qt
         from PySide6.QtWidgets import (
             QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-            QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-            QScrollArea, QVBoxLayout, QWidget,
+            QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
+            QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QToolButton,
+            QVBoxLayout, QWidget,
         )
+        from pyCamSet.gui.colour_picker import ColourPicker
         from pyCamSet.gui.figure_fonts import available_fonts, resolve_figure_font
 
         class _Dialog(QDialog):
@@ -604,8 +800,29 @@ class VisualStyleDialog:
                 root = QVBoxLayout(self)
                 content = QWidget(self)
                 content_layout = QVBoxLayout(content)
-                form = QFormLayout()
-                content_layout.addLayout(form)
+                content_layout.setSpacing(10)
+
+                def group(title, host=None):
+                    box = QGroupBox(title, content)
+                    box_form = QFormLayout(box)
+                    box_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+                    (host or content_layout).addWidget(box)
+                    return box, box_form
+
+                # ---- Suggested appearance (first: the quickest start) ----
+                _preset_box, preset_form = group("Suggested appearance")
+                self.preset = QComboBox()
+                self.preset.addItem("Custom", None)
+                for key, preset in PRESETS.items():
+                    self.preset.addItem(preset["label"], key)
+                self.preset.setCurrentIndex(max(0, self.preset.findData(style.suggested_preset)))
+                self.preset.setToolTip("A starting point you can edit; not a claim of journal compliance.")
+                preset_form.addRow("Preset:", self.preset)
+
+                # ---- Text and Figure, side by side as in the optical-mapping GUI ----
+                pair = QHBoxLayout()
+                content_layout.addLayout(pair)
+                _text_box, text_form = group("Text", pair)
                 self.font = QComboBox()
                 # Only open-source families with a recorded licence that can
                 # render here; an older style's other family shows as the
@@ -614,62 +831,149 @@ class VisualStyleDialog:
                 self.font.setCurrentText(resolve_figure_font(style.font_family) or "Sans Serif")
                 self.font.setToolTip("Open-source typefaces with a recorded licence; "
                                      "DejaVu families are bundled and always available.")
-                form.addRow("Typeface:", self.font)
+                text_form.addRow("Typeface:", self.font)
                 self.font_weight = QComboBox()
                 self.font_weight.addItems(["Theme default", "Normal", "Bold"])
                 self.font_weight.setCurrentIndex({None: 0, "normal": 1, "bold": 2}[style.font_weight])
-                form.addRow("Font weight:", self.font_weight)
+                text_form.addRow("Weight:", self.font_weight)
                 self.font_size = _number(QDoubleSpinBox, style.font_size, 10, 1, 48)
-                form.addRow("Typography size (pt):", self.font_size)
+                self.font_size.setSuffix(" pt")
+                text_form.addRow("Size:", self.font_size)
+                self.text_colour = ColourPicker(style.text_colour)
+                text_form.addRow("Text colour:", self.text_colour)
+                self.title_colour = ColourPicker(style.title_colour)
+                text_form.addRow("Title colour:", self.title_colour)
+
+                # ---- Figure ----
+                _figure_box, figure_form = group("Figure", pair)
+                self.figure_background = ColourPicker(style.figure_background)
+                figure_form.addRow("Figure background:", self.figure_background)
+                self.axes_background = ColourPicker(style.axes_background)
+                figure_form.addRow("Plot background:", self.axes_background)
                 self.line_width = _number(QDoubleSpinBox, style.line_width, 1.5, 0.2, 12)
-                form.addRow("Line width:", self.line_width)
+                self.line_width.setToolTip("Width of every line; a row in the table below can override one line.")
+                figure_form.addRow("All line widths:", self.line_width)
                 self.marker_size = _number(QDoubleSpinBox, style.marker_size, 6, 1, 24)
-                form.addRow("Marker size:", self.marker_size)
-                self.text_colour = _colour(QLineEdit, style.text_colour)
-                form.addRow("General text colour (#RRGGBB):", self.text_colour)
-                self.title_colour = _colour(QLineEdit, style.title_colour)
-                form.addRow("Title colour:", self.title_colour)
-                self.tick_colour = _colour(QLineEdit, style.tick_colour)
-                form.addRow("Tick colour:", self.tick_colour)
-                self.axes_colour = _colour(QLineEdit, style.axes_colour)
-                form.addRow("Axes-label colour:", self.axes_colour)
-                self.legend_colour = _colour(QLineEdit, style.legend_colour)
-                form.addRow("Legend text colour:", self.legend_colour)
-                self.figure_background = _colour(QLineEdit, style.figure_background)
-                form.addRow("Figure background:", self.figure_background)
-                self.axes_background = _colour(QLineEdit, style.axes_background)
-                form.addRow("Axes background:", self.axes_background)
-                self.overlay_size = _number(QDoubleSpinBox, style.overlay_size, 10, 1, 24)
-                self.overlay_size.setAccessibleName("Detection marker size")
-                form.addRow("Detection marker size:", self.overlay_size)
+                figure_form.addRow("All line markers:", self.marker_size)
+                self.grid = QCheckBox("Override grid")
+                self.grid.setChecked(style.grid_visible is not None)
+                self.grid_value = QCheckBox("Show grid")
+                self.grid_value.setChecked(bool(style.grid_visible))
+                figure_form.addRow(self.grid, self.grid_value)
+                self.legend = QCheckBox("Override legend")
+                self.legend.setChecked(style.legend_visible is not None)
+                self.legend_value = QCheckBox("Show legend")
+                self.legend_value.setChecked(bool(style.legend_visible))
+                figure_form.addRow(self.legend, self.legend_value)
+
+                # ---- Every element: lines, thresholds, bars, points ----
+                self.elements = [row for row in styleable_elements(figure) if row["kind"] != "detections"]
+                self.element_table = QTableWidget(len(self.elements), 7, content)
+                self.element_table.setObjectName("elementTable")
+                self.element_table.setHorizontalHeaderLabels(
+                    ["Element", "Colour", "Width", "Line style", "Shape", "Fill", "Size"])
+                self.element_table.verticalHeader().setVisible(False)
+                self.element_table.setAccessibleName("Figure elements and their styles")
+                header = self.element_table.horizontalHeader()
+                header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+                header.setMinimumSectionSize(60)
+                for column in range(1, 7):
+                    header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+                self.element_table.setWordWrap(False)
+                self._element_controls = []
+                for row, element in enumerate(self.elements):
+                    self._element_controls.append(self._build_element_row(row, element))
+                self.element_table.resizeColumnsToContents()
+                self.element_table.resizeRowsToContents()
+                rows_height = sum(self.element_table.rowHeight(row) for row in range(len(self.elements)))
+                # Show every row without an inner scroll bar, up to about eight rows.
+                table_height = min(self.element_table.horizontalHeader().sizeHint().height()
+                                   + rows_height + 6, 360)
+                self.element_table.setMinimumHeight(table_height)
+                self.element_table.setMaximumHeight(table_height)
+                elements_box = QGroupBox("Lines, thresholds, bars and points", content)
+                elements_layout = QVBoxLayout(elements_box)
+                if self.elements:
+                    hint = QLabel("“Original” keeps the look the figure was drawn with. "
+                                  "Thresholds and reference lines are listed separately from data, "
+                                  "so a preset never recolours them unless you do.")
+                    hint.setWordWrap(True)
+                    hint.setProperty("textRole", "muted")
+                    elements_layout.addWidget(hint)
+                    elements_layout.addWidget(self.element_table)
+                else:
+                    self.element_table.hide()
+                    elements_layout.addWidget(QLabel("This figure has no lines, bars or points to restyle."))
+                content_layout.addWidget(elements_box)
+
+                # ---- Detection markers (only where the figure has them) ----
+                self.detections_box, detection_form = group("Detection markers")
+                # Short values: controls keep their natural width, not the dialog's.
+                detection_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+                self.overlay_colour = ColourPicker(style.overlay_colour)
+                self.overlay_colour.setAccessibleName("Detection marker colour")
+                detection_form.addRow("Colour:", self.overlay_colour)
                 self.overlay_marker = QComboBox()
                 self.overlay_marker.addItem("Theme default", "")
-                for label, marker in (("Circle", "o"), ("Square", "s"), ("Triangle up", "^"),
-                                      ("Triangle down", "v"), ("Diamond", "D"),
-                                      ("Plus", "+"), ("Cross", "x"), ("Point", ".")):
+                for label, marker in MARKER_SHAPES:
                     self.overlay_marker.addItem(label, marker)
                 self.overlay_marker.setCurrentIndex(max(0, self.overlay_marker.findData(style.overlay_marker or "")))
                 self.overlay_marker.setAccessibleName("Detection marker shape")
-                form.addRow("Detection marker shape:", self.overlay_marker)
-                self.overlay_colour = _colour(QLineEdit, style.overlay_colour)
-                self.overlay_colour.setAccessibleName("Detection marker fill colour")
-                form.addRow("Detection marker colour:", self.overlay_colour)
-                self.overlay_edge_colour = _colour(QLineEdit, style.overlay_edge_colour)
-                self.overlay_edge_colour.setAccessibleName("Detection marker edge colour")
-                form.addRow("Detection marker edge colour:", self.overlay_edge_colour)
+                detection_form.addRow("Shape:", self.overlay_marker)
+                self.overlay_fill = QComboBox()
+                self.overlay_fill.addItems(["Theme default", "Filled", "Hollow (outline only)"])
+                self.overlay_fill.setCurrentIndex({None: 0, True: 1, False: 2}[style.overlay_filled])
+                self.overlay_fill.setAccessibleName("Detection marker fill")
+                self.overlay_fill.setToolTip("Hollow markers leave the corner visible inside them. "
+                                             "Plus, cross and point shapes are always outlines.")
+                detection_form.addRow("Fill:", self.overlay_fill)
+                for control in (self.overlay_marker, self.overlay_fill):
+                    control.setMinimumWidth(220)
+                self.overlay_size = _number(QDoubleSpinBox, style.overlay_size, 10, 1, 24)
+                self.overlay_size.setAccessibleName("Detection marker size")
+                detection_form.addRow("Size:", self.overlay_size)
                 self.overlay_line_width = _number(QDoubleSpinBox, style.overlay_line_width, 0.4, 0.2, 12)
                 self.overlay_line_width.setAccessibleName("Detection marker edge width")
-                form.addRow("Detection marker edge width:", self.overlay_line_width)
+                detection_form.addRow("Outline width:", self.overlay_line_width)
+                self.overlay_opacity = _number(QDoubleSpinBox, style.overlay_opacity, 1.0, 0.0, 1.0)
+                self.overlay_opacity.setDecimals(2)
+                self.overlay_opacity.setSingleStep(0.05)
+                self.overlay_opacity.setAccessibleName("Detection marker opacity")
+                detection_form.addRow("Opacity:", self.overlay_opacity)
+                self.detections_box.setVisible(any(row["kind"] == "detections"
+                                                   for row in styleable_elements(figure)))
+
+                # ---- Advanced: exact colours and rarely used controls ----
+                self.advanced_toggle = QToolButton(content)
+                self.advanced_toggle.setObjectName("sectionToggle")
+                self.advanced_toggle.setCheckable(True)
+                self.advanced_toggle.setText("▶  Advanced")
+                self.advanced_toggle.setAccessibleName("Advanced settings")
+                self.advanced_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+                content_layout.addWidget(self.advanced_toggle)
+                self.advanced = QGroupBox("", content)
+                advanced_form = QFormLayout(self.advanced)
+                advanced_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+                content_layout.addWidget(self.advanced)
+                advanced_note = QLabel("Every colour control also takes an exact value: open it "
+                                       "and choose “Custom colour… (exact RGB)”.")
+                advanced_note.setWordWrap(True)
+                advanced_note.setProperty("textRole", "muted")
+                advanced_form.addRow(advanced_note)
+                self.tick_colour = ColourPicker(style.tick_colour)
+                advanced_form.addRow("Tick label colour:", self.tick_colour)
+                self.axes_colour = ColourPicker(style.axes_colour)
+                advanced_form.addRow("Axis label colour:", self.axes_colour)
+                self.legend_colour = ColourPicker(style.legend_colour)
+                advanced_form.addRow("Legend text colour:", self.legend_colour)
+                self.overlay_edge_colour = ColourPicker(style.overlay_edge_colour)
+                self.overlay_edge_colour.setAccessibleName("Detection marker edge colour")
+                advanced_form.addRow("Detection outline colour:", self.overlay_edge_colour)
                 self.overlay_line_style = QComboBox()
                 self.overlay_line_style.addItems(["Theme default", "Solid", "Dashed", "Dash-dot", "Dotted"])
                 self.overlay_line_style.setCurrentIndex({None: 0, "-": 1, "--": 2, "-.": 3, ":": 4}[style.overlay_line_style])
                 self.overlay_line_style.setAccessibleName("Detection marker edge line style")
-                form.addRow("Detection marker edge style:", self.overlay_line_style)
-                self.overlay_opacity = _number(QDoubleSpinBox, style.overlay_opacity, 1.0, 0.0, 1.0)
-                self.overlay_opacity.setDecimals(3)
-                self.overlay_opacity.setSingleStep(0.05)
-                self.overlay_opacity.setAccessibleName("Detection marker opacity")
-                form.addRow("Detection marker opacity:", self.overlay_opacity)
+                advanced_form.addRow("Detection outline style:", self.overlay_line_style)
                 self.series_id = QComboBox()
                 self.series_id.addItem("No series override", "")
                 for axes_index, axes in enumerate(figure.axes):
@@ -678,8 +982,8 @@ class VisualStyleDialog:
                         if label and not label.startswith("_"):
                             stable_id = line.get_gid() or f"line:{axes_index}:{label}"
                             self.series_id.addItem(f"{label} [{stable_id}]", stable_id)
-                form.addRow("Series ID:", self.series_id)
-                self.series_colour = _colour(QLineEdit, "")
+                advanced_form.addRow("Series by ID:", self.series_id)
+                self.series_colour = ColourPicker("")
                 self.series_width = _number(QDoubleSpinBox, None, 1.5, 0.2, 12)
                 self.series_dash = QComboBox()
                 self.series_dash.addItems(["Theme default", "Solid", "Dashed", "Dash-dot", "Dotted"])
@@ -689,10 +993,10 @@ class VisualStyleDialog:
                 if self.series_id.count() < 2:
                     self.series_id.setEnabled(False)
                     self.series_colour.setEnabled(False)
-                form.addRow("Series colour (#RRGGBB):", self.series_colour)
-                form.addRow("Series line width:", self.series_width)
-                form.addRow("Series dash:", self.series_dash)
-                form.addRow("Series marker:", self.series_marker)
+                advanced_form.addRow("Series colour:", self.series_colour)
+                advanced_form.addRow("Series line width:", self.series_width)
+                advanced_form.addRow("Series dash:", self.series_dash)
+                advanced_form.addRow("Series marker:", self.series_marker)
                 self.colormap = QComboBox()
                 self.colormap.addItems(["Theme default", "viridis", "plasma", "inferno", "magma",
                                         "cividis", "coolwarm", "RdBu_r"])
@@ -700,41 +1004,32 @@ class VisualStyleDialog:
                                    for axes in figure.axes for image in axes.images)
                 self.colormap.setEnabled(can_recolour)
                 self.colormap.setToolTip("Only explicitly opted-in scalar images can change palette; scientific ranges are unchanged.")
-                form.addRow("Opted-in scalar image palette:", self.colormap)
+                advanced_form.addRow("Opted-in image palette:", self.colormap)
+                scale = QCheckBox("Enable scale bar")
+                scale.setEnabled(False)
+                scale.setToolTip(scale_bar_unavailable())
+                advanced_form.addRow("Scale bar:", scale)
                 scale_note = QLabel("Numeric limits, units, colourbar labels, heatmap palettes and signed/error-map encodings are fixed by the scientific producer. Range controls stay unavailable unless a producer explicitly supplies non-semantic presentation limits.")
                 scale_note.setWordWrap(True)
                 scale_note.setAccessibleName("Scientific colour-scale limits are protected")
-                content_layout.addWidget(scale_note)
-                self.preset = QComboBox()
-                self.preset.addItem("Custom", None)
-                for key, preset in PRESETS.items():
-                    self.preset.addItem(preset["label"], key)
-                self.preset.setCurrentIndex(max(0, self.preset.findData(style.suggested_preset)))
-                form.addRow("Suggested appearance:", self.preset)
+                advanced_form.addRow(scale_note)
                 citation = QLabel(SUGGESTED_PRESET_CITATIONS)
                 citation.setProperty("sourceRevision", SUGGESTED_PRESET_REGISTRY_VERSION)
                 citation.setWordWrap(True)
                 citation.setAccessibleName("Suggested figure-style sources and limitations")
-                content_layout.addWidget(citation)
-                self.preset.currentIndexChanged.connect(self._apply_suggested_preset)
-                self.grid = QCheckBox("Override grid visibility")
-                self.grid.setChecked(style.grid_visible is not None)
-                self.grid_value = QCheckBox("Show grid")
-                self.grid_value.setChecked(bool(style.grid_visible))
-                form.addRow(self.grid, self.grid_value)
-                self.legend = QCheckBox("Override legend visibility")
-                self.legend.setChecked(style.legend_visible is not None)
-                self.legend_value = QCheckBox("Show legend")
-                self.legend_value.setChecked(bool(style.legend_visible))
-                form.addRow(self.legend, self.legend_value)
-                scale = QCheckBox("Enable scale bar")
-                scale.setEnabled(False)
-                scale.setToolTip(scale_bar_unavailable())
-                form.addRow("Scale bar:", scale)
+                advanced_form.addRow(citation)
                 note = QLabel("Scale bars require a known pixel-to-world transform and unit. "
                               "Raw-image overlays remain unmodified.")
                 note.setWordWrap(True)
-                content_layout.addWidget(note)
+                advanced_form.addRow(note)
+                self.advanced.setVisible(False)
+
+                def toggle_advanced(checked):
+                    self.advanced.setVisible(checked)
+                    self.advanced_toggle.setText(("▼" if checked else "▶") + "  Advanced")
+                self.advanced_toggle.toggled.connect(toggle_advanced)
+                content_layout.addStretch(1)
+                self.preset.currentIndexChanged.connect(self._apply_suggested_preset)
                 scroll = QScrollArea(self)
                 scroll.setWidgetResizable(True)
                 scroll.setWidget(content)
@@ -745,8 +1040,8 @@ class VisualStyleDialog:
                 if screen is not None:
                     available = screen.availableGeometry()
                     self.setMaximumHeight(max(320, available.height() - 80))
-                    self.resize(min(680, available.width() - 60),
-                                min(available.height() - 80, 780))
+                    self.resize(min(980, available.width() - 60),
+                                min(available.height() - 80, 860))
                 row = QHBoxLayout()
                 root.addLayout(row)
                 save = QPushButton("Save JSON…")
@@ -783,10 +1078,13 @@ class VisualStyleDialog:
                                self.legend_colour, self.figure_background, self.axes_background,
                                self.overlay_size, self.overlay_marker, self.overlay_colour, self.overlay_edge_colour,
                                self.overlay_line_width, self.overlay_line_style, self.overlay_opacity,
+                               self.overlay_fill,
                                self.series_id, self.series_colour, self.series_width,
                                self.series_dash, self.series_marker, self.colormap, self.preset,
                                self.grid, self.grid_value,
-                               self.legend, self.legend_value):
+                               self.legend, self.legend_value,
+                               *(control for controls in self._element_controls
+                                 for control in controls.values())):
                     signal = getattr(widget, "currentTextChanged", None) or getattr(widget, "valueChanged", None) \
                         or getattr(widget, "textChanged", None) or getattr(widget, "toggled", None)
                     if signal is not None:
@@ -798,9 +1096,98 @@ class VisualStyleDialog:
                 buttons.accepted.connect(self.accept)
                 buttons.rejected.connect(self.reject)
 
+            def _build_element_row(self, row, element):
+                """One table row: only the controls that apply to this kind of element."""
+                allowed = ELEMENT_KEYS[element["kind"]]
+                saved = dict(style.series_styles.get(element["id"], {}))
+                if "colour" not in saved and element["id"] in style.series_colours:
+                    saved["colour"] = style.series_colours[element["id"]]
+                name = QTableWidgetItem(element["name"])
+                name.setFlags(name.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                name.setToolTip({"line": "Data line", "reference": "Threshold or reference line",
+                                 "bars": "Bar group", "points": "Scatter points"}[element["kind"]])
+                self.element_table.setItem(row, 0, name)
+                colour = ColourPicker(saved.get("colour"), default_label="Original")
+                width = QDoubleSpinBox()
+                width.setRange(0.0, 12.0)
+                width.setSingleStep(0.25)
+                width.setSpecialValueText("Original")
+                width.setValue(saved.get("line_width", 0.0))
+                line_style = QComboBox()
+                line_style.addItem("Original", None)
+                for label, code in LINE_STYLES:
+                    line_style.addItem(label, code)
+                line_style.setCurrentIndex(max(0, line_style.findData(saved.get("line_style"))))
+                shape = QComboBox()
+                shape.addItem("Original", None)
+                for label, code in MARKER_SHAPES:
+                    shape.addItem(label, code)
+                shape.setCurrentIndex(max(0, shape.findData(saved.get("marker") or None)))
+                fill = QComboBox()
+                fill.addItems(["Original", "Filled", "Hollow"])
+                fill.setCurrentIndex({None: 0, True: 1, False: 2}[saved.get("filled")])
+                size = QDoubleSpinBox()
+                size.setRange(0.0, 48.0)
+                size.setSpecialValueText("Original")
+                size.setValue(saved.get("size", 0.0))
+                controls = {"colour": colour, "line_width": width, "line_style": line_style,
+                            "marker": shape, "filled": fill, "size": size}
+                for column, key in enumerate(("colour", "line_width", "line_style", "marker", "filled", "size"), start=1):
+                    control = controls[key]
+                    control.setEnabled(key in allowed)
+                    control.setAccessibleName(f"{element['name']} {key.replace('_', ' ')}")
+                    self.element_table.setCellWidget(row, column, control)
+                return controls
+
+            def _element_settings(self, controls):
+                """The non-original settings of one table row."""
+                settings = {}
+                if controls["colour"].isEnabled() and controls["colour"].text():
+                    settings["colour"] = controls["colour"].text()
+                if controls["line_width"].isEnabled() and controls["line_width"].value() > 0:
+                    settings["line_width"] = max(0.2, controls["line_width"].value())
+                if controls["line_style"].isEnabled() and controls["line_style"].currentData():
+                    settings["line_style"] = controls["line_style"].currentData()
+                if controls["marker"].isEnabled() and controls["marker"].currentData():
+                    settings["marker"] = controls["marker"].currentData()
+                if controls["filled"].isEnabled() and controls["filled"].currentIndex():
+                    settings["filled"] = controls["filled"].currentIndex() == 1
+                if controls["size"].isEnabled() and controls["size"].value() > 0:
+                    settings["size"] = max(1.0, controls["size"].value())
+                return settings
+
+            def _set_element_rows(self, candidate):
+                """Show *candidate*'s element settings in the table, without previewing."""
+                for element, controls in zip(self.elements, self._element_controls):
+                    saved = dict(candidate.series_styles.get(element["id"], {}))
+                    if "colour" not in saved and element["id"] in candidate.series_colours:
+                        saved["colour"] = candidate.series_colours[element["id"]]
+                    for control in controls.values():
+                        control.blockSignals(True)
+                    controls["colour"].setText(saved.get("colour", ""))
+                    controls["line_width"].setValue(saved.get("line_width", 0.0))
+                    controls["line_style"].setCurrentIndex(max(0, controls["line_style"].findData(saved.get("line_style"))))
+                    controls["marker"].setCurrentIndex(max(0, controls["marker"].findData(saved.get("marker") or None)))
+                    controls["filled"].setCurrentIndex({None: 0, True: 1, False: 2}[saved.get("filled")])
+                    controls["size"].setValue(saved.get("size", 0.0))
+                    for control in controls.values():
+                        control.blockSignals(False)
+
             def _read(self):
                 series_colours = dict(self.current.series_colours)
                 series_styles = {key: dict(value) for key, value in self.current.series_styles.items()}
+                for element, controls in zip(self.elements, self._element_controls):
+                    settings = self._element_settings(controls)
+                    legacy = series_colours.get(element["id"])
+                    if legacy is not None and settings.get("colour") == legacy:
+                        # An unchanged colour from an older file stays where it was.
+                        settings.pop("colour")
+                    elif legacy is not None:
+                        series_colours.pop(element["id"], None)
+                    if settings:
+                        series_styles[element["id"]] = settings
+                    else:
+                        series_styles.pop(element["id"], None)
                 selected_id = self.series_id.currentData()
                 if selected_id:
                     properties = {}
@@ -851,6 +1238,7 @@ class VisualStyleDialog:
                                         else ("-", "-", "--", "-.", ":")[self.overlay_line_style.currentIndex()]),
                     overlay_opacity=(self.overlay_opacity.value()
                                      if self.overlay_opacity.value() != 1.0 else None),
+                    overlay_filled={0: None, 1: True, 2: False}[self.overlay_fill.currentIndex()],
                     series_colours=series_colours, series_styles=series_styles,
                     colormap=(self.colormap.currentText() if self.colormap.currentIndex() else None),
                     suggested_preset=self.preset.currentData(),
@@ -934,6 +1322,8 @@ class VisualStyleDialog:
                 self.preset.setCurrentIndex(0)
                 self.grid.setChecked(False)
                 self.legend.setChecked(False)
+                self.overlay_fill.setCurrentIndex(0)
+                self._set_element_rows(self.current)
                 self._preview(force=True)
 
             def _show_default_status(self):
@@ -1043,6 +1433,8 @@ class VisualStyleDialog:
                     self.legend_value.setChecked(bool(candidate.legend_visible))
                     self.colormap.setCurrentIndex(self.colormap.findText(candidate.colormap or "Theme default"))
                     self.preset.setCurrentIndex(max(0, self.preset.findData(candidate.suggested_preset)))
+                    self.overlay_fill.setCurrentIndex({None: 0, True: 1, False: 2}[candidate.overlay_filled])
+                    self._set_element_rows(candidate)
                 finally:
                     for control, was_blocked in zip(controls, blocked):
                         control.blockSignals(was_blocked)
@@ -1068,11 +1460,8 @@ class VisualStyleDialog:
             widget.setValue(value if value is not None else default)
             return widget
 
-        def _colour(widget_type, value):
-            widget = widget_type(value or "")
-            widget.setPlaceholderText("Theme default")
-            widget.setMaxLength(7)
-            return widget
+        def _colour(_widget_type, value):
+            return ColourPicker(value)
 
         def _optional(value):
             return value.strip() or None

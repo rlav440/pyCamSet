@@ -34,7 +34,7 @@ def test_style_json_round_trip_is_versioned_and_visual_specific():
                         suggested_preset="Science",
                         suggested_preset_registry=SUGGESTED_PRESET_REGISTRY_VERSION)
     text = style_to_json(style, "phase2:view-errors")
-    assert json.loads(text)["version"] == 5
+    assert json.loads(text)["version"] == 6
     assert style_from_json(text, "phase2:view-errors") == style
     assert json.loads(text)["style"]["suggested_preset_registry"] == SUGGESTED_PRESET_REGISTRY_VERSION
     with pytest.raises(ValueError, match="different visual"):

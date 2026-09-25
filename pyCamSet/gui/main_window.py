@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import shiboken6
 from PySide6.QtCore import QEvent, QObject, QSettings, Qt
 from PySide6.QtWidgets import (
     QApplication,
@@ -53,9 +54,13 @@ class _TooltipFilter(QObject):
         self._info_cb = info_cb
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
-        if not self._info_cb.isChecked() and event.type() == QEvent.Type.ToolTip:
-            return True  # consume / block the tooltip event
-        return False
+        if event.type() != QEvent.Type.ToolTip:
+            return False
+        # The filter is application-wide, so it can still see events while its
+        # window is being destroyed and the checkbox is already gone.
+        if not shiboken6.isValid(self._info_cb):
+            return False
+        return not self._info_cb.isChecked()  # True consumes the tooltip
 
 
 class PyCamSetApp(QMainWindow):

@@ -16,6 +16,7 @@ import pathlib
 import numpy as np
 import pytest
 
+from pyCamSet.calibration_targets.markers.backend_registry import marker_backend_available
 from pyCamSet.workflow import detection_cost as dc
 
 
@@ -237,6 +238,9 @@ class TestPreflight:
         assert dc.preflight(options)["matched_declared_target"] == declared
 
 
+@pytest.mark.skipif(
+    not marker_backend_available("aruco2"),
+    reason="measures a ChArUco2 target, whose detector (aruco2) is not installed")
 class TestMeasureFolder:
 
     def test_produces_a_report_and_writes_both_files(self, tmp_path):

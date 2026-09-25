@@ -12,7 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from pyCamSet.gui import preferences
+pytest.importorskip("PySide6")
+
+from pyCamSet.gui import preferences  # noqa: E402  (needs the GUI toolkit)
 
 
 def test_preferences_round_trip_and_defaults(tmp_path, monkeypatch):

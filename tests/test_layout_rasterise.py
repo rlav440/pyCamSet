@@ -1,4 +1,4 @@
-"""Regression tests for ``charuco2/layout.py``'s ``rasterise_rectangles``.
+"""Regression tests for ``markers/gridboard_layout.py``'s ``rasterise_rectangles``.
 
 Pure-numpy unit tests for the rasteriser itself, independent of aruco2 (the
 module docstring promises it "imports cleanly without aruco2" -- see

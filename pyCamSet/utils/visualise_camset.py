@@ -72,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="cosmetic Matplotlib chrome theme for each 2D figure")
     parser.add_argument("--matplotlib-only", action="store_true",
                         help="skip PyVista scenes for a 2D-only export request")
+    parser.add_argument("--3d-only", dest="three_d_only", action="store_true",
+                        help="open the 3D scenes without the 2D figures")
     parser.add_argument("--export-csv", action="store_true",
                         help="write source-array CSVs beside saved 2D assessment figures")
     args = parser.parse_args(argv)
@@ -151,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             three_d_background=args.three_d_background,
             three_d_point_size=args.three_d_point_size,
             three_d_view=args.three_d_view, three_d_axes=args.three_d_axes,
-            three_d_legend=args.three_d_legend)
+            three_d_legend=args.three_d_legend, three_d_only=args.three_d_only)
     except Exception as exc:
         print(f"Could not draw the calibration: {exc}", file=sys.stderr)
         return 1

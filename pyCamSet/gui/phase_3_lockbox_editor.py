@@ -1339,15 +1339,22 @@ class Phase3LockboxEditor(QDialog):
             label_id = self._o3d_scene_widget.add_3d_label((center + offset).tolist(), face_text)
             self._o3d_label_ids.append(label_id)
 
+    _O3D_BACKGROUNDS = {
+        'Dark calibration': [0.08, 0.10, 0.16, 1.0],
+        'Neutral grey': [0.22, 0.22, 0.24, 1.0],
+        'Light studio': [0.82, 0.84, 0.88, 1.0],
+    }
+
+    def _o3d_background_rgb(self) -> list[float]:
+        """The chosen Open3D background as 0-1 RGB."""
+        name = (getattr(self, "_o3d_visual_settings", None) or {}).get("background")
+        return self._O3D_BACKGROUNDS.get(name, self._O3D_BACKGROUNDS['Dark calibration'])[:3]
+
     def _apply_open3d_visual_settings(self) -> None:
         if self._o3d_scene_widget is None:
             return
         scene = self._o3d_scene_widget.scene
-        bg_map = {
-            'Dark calibration': [0.08, 0.10, 0.16, 1.0],
-            'Neutral grey': [0.22, 0.22, 0.24, 1.0],
-            'Light studio': [0.82, 0.84, 0.88, 1.0],
-        }
+        bg_map = self._O3D_BACKGROUNDS
         plane_map = {
             'XZ floor': _o3d_rendering.Scene.GroundPlane.XZ,
             'XY backplane': _o3d_rendering.Scene.GroundPlane.XY,
@@ -1485,9 +1492,11 @@ class Phase3LockboxEditor(QDialog):
             pass
         try:
             cam_meshes, view_cones = self.working_camset.get_camera_meshes(viewcone=0.15, scale=cam_scale)
+            from pyCamSet.utils.visualisation import contrast_colours
+            frustum_colour = list(contrast_colours(self._o3d_background_rgb())[0])
             for i, mesh in enumerate(cam_meshes):
                 ls = self._pv_polydata_to_o3d_lineset(mesh)
-                ls.paint_uniform_color([0.0, 0.0, 0.0])
+                ls.paint_uniform_color(frustum_colour)
                 scene.add_geometry(f"edited_{i}", ls, line_mat)
             for i, vc in enumerate(view_cones):
                 ls = self._pv_polydata_to_o3d_lineset(vc)
@@ -1610,7 +1619,8 @@ class Phase3LockboxEditor(QDialog):
             return
         del index
         self._o3d_visual_settings['background'] = text
-        self._apply_open3d_visual_settings()
+        # Rebuild, not just repaint: the frustum colour follows the background.
+        self._refresh_open3d_native_view()
         self._o3d_window.post_redraw()
 
     def _on_o3d_lighting_changed(self, text: str, index: int) -> None:

@@ -161,27 +161,37 @@ def test_phase1_default_and_expanded_parameter_geometry(application):
 
 
 def test_global_menu_controls_reuse_live_widget_state(application):
-    """Menu-hosted controls must be the same objects and signals as before."""
+    """Menu items are plain actions (clickable in the native macOS menu bar)
+    that drive the same checkbox and combo state every tab reads."""
     from pyCamSet.gui.main_window import PyCamSetApp
 
     window = PyCamSetApp()
     try:
         menus = {menu.title(): menu for menu in window.menuBar().findChildren(QMenu)}
-        assert {"File", "Edit", "Settings"}.issubset(menus)
-        edit_action = next(action for action in menus["Edit"].actions() if isinstance(action, QWidgetAction))
-        settings_widgets = [
-            action for action in menus["Settings"].actions()
-            if isinstance(action, QWidgetAction)
-        ]
-        assert edit_action.defaultWidget() is window._info_cb
-        assert settings_widgets[0].defaultWidget() is window._terminal_cb
-        assert settings_widgets[1].defaultWidget() is window._theme_combo
+        assert {"File", "Edit", "Settings", "Theme"}.issubset(menus)
+        for menu in menus.values():
+            assert not any(isinstance(action, QWidgetAction) for action in menu.actions())
+        info = next(a for a in menus["Edit"].actions() if a.text() == window._info_cb.text())
+        terminal = next(a for a in menus["Settings"].actions() if a.text() == window._terminal_cb.text())
         assert isinstance(window._info_cb, QCheckBox)
         assert isinstance(window._theme_combo, QComboBox)
-        window._info_cb.setChecked(False)
+        # A click on the menu item changes the shared state...
+        info.setChecked(True)
+        info.trigger()
+        assert not window._info_cb.isChecked()
         assert QApplication.instance().property("tooltipsEnabled") is False
-        window._theme_combo.setCurrentText("Dark")
+        before = window._terminal_cb.isChecked()
+        terminal.trigger()
+        assert window._terminal_cb.isChecked() is (not before)
+        dark = next(a for a in menus["Theme"].actions() if a.text() == "Dark")
+        dark.trigger()
+        assert window._theme_combo.currentText() == "Dark"
         assert QApplication.instance().property("pycamsetTheme") == "Dark"
+        # ...and a change made elsewhere shows in the menu.
+        window._info_cb.setChecked(True)
+        assert info.isChecked()
+        window._theme_combo.setCurrentText("Sepia")
+        assert next(a for a in menus["Theme"].actions() if a.isChecked()).text() == "Sepia"
     finally:
         window.close()
         window.deleteLater()

@@ -16,7 +16,6 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -55,7 +54,6 @@ from pyCamSet.gui.shared_functions import (
     show_tab,
 )
 from pyCamSet.workflow import phase4 as phase4_workflow
-from pyCamSet.gui.three_d_style import ThreeDStyleControls
 from pyCamSet.workflow.params import (
     ParamError,
     as_int,
@@ -69,11 +67,6 @@ from pyCamSet.workflow.workspace import (
     resolve_artifact,
 )
 from pyCamSet.gui.assess_calibration import (
-    launch_visualise_calibration_for_run,
-    launch_visualise_calibration_open3d_for_run,
-    launch_save_pyvista_png_for_run,
-    launch_export_3d_for_run,
-    launch_save_assessment_pngs_for_run,
     merge_phase3_phase4_runs,
     select_latest_visualisation_run,
 )
@@ -653,88 +646,10 @@ class Phase4DiagnosticsTab(QWidget):
         summary_root.addWidget(self._summary_scroll)
         self._sub_tabs.addTab(self._summary_widget, "Summary (D4.1-D4.10)")
 
-        self._visual_widget = QWidget()
-        visual_layout = QVBoxLayout(self._visual_widget)
-        visual_btn_row = QHBoxLayout()
-        self._pyvista_cb = QCheckBox("PyVista")
-        self._pyvista_cb.setChecked(True)
-        self._pyvista_cb.setToolTip("Use PyVista backend (opens native window).")
-        visual_btn_row.addWidget(self._pyvista_cb)
-        self._open3d_cb = QCheckBox("Open3D")
-        self._open3d_cb.setChecked(False)
-        self._open3d_cb.setToolTip("Use Open3D backend (opens a separate interactive window).")
-        visual_btn_row.addWidget(self._open3d_cb)
-        # Enforce mutual exclusivity via QButtonGroup.
-        self._backend_group = QButtonGroup(self)
-        self._backend_group.setExclusive(True)
-        self._backend_group.addButton(self._pyvista_cb)
-        self._backend_group.addButton(self._open3d_cb)
-        self._backend_group.buttonClicked.connect(self._on_backend_changed)
-        self._visual_btn = QPushButton("Assess Calibration")
-        self._visual_btn.clicked.connect(self._run_visualise_target)
-        visual_btn_row.addWidget(self._visual_btn)
-        self._save_png_btn = QPushButton("Save PNG")
-        self._save_png_btn.setToolTip("Save the current visualisation as PNG.")
-        self._save_png_btn.clicked.connect(self._save_visualisation_png)
-        visual_btn_row.addWidget(self._save_png_btn)
-        self._three_d_export_preset = QComboBox()
-        self._three_d_export_preset.addItem("3D screen · 160 mm · 150 dpi", (160.0, 150))
-        self._three_d_export_preset.addItem("3D single-column · 85 mm · 300 dpi", (85.0, 300))
-        self._three_d_export_preset.addItem("3D double-column · 180 mm · 300 dpi", (180.0, 300))
-        self._three_d_export_preset.setToolTip(
-            "PNG pixel dimensions follow this generic width/DPI preset; no journal compliance is implied.")
-        from pyCamSet.gui.preferences import bind_export_preset
-        bind_export_preset(self._three_d_export_preset, "phase4:3d-export")
-        visual_btn_row.addWidget(self._three_d_export_preset)
-        export_3d_btn = QPushButton("Export 3D geometry…")
-        export_3d_btn.setToolTip("PyVista: GLTF scene, OBJ geometry, or PLY target-frame point cloud.")
-        export_3d_btn.clicked.connect(self._export_visualisation_3d)
-        visual_btn_row.addWidget(export_3d_btn)
-        self._assessment_export_preset = QComboBox()
-        self._assessment_export_preset.addItem("Screen template · 160 mm · 150 dpi", (160.0, 150))
-        self._assessment_export_preset.addItem("Single-column template · 85 mm · 300 dpi", (85.0, 300))
-        self._assessment_export_preset.addItem("Double-column template · 180 mm · 300 dpi", (180.0, 300))
-        self._assessment_export_preset.setToolTip("Generic templates; no named-journal compliance is implied.")
-        bind_export_preset(self._assessment_export_preset, "phase4:assessment-export")
-        visual_btn_row.addWidget(self._assessment_export_preset)
-        save_2d_btn = QPushButton("Save 2D assessment exports…")
-        save_2d_btn.setToolTip("Save the three child-process Matplotlib figures as PNG, SVG and PDF.")
-        save_2d_btn.clicked.connect(self._save_assessment_2d_pngs)
-        visual_btn_row.addWidget(save_2d_btn)
-        visual_btn_row.addStretch()
-        visual_layout.addLayout(visual_btn_row)
-        style_row = QHBoxLayout()
-        self._assessment_figure_themes = []
-        for figure_label in ("Error distribution", "Camera coverage", "Accuracy / precision"):
-            style_row.addWidget(QLabel(f"{figure_label} chrome:"))
-            theme_combo = QComboBox()
-            theme_combo.addItems(("Inherit", "Light", "Dark", "Sepia"))
-            theme_combo.setToolTip("Cosmetic figure chrome only; quantitative colours are unchanged.")
-            self._assessment_figure_themes.append(theme_combo)
-            style_row.addWidget(theme_combo)
-        style_row.addStretch()
-        visual_layout.addLayout(style_row)
-        self._three_d_style = ThreeDStyleControls(
-            self._visual_widget, visual_id="assessment:phase4")
-        visual_layout.addWidget(self._three_d_style)
-        # Shows which run/phase the most recent Assess Calibration click actually
-        # resolved to -- lets a user comparing PyVista vs. Open3D (or comparing this
-        # tab against Phase 3's own Assess Calibration tab) immediately see whether
-        # they are looking at two different camsets/runs on purpose, rather than
-        # mistaking a run-selection mismatch for a rendering disagreement.
-        self._current_run_label = QLabel("")
-        set_text_role(self._current_run_label, "muted")
-        visual_layout.addWidget(self._current_run_label)
-        self._open3d_output = QLabel("")
-        self._open3d_output.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._open3d_output.setMinimumHeight(400)
-        self._open3d_output.setObjectName("viewportPlaceholder")
-        self._open3d_output.setText("Select Open3D backend and click Assess Calibration to render here.")
-        self._open3d_output.setWordWrap(True)
-        self._open3d_output.setVisible(False)
-        visual_layout.addWidget(self._open3d_output)
-        visual_layout.addStretch()
-        self._sub_tabs.addTab(self._visual_widget, "Assess Calibration")
+        from pyCamSet.gui.assess_panel import AssessCalibrationPanel
+        self._assess = AssessCalibrationPanel("phase4", self._assessment_run, parent=self)
+        self._visual_widget = self._assess
+        self._sub_tabs.addTab(self._assess, "Assess Calibration")
 
         self.refresh()
 
@@ -760,10 +675,12 @@ class Phase4DiagnosticsTab(QWidget):
         self._all_runs = self._combined_runs()
         self._run_selector.refresh(self._all_runs)
         self._render_summary(self._run_selector.get_selected())
+        self._assess.refresh_run()
 
     def _on_selection_changed(self, _runs: list[dict]) -> None:
         self._run_selector.enforce_max_selection(4)
         self._render_summary(self._run_selector.get_selected())
+        self._assess.refresh_run()
 
     def _render_summary(self, runs: list[dict]) -> None:
         while self._summary_layout.count():
@@ -853,138 +770,12 @@ class Phase4DiagnosticsTab(QWidget):
             render_predecessor_chain_section(self._summary_layout, self._workspace_mgr, run)
         self._summary_layout.addStretch()
 
-    def _on_backend_changed(self, btn) -> None:
-        """Handle backend selector toggle — update Open3D output visibility."""
-        if self._open3d_cb.isChecked():
-            self._three_d_style.setEnabled(False)
-            self._open3d_output.setText("Click Assess Calibration to open an interactive Open3D window.")
-            self._open3d_output.setVisible(True)
-        else:
-            self._three_d_style.setEnabled(True)
-            self._open3d_output.setVisible(False)
-
-    def _on_pyvista_toggled(self, state: int) -> None:
-        # Kept for backwards compatibility; QButtonGroup handles exclusivity.
-        self._open3d_output.setVisible(False)
-
-    def _on_open3d_toggled(self, state: int) -> None:
-        # Kept for backwards compatibility; QButtonGroup handles exclusivity.
-        self._open3d_output.setVisible(bool(state))
-
-    def _run_visualise_target(self) -> None:
-        selected = self._run_selector.get_selected()
-        chosen = select_latest_visualisation_run(selected, self._all_runs)
-        if chosen is None:
-            if self._info_cb.isChecked():
-                QMessageBox.information(self, "Select run", "Select at least one run first.")
-            return
-        self._current_run_label.setText(
-            f"Currently showing: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}"
-        )
-        if self._open3d_cb.isChecked():
-            # On Linux, EGL offscreen rendering is typically available, so we
-            # can embed the Open3D view in the GUI. On Windows, EGL support is
-            # missing so we fall back to a separate native Open3D window.
-            self._three_d_style.setEnabled(False)
-            _open3d_widget = self._open3d_output if os.name != "nt" else None
-            ok, msg = launch_visualise_calibration_open3d_for_run(chosen, output_widget=_open3d_widget)
-        else:
-            self._three_d_style.setEnabled(True)
-            app = QApplication.instance()
-            active_theme = app.property("pycamsetTheme") if app else "Light"
-            figure_themes = tuple(
-                theme.currentText() if theme.currentText() != "Inherit" else active_theme
-                for theme in self._assessment_figure_themes
-            )
-            ok, msg = launch_visualise_calibration_for_run(
-                chosen, theme_name=active_theme, figure_themes=figure_themes,
-                three_d_arguments=self._three_d_style.viewer_arguments())
-        if not ok:
-            QMessageBox.warning(self, "Assess Calibration", msg)
-
-    def _save_visualisation_png(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Visualisation as PNG", "calibration_assessment.png", "PNG Files (*.png)"
-        )
-        if not path:
-            return
-        if self._open3d_cb.isChecked():
-            # Open3D opens a separate native window — no embedded pixmap to save.
-            QMessageBox.information(
-                self, "Save PNG",
-                "PNG export is not available with the Open3D backend.\n"
-                "Switch to the PyVista backend to save a PNG export.",
-            )
-        else:
-            # PyVista: offscreen render to PNG.
-            selected = self._run_selector.get_selected()
-            chosen = select_latest_visualisation_run(selected, self._all_runs)
-            if chosen is None:
-                QMessageBox.warning(self, "Save PNG", "Select at least one run first.")
-                return
-            self._current_run_label.setText(
-                f"Currently showing: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}"
-            )
-            from pathlib import Path
-            width_mm, dpi = self._three_d_export_preset.currentData()
-            app = QApplication.instance()
-            active_theme = app.property("pycamsetTheme") if app else "Light"
-            ok, msg = launch_save_pyvista_png_for_run(
-                chosen, Path(path), width_mm=width_mm, dpi=dpi, theme_name=active_theme,
-                three_d_arguments=self._three_d_style.viewer_arguments())
-            if ok:
-                QMessageBox.information(self, "Save PNG", msg)
-            else:
-                QMessageBox.warning(self, "Save PNG", f"Could not save PNG:\n{msg}")
-
-    def _export_visualisation_3d(self) -> None:
-        """Offer an actual PyVista geometry export, independent of PNG capture."""
-        path, selected_filter = QFileDialog.getSaveFileName(
-            self, "Export 3D Geometry", "calibration_scene.gltf",
-            "glTF scene (*.gltf);;Wavefront geometry (*.obj);;PLY point cloud (*.ply)")
-        if not path:
-            return
-        if not Path(path).suffix:
-            extension = {"Wavefront geometry (*.obj)": ".obj",
-                         "PLY point cloud (*.ply)": ".ply"}.get(selected_filter, ".gltf")
-            path = f"{path}{extension}"
-        selected = self._run_selector.get_selected()
-        chosen = select_latest_visualisation_run(selected, self._all_runs)
-        if chosen is None:
-            QMessageBox.warning(self, "3D Export", "Select at least one run first.")
-            return
-        self._current_run_label.setText(
-            f"Currently exporting: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}")
-        ok, message = launch_export_3d_for_run(chosen, Path(path))
-        if ok:
-            QMessageBox.information(self, "3D Export", message)
-        else:
-            QMessageBox.warning(self, "3D Export", message)
-
-    def _save_assessment_2d_pngs(self) -> None:
-        """Save the child process's numerical 2D assessment figures as PNGs."""
-        directory = QFileDialog.getExistingDirectory(self, "Save 2D Assessment Figures")
-        if not directory:
-            return
-        selected = self._run_selector.get_selected()
-        chosen = select_latest_visualisation_run(selected, getattr(self, "_all_runs", []))
-        if chosen is None:
-            QMessageBox.warning(self, "Assess Calibration", "Select at least one run first.")
-            return
-        app = QApplication.instance()
-        theme_name = app.property("pycamsetTheme") if app else "Light"
-        width_mm, dpi = self._assessment_export_preset.currentData()
-        figure_themes = tuple(
-            theme.currentText() if theme.currentText() != "Inherit" else theme_name
-            for theme in self._assessment_figure_themes
-        )
-        ok, message = launch_save_assessment_pngs_for_run(
-            chosen, Path(directory), theme_name, width_mm, dpi, figure_themes)
-        if ok:
-            QMessageBox.information(self, "Assess Calibration", message or "Saved 2D assessment PNGs.")
-        else:
-            QMessageBox.warning(self, "Assess Calibration", f"Could not save 2D assessment PNGs:\n{message}")
+    def _assessment_run(self) -> Optional[dict]:
+        """The run Assess Calibration shows: the latest of those selected."""
+        return select_latest_visualisation_run(
+            self._run_selector.get_selected(), getattr(self, "_all_runs", []))
 
     def visualise_from_primary(self) -> None:
-        self._sub_tabs.setCurrentWidget(self._visual_widget)
-        self._run_visualise_target()
+        """Open Assess Calibration; its figures draw on their own."""
+        self._assess.refresh_run()
+        self._sub_tabs.setCurrentWidget(self._assess)

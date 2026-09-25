@@ -24,8 +24,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+import shiboken6
 from PySide6.QtCore import QEvent, QObject, QStandardPaths, QThread, Signal, Qt
-from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QActionGroup, QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -43,6 +44,8 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QMenu,
+    QToolButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
@@ -285,8 +288,12 @@ class MatplotlibFigureCard(QWidget):
         layout.setContentsMargins(0, 2, 0, 8)
 
         header = QHBoxLayout()
-        header.addWidget(make_section_label(title))
-        header.addStretch()
+        title_label = make_section_label(title)
+        # Wrap rather than hold the card wide: in a narrow window a long title
+        # would otherwise set the minimum width of the whole page.
+        title_label.setWordWrap(True)
+        title_label.setMinimumWidth(80)
+        header.addWidget(title_label, 1)
         save_btn = QPushButton("Save PNG")
         save_btn.setToolTip("Save PNG (at the selected size template)")
         from pyCamSet.gui.action_icons import set_action_icon
@@ -300,16 +307,40 @@ class MatplotlibFigureCard(QWidget):
         self._preset.setToolTip("Generic sizing templates only; not a claim of compliance with any named journal.")
         from pyCamSet.gui.preferences import bind_export_preset
         bind_export_preset(self._preset, self._visual_id)
-        # Grouped: the size preset, then the three picture exports it sizes,
-        # then style and data export (gear before chart, as in the optical-
-        # mapping app), then expand.
-        header.addWidget(self._preset)
+        # Compact, as in the optical-mapping app: one click saves a PNG, and
+        # the menu beside it holds the vector formats and the export size.  The
+        # size combo stays as the bound state the menu mirrors, but hidden: at
+        # full width it made every card, and so every page, hundreds of pixels
+        # wider than a small window.
+        self._preset.setVisible(False)
         header.addWidget(save_btn)
+        more_btn = QToolButton()
+        more_btn.setText("▾")
+        more_btn.setObjectName("saveMenuButton")
+        more_btn.setFixedSize(20, 28)
+        more_btn.setToolTip("More ways to save: SVG, PDF and the export size")
+        more_btn.setAccessibleName(f"More save options for {title}")
+        more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        save_menu = QMenu(more_btn)
+        save_menu.addAction("Save PNG", self._save_png)
         for fmt in ("SVG", "PDF"):
-            vector_btn = QPushButton(f"Save {fmt}")
-            vector_btn.clicked.connect(lambda _checked=False, output_format=fmt: self._save_vector(output_format))
-            header.addWidget(vector_btn)
-        header.addSpacing(10)
+            save_menu.addAction(f"Save {fmt}",
+                                lambda output_format=fmt: self._save_vector(output_format))
+        save_menu.addSeparator()
+        size_menu = save_menu.addMenu("Export size")
+        size_group = QActionGroup(size_menu)
+        for index in range(self._preset.count()):
+            action = size_menu.addAction(self._preset.itemText(index))
+            action.setCheckable(True)
+            action.setChecked(index == self._preset.currentIndex())
+            action.triggered.connect(lambda _c=False, i=index: self._preset.setCurrentIndex(i))
+            size_group.addAction(action)
+        self._preset.currentIndexChanged.connect(
+            lambda i: size_group.actions()[i].setChecked(True) if 0 <= i < len(size_group.actions()) else None)
+        more_btn.setMenu(save_menu)
+        header.addWidget(more_btn)
+        self._save_menu = save_menu
+        header.addSpacing(6)
         style_btn = QPushButton("Style…")
         style_btn.setToolTip("Figure style options: fonts, colours, grid and legend")
         set_action_icon(style_btn, "options")
@@ -1593,6 +1624,32 @@ class PhaseWorker(QThread):
         except Exception as exc:
             self.error.emit(str(exc))
             self.finished.emit({"error": str(exc)})
+
+
+def hold_run_button(button: Optional[QPushButton], worker: "PhaseWorker") -> None:
+    """Disable *button* and say so until *worker* finishes or is cancelled.
+
+    A second click while a run is going would start a second run into the
+    same workspace.  PhaseWorker emits ``finished`` on success, on error and
+    after a cancelled run, so the button always comes back.
+    """
+    if button is None:
+        return
+    if button.property("heldText") is None:
+        button.setProperty("heldText", button.text())
+        # Keep the width, so the row does not jump while the label is shorter.
+        button.setMinimumWidth(button.sizeHint().width())
+    button.setEnabled(False)
+    button.setText("Running…")
+
+    def release(*_args) -> None:
+        if not shiboken6.isValid(button):
+            return
+        button.setText(button.property("heldText"))
+        button.setProperty("heldText", None)
+        button.setEnabled(True)
+
+    worker.finished.connect(release)
 
 
 # ---------------------------------------------------------------------------

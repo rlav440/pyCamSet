@@ -168,7 +168,18 @@ def test_action_icons_preserve_labels_accessibility_and_click_signals(tmp_path, 
     assert buttons["Style…"].accessibleName() == "Figure style options for Test figure"
     for label in ("Save PNG", "Save CSV", "Style…"):
         assert buttons[label].property("designRole") == "icon"
-    assert buttons["Save SVG"].property("designRole") is None
+    # SVG, PDF and the export size sit in the menu beside the PNG button, so
+    # the header stays narrow enough for a small window.
+    assert "Save SVG" not in buttons
+    menu_labels = [action.text() for action in card._save_menu.actions()]
+    assert {"Save PNG", "Save SVG", "Save PDF", "Export size"} <= set(menu_labels)
+    assert not card._preset.isVisibleTo(card)
+    size_actions = next(a for a in card._save_menu.actions() if a.text() == "Export size").menu().actions()
+    size_actions[2].trigger()
+    assert card._preset.currentIndex() == 2
+    card._preset.setCurrentIndex(1)
+    assert size_actions[1].isChecked()
+    assert card.minimumSizeHint().width() < 420
     target = tmp_path / "icon-wired.png"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(target), "PNG"))
     buttons["Save PNG"].click()
@@ -225,45 +236,6 @@ def test_assess_calibration_child_receives_selected_theme(monkeypatch, tmp_path)
         str(tmp_path / "run.camset"), "--theme", "Sepia",
         "--figure-themes", "Light", "Sepia", "Dark",
     ]
-
-
-@pytest.mark.parametrize("module_name,class_name", [
-    ("pyCamSet.gui.phase_3_bundle_adjustment", "Phase3DiagnosticsTab"),
-    ("pyCamSet.gui.phase_4_self_calibration", "Phase4DiagnosticsTab"),
-])
-def test_assess_calibration_action_forwards_per_figure_themes(
-    monkeypatch, qapp, module_name, class_name,
-):
-    import importlib
-    from types import SimpleNamespace
-
-    module = importlib.import_module(module_name)
-    selected_run = {"run_id": "run"}
-    captured = {}
-    monkeypatch.setattr(module, "select_latest_visualisation_run", lambda selected, runs: selected_run)
-    monkeypatch.setattr(
-        module, "launch_visualise_calibration_for_run",
-        lambda run, **kwargs: captured.update(run=run, kwargs=kwargs) or (True, ""),
-    )
-    qapp.setProperty("pycamsetTheme", "Dark")
-    tab = SimpleNamespace(
-        _run_selector=SimpleNamespace(get_selected=lambda: [selected_run]),
-        _all_runs=[selected_run],
-        _current_run_label=SimpleNamespace(setText=lambda text: None),
-        _three_d_style=SimpleNamespace(setEnabled=lambda enabled: None,
-                                       viewer_arguments=lambda: ["--3d-view", "front"]),
-        _open3d_cb=SimpleNamespace(isChecked=lambda: False),
-        _assessment_figure_themes=[
-            SimpleNamespace(currentText=lambda value=value: value)
-            for value in ("Light", "Inherit", "Sepia")
-        ],
-    )
-    getattr(getattr(module, class_name), "_run_visualise_target")(tab)
-    assert captured["run"] is selected_run
-    assert captured["kwargs"] == {
-        "theme_name": "Dark", "figure_themes": ("Light", "Dark", "Sepia"),
-        "three_d_arguments": ["--3d-view", "front"],
-    }
 
 
 def test_assessment_figure_batch_formats_sizes_and_refuses_overwrite(tmp_path):

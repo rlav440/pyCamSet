@@ -9,9 +9,10 @@ import json
 import math
 from pathlib import Path
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QMessageBox,
-    QPushButton, QWidget,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
 _STYLE_SCHEMA = "pycamset.3d-visual-style"
@@ -59,6 +60,9 @@ def _validated_style(document: object, visual_id: str) -> dict:
 class ThreeDStyleControls(QWidget):
     """Compact 3D cosmetics editor; values never enter calibration parameters."""
 
+    #: Emitted when any presentation setting changes, for live embedded views.
+    changed = Signal()
+
     def __init__(self, parent=None, visual_id: str = "assessment:phase3",
                  show_open3d_note: bool = True):
         super().__init__(parent)
@@ -66,8 +70,13 @@ class ThreeDStyleControls(QWidget):
             raise ValueError("visual_id must be a non-empty string")
         self._visual_id = visual_id
         self._style_file = _style_path(visual_id)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # Two short rows rather than one long one, so a narrow window keeps
+        # every control in view.
+        rows = QVBoxLayout(self)
+        rows.setContentsMargins(0, 0, 0, 0)
+        rows.setSpacing(6)
+        layout = QHBoxLayout()
+        rows.addLayout(layout)
         layout.addWidget(QLabel("3D background:"))
         self.background = QComboBox()
         self.background.addItem("Theme default", "theme")
@@ -95,6 +104,9 @@ class ThreeDStyleControls(QWidget):
         self.legend.setToolTip("Shows or hides the reprojection-error scale; it does not rescale values.")
         layout.addWidget(self.axes)
         layout.addWidget(self.legend)
+        layout.addStretch()
+        layout = QHBoxLayout()
+        rows.addLayout(layout)
         self.save_style = QPushButton("Save style")
         self.save_style.setToolTip("Save these presentation settings for this visual on this computer.")
         self.save_style.clicked.connect(self._save_style)
@@ -111,8 +123,14 @@ class ThreeDStyleControls(QWidget):
             "use the native viewer's interactive camera controls."
         )
         self._open3d_note.setVisible(show_open3d_note)
-        layout.addWidget(self._open3d_note)
+        self._open3d_note.setWordWrap(True)
+        layout.addWidget(self._open3d_note, 1)
+        if not show_open3d_note:
+            layout.addStretch()
         self._load_style(silent=True)
+        for signal in (self.background.currentIndexChanged, self.point_size.valueChanged,
+                       self.view.currentIndexChanged, self.axes.toggled, self.legend.toggled):
+            signal.connect(lambda *_args: self.changed.emit())
 
     def _style_values(self) -> dict:
         """Capture presentation controls without touching reconstructed data."""
@@ -166,6 +184,10 @@ class ThreeDStyleControls(QWidget):
             return
         self._set_style({"background": "theme", "point_size": 3.0,
                          "view": "isometric", "axes": True, "legend": True})
+
+    def values(self) -> dict:
+        """The current presentation settings, as ``_apply_3d_cosmetics`` takes them."""
+        return self._style_values()
 
     def viewer_arguments(self) -> list[str]:
         """Return explicit viewer CLI arguments for the current cosmetic state."""

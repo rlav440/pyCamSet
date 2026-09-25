@@ -51,6 +51,9 @@ dependencies = [
     # dependency.  It is also by far the largest -- see requirements_core.txt
     # for the lean install that leaves it out.
     "PySide6",
+    # Embeds the Assess Calibration 3D views in the GUI.  Pure Python over
+    # qtpy; the GUI falls back to a separate viewer window without it.
+    "pyvistaqt",
 ]
 
 [project.urls]

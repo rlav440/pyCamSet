@@ -572,8 +572,10 @@ class CameraSet:
         pv.set_plot_theme('Document')
         if scene is None:
             scene = pv.Plotter()
-        for mesh in cam_meshes:
-            scene.add_mesh(mesh, style='wireframe', reset_camera=True, color='k')
+        # Named so a theme can recolour them: black is lost on a dark background.
+        for index, mesh in enumerate(cam_meshes):
+            scene.add_mesh(mesh, style='wireframe', reset_camera=True, color='k',
+                           name=f"camera-frustum-{index}")
         if view_cones is not None:
             for v_con in v_cones:
                 scene.add_mesh(v_con, opacity=0.05, color='g')

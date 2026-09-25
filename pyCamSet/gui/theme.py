@@ -401,6 +401,23 @@ def _stylesheet(tokens: Mapping[str, str]) -> str:
             border-color: {t['accent']}; }}
         QToolButton#allTabsButton:focus {{ border-color: {t['focus']}; }}
         QToolButton#allTabsButton::menu-indicator {{ image: none; width: 0; }}
+        QPushButton#linkButton {{ background: transparent; border: none; color: {t['accent_pressed']};
+            padding: 2px 4px; min-height: 0; text-decoration: underline; }}
+        QPushButton#linkButton:hover {{ color: {t['accent']}; }}
+        QPushButton#linkButton:focus {{ border: 1.5px solid {t['focus']}; border-radius: 4px; }}
+        /* Menu buttons that sit beside ordinary buttons (figure save menu,
+           Assess Calibration toolbar): same outline, their own ▾ glyph. */
+        QToolButton#saveMenuButton, QToolButton#toolbarMenuButton {{
+            background-color: {t['surface']}; color: {t['text']};
+            border: 1px solid {t['border_strong']}; border-radius: 6px; padding: 3px 8px; }}
+        QToolButton#saveMenuButton {{ padding: 0; }}
+        QToolButton#saveMenuButton:hover, QToolButton#toolbarMenuButton:hover,
+        QToolButton#toolbarMenuButton:checked {{
+            background-color: {t['accent_tint']}; border-color: {t['accent']}; }}
+        QToolButton#saveMenuButton:focus, QToolButton#toolbarMenuButton:focus {{
+            border: 1.5px solid {t['focus']}; }}
+        QToolButton#saveMenuButton::menu-indicator,
+        QToolButton#toolbarMenuButton::menu-indicator {{ image: none; width: 0; }}
 
         /* ---- Scroll areas / scrollbars -------------------------------- */
         QScrollArea {{ border: none; background: transparent; }}

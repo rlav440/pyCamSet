@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 
 from pyCamSet.gui.theme import set_text_role
 from pyCamSet.gui.shared_functions import (
+    hold_run_button,
     CollapsibleSection,
     DETECTOR_CHOOSE,
     IMAGE_FOLDER_SCHEMATIC,
@@ -230,11 +231,16 @@ class Phase1Tab(QWidget):
         form_scroll.setWidget(form_widget)  # Make the whole left-side form scroll as one unit.
         top_row.addWidget(form_scroll, stretch=1)  # Preserve the existing left/right split layout.
 
-        side = QWidget()
+        side = self._side = QWidget()
         side.setFixedWidth(200)
         side_layout = QVBoxLayout(side)
         side_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         top_row.addWidget(side)
+        # The finished run's result, right of the controls; it takes the
+        # empty side column's place once there is something to show.
+        from pyCamSet.gui.run_results import RunResultPanel
+        self._result_panel = RunResultPanel("Detections", self._open_diagnostics)
+        top_row.addWidget(self._result_panel, stretch=1)
 
         # ── Paths (collapsible) ────────────────────────────────────────
         paths_sect = CollapsibleSection("Paths", expanded=False)
@@ -432,7 +438,7 @@ class Phase1Tab(QWidget):
 
         # ── Action buttons ─────────────────────────────────────────────
         btn_row = QHBoxLayout()
-        run_btn = make_blue_button("▶  Run Phase 1", self._run_phase1)
+        run_btn = self._run_btn = make_blue_button("▶  Run Phase 1", self._run_phase1)
         run_btn.setToolTip("Run target detection for the selected image folder.")
         btn_row.addWidget(run_btn)
         diag_btn = make_warning_button("Diagnostics ▼", self._open_diagnostics)
@@ -679,10 +685,15 @@ class Phase1Tab(QWidget):
         self._worker.finished.connect(self._on_run_finished)
         self._worker.error.connect(
             lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
+        hold_run_button(self._run_btn, self._worker)
         self._worker.start()
 
     def _on_run_finished(self, metadata: dict) -> None:
         gate_continue_button(self._continue_btn, self._terminal, metadata)
+        from pyCamSet.gui.run_results import show_run_result
+        show_run_result(self._result_panel, "phase1", metadata,
+                        self._workspace_mgr.workspace_path)
+        self._side.setVisible(not self._result_panel.isVisibleTo(self))
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
 

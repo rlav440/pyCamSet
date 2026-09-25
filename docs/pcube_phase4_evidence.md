@@ -157,6 +157,10 @@ The implementation adds:
 - GUI run/cancel/retry status handling and quality-gate presentation.
 - non-linear loss handling that cannot silently fall through the custom Schur
   path; SciPy trust-region receives the requested loss and scale.
+  Superseded on 2026-09-25: the Schur solver now honours SciPy's named robust
+  losses itself (`pyCamSet/optimisation/robust_loss.py`), so a robust Phase 4
+  stays on it; the trust-region fallback remains for the cases
+  `can_use_schur` rejects, and its warning now always gives the reason.
 
 The missing-image gate and initial-error fallback each have regression tests.
 

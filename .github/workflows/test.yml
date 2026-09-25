@@ -145,7 +145,7 @@ jobs:
         # themselves are headless -- conftest forces the offscreen platform
         # plugin -- so this needs no display and no xvfb.
         if: ${{ ! matrix.lean }}
-        run: pip install PySide6
+        run: pip install PySide6 pyvistaqt
 
       - name: Check Qt starts
         # A missing native library surfaces here, once, instead of as fifty

@@ -24,8 +24,13 @@ If it will not start, see
 The **File**, **Edit**, and **Settings** menus sit at the top left. File also
 offers **Create Target…**; it remains available as a prominent button above
 the tabs. Edit contains the informational-tooltip toggle. Settings contains
-the terminal-output toggle and colour-theme selector. These menu controls are
-the same live controls used by the application, not separate copies.
+the terminal-output toggle and a **Theme** submenu. Every item is an ordinary
+menu entry that can be clicked (on macOS, too, where the menu bar is the
+system's own) and stays in step with the setting it controls.
+
+**Run** on a phase can be pressed once: it reads **Running…** and stays
+disabled until that run finishes, fails or is cancelled, and a rerun started
+from the phase's diagnostics holds it the same way.
 
 The Settings theme selector offers Light, Dark, and Sepia. The selected theme
 sets application chrome and the neutral chrome of GUI-managed Matplotlib
@@ -148,6 +153,12 @@ images that holds every run. Recent folders are remembered between sessions.
 ![The Phase 1 Detection tab.](../assets/gui/phase-1-detection-light.png#only-light)
 ![The Phase 1 Detection tab.](../assets/gui/phase-1-detection-dark.png#only-dark)
 
+When a run finishes, a card to the right of the controls shows two images with
+their detections drawn on: the image with the most detections and the image
+with the fewest (among those where the target was found at all), each named
+with its camera, file and count. **See more in Diagnostics** opens the full
+viewer. The markers follow the style saved for the diagnostics overlay.
+
 Finds the calibration target in every image. The calibration target is
 described here, and the detector's own options appear in a section named for
 the backend in use — *Detection Options (aruco1)* above.
@@ -180,6 +191,10 @@ board completeness (D1.3), a feature-count heatmap (D1.4), spatial coverage
 
 ### Phase 2 — Intrinsics
 
+After a run, the card beside the controls plots every image's reprojection
+RMS for each camera, with a diamond for the camera's own RMS: which camera is
+off, and whether a few images carry the error, at a glance.
+
 Calibrates each camera independently, producing the camset the bundle
 adjustment starts from. Its diagnostics cover per-camera RMS reprojection
 (D2.1), the intrinsics and distortion themselves (D2.2, D2.3), the spread
@@ -204,6 +219,12 @@ from the cameras Phase 2 produced.
 
 ![The Phase 3 Bundle Adjustment tab.](../assets/gui/phase-3-bundle-adjustment-light.png#only-light)
 ![The Phase 3 Bundle Adjustment tab.](../assets/gui/phase-3-bundle-adjustment-dark.png#only-dark)
+
+After a run, the card beside the controls shows the camera poses, each camera
+named with its mean reprojection error underneath. A telecentric camera has
+only its direction solved, so a telecentric rig is drawn one unit back along
+each camera's viewing direction, looking at the target; the card says so. The
+D3.13 diagnostics plot draws the same figure.
 
 Solves the whole camera set and the target poses together. The solver controls
 are here — thread count, `max_nfev`, verbosity, outlier rejection, and which
@@ -260,10 +281,12 @@ Each also shows an **Upstream Run Chain** for the selected run — the phase 2 i
 started from, the phase 1 that fed that — so a result can be traced back to the
 detections that produced it.
 
-Managed Matplotlib figure cards offer **Expand**, **Save PNG**, **Save SVG**, **Save PDF**,
-**Save CSV** when a source-backed numeric adapter exists, and **Style…**. PNG sizing
-templates expose screen (160 mm / 150 dpi), generic single-column (85 mm / 300 dpi),
-and generic double-column (180 mm / 300 dpi) choices. These are templates, not
+Managed Matplotlib figure cards keep a compact header: the camera icon saves a
+PNG, the **▾** beside it holds **Save SVG**, **Save PDF** and the **Export size**,
+the gear opens **Style…**, the chart icon saves a CSV when a source-backed numeric
+adapter exists, and **Expand** opens a larger view. Export sizes are screen
+(160 mm / 150 dpi), generic single-column (85 mm / 300 dpi), and generic
+double-column (180 mm / 300 dpi). These are templates, not
 claims of compliance with a named journal. CSV exports include JSON metadata comments
 for source/run, data kind, axes and units where those are known; raster screenshots
 are never converted into fabricated data.
@@ -329,12 +352,7 @@ fetch returned 403. The separate 2026 *Science Advances* guide is not the
 source for this Science suggestion. This presentation editor applies
 to Matplotlib cards and the Phase 1 detection montage; the montage has a frame PNG
 and observed-coordinate CSV action. Phase 2 per-view plots and Phase 3 error,
-residual and camera-pose plots are hosted in cards. Assess Calibration remains in
-a child process: the selected application theme is propagated to its Matplotlib
-chrome and **Save 2D assessment exports…** writes its three 2D diagnostics (not
-the 3D scenes) as PNG, SVG and PDF using a generic screen/single-/double-column width/DPI template.
-Per-figure style controls and source-backed CSV are not yet available on that
-path. See [visual export coverage](visual-export.md)
+residual and camera-pose plots are hosted in cards. See [visual export coverage](visual-export.md)
 for the surface-by-surface traceability and remaining gaps. Managed PyVista
 views also provide 3D background, point-size, camera-view, axes,
 and error-legend controls. Save style and Load saved operate on a versioned
@@ -344,9 +362,24 @@ presentation-only and do not modify calibration coordinates, error scalars,
 or run artefacts. Open3D controls that cannot be implemented are explicitly
 unavailable; target printable SVG/PDF generation remains unchanged.
 
-Phase 3 and Phase 4 additionally offer **Assess Calibration**, which opens the full-size
-reconstruction and residual views in native matplotlib and PyVista windows
-rather than embedding them.
+Phase 3 and Phase 4 diagnostics share an **Assess Calibration** page:
+
+- **Figures** — the error distribution, per-camera coverage and accuracy vs
+  precision plots draw in the page as soon as it is opened for a run (the
+  calibration is assessed off the GUI thread). They are ordinary figure cards,
+  with style, PNG/SVG/PDF and source-backed CSV, and they reflow from three
+  columns to one as the window narrows.
+- **3D views** — the reconstructed points with the cameras, and in the
+  target's own frame. They use more memory, so they wait for **Visualise
+  Calibration**. *In this tab (PyVista)* embeds both interactive views
+  (through `pyvistaqt`); *Separate window (PyVista)* and *Separate window
+  (Open3D)* open a viewer of their own. **3D style ▾** holds the background,
+  point size, view, axes and legend, which redraw the embedded views live.
+- **Export ▾** saves the figures (PNG, SVG, PDF and CSV), the 3D views as a
+  PNG, or 3D geometry (glTF, OBJ, PLY), at the chosen export size.
+
+On a dark background the camera frustums and the 3D titles and legend are drawn
+in light grey rather than black, so they stay visible.
 
 ## Making a target
 

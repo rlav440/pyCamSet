@@ -557,8 +557,9 @@ def per_camera_coverage(diagnostics: CalibrationDiagnostics) -> plt.Figure:
         im = ax[cam_n].scatter(loc_x, loc_y, c=error * away, s=2, alpha=0.4,
                                vmin=-diagnostics.e_lim, vmax=diagnostics.e_lim,
                                cmap="coolwarm")
+        # two lines: long rig camera names otherwise run into their neighbours
         ax[cam_n].set_title(
-            f"{detection.cam_names[cam_n]} mean error {np.mean(error):.2f}",
+            f"{detection.cam_names[cam_n]}\nmean error {np.mean(error):.2f} px",
             fontsize=8)
         ax[cam_n].set_xlim([0, cams[cam_n].res[0]])
         ax[cam_n].set_ylim([0, cams[cam_n].res[1]])
@@ -579,6 +580,32 @@ def per_camera_coverage(diagnostics: CalibrationDiagnostics) -> plt.Figure:
     return fig
 
 
+FRUSTUM_ACTOR_PREFIX = "camera-frustum"
+
+
+def is_dark(colour) -> bool:
+    """Whether *colour* (hex or 0-1 RGB) is a dark background."""
+    from matplotlib.colors import to_rgb
+
+    red, green, blue = to_rgb(colour)
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue < 0.5
+
+
+def contrast_colours(background) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """
+    Frustum line and text colours that read against *background*.
+
+    Black frustums vanish on a dark background, so on one they are drawn in a
+    light grey, a step softer than the text so the data points stay dominant.
+
+    :param background: the scene background, hex or 0-1 RGB
+    :return: the frustum colour and the text colour, as 0-1 RGB
+    """
+    if is_dark(background):
+        return (0.76, 0.79, 0.85), (0.91, 0.92, 0.95)
+    return (0.0, 0.0, 0.0), (0.1, 0.1, 0.1)
+
+
 def _apply_3d_cosmetics(plotter, theme_name: str = "Light", background: str = "theme",
                         point_size: float = 3.0, view: str = "isometric",
                         axes: bool = True) -> None:
@@ -596,13 +623,25 @@ def _apply_3d_cosmetics(plotter, theme_name: str = "Light", background: str = "t
     colour = (THEME_TOKENS[theme_name]["background"] if background == "theme"
               else {"white": "#ffffff", "charcoal": "#242a32"}[background])
     plotter.set_background(colour, all_renderers=True)
+    frustum_colour, text_colour = contrast_colours(colour)
+    for bar in getattr(plotter, "scalar_bars", {}).values():
+        bar.GetTitleTextProperty().SetColor(*text_colour)
+        bar.GetLabelTextProperty().SetColor(*text_colour)
     renderers = list(plotter.renderers)
     columns = max(1, int(plotter.shape[1]))
     for index in range(len(renderers)):
         plotter.subplot(index // columns, index % columns)
         if axes:
             plotter.add_axes()
-        for actor in plotter.renderer.actors.values():
+        for name, actor in plotter.renderer.actors.items():
+            if str(name).startswith(FRUSTUM_ACTOR_PREFIX):
+                actor.GetProperty().SetColor(*frustum_colour)
+                continue
+            text_property = (actor.GetTextProperty() if hasattr(actor, "GetTextProperty")
+                             else None)
+            if text_property is not None:
+                text_property.SetColor(*text_colour)
+                continue
             mapper = actor.GetMapper() if hasattr(actor, "GetMapper") else None
             dataset = mapper.GetInput() if mapper is not None else None
             if (dataset is not None and dataset.GetNumberOfCells() == 0
@@ -620,16 +659,19 @@ def _apply_3d_cosmetics(plotter, theme_name: str = "Light", background: str = "t
 
 
 def reconstruction_scene(diagnostics: CalibrationDiagnostics, point_size: float = 3.0,
-                         show_legend: bool = True) -> 'pv.Plotter':
+                         show_legend: bool = True, plotter=None) -> 'pv.Plotter':
     """
     The triangulated features where the cameras put them, with the cameras.
 
     :param diagnostics: the calibration to draw
+    :param plotter: draw into this plotter (an embedded Qt view, say)
+        rather than a new window
     :return: the plotter, to show or screenshot
     """
     pv.set_plot_theme('document')
-    plotter = pv.Plotter()
-    plotter.title = "Reconstructed Points in Scene Coordinates"
+    if plotter is None:
+        plotter = pv.Plotter()
+        plotter.title = "Reconstructed Points in Scene Coordinates"
     plotter.add_text("Reconstructed Points in Scene Coordinates",
                      position='upper_edge', font_size=10, font="times")
     diagnostics.cams.get_scene(scene=plotter, labels=False)
@@ -648,7 +690,7 @@ def reconstruction_scene(diagnostics: CalibrationDiagnostics, point_size: float 
 def target_space_scene(diagnostics: CalibrationDiagnostics,
                        title: str = "Reconstructed Points in Target Coordinates",
                        point_size: float = 3.0, show_legend: bool = True,
-                       ) -> 'pv.Plotter':
+                       plotter=None) -> 'pv.Plotter':
     """
     The same features carried back into the target's own frame.
 
@@ -658,11 +700,13 @@ def target_space_scene(diagnostics: CalibrationDiagnostics,
 
     :param diagnostics: the calibration to draw
     :param title: what to write across the top of it
+    :param plotter: draw into this plotter rather than a new window
     :return: the plotter, to show or screenshot
     """
     pv.set_plot_theme('document')
-    plotter = pv.Plotter()
-    plotter.title = title
+    if plotter is None:
+        plotter = pv.Plotter()
+        plotter.title = title
     plotter.add_text(title, position="upper_edge", font_size=10, font='times')
     plotter.add_text(f"{diagnostics.rejected} erroneous Points",
                      position='lower_left', font_size=10, font='times')
@@ -818,6 +862,7 @@ def visualise_calibration(
         three_d_view: str = "isometric",
         three_d_axes: bool = True,
         three_d_legend: bool = True,
+        three_d_only: bool = False,
     ) -> list[Path]:
     """
     A function to draw and plot the errors in a calibration given the results.
@@ -835,6 +880,8 @@ def visualise_calibration(
     :param figure_dpi: raster DPI for PNG output
     :param figure_formats: Matplotlib output formats, e.g. PNG/SVG/PDF
     :param matplotlib_only: skip 3D scene generation for a 2D-only export request
+    :param three_d_only: skip the 2D figures, for a viewer opened beside a GUI
+        that already shows them
     :return: the files written, if any
     """
     if not _PYVISTA_OK and not matplotlib_only:
@@ -859,7 +906,7 @@ def visualise_calibration(
                                   + ", ".join(existing))
 
     written: list[Path | None] = []
-    figures = [
+    figures = [] if three_d_only else [
         (cluster_plot([diagnostics.residuals], alphas=[0.1]), "error_distribution"),
         (per_camera_coverage(diagnostics), "per_camera_coverage"),
         (accuracy_precision_plot(diagnostics), "accuracy_precision"),
@@ -868,6 +915,8 @@ def visualise_calibration(
     # Apply GUI chrome in this isolated process without recolouring data series.
     from pyCamSet.gui.theme import apply_matplotlib_theme
     per_figure_themes = figure_themes or (theme_name,) * len(figures)
+    if three_d_only:
+        per_figure_themes = ()
     if len(per_figure_themes) != len(figures):
         raise ValueError("figure_themes must contain one theme per assessment figure")
     for (figure, _), figure_theme in zip(figures, per_figure_themes):
@@ -879,7 +928,7 @@ def visualise_calibration(
                 for figure, name in figures]
     if save_dir is not None and export_csv:
         written.extend(_write_assessment_csvs(diagnostics, save_dir, provenance))
-    if show:
+    if show and figures:
         plt.show()
     else:
         for figure, _ in figures:

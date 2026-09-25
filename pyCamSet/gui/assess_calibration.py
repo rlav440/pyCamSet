@@ -78,6 +78,19 @@ def resolve_run_camset_artifact(
             pp = Path(p)
             if pp.exists():
                 return pp
+    # A workspace moved to another drive keeps its old absolute paths; the
+    # files are still beside the run's own record.
+    run_dir = run.get("_run_dir")
+    if run_dir:
+        from pyCamSet.workflow.workspace import resolve_artifact
+
+        phase = canonical_phase_tag(run.get("phase"))
+        if phase in ("phase3", "phase4"):
+            found = resolve_artifact(
+                {"run_id": Path(run_dir).name}, phase, Path(run_dir).parent.parent)
+            if found is not None and not (accepted_only and phase == "phase4"
+                                          and found.name == "initial_cameras.camset"):
+                return found
     return None
 
 

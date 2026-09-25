@@ -12,6 +12,7 @@ from pathlib import Path
 
 import shiboken6
 from PySide6.QtCore import QEvent, QObject, QSettings, Qt
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -25,7 +26,6 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QToolButton,
     QVBoxLayout,
-    QWidgetAction,
     QWidget,
 )
 
@@ -176,18 +176,26 @@ class PyCamSetApp(QMainWindow):
         create_target_action = file_menu.addAction("Create Target…")
         create_target_action.triggered.connect(self._open_create_target)
 
+        # Plain checkable actions, not widgets embedded in the menus: the
+        # macOS menu bar is native, and a widget inside a native menu takes
+        # the keyboard but not the mouse.  The checkboxes and the combo stay
+        # the state every tab reads; each action mirrors one of them.
         edit_menu = self.menuBar().addMenu("Edit")
-        info_control = QWidgetAction(edit_menu)
-        info_control.setDefaultWidget(self._info_cb)
-        edit_menu.addAction(info_control)
+        self._info_action = self._mirror_checkbox(edit_menu, self._info_cb)
 
         settings_menu = self.menuBar().addMenu("Settings")
-        terminal_control = QWidgetAction(settings_menu)
-        terminal_control.setDefaultWidget(self._terminal_cb)
-        settings_menu.addAction(terminal_control)
-        theme_control = QWidgetAction(settings_menu)
-        theme_control.setDefaultWidget(self._theme_combo)
-        settings_menu.addAction(theme_control)
+        self._terminal_action = self._mirror_checkbox(settings_menu, self._terminal_cb)
+        theme_menu = settings_menu.addMenu("Theme")
+        self._theme_actions = QActionGroup(theme_menu)
+        self._theme_actions.setExclusive(True)
+        for name in (self._theme_combo.itemText(i) for i in range(self._theme_combo.count())):
+            action = theme_menu.addAction(name)
+            action.setCheckable(True)
+            action.setMenuRole(QAction.MenuRole.NoRole)
+            action.setChecked(name == self._theme_combo.currentText())
+            action.triggered.connect(lambda _checked=False, n=name: self._theme_combo.setCurrentText(n))
+            self._theme_actions.addAction(action)
+        self._theme_combo.currentTextChanged.connect(self._check_theme_action)
 
         # ── Tab widget ─────────────────────────────────────────────────
         ws = self._workspace_mgr
@@ -658,6 +666,24 @@ class PyCamSetApp(QMainWindow):
         self._theme_settings.sync()
         if self._theme_settings.status() != QSettings.Status.NoError:
             self.statusBar().showMessage("Colour theme is active but could not be saved.", 10000)
+
+    @staticmethod
+    def _mirror_checkbox(menu: QMenu, checkbox: QCheckBox) -> QAction:
+        """A checkable menu action that shows and sets *checkbox*."""
+        action = menu.addAction(checkbox.text())
+        action.setCheckable(True)
+        action.setChecked(checkbox.isChecked())
+        # Keep Qt's macOS heuristics from moving the item into the
+        # application menu because its text resembles "Preferences".
+        action.setMenuRole(QAction.MenuRole.NoRole)
+        action.toggled.connect(checkbox.setChecked)
+        checkbox.toggled.connect(action.setChecked)
+        return action
+
+    def _check_theme_action(self, name: str) -> None:
+        for action in self._theme_actions.actions():
+            if action.text() == name:
+                action.setChecked(True)
 
     def _populate_tabs_menu(self, menu: QMenu) -> None:
         """List the currently visible tabs, marking the open one."""

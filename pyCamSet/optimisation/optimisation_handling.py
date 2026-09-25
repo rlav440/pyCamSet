@@ -17,6 +17,7 @@ import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.template_handler as th
 from pyCamSet.optimisation.numba_schur import (
     SchurSolver, levenberg_marquardt, spec_from_groups)
+from pyCamSet.optimisation import robust_loss
 
 from pyCamSet.calibration_targets import TargetDetection
 from pyCamSet.utils.calibration_report import (
@@ -111,6 +112,9 @@ def can_use_schur(param_handler) -> tuple[bool, str]:
     """
     if param_handler.problem_opts.get("solver", "schur") != "schur":
         return False, f"solver option is {param_handler.problem_opts['solver']!r}"
+    loss = param_handler.problem_opts.get("loss", "linear")
+    if not robust_loss.is_supported(loss):
+        return False, f"the loss {loss!r} is not one the Schur solver implements"
     # The block solver is built from parameter_groups()/make_loss_blocks(),
     # which describe the reprojection residuals alone.  Prior rows appended
     # to the loss are invisible to it, so it would quietly optimise a
@@ -154,6 +158,12 @@ def run_schur_bundle_adjustment(param_handler, loss_fn, bundle_jac, init_params,
     spec = spec_from_groups(groups)
     solver = SchurSolver(spec)
     blocks = param_handler.make_loss_blocks(threads)
+    loss = param_handler.problem_opts.get("loss", "linear")
+    residuals = loss_fn
+    if loss != "linear":
+        f_scale = float(param_handler.problem_opts.get("f_scale", 1.0))
+        residuals, blocks = robust_loss.robustify(loss_fn, blocks, loss, f_scale)
+        logger.info(f"Schur solver: {loss} loss, f_scale {f_scale:g}")
     logger.info(
         f"Schur solver: eliminating {spec.n_elim_blocks} blocks of "
         f"{spec.elim_size}x{spec.elim_size}, leaving a "
@@ -161,13 +171,18 @@ def run_schur_bundle_adjustment(param_handler, loss_fn, bundle_jac, init_params,
         f"(from {init_params.size})"
     )
     with OptimisationProgress() as progress:
-        return levenberg_marquardt(
-            loss_fn, blocks, init_params, solver,
+        result = levenberg_marquardt(
+            residuals, blocks, init_params, solver,
             max_iter=param_handler.problem_opts["max_nfev"],
             jac_csr=bundle_jac,
             verbose=param_handler.problem_opts["verbosity"] > 1,
             callback=progress.update,
         )
+    if residuals is not loss_fn:
+        # As scipy reports it: cost is the robust objective, fun the raw
+        # residuals every error statistic is computed from.
+        result.fun = loss_fn(result.x)
+    return result
 
 
 def get_bundle_adjustment_stats(
@@ -306,21 +321,17 @@ def _solve_bundle_adjustment(
     start = time.time()
     usable, reason = can_use_schur(param_handler)
     requested_loss = param_handler.problem_opts.get("loss", "linear")
-    # The custom Schur path only minimises the raw residual vector; sending a
-    # scipy robust-loss request through it would silently ignore the GUI/API
-    # option.  Use scipy's trust-region implementation whenever a nonlinear
-    # loss is requested so the selected loss and scale are actually honoured.
-    use_schur = (
-        usable and bundle_jac is not None and requested_loss == "linear"
-    )
-    if use_schur:
+    # The Schur path honours scipy's named robust losses itself (see
+    # robust_loss); anything else goes to scipy, and can_use_schur says why.
+    if usable and bundle_jac is None:
+        usable, reason = False, "the handler provides no analytic jacobian"
+    if usable:
         solver = "schur"
         optimisation = run_schur_bundle_adjustment(
             param_handler, loss_fn, bundle_jac, init_params, threads)
     else:
         solver = "trf"
-        if bundle_jac is not None and param_handler.problem_opts.get(
-                "solver", "schur") == "schur":
+        if param_handler.problem_opts.get("solver", "schur") == "schur":
             logger.warning(f"Falling back to the trust region solver: {reason}")
         # A lockbox constrains parameters by bounding them, so the bounds
         # have to reach the solver: without them the priors pull, but

@@ -460,6 +460,21 @@ class PuzzleBoardCube(AbstractTarget):
         affine[:2, 2] *= self.face_length
         return affine
 
+    def _label_fill_colour(self, face_index: int) -> str:
+        """Contrasting text colour for the face-number label's border cell.
+
+        The label sits in the bottom-left border cell (x=0, y=n_points), whose
+        colour follows the same checkerboard parity as :meth:`_face_rectangles`.
+        That parity is fixed for faces whose net origin makes ``start_x +
+        start_y`` always even (2, 4, 6 in the printed 1-based numbering), but
+        for the others it tracks the parity of ``n_points`` -- an odd corner
+        count flips their border cell from black to white, so a label fixed
+        at "white" goes invisible on those faces.
+        """
+        start_x, start_y = self.face_origins[face_index]
+        corner_is_black = (self.n_points + start_x + start_y) % 2 == 0
+        return "white" if corner_is_black else "black"
+
     def _face_rectangles(self, face_index: int) -> list[np.ndarray]:
         """Return black checkerboard polygons for one face in local metres."""
         size = self.n_points
@@ -571,7 +586,7 @@ class PuzzleBoardCube(AbstractTarget):
                 label_text = drawing.text(  # Use viewBox millimetres directly; an additional mm suffix would rescale the text.
                     str(face_index + 1),
                     insert=tuple(label_mm),
-                    fill="white",
+                    fill=self._label_fill_colour(face_index),
                     font_size=f"{label_size_mm:.6f}",
                     font_family="Arial",
                     font_weight="bold",
@@ -592,7 +607,7 @@ class PuzzleBoardCube(AbstractTarget):
         drawing.add(drawing.text(
             str(face_index + 1),
             insert=(float(side_mm * 0.02), float(side_mm * 0.985)),
-            fill="white",
+            fill=self._label_fill_colour(face_index),
             font_size=f"{side_mm * 0.045:.6f}",
             font_family="Arial",
             font_weight="bold",

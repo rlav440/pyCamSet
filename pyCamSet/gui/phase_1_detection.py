@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+import tempfile
 from typing import Any, Callable, Optional
 import pickle
 
@@ -29,6 +30,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -38,14 +40,17 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.utils.paths import long_path
 from pyCamSet.gui.shared_functions import (
+    hold_run_button,
     CollapsibleSection,
     DETECTOR_CHOOSE,
     IMAGE_FOLDER_SCHEMATIC,
@@ -62,7 +67,7 @@ from pyCamSet.gui.shared_functions import (
     gate_continue_button,
     make_blue_button,
     make_continue_button,
-    make_orange_button,
+    make_warning_button,
     make_scrollable_tab,
     make_section_label,
     make_separator,
@@ -86,7 +91,6 @@ from pyCamSet.workflow.recent_targets import (
     forget_target, load_recent_targets, remember_target)
 from pyCamSet.workflow.targets import describe_target, TARGET_KEY
 from pyCamSet.workflow.workspace import (
-    IMAGE_EXTS as _IMAGE_EXTS,
     WorkspaceManager,
     get_camera_subfolders,
     path_exists,
@@ -183,16 +187,22 @@ class Phase1Tab(QWidget):
         self._cam_checkboxes.clear()
         if not camera_names:
             lbl = QLabel("(no cameras found)")
-            lbl.setStyleSheet("color: gray; font-size: 10px;")
+            set_text_role(lbl, "hint")
             self._cameras_area_layout.addWidget(lbl)
+            self._cameras_area.setMinimumHeight(lbl.sizeHint().height())
             self._rebuilding_cameras = False
             return
         for name in camera_names:
             cb = QCheckBox(name)
+            cb.setMinimumHeight(cb.sizeHint().height())
             cb.setChecked(True if restore_states is None else bool(restore_states.get(name, True)))
             cb.stateChanged.connect(lambda _state: self._emit_cameras_changed())
             self._cam_checkboxes[name] = cb
             self._cameras_area_layout.addWidget(cb)
+        checkbox_heights = [cb.sizeHint().height() for cb in self._cam_checkboxes.values()]
+        spacing = self._cameras_area_layout.spacing()
+        content_height = sum(checkbox_heights) + spacing * max(0, len(checkbox_heights) - 1)
+        self._cameras_area.setMinimumHeight(content_height)
         self._rebuilding_cameras = False
 
     def _emit_cameras_changed(self) -> None:
@@ -204,26 +214,33 @@ class Phase1Tab(QWidget):
 
     def _build_ui(self, terminal_cb: QCheckBox) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
+        root.setContentsMargins(4, 4, 4, 4)
 
         top_row = QHBoxLayout()
         root.addLayout(top_row)
 
         form_widget = QWidget()
         form_root = QVBoxLayout(form_widget)
+        # Pack sections at the top; spare height must not open gaps between them.
+        form_root.setAlignment(Qt.AlignmentFlag.AlignTop)
         form_root.setContentsMargins(0, 0, 0, 0)
-        form_root.setSpacing(4)
+        form_root.setSpacing(2)
         form_scroll = QScrollArea()  # Keep long parameter forms usable when collapsible sections expand.
         form_scroll.setWidgetResizable(True)  # Resize the inner form to the available width.
         form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)  # Match the existing flat panel styling.
         form_scroll.setWidget(form_widget)  # Make the whole left-side form scroll as one unit.
         top_row.addWidget(form_scroll, stretch=1)  # Preserve the existing left/right split layout.
 
-        side = QWidget()
+        side = self._side = QWidget()
         side.setFixedWidth(200)
         side_layout = QVBoxLayout(side)
         side_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         top_row.addWidget(side)
+        # The finished run's result, right of the controls; it takes the
+        # empty side column's place once there is something to show.
+        from pyCamSet.gui.run_results import RunResultPanel
+        self._result_panel = RunResultPanel("Detections", self._open_diagnostics)
+        top_row.addWidget(self._result_panel, stretch=1)
 
         # ── Paths (collapsible) ────────────────────────────────────────
         paths_sect = CollapsibleSection("Paths", expanded=False)
@@ -235,7 +252,8 @@ class Phase1Tab(QWidget):
         self._floc_edit.setToolTip(IMAGE_FOLDER_SCHEMATIC)
         self._floc_edit.textChanged.connect(self._on_floc_changed)
         floc_btn = QPushButton("Browse…")
-        floc_btn.setFixedWidth(70)
+        floc_btn.setMinimumWidth(70)
+        floc_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         floc_btn.setToolTip("Select the root folder that contains one subfolder per camera.")
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
@@ -256,7 +274,8 @@ class Phase1Tab(QWidget):
         )
         self._recent_target_combo.activated.connect(self._on_recent_target_selected)
         forget_btn = QPushButton("Forget")
-        forget_btn.setFixedWidth(70)
+        forget_btn.setMinimumWidth(70)
+        forget_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         forget_btn.setToolTip("Remove the selected target from this list.")
         forget_btn.clicked.connect(self._forget_selected_target)
         recent_row.addWidget(self._recent_target_combo)
@@ -271,12 +290,9 @@ class Phase1Tab(QWidget):
 
         # ── Detection options ──────────────────────────────────────────
         form_root.addWidget(make_separator())
-        form_root.addWidget(make_section_label("pyCamSet Detection Options"))
-
-        detect_form = QFormLayout()
-        detect_form.setContentsMargins(0, 0, 0, 0)
-        detect_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        form_root.addLayout(detect_form)
+        detect_sect = CollapsibleSection("pyCamSet Detection Options", expanded=False)
+        form_root.addWidget(detect_sect)
+        detect_form = detect_sect.form()
 
         self._cache_cb = QCheckBox("Cache detections (caching)")
         self._cache_cb.setChecked(True)
@@ -405,30 +421,33 @@ class Phase1Tab(QWidget):
         self._cameras_area_layout = QVBoxLayout(self._cameras_area)
         self._cameras_area_layout.setContentsMargins(0, 0, 0, 0)
         self._cameras_area_layout.setSpacing(2)
-        self._cameras_placeholder = QLabel("(set image folder in Phase 0 to populate)")
-        self._cameras_placeholder.setStyleSheet("color: gray; font-size: 10px;")
+        self._cameras_placeholder = QLabel(
+            "No cameras yet: confirm an image folder in Phase 0 first.")
+        set_text_role(self._cameras_placeholder, "muted")
         self._cameras_area_layout.addWidget(self._cameras_placeholder)
         cam_scroll = QScrollArea()
         cam_scroll.setWidgetResizable(True)
-        cam_scroll.setFixedHeight(90)
+        # Keep several camera choices visible while avoiding a large empty
+        # placeholder panel in the default form; longer lists still scroll.
+        cam_scroll.setFixedHeight(56)
         cam_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         cam_scroll.setWidget(self._cameras_area)
         form_root.addWidget(cam_scroll)
+        # Spare height collects below the form, not between its rows.
+        form_root.addStretch(1)
 
         # ── Action buttons ─────────────────────────────────────────────
-        form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
-        run_btn = make_blue_button("▶  Run Phase 1", self._run_phase1)
+        run_btn = self._run_btn = make_blue_button("▶  Run Phase 1", self._run_phase1)
         run_btn.setToolTip("Run target detection for the selected image folder.")
         btn_row.addWidget(run_btn)
-        diag_btn = make_orange_button("Diagnostics ▼", self._open_diagnostics)
+        diag_btn = make_warning_button("Diagnostics ▼", self._open_diagnostics)
         diag_btn.setToolTip("Open Phase 1 diagnostics (hidden tab).")
         btn_row.addWidget(diag_btn)
         self._continue_btn = make_continue_button(self._continue_to_next)
         btn_row.addWidget(self._continue_btn)
         btn_row.addStretch()
-        form_root.addLayout(btn_row)
-        form_root.addStretch()
+        root.addLayout(btn_row)
 
         # ── Side panel ────────────────────────────────────────────────
         side_layout.addStretch()
@@ -552,7 +571,7 @@ class Phase1Tab(QWidget):
             if meta.priority and meta.priority != active_priority:
                 active_priority = meta.priority
                 heading = QLabel(f"Priority {meta.priority}")
-                heading.setStyleSheet("color: #1976d2; font-weight: bold;")
+                set_text_role(heading, "subheading")
                 self._detection_opts_section.addRow(heading)
             widget = build_parameter_widget(meta)
             if (meta.key in self._detection_option_edited
@@ -666,10 +685,15 @@ class Phase1Tab(QWidget):
         self._worker.finished.connect(self._on_run_finished)
         self._worker.error.connect(
             lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
+        hold_run_button(self._run_btn, self._worker)
         self._worker.start()
 
     def _on_run_finished(self, metadata: dict) -> None:
         gate_continue_button(self._continue_btn, self._terminal, metadata)
+        from pyCamSet.gui.run_results import show_run_result
+        show_run_result(self._result_panel, "phase1", metadata,
+                        self._workspace_mgr.workspace_path)
+        self._side.setVisible(not self._result_panel.isVisibleTo(self))
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
 
@@ -740,7 +764,7 @@ class Phase1DiagnosticsTab(QWidget):
 
         top_btn_row = QHBoxLayout()
         top_btn_row.addWidget(
-            make_orange_button("▲ Detection Settings", self._go_to_detection_settings)
+            make_warning_button("▲ Detection Settings", self._go_to_detection_settings)
         )
         top_btn_row.addStretch()
         root.addLayout(top_btn_row)
@@ -813,22 +837,55 @@ class Phase1DiagnosticsTab(QWidget):
         # Permanent navigation bar — created once, never rebuilt
         nav_bar = QHBoxLayout()
         self._draw_prev_btn = QPushButton("◀")
-        self._draw_prev_btn.setFixedWidth(36)
+        self._draw_prev_btn.setAccessibleName("Previous detection image")
+        self._draw_prev_btn.setToolTip("Show the previous detection image")
+        self._draw_prev_btn.setMinimumWidth(36)
+        self._draw_prev_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self._draw_prev_btn.clicked.connect(lambda: self._step_draw_image(-1))
         nav_bar.addWidget(self._draw_prev_btn)
         self._draw_next_btn = QPushButton("▶")
-        self._draw_next_btn.setFixedWidth(36)
+        self._draw_next_btn.setAccessibleName("Next detection image")
+        self._draw_next_btn.setToolTip("Show the next detection image")
+        self._draw_next_btn.setMinimumWidth(36)
+        self._draw_next_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self._draw_next_btn.clicked.connect(lambda: self._step_draw_image(+1))
         nav_bar.addWidget(self._draw_next_btn)
         self._draw_status_lbl = QLabel("—")
         self._draw_status_lbl.setFixedWidth(80)
-        self._draw_status_lbl.setStyleSheet("font-family: monospace;")
+        set_text_role(self._draw_status_lbl, "mono")
         nav_bar.addWidget(self._draw_status_lbl)
         nav_bar.addStretch()
         self._draw_expand_btn = QPushButton("Expand")
-        self._draw_expand_btn.setFixedWidth(70)
+        self._draw_expand_btn.setMinimumWidth(70)
+        self._draw_expand_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self._draw_expand_btn.clicked.connect(self._expand_draw_figure)
         nav_bar.addWidget(self._draw_expand_btn)
+        self._draw_save_btn = QPushButton("Save PNG")
+        from pyCamSet.gui.action_icons import set_action_icon
+        set_action_icon(self._draw_save_btn, "snapshot")
+        self._draw_save_btn.setEnabled(False)
+        self._draw_save_btn.clicked.connect(self._save_detection_montage_png)
+        nav_bar.addWidget(self._draw_save_btn)
+        self._montage_export_preset = QComboBox()
+        self._montage_export_preset.addItem("Screen · 160 mm · 150 dpi", (160.0, 150))
+        self._montage_export_preset.addItem("Single-column · 85 mm · 300 dpi", (85.0, 300))
+        self._montage_export_preset.addItem("Double-column · 180 mm · 300 dpi", (180.0, 300))
+        self._montage_export_preset.setToolTip("Generic width/DPI templates; no journal compliance is implied.")
+        from pyCamSet.gui.preferences import bind_export_preset
+        bind_export_preset(self._montage_export_preset, "phase1:detection-montage")
+        nav_bar.addWidget(self._montage_export_preset)
+        self._draw_csv_btn = QPushButton("Save coordinates CSV")
+        set_action_icon(self._draw_csv_btn, "chart")
+        self._draw_csv_btn.setEnabled(False)
+        self._draw_csv_btn.setToolTip("Export observed detected pixel coordinates for the displayed image index.")
+        self._draw_csv_btn.clicked.connect(self._save_detection_coordinates_csv)
+        nav_bar.addWidget(self._draw_csv_btn)
+        self._draw_style_btn = QPushButton("Style…")
+        set_action_icon(self._draw_style_btn, "options")
+        self._draw_style_btn.setAccessibleName("Detection overlay style options")
+        self._draw_style_btn.setEnabled(False)
+        self._draw_style_btn.clicked.connect(self._edit_detection_style)
+        nav_bar.addWidget(self._draw_style_btn)
         self._draw_btn = QPushButton("Draw Detections")
         self._draw_btn.clicked.connect(self._draw_detections_clicked)
         nav_bar.addWidget(self._draw_btn)
@@ -840,7 +897,7 @@ class Phase1DiagnosticsTab(QWidget):
         self._canvas_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         _placeholder = QLabel("Select a run and click 'Draw Detections' to render detected feature points.")
         _placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _placeholder.setStyleSheet("color: gray;")
+        set_text_role(_placeholder, "muted")
         _placeholder.setWordWrap(True)
         self._canvas_scroll.setWidget(_placeholder)
         montage_layout.addWidget(self._canvas_scroll, stretch=1)
@@ -899,7 +956,7 @@ class Phase1DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select one or more runs (up to 5) from the list to compare.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._summary_layout.addWidget(lbl)
             return
@@ -911,7 +968,7 @@ class Phase1DiagnosticsTab(QWidget):
             from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
         except ImportError:
             lbl = QLabel("matplotlib not available — cannot render summary plots.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._summary_layout.addWidget(lbl)
             return
@@ -984,10 +1041,32 @@ class Phase1DiagnosticsTab(QWidget):
                     fontsize=7,
                 )
 
-            canvas = FigureCanvasQTAgg(fig)
-            canvas.setMinimumSize(500, 330)
+            diagnostic_keys = {
+                "D1.1": "D1.1_total_detections", "D1.2": "D1.2_detection_rate",
+                "D1.3": "D1.3_board_completeness", "D1.6": "D1.6_spatial_coverage",
+                "D1.7": "D1.7_min_features",
+            }
+            metric_key = diagnostic_keys[title[:4]]
+            source_rows = []
+            for run_id, value, source_run in zip(run_ids, vals, runs):
+                diagnostics = source_run.get("diagnostics", {})
+                source_value = diagnostics.get(metric_key)
+                if source_value is None or source_value == {} or source_value == []:
+                    continue
+                source_rows.append((run_id, title, float(value), ylab))
 
-            card = MatplotlibFigureCard(title, fig, FigureCanvasQTAgg, parent=plots_host, min_height=330)
+            card = MatplotlibFigureCard(
+                title, fig, FigureCanvasQTAgg, parent=plots_host, min_height=330,
+                csv_export={
+                    "columns": ["run_id", "metric", "value", "unit"],
+                    "rows": source_rows,
+                    "metadata": {
+                        "phase": "phase1", "diagnostic": title,
+                        "data_kind": "run diagnostic summary values (mean/total aggregation as labelled)",
+                        "units": {"value": ylab}, "x_axis": "run_id", "y_axis": "value",
+                    },
+                },
+            )
 
             r = i // n_cols
             c = i % n_cols
@@ -1008,7 +1087,7 @@ class Phase1DiagnosticsTab(QWidget):
             cov_dict = d.get("D1.6_spatial_coverage", {}) or {}
 
             hdr = QLabel(f"Run: {run_id}")
-            hdr.setStyleSheet("font-weight: bold; margin-top: 8px;")
+            set_text_role(hdr, "subheading")
             self._summary_layout.addWidget(hdr)
 
             # A run that failed has no detections to summarise, and every
@@ -1019,7 +1098,8 @@ class Phase1DiagnosticsTab(QWidget):
             if failure:
                 why = QLabel(f"This run failed: {failure}")
                 why.setWordWrap(True)
-                why.setStyleSheet("color: #c0392b; margin-left: 16px;")
+                set_text_role(why, "danger")
+                why.setIndent(16)
                 self._summary_layout.addWidget(why)
 
             # Top summary lines (same content, compact style)
@@ -1053,7 +1133,7 @@ class Phase1DiagnosticsTab(QWidget):
                     ("D1.6 Coverage %", 1),
                 ]:
                     lbl = QLabel(text)
-                    lbl.setStyleSheet("font-weight: bold;")
+                    set_text_role(lbl, "subheading")
                     head.addWidget(lbl, stretch=stretch)
                 self._summary_layout.addLayout(head)
 
@@ -1084,7 +1164,7 @@ class Phase1DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select a run to view the detection heatmap.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._heatmap_layout.addWidget(lbl)
             return
@@ -1096,7 +1176,7 @@ class Phase1DiagnosticsTab(QWidget):
             from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
         except ImportError:
             lbl = QLabel("matplotlib not available — cannot render heatmap.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             self._heatmap_layout.addWidget(lbl)
             return
 
@@ -1115,7 +1195,7 @@ class Phase1DiagnosticsTab(QWidget):
             lbl = QLabel(
                 "No heatmap data in selected run(s).\nRe-run Phase 1 to generate it."
             )
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._heatmap_layout.addWidget(lbl)
             return
@@ -1130,7 +1210,7 @@ class Phase1DiagnosticsTab(QWidget):
                 "Check Phase 1 detection results; this run produced zero "
                 "detected features across all cameras."
             )
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._heatmap_layout.addWidget(lbl)
             return
@@ -1158,6 +1238,18 @@ class Phase1DiagnosticsTab(QWidget):
             FigureCanvasQTAgg,
             parent=self._heatmap_widget,
             min_height=360,
+            csv_export={
+                "columns": ["image_index", "camera", "features_detected"],
+                "rows": [(image_index, cam_names[camera_index] if camera_index < len(cam_names)
+                          else f"camera_{camera_index}", matrix_data[image_index, camera_index].item())
+                         for image_index in range(n_ims) for camera_index in range(n_cams)],
+                "metadata": {
+                    "run_id": selected_run.get("run_id"), "phase": "phase1",
+                    "diagnostic": "D1.4_features_matrix", "data_kind": "observed detection counts",
+                    "units": {"image_index": "index", "features_detected": "count"},
+                    "x_axis": "camera", "y_axis": "image_index", "value": "features_detected",
+                },
+            },
         )
         self._heatmap_layout.addWidget(card)
 
@@ -1288,11 +1380,12 @@ class Phase1DiagnosticsTab(QWidget):
         cam_points: dict[str, dict[int, np.ndarray]] = {}
         max_images = 0
 
+        from natsort import natsorted
+        from pyCamSet.utils.general_utils import glob_ims
         for cam in cams:
-            ims = sorted(
-                [p for p in cam_folders[cam].iterdir()
-                 if p.is_file() and p.suffix.lower() in _IMAGE_EXTS]
-            )
+            # Detection row indices are assigned after natural sorting in the producer.
+            # Reuse the producer's recursive, suffix-filtered, resolved image list.
+            ims = natsorted(glob_ims(cam_folders[cam]))
             cam_images[cam] = ims
             max_images = max(max_images, len(ims))
             per_im: dict[int, np.ndarray] = {}
@@ -1314,11 +1407,16 @@ class Phase1DiagnosticsTab(QWidget):
         cols = min(3, n)
         rows = int(math.ceil(n / cols))
         fig = Figure(figsize=(5 * cols, 3.5 * rows), tight_layout=True)
+        from pyCamSet.gui.theme import apply_matplotlib_theme
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        apply_matplotlib_theme(fig, app.property("pycamsetTheme") if app else "Light")
         canvas = FigureCanvasQTAgg(fig)
 
         axes: dict[str, object] = {}
-        im_art: dict[str, object] = {}
+        im_art: dict[str, object | None] = {}
         sc_art: dict[str, object] = {}
+        unreadable_art: dict[str, object] = {}
         empty = np.empty((0, 2))
 
         for i, cam in enumerate(cams, start=1):
@@ -1329,12 +1427,20 @@ class Phase1DiagnosticsTab(QWidget):
                 ax.set_title(f"{cam} (no images)")
                 ax.axis("off")
                 continue
-            img0 = mpimg.imread(ims[0])
-            im_artist = ax.imshow(img0, cmap="gray" if getattr(img0, "ndim", 3) == 2 else None)
             sc_artist = ax.scatter([], [], s=10, c="lime", marker="o", linewidths=0.4)
+            # Stable camera-scoped identity lets presentation settings follow this renderer.
+            sc_artist.set_gid(f"detection-overlay:phase1:{cam}")
             ax.axis("off")
-            im_art[cam] = im_artist
+            im_art[cam] = None
             sc_art[cam] = sc_artist
+            unreadable_art[cam] = ax.text(
+                0.5, 0.5, "Image unreadable", transform=ax.transAxes,
+                horizontalalignment="center", verticalalignment="center",
+                wrap=True,
+            )
+            # Opt this presentation placeholder into theme foreground updates.
+            unreadable_art[cam].set_gid("phase1:unreadable-placeholder")
+            unreadable_art[cam].set_visible(False)
 
         # Replace only the canvas area — the control bar stays unchanged
         self._canvas_scroll.setWidget(canvas)
@@ -1342,18 +1448,98 @@ class Phase1DiagnosticsTab(QWidget):
         self._draw_state = {
             "fig": fig,
             "canvas": canvas,
+            "run_id": chosen.get("run_id"),
             "cams": cams,
             "cam_images": cam_images,
             "cam_points": cam_points,
             "axes": axes,
             "im_art": im_art,
             "sc_art": sc_art,
+            "unreadable_art": unreadable_art,
             "max_images": max_images,
             "empty": empty,
             "mpimg": mpimg,
         }
+        # Load only the validated presentation sidecar; science/run files stay untouched.
+        from pyCamSet.gui.preferences import config_directory
+        from pyCamSet.gui.visual_style import apply_visual_style, load_style_for_visual
+        style_id = "phase1:detection-overlay"
+        # Its own style, else the saved default for all figures, else the
+        # theme; a malformed file falls back rather than half-applying.
+        saved_style, _source = load_style_for_visual(config_directory(), style_id)
+        self._draw_state["style"] = saved_style
+        apply_visual_style(fig, saved_style,
+                           (app.property("pycamsetTheme") if app else None) or "Light")
+        self._draw_style_btn.setEnabled(True)
+        self._draw_save_btn.setEnabled(True)
+        self._draw_csv_btn.setEnabled(True)
         self._draw_index = 0
         self._update_draw_frame()
+
+    def _edit_detection_style(self) -> None:
+        """Edit only rendered detections, never their source points or image."""
+        if not self._draw_state:
+            return
+        from PySide6.QtWidgets import QApplication, QMessageBox
+        from pyCamSet.gui.preferences import config_directory
+        from pyCamSet.gui.visual_style import (
+            VisualStyle, VisualStyleDialog, apply_visual_style, load_default_style,
+            load_style_for_visual, style_path_for_visual, style_to_json,
+        )
+
+        visual_id = "phase1:detection-overlay"
+        config_dir = config_directory()
+        style_path = style_path_for_visual(config_dir, visual_id)
+        current, _source = load_style_for_visual(config_dir, visual_id)
+        app = QApplication.instance()
+        theme = (app.property("pycamsetTheme") if app else None) or "Light"
+        figure = self._draw_state["fig"]
+        dialog = VisualStyleDialog(figure, visual_id, current, theme, self,
+                                   lambda *_: self._draw_state["canvas"].draw_idle())
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if dialog.current == VisualStyle():
+            # An empty style means "no style of its own": remove the file so
+            # the overlay follows the saved default, or the theme without one.
+            try:
+                style_path.unlink(missing_ok=True)
+            except OSError as exc:
+                QMessageBox.warning(self, "Overlay style not reset",
+                                    f"The saved style could not be removed.\n\nTechnical detail: {exc}")
+                return
+            fallback = load_default_style(config_dir) or VisualStyle()
+            self._draw_state["style"] = fallback
+            apply_visual_style(figure, fallback, theme)
+            self._draw_state["canvas"].draw_idle()
+            return
+        temporary_path = None
+        try:
+            dialog.current.validate()
+            style_path.parent.mkdir(parents=True, exist_ok=True)
+            # Stage beside the sidecar so replacement is atomic on the same filesystem.
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=style_path.parent,
+                prefix=f".{style_path.name}.", suffix=".tmp", delete=False,
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+                temporary_file.write(style_to_json(dialog.current, visual_id))
+            temporary_path.replace(style_path)
+        except (OSError, ValueError) as exc:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            # A failed save must restore the durable style, not leave an accepted preview visible.
+            self._draw_state["style"] = current
+            apply_visual_style(figure, current, theme)
+            self._draw_state["canvas"].draw_idle()
+            QMessageBox.warning(self, "Overlay style not saved",
+                                f"The style could not be saved.\n\nTechnical detail: {exc}")
+            return
+        self._draw_state["style"] = dialog.current
+        apply_visual_style(figure, dialog.current, theme)
+        self._draw_state["canvas"].draw_idle()
 
     def _step_draw_image(self, delta: int) -> None:
         if not self._draw_state:
@@ -1376,6 +1562,7 @@ class Phase1DiagnosticsTab(QWidget):
         axes = self._draw_state["axes"]
         im_art = self._draw_state["im_art"]
         sc_art = self._draw_state["sc_art"]
+        unreadable_art = self._draw_state["unreadable_art"]
         max_images = int(self._draw_state["max_images"])
         empty = self._draw_state["empty"]
         mpimg = self._draw_state["mpimg"]
@@ -1391,8 +1578,30 @@ class Phase1DiagnosticsTab(QWidget):
                 continue
 
             im_idx = idx % len(ims)
-            img = mpimg.imread(ims[im_idx])
-            im_art[cam].set_data(img)
+            try:
+                img = mpimg.imread(ims[im_idx])
+            except (OSError, ValueError, SyntaxError) as exc:
+                # Keep the producer's original index; never borrow pixels from a neighbouring frame.
+                if im_art[cam] is not None:
+                    im_art[cam].remove()
+                    im_art[cam] = None
+                unreadable_art[cam].set_text(
+                    f"Image unreadable\n{ims[im_idx].name}\n{type(exc).__name__}"
+                )
+                unreadable_art[cam].set_visible(True)
+                sc_art[cam].set_offsets(empty)
+                sc_art[cam].set_visible(False)
+                ax.set_title(f"{cam} | im {im_idx} | unreadable image")
+                continue
+
+            if im_art[cam] is None:
+                im_art[cam] = ax.imshow(
+                    img, cmap="gray" if getattr(img, "ndim", 3) == 2 else None
+                )
+            else:
+                im_art[cam].set_data(img)
+            unreadable_art[cam].set_visible(False)
+            sc_art[cam].set_visible(True)
 
             pts = cam_points.get(cam, {}).get(im_idx, empty)
             sc_art[cam].set_offsets(pts if len(pts) else empty)
@@ -1400,7 +1609,81 @@ class Phase1DiagnosticsTab(QWidget):
 
         # Update the permanent status label (always the same instance)
         self._draw_status_lbl.setText(f"{idx + 1}/{max_images}")
+        from pyCamSet.gui.theme import apply_matplotlib_theme
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        apply_matplotlib_theme(
+            self._draw_state["fig"],
+            (app.property("pycamsetTheme") if app else None) or "Light")
+        style = self._draw_state.get("style")
+        if style is not None:
+            from pyCamSet.gui.visual_style import apply_visual_style
+            apply_visual_style(self._draw_state["fig"], style,
+                               (app.property("pycamsetTheme") if app else None) or "Light")
         self._draw_state["canvas"].draw_idle()
+
+    def _save_detection_montage_png(self) -> None:
+        """Save the currently displayed detection montage without changing source images."""
+        if not self._draw_state:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save Detection Montage", "detections.png", "PNG Files (*.png)")
+        if not path:
+            return
+        try:
+            from pyCamSet.gui.visual_style import _validate_user_style_filename
+            _validate_user_style_filename(Path(path).name)
+            figure = self._draw_state["fig"]
+            width_mm, dpi = self._montage_export_preset.currentData()
+            original_size = figure.get_size_inches().copy()
+            try:
+                width_inches = width_mm / 25.4
+                height_inches = original_size[1] * width_inches / original_size[0]
+                figure.set_size_inches(round(width_inches * dpi) / dpi,
+                                       round(height_inches * dpi) / dpi,
+                                       forward=False)
+                figure.savefig(path, dpi=dpi, format="png")
+            finally:
+                figure.set_size_inches(original_size, forward=False)
+        except Exception as exc:
+            QMessageBox.warning(self, "PNG export failed", f"The montage could not be saved.\n\nTechnical detail: {exc}")
+
+    def _save_detection_coordinates_csv(self) -> None:
+        """Export observed detected pixel coordinates for the currently displayed image index."""
+        if not self._draw_state:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save Detection Coordinates", "detection-coordinates.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            import csv
+            import json
+            from pyCamSet.gui.visual_style import _validate_user_style_filename
+            _validate_user_style_filename(Path(path).name)
+            state = self._draw_state
+            image_index = self._draw_index
+            with open(path, "w", newline="", encoding="utf-8") as stream:
+                stream.write("# " + json.dumps({
+                    "run_id": state.get("run_id"), "phase": "phase1",
+                    "diagnostic": "D1.5 observed detections",
+                    "data_kind": "observed detected image pixel coordinates",
+                    "units": {"x_px": "px", "y_px": "px"},
+                    "montage_frame_index": image_index,
+                    "image_index_semantics": "row value is each camera's selected local image index",
+                    "coordinate_origin": "image coordinate convention used by detector",
+                }, ensure_ascii=False) + "\n")
+                writer = csv.writer(stream)
+                writer.writerow(["camera", "image_index", "image_name", "x_px", "y_px"])
+                for camera in state["cams"]:
+                    images = state["cam_images"].get(camera, [])
+                    if not images:
+                        continue
+                    camera_image_index = image_index % len(images)
+                    image_name = images[camera_image_index].name
+                    points = state["cam_points"].get(camera, {}).get(camera_image_index, state["empty"])
+                    writer.writerows((camera, camera_image_index, image_name,
+                                      float(point[0]), float(point[1])) for point in points)
+        except Exception as exc:
+            QMessageBox.warning(self, "CSV export failed", f"Coordinates could not be saved.\n\nTechnical detail: {exc}")
 
     def _resolve_private_pickle_path_for_run(self, run: dict) -> Optional[Path]:
         """This run's own detected_datapoints.pickle -- never a shared slot.

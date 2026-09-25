@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from pyCamSet.workflow import phase4
 from pyCamSet.workflow.workspace import WorkspaceManager, workspace_path_for
@@ -52,6 +53,7 @@ def test_phase4_quality_gate_records_gauge_and_coverage_contract():
         _optimisation(), _Handler(),
         {"success": True}, np.ones((4, 2)),
         initial_euclid=10.0, final_euclid=2.0, observation_count=4,
+        phase3_status="complete", phase3_run_id="p3",
     )
 
     assert gate["status"] == "complete"
@@ -145,6 +147,108 @@ def test_phase4_quality_gate_distinguishes_objective_from_mean_error():
     assert "final reprojection error did not improve finitely" in gate["blocking_flags"]
 
 
+def test_incomplete_phase4_alias_is_diagnostic_only(tmp_path):
+    from pyCamSet.gui.assess_calibration import resolve_run_camset_artifact
+
+    camset = tmp_path / "incomplete.camset"
+    camset.write_text("diagnostic", encoding="utf-8")
+    run = {
+        "phase": "phase4",
+        "status": "incomplete",
+        "artifacts": {"optimised_camset": str(camset)},
+    }
+
+    assert resolve_run_camset_artifact(run) == camset
+    assert resolve_run_camset_artifact(run, accepted_only=True) is None
+
+
+def test_accepted_phase4_requires_a_phase4_output_artifact(tmp_path):
+    from pyCamSet.gui.assess_calibration import resolve_run_camset_artifact
+
+    phase3_input = tmp_path / "initial.camset"
+    phase3_input.write_text("input", encoding="utf-8")
+    run = {
+        "phase": "phase4",
+        "status": "complete",
+        "artifacts": {"initial_camset": str(phase3_input)},
+    }
+
+    # General diagnostic lookup keeps legacy fallback; accepted use must not.
+    assert resolve_run_camset_artifact(run) == phase3_input
+    assert resolve_run_camset_artifact(run, accepted_only=True) is None
+
+
+@pytest.mark.parametrize("phase4_status", ["incomplete", None])
+def test_exporter_rejects_incomplete_or_unknown_phase4_alias(
+    tmp_path, monkeypatch, phase4_status
+):
+    pytest.importorskip("PySide6")  # the lean install has no GUI toolkit
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.gui import export_calibration_tab as export_module
+    from pyCamSet.gui.export_calibration_tab import ExportCalibrationTab
+
+    QApplication.instance() or QApplication([])
+    workspace = WorkspaceManager(workspace_path_for(tmp_path))
+    tab = ExportCalibrationTab(QTabWidget(), QCheckBox(), QCheckBox(), workspace)
+    messages = []
+    tab._terminal = SimpleNamespace(append_line=messages.append)
+    run = {
+        "phase": "phase4",
+        "status": phase4_status,
+        "run_id": "p4-incomplete",
+        "artifacts": {"optimised_camset": str(tmp_path / "diagnostic.camset")},
+    }
+    tab._run_selector = SimpleNamespace(get_selected=lambda: [run])
+    tab._selected_format = lambda: "colmap"
+    exports = []
+    monkeypatch.setattr(export_module, "camset_to_colmap", lambda *_args: exports.append(True))
+    monkeypatch.setattr(export_module, "camset_to_apde", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(export_module, "load_CameraSet", lambda _path: object())
+    monkeypatch.setattr(export_module, "_PYCAMSET_OK", True)
+
+    tab._export_selected()
+
+    assert not exports
+    assert any("Phase 4 status is not complete" in message for message in messages)
+
+
+def test_exporter_rejects_complete_phase4_without_output_artifact(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("PySide6")  # the lean install has no GUI toolkit
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.gui import export_calibration_tab as export_module
+    from pyCamSet.gui.export_calibration_tab import ExportCalibrationTab
+
+    QApplication.instance() or QApplication([])
+    workspace = WorkspaceManager(workspace_path_for(tmp_path))
+    tab = ExportCalibrationTab(QTabWidget(), QCheckBox(), QCheckBox(), workspace)
+    messages = []
+    tab._terminal = SimpleNamespace(append_line=messages.append)
+    phase3_input = tmp_path / "initial.camset"
+    phase3_input.write_text("input", encoding="utf-8")
+    run = {
+        "phase": "phase4",
+        "status": "complete",
+        "run_id": "p4-missing-output",
+        "artifacts": {"initial_camset": str(phase3_input)},
+    }
+    tab._run_selector = SimpleNamespace(get_selected=lambda: [run])
+    tab._selected_format = lambda: "colmap"
+    exports = []
+    monkeypatch.setattr(export_module, "camset_to_colmap", lambda *_args: exports.append(True))
+    monkeypatch.setattr(export_module, "camset_to_apde", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(export_module, "load_CameraSet", lambda _path: object())
+    monkeypatch.setattr(export_module, "_PYCAMSET_OK", True)
+
+    tab._export_selected()
+
+    assert not exports
+    assert any("no camset artifact found" in message for message in messages)
+
+
 def test_phase4_run_persists_quality_gate_disposition(tmp_path, monkeypatch):
     workspace = WorkspaceManager(workspace_path_for(tmp_path))
     output = Path(tmp_path) / "self_calibrated_cameras.camset"
@@ -164,6 +268,32 @@ def test_phase4_run_persists_quality_gate_disposition(tmp_path, monkeypatch):
     assert metadata["status"] == "incomplete"
     assert metadata["inputs"]["phase3_run_id"] == "p3"
     assert workspace.find_run("phase4", metadata["run_id"])["status"] == "incomplete"
+
+
+@pytest.mark.parametrize("options,expected", [({}, 100), ({"max_nfev": 37}, 37)])
+def test_phase4_api_default_is_100_and_explicit_value_is_preserved(
+    tmp_path, monkeypatch, options, expected
+):
+    detection = SimpleNamespace(cam_names=["cam0"])
+    previous_handler = SimpleNamespace(target=object(), detection=detection)
+    previous_cams = SimpleNamespace(
+        calibration_handler=previous_handler,
+        get_names=lambda: ["cam0"],
+    )
+    monkeypatch.setattr(phase4, "load_CameraSet", lambda _path: previous_cams)
+    captured = {}
+
+    def stop_after_option_capture(*args, options, **kwargs):
+        captured.update(options)
+        raise RuntimeError("stop after checking options")
+
+    monkeypatch.setattr(phase4, "solve", stop_after_option_capture)
+    with pytest.raises(RuntimeError, match="stop after checking options"):
+        phase4._solve(
+            {"problem_options": options}, tmp_path, tmp_path / "phase3.camset",
+            {"run_id": "p3", "status": "complete"}, lambda _line: None,
+        )
+    assert captured["max_nfev"] == expected
 
 
 def test_self_calibration_gauge_uses_target_point_data_units():
@@ -258,3 +388,30 @@ def test_self_calibration_output_does_not_mutate_input_camera_set(monkeypatch):
     drift = phase4._camera_drift(source, output)
     assert drift["available"]
     assert drift["cameras"]["cam0"]["extrinsic"] > 0.0
+
+
+@pytest.mark.parametrize(
+    "phase3_status,phase3_run_id",
+    [(None, None), (None, "p3"), ("complete", None), ("failed", "p3")],
+)
+def test_phase4_provenance_must_be_identified_and_complete(
+    phase3_status, phase3_run_id
+):
+    gate = phase4._quality_gate(
+        _optimisation(), _Handler(), {"success": True}, np.ones((4, 2)),
+        initial_euclid=10.0, final_euclid=2.0, observation_count=4,
+        phase3_status=phase3_status, phase3_run_id=phase3_run_id,
+    )
+    assert gate["status"] == "incomplete"
+    assert not gate["phase3_provenance_complete"]
+    assert "Phase 3 input lacks an identified run with complete status" in gate["blocking_flags"]
+
+
+def test_phase4_provenance_accepts_identified_complete_run():
+    gate = phase4._quality_gate(
+        _optimisation(), _Handler(), {"success": True}, np.ones((4, 2)),
+        initial_euclid=10.0, final_euclid=2.0, observation_count=4,
+        phase3_status="complete", phase3_run_id="p3",
+    )
+    assert gate["status"] == "complete"
+    assert gate["phase3_provenance_complete"]

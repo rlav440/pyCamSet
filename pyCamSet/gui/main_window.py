@@ -10,17 +10,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject
+import shiboken6
+from PySide6.QtCore import QEvent, QObject, QSettings, Qt
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QFrame,
+    QPushButton,
     QHBoxLayout,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QSpinBox,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -38,7 +42,7 @@ from pyCamSet.gui.shared_functions import (
     TAB_PHASE4,
     TAB_PHASE4_DIAG,
     WorkspaceManager,
-    make_blue_button,
+    WheelMutationGuard,
 )
 
 
@@ -50,9 +54,13 @@ class _TooltipFilter(QObject):
         self._info_cb = info_cb
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
-        if not self._info_cb.isChecked() and event.type() == QEvent.Type.ToolTip:
-            return True  # consume / block the tooltip event
-        return False
+        if event.type() != QEvent.Type.ToolTip:
+            return False
+        # The filter is application-wide, so it can still see events while its
+        # window is being destroyed and the checkbox is already gone.
+        if not shiboken6.isValid(self._info_cb):
+            return False
+        return not self._info_cb.isChecked()  # True consumes the tooltip
 
 
 class PyCamSetApp(QMainWindow):
@@ -68,13 +76,31 @@ class PyCamSetApp(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        from pyCamSet.gui.preferences import get_preferences, initialise_application_identity
+        initialise_application_identity(QApplication.instance())
+        self._preferences = get_preferences()
         self.setWindowTitle("pyCamSet — Multi-Camera Calibration")
         self.resize(1140, 820)
         self.setMinimumSize(860, 640)
 
+        # Apply the saved theme before widgets are constructed.
+        self._theme_settings = QSettings("pyCamSet", "pyCamSet")
+        theme_name = self._theme_settings.value("appearance/theme", "Light", type=str)
+        from pyCamSet.gui.theme import THEME_TOKENS, apply_theme
+        if theme_name not in THEME_TOKENS:
+            theme_name = "Light"
+        apply_theme(QApplication.instance(), theme_name)
+
+        # Protect every tab's parameter controls from stray wheel changes.
+        # The filter consumes only unfocused wheel events and never re-posts
+        # them into the scroll hierarchy.
+        self._wheel_mutation_guard = WheelMutationGuard(self)
+        QApplication.instance().installEventFilter(self._wheel_mutation_guard)
+
         # Shared state injected into child tabs
         self._info_cb = QCheckBox("Enable Informational Windows")
-        self._info_cb.setChecked(True)
+        self._info_cb.setAccessibleName("Enable informational tooltips")
+        self._info_cb.setChecked(self._preferences.values["info_enabled"])
         self._info_cb.stateChanged.connect(self._on_info_toggle)
 
         # Install an application-level event filter that blocks hover tooltip
@@ -83,7 +109,18 @@ class PyCamSetApp(QMainWindow):
         QApplication.instance().installEventFilter(self._tooltip_filter)
 
         self._terminal_cb = QCheckBox("Show Terminal Output")
-        self._terminal_cb.setChecked(True)
+        self._terminal_cb.setAccessibleName("Show terminal output")
+        self._terminal_cb.setChecked(self._preferences.values["terminal_visible"])
+        self._terminal_cb.stateChanged.connect(self._on_terminal_toggle)
+
+        self._theme_combo = QComboBox()
+        self._theme_combo.setObjectName("themeSelector")
+        self._theme_combo.setAccessibleName("Colour theme")
+        self._theme_combo.setToolTip("Choose the application colour theme")
+        self._theme_combo.addItems(("Light", "Dark", "Sepia"))
+        self._theme_combo.setCurrentText(
+            QApplication.instance().property("pycamsetTheme") or "Light")
+        self._theme_combo.currentTextChanged.connect(self._on_theme_changed)
 
         # Tab-bar indices of the diagnostics pages, which are hidden
         # until something navigates to one.  See show_tab().
@@ -93,13 +130,23 @@ class PyCamSetApp(QMainWindow):
         self._workspace_mgr = WorkspaceManager(None)
 
         self._build_ui()
+        from pyCamSet.gui.parameter_preferences import ParameterPreferences
+        self._parameter_preferences = ParameterPreferences(self)
         self._on_info_toggle()  # apply initial tooltip state
+        if self._preferences.load_error:
+            self.statusBar().showMessage(
+                "Saved GUI preferences are invalid; defaults are active and the original file is preserved.",
+                15000)
+        if self._parameter_preferences.load_error:
+            self.statusBar().showMessage(
+                "Saved GUI parameters are invalid; check or reset the affected inputs.", 15000)
 
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
         # Deferred imports so module is importable without a display server
         from pyCamSet.gui.export_calibration_tab import ExportCalibrationTab
+        from pyCamSet.gui.detection_cost_tab import DetectionCostTab, TAB_DETECTION_COST
         from pyCamSet.gui.phase_0_input import Phase0Tab
         from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab, Phase1Tab
         from pyCamSet.gui.phase_2_intrinsics import Phase2DiagnosticsTab, Phase2Tab
@@ -110,30 +157,63 @@ class PyCamSetApp(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(4, 4, 4, 4)
-        root_layout.setSpacing(4)
+        root_layout.setContentsMargins(8, 6, 8, 8)
+        root_layout.setSpacing(6)
 
-        # ── Global controls ────────────────────────────────────────────
+        # ── Global actions ────────────────────────────────────────────
+        # A neutral button: the filled primary colour is kept for each
+        # phase's own call to action, so it is never ambiguous which button
+        # runs the current step.
         ctrl_row = QHBoxLayout()
-        ctrl_row.addWidget(make_blue_button(
-            "Create Target…", self._open_create_target))
-        ctrl_row.addSpacing(16)
-        ctrl_row.addWidget(self._info_cb)
-        ctrl_row.addSpacing(16)
-        ctrl_row.addWidget(self._terminal_cb)
+        create_target_button = QPushButton("Create Target…")
+        create_target_button.setToolTip("Design and save a new calibration target")
+        create_target_button.clicked.connect(self._open_create_target)
+        ctrl_row.addWidget(create_target_button)
         ctrl_row.addStretch()
         root_layout.addLayout(ctrl_row)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setFrameShadow(QFrame.Shadow.Sunken)
-        root_layout.addWidget(sep)
+        file_menu = self.menuBar().addMenu("File")
+        create_target_action = file_menu.addAction("Create Target…")
+        create_target_action.triggered.connect(self._open_create_target)
+
+        # Plain checkable actions, not widgets embedded in the menus: the
+        # macOS menu bar is native, and a widget inside a native menu takes
+        # the keyboard but not the mouse.  The checkboxes and the combo stay
+        # the state every tab reads; each action mirrors one of them.
+        edit_menu = self.menuBar().addMenu("Edit")
+        self._info_action = self._mirror_checkbox(edit_menu, self._info_cb)
+
+        settings_menu = self.menuBar().addMenu("Settings")
+        self._terminal_action = self._mirror_checkbox(settings_menu, self._terminal_cb)
+        theme_menu = settings_menu.addMenu("Theme")
+        self._theme_actions = QActionGroup(theme_menu)
+        self._theme_actions.setExclusive(True)
+        for name in (self._theme_combo.itemText(i) for i in range(self._theme_combo.count())):
+            action = theme_menu.addAction(name)
+            action.setCheckable(True)
+            action.setMenuRole(QAction.MenuRole.NoRole)
+            action.setChecked(name == self._theme_combo.currentText())
+            action.triggered.connect(lambda _checked=False, n=name: self._theme_combo.setCurrentText(n))
+            self._theme_actions.addAction(action)
+        self._theme_combo.currentTextChanged.connect(self._check_theme_action)
 
         # ── Tab widget ─────────────────────────────────────────────────
         ws = self._workspace_mgr
 
         self._notebook = QTabWidget()
         root_layout.addWidget(self._notebook)
+        # At narrow widths the tab bar scrolls and later tabs slide out of
+        # view; this corner menu names every reachable tab so none is hidden.
+        tabs_button = QToolButton()
+        tabs_button.setObjectName("allTabsButton")
+        tabs_button.setText("All tabs ▾")
+        tabs_button.setToolTip("Jump to any tab, including ones scrolled out of view")
+        tabs_button.setAccessibleName("Show all tabs")
+        tabs_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        tabs_menu = QMenu(tabs_button)
+        tabs_menu.aboutToShow.connect(lambda: self._populate_tabs_menu(tabs_menu))
+        tabs_button.setMenu(tabs_menu)
+        self._notebook.setCornerWidget(tabs_button, Qt.Corner.TopRightCorner)
 
         self.phase0_tab = Phase0Tab(
             notebook=self._notebook,
@@ -227,6 +307,16 @@ class PyCamSetApp(QMainWindow):
         )
         self._notebook.addTab(self.optimisation_tab, TAB_OPTIMISATION)
 
+        # Detection Cost: a measurement of this machine and this target, run on
+        # demand. It reads a folder of finished frames, so it needs no cameras
+        # and no workspace -- it is not a phase and nothing depends on it.
+        self.detection_cost_tab = DetectionCostTab(
+            notebook=self._notebook,
+            info_cb=self._info_cb,
+            terminal_cb=self._terminal_cb,
+        )
+        self._notebook.addTab(self.detection_cost_tab, TAB_DETECTION_COST)
+
         # Cross-tab wiring
         self.phase1_tab.set_diagnostics_tab(self.phase1_diag_tab)
         self.phase2_tab.set_diagnostics_tab(self.phase2_diag_tab)
@@ -283,6 +373,9 @@ class PyCamSetApp(QMainWindow):
         # Enforce binary outlier selection for outlier-related combo controls.
         self._normalize_outlier_combos(self.phase2_tab)
         self._normalize_outlier_combos(self.phase3_tab)
+        # Phase 4 too: otherwise a visited session saves "No" while a fresh
+        # start still lists "n"/"y", and every saved parameter is rejected.
+        self._normalize_outlier_combos(self.phase4_tab)
 
         self._notebook.currentChanged.connect(self._on_tab_changed)
         self._apply_phase3_handoff()
@@ -545,6 +638,64 @@ class PyCamSetApp(QMainWindow):
         QApplication.instance().setProperty(
             "tooltipsEnabled", self._info_cb.isChecked()
         )
+        if self._preferences.values["info_enabled"] != self._info_cb.isChecked():
+            self._persist_preference("info_enabled", self._info_cb.isChecked())
+
+    def _on_terminal_toggle(self) -> None:
+        """Persist the visibility choice for per-tab terminal panes."""
+        self._persist_preference("terminal_visible", self._terminal_cb.isChecked())
+
+    def _persist_preference(self, key: str, value: bool) -> None:
+        """Keep the UI usable and report a failed per-user settings write."""
+        try:
+            self._preferences.set(key, value)
+        except OSError as exc:
+            self.statusBar().showMessage(f"GUI preference was not saved: {exc}", 10000)
+            checkbox = self._info_cb if key == "info_enabled" else self._terminal_cb
+            checkbox.blockSignals(True)
+            checkbox.setChecked(self._preferences.values[key])
+            checkbox.blockSignals(False)
+
+    def _on_theme_changed(self, theme_name: str) -> None:
+        """Apply and persist the selected presentation theme."""
+        from pyCamSet.gui.theme import apply_theme, refresh_matplotlib_theme
+
+        apply_theme(QApplication.instance(), theme_name)
+        refresh_matplotlib_theme(theme_name)
+        self._theme_settings.setValue("appearance/theme", theme_name)
+        self._theme_settings.sync()
+        if self._theme_settings.status() != QSettings.Status.NoError:
+            self.statusBar().showMessage("Colour theme is active but could not be saved.", 10000)
+
+    @staticmethod
+    def _mirror_checkbox(menu: QMenu, checkbox: QCheckBox) -> QAction:
+        """A checkable menu action that shows and sets *checkbox*."""
+        action = menu.addAction(checkbox.text())
+        action.setCheckable(True)
+        action.setChecked(checkbox.isChecked())
+        # Keep Qt's macOS heuristics from moving the item into the
+        # application menu because its text resembles "Preferences".
+        action.setMenuRole(QAction.MenuRole.NoRole)
+        action.toggled.connect(checkbox.setChecked)
+        checkbox.toggled.connect(action.setChecked)
+        return action
+
+    def _check_theme_action(self, name: str) -> None:
+        for action in self._theme_actions.actions():
+            if action.text() == name:
+                action.setChecked(True)
+
+    def _populate_tabs_menu(self, menu: QMenu) -> None:
+        """List the currently visible tabs, marking the open one."""
+        menu.clear()
+        for index in range(self._notebook.count()):
+            if not self._notebook.isTabVisible(index):
+                continue
+            action = menu.addAction(self._notebook.tabText(index))
+            action.setCheckable(True)
+            action.setChecked(index == self._notebook.currentIndex())
+            action.triggered.connect(
+                lambda _checked=False, i=index: self._notebook.setCurrentIndex(i))
 
     def switch_to_tab(self, name: str) -> None:
         """Switch to the named tab by its display text."""
@@ -552,6 +703,16 @@ class PyCamSetApp(QMainWindow):
             if self._notebook.tabText(i) == name:
                 self._notebook.setCurrentIndex(i)
                 return
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        """Persist editable inputs before the user closes the window."""
+        try:
+            self._parameter_preferences.save()
+        except (OSError, ValueError, TypeError) as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Parameters not saved",
+                                f"The current inputs could not be saved.\n\nTechnical detail: {exc}")
+        super().closeEvent(event)
 
 
 def main_window() -> None:

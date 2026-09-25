@@ -1,5 +1,6 @@
 from __future__ import annotations
 import datetime
+import json
 import logging
 from dataclasses import dataclass
 from math import copysign
@@ -83,6 +84,22 @@ def _target_mean_distance(target) -> float:
         return float(np.mean(np.linalg.norm(pts, axis=-1)))
     return float(np.mean(np.linalg.norm(target.point_data, axis=-1)))
 
+
+def _publication_render_size(width_mm: float, dpi: int, aspect_ratio: float = 8 / 3) -> tuple[int, int]:
+    """Convert a publication width/DPI preset to deterministic renderer pixels."""
+    if width_mm <= 0 or dpi <= 0 or aspect_ratio <= 0:
+        raise ValueError("Width, DPI and aspect ratio must all be positive.")
+    width_px = round(float(width_mm) * int(dpi) / 25.4)
+    return width_px, round(width_px / aspect_ratio)
+
+
+def save_pyvista_screenshot(plotter, output_path: str | Path,
+                            width_mm: float = 160.0, dpi: int = 150) -> tuple[int, int]:
+    """Save a PyVista render at the requested publication pixel dimensions."""
+    size = _publication_render_size(width_mm, dpi)
+    plotter.screenshot(str(output_path), window_size=size)
+    return size
+
 blues_with_white = LinearSegmentedColormap.from_list('Blues_with_white', [(1, 1, 1), *plt.cm.Blues(np.linspace(0, 1, 1024)[:900])])
 
 
@@ -111,7 +128,8 @@ def finalise_figure(figure, name: str, show: bool = True,
 
 
 def save_figure(figure, name: str,
-                save_dir: Path | str | None) -> Path | None:
+                save_dir: Path | str | None, *, width_mm: float | None = None,
+                dpi: int = 150, formats: tuple[str, ...] = ("png",)) -> Path | None:
     """
     Write a figure into a directory and leave it open.
 
@@ -121,14 +139,36 @@ def save_figure(figure, name: str,
 
     :param figure: the figure to write
     :param name: the file stem to write it under
-    :param save_dir: a directory to write ``<name>.png`` into, or None
+    :param save_dir: a directory to write the requested formats into, or None
     :return: where it was written, if it was
     """
     if save_dir is None:
         return None
     written = Path(save_dir) / f"{name}.png"
     written.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(written, dpi=150, bbox_inches="tight")
+    targets = [Path(save_dir) / f"{name}.{output_format}" for output_format in formats]
+    existing = [str(target) for target in targets if target.exists()]
+    if existing:
+        raise FileExistsError("Refusing to overwrite existing figure export(s): " + ", ".join(existing))
+    original_size = figure.get_size_inches().copy()
+    if width_mm is None:
+        output_size = original_size
+    else:
+        width_inches = float(width_mm) / 25.4
+        height_inches = width_inches * float(original_size[1]) / float(original_size[0])
+        output_size = (width_inches, height_inches)
+    if width_mm is not None and "png" in formats:
+        pixel_size = (round(width_inches * dpi) / dpi,
+                      round(height_inches * dpi) / dpi)
+        output_size = pixel_size
+    if width_mm is not None:
+        figure.set_size_inches(*output_size, forward=False)
+    try:
+        for output_format, target in zip(formats, targets):
+            figure.savefig(target, dpi=int(dpi), format=output_format,
+                           bbox_inches=(None if width_mm is not None else "tight"))
+    finally:
+        figure.set_size_inches(original_size, forward=False)
     return written
 
 
@@ -445,8 +485,9 @@ def per_camera_coverage(diagnostics: CalibrationDiagnostics) -> plt.Figure:
         im = ax[cam_n].scatter(loc_x, loc_y, c=error * away, s=2, alpha=0.4,
                                vmin=-diagnostics.e_lim, vmax=diagnostics.e_lim,
                                cmap="coolwarm")
+        # two lines: long rig camera names otherwise run into their neighbours
         ax[cam_n].set_title(
-            f"{detection.cam_names[cam_n]} mean error {np.mean(error):.2f}",
+            f"{detection.cam_names[cam_n]}\nmean error {np.mean(error):.2f} px",
             fontsize=8)
         ax[cam_n].set_xlim([0, cams[cam_n].res[0]])
         ax[cam_n].set_ylim([0, cams[cam_n].res[1]])
@@ -467,24 +508,107 @@ def per_camera_coverage(diagnostics: CalibrationDiagnostics) -> plt.Figure:
     return fig
 
 
-def reconstruction_scene(diagnostics: CalibrationDiagnostics) -> 'pv.Plotter':
+FRUSTUM_ACTOR_PREFIX = "camera-frustum"
+
+
+def is_dark(colour) -> bool:
+    """Whether *colour* (hex or 0-1 RGB) is a dark background."""
+    from matplotlib.colors import to_rgb
+
+    red, green, blue = to_rgb(colour)
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue < 0.5
+
+
+def contrast_colours(background) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """
+    Frustum line and text colours that read against *background*.
+
+    Black frustums vanish on a dark background, so on one they are drawn in a
+    light grey, a step softer than the text so the data points stay dominant.
+
+    :param background: the scene background, hex or 0-1 RGB
+    :return: the frustum colour and the text colour, as 0-1 RGB
+    """
+    if is_dark(background):
+        return (0.76, 0.79, 0.85), (0.91, 0.92, 0.95)
+    return (0.0, 0.0, 0.0), (0.1, 0.1, 0.1)
+
+
+def _apply_3d_cosmetics(plotter, theme_name: str = "Light", background: str = "theme",
+                        point_size: float = 3.0, view: str = "isometric",
+                        axes: bool = True) -> None:
+    """Apply presentation-only PyVista options without touching scene arrays."""
+    from pyCamSet.gui.theme import THEME_TOKENS
+
+    if theme_name not in THEME_TOKENS:
+        raise ValueError(f"Unknown 3D theme: {theme_name}")
+    if background not in {"theme", "white", "charcoal"}:
+        raise ValueError("3D background must be theme, white or charcoal")
+    if not 1.0 <= float(point_size) <= 20.0:
+        raise ValueError("3D point size must be between 1 and 20")
+    if view not in {"isometric", "top", "front", "side"}:
+        raise ValueError("3D view must be isometric, top, front or side")
+    colour = (THEME_TOKENS[theme_name]["background"] if background == "theme"
+              else {"white": "#ffffff", "charcoal": "#242a32"}[background])
+    plotter.set_background(colour, all_renderers=True)
+    frustum_colour, text_colour = contrast_colours(colour)
+    for bar in getattr(plotter, "scalar_bars", {}).values():
+        bar.GetTitleTextProperty().SetColor(*text_colour)
+        bar.GetLabelTextProperty().SetColor(*text_colour)
+    renderers = list(plotter.renderers)
+    columns = max(1, int(plotter.shape[1]))
+    for index in range(len(renderers)):
+        plotter.subplot(index // columns, index % columns)
+        if axes:
+            plotter.add_axes()
+        for name, actor in plotter.renderer.actors.items():
+            if str(name).startswith(FRUSTUM_ACTOR_PREFIX):
+                actor.GetProperty().SetColor(*frustum_colour)
+                continue
+            text_property = (actor.GetTextProperty() if hasattr(actor, "GetTextProperty")
+                             else None)
+            if text_property is not None:
+                text_property.SetColor(*text_colour)
+                continue
+            mapper = actor.GetMapper() if hasattr(actor, "GetMapper") else None
+            dataset = mapper.GetInput() if mapper is not None else None
+            if (dataset is not None and dataset.GetNumberOfCells() == 0
+                    and dataset.GetNumberOfPoints() > 0):
+                actor.GetProperty().SetPointSize(float(point_size))
+        if view == "top":
+            plotter.view_xy()
+        elif view == "front":
+            plotter.view_xz()
+        elif view == "side":
+            plotter.view_yz()
+        else:
+            plotter.view_isometric()
+        plotter.reset_camera()
+
+
+def reconstruction_scene(diagnostics: CalibrationDiagnostics, point_size: float = 3.0,
+                         show_legend: bool = True, plotter=None) -> 'pv.Plotter':
     """
     The triangulated features where the cameras put them, with the cameras.
 
     :param diagnostics: the calibration to draw
+    :param plotter: draw into this plotter (an embedded Qt view, say)
+        rather than a new window
     :return: the plotter, to show or screenshot
     """
     pv.set_plot_theme('document')
-    plotter = pv.Plotter()
-    plotter.title = "Reconstructed Points in Scene Coordinates"
+    if plotter is None:
+        plotter = pv.Plotter()
+        plotter.title = "Reconstructed Points in Scene Coordinates"
     plotter.add_text("Reconstructed Points in Scene Coordinates",
                      position='upper_edge', font_size=10, font="times")
     diagnostics.cams.get_scene(scene=plotter, labels=False)
     if len(diagnostics.scene_points):
         points = pv.PolyData(diagnostics.scene_points)
         points['Reprojection error (px)'] = diagnostics.point_error
-        plotter.add_mesh(points, render_points_as_spheres=True, point_size=2,
-                         clim=[0, diagnostics.e_lim])
+        plotter.add_mesh(points, render_points_as_spheres=True, point_size=point_size,
+                         clim=[0, diagnostics.e_lim], show_scalar_bar=show_legend,
+                         scalar_bar_args={"title": "Reprojection error (px)"})
     else:
         plotter.add_text("No points within outlier threshold",
                          position='lower_left', font_size=10, font='times')
@@ -493,7 +617,8 @@ def reconstruction_scene(diagnostics: CalibrationDiagnostics) -> 'pv.Plotter':
 
 def target_space_scene(diagnostics: CalibrationDiagnostics,
                        title: str = "Reconstructed Points in Target Coordinates",
-                       ) -> 'pv.Plotter':
+                       point_size: float = 3.0, show_legend: bool = True,
+                       plotter=None) -> 'pv.Plotter':
     """
     The same features carried back into the target's own frame.
 
@@ -503,18 +628,21 @@ def target_space_scene(diagnostics: CalibrationDiagnostics,
 
     :param diagnostics: the calibration to draw
     :param title: what to write across the top of it
+    :param plotter: draw into this plotter rather than a new window
     :return: the plotter, to show or screenshot
     """
     pv.set_plot_theme('document')
-    plotter = pv.Plotter()
-    plotter.title = title
+    if plotter is None:
+        plotter = pv.Plotter()
+        plotter.title = title
     plotter.add_text(title, position="upper_edge", font_size=10, font='times')
     plotter.add_text(f"{diagnostics.rejected} erroneous Points",
                      position='lower_left', font_size=10, font='times')
     points = pv.PolyData(diagnostics.object_points)
     points['Reprojection Error (px)'] = diagnostics.point_error
-    plotter.add_mesh(points, render_points_as_spheres=True, point_size=4,
-                     clim=[0, diagnostics.e_lim])
+    plotter.add_mesh(points, render_points_as_spheres=True, point_size=point_size,
+                     clim=[0, diagnostics.e_lim], show_scalar_bar=show_legend,
+                     scalar_bar_args={"title": "Reprojection error (px)"})
     return plotter
 
 
@@ -556,11 +684,113 @@ def accuracy_precision_plot(diagnostics: CalibrationDiagnostics,
     return fig
 
 
+def _assessment_csv_payloads(diagnostics: CalibrationDiagnostics) -> dict[str, tuple[list[str], list[tuple]]]:
+    """Return source-array rows for each assessment figure; never digitise artists."""
+    residuals = np.asarray(diagnostics.residuals).reshape(-1, 2)
+    euclidean = np.asarray(diagnostics.euclidean_err).reshape(-1)
+    if len(residuals) != len(euclidean):
+        raise ValueError("Residual and Euclidean-error arrays must have matching observation counts")
+    error_rows = [(index, float(vector[0]), float(vector[1]), float(euclidean[index]))
+                  for index, vector in enumerate(residuals)]
+
+    coverage_rows = []
+    residual_cursor = 0
+    for cam_detection in diagnostics.detection.get_cam_list():
+        datum = cam_detection.get_data()
+        if datum is None:
+            continue
+        cam_n = int(datum[0, 0])
+        camera_name = diagnostics.detection.cam_names[cam_n]
+        residual_slice = residuals[residual_cursor:residual_cursor + len(datum)]
+        if len(residual_slice) != len(datum):
+            raise ValueError("Detection and residual arrays must have matching observation counts")
+        for local_index, (source_row, vector) in enumerate(zip(datum, residual_slice)):
+            magnitude = float(np.linalg.norm(vector))
+            principal = diagnostics.cams[cam_n].intrinsic[:2, 2]
+            direction = np.sign(np.dot(source_row[-2:] - principal, vector))
+            coverage_rows.append((cam_n, camera_name, local_index, float(source_row[-2]),
+                                  float(source_row[-1]), magnitude * (direction or 1)))
+        residual_cursor += len(datum)
+    if residual_cursor != len(residuals):
+        raise ValueError("Residual arrays contain observations not represented by detection rows")
+
+    feature_lengths = (len(diagnostics.accuracy), len(diagnostics.precision),
+                       len(diagnostics.feature_error))
+    if len(set(feature_lengths)) != 1:
+        raise ValueError("Accuracy, precision and feature-error arrays must have matching feature counts")
+    feature_count = feature_lengths[0]
+    accuracy_rows = [(index, float(diagnostics.accuracy[index]),
+                      float(diagnostics.precision[index]),
+                      float(diagnostics.feature_error[index]))
+                     for index in range(feature_count)]
+    return {
+        "error_distribution": (["residual_index", "x_error_px", "y_error_px", "euclidean_error_px"], error_rows),
+        "per_camera_coverage": (["camera_index", "camera_name", "camera_observation_index", "x_px", "y_px", "signed_euclidean_error_px"], coverage_rows),
+        "accuracy_precision": (["feature_array_index", "accuracy_mm", "precision_mm", "mean_reprojection_error_px"], accuracy_rows),
+    }
+
+
+def _write_assessment_csvs(
+    diagnostics: CalibrationDiagnostics, save_dir: Path | str,
+    provenance: str | None = None,
+) -> list[Path]:
+    """Write explicit source-backed CSVs beside the assessment figures."""
+    import csv
+    import json
+
+    output_dir = Path(save_dir)
+    payloads = _assessment_csv_payloads(diagnostics)
+    units = {
+        "error_distribution": {"x_error_px": "px", "y_error_px": "px", "euclidean_error_px": "px"},
+        "per_camera_coverage": {"x_px": "px", "y_px": "px", "signed_euclidean_error_px": "px"},
+        "accuracy_precision": {"accuracy_mm": "mm", "precision_mm": "mm", "mean_reprojection_error_px": "px"},
+    }
+    empty_reasons = {
+        "error_distribution": "No reprojection residual observations",
+        "per_camera_coverage": "No camera detection observations",
+        "accuracy_precision": "No feature was observed in more than two images",
+    }
+    targets = [output_dir / f"{name}.csv" for name in payloads]
+    existing = [str(path) for path in targets if path.exists()]
+    if existing:
+        raise FileExistsError("Refusing to overwrite existing assessment CSV(s): " + ", ".join(existing))
+    written = []
+    for (name, (columns, rows)), path in zip(payloads.items(), targets):
+        with path.open("x", newline="", encoding="utf-8") as stream:
+            stream.write("# " + json.dumps({
+                "source": "CalibrationDiagnostics.from_results source arrays",
+                "diagnostic": name, "units": units[name],
+                "camset_source": provenance,
+                "row_count": len(rows),
+                "empty_reason": empty_reasons[name] if not rows else None,
+                "index_semantics": "array order only; no feature identity inferred",
+            }, ensure_ascii=False) + "\n")
+            writer = csv.writer(stream)
+            writer.writerow(columns)
+            writer.writerows(rows)
+        written.append(path)
+    return written
+
+
 def visualise_calibration(
         o_results:dict,
         param_handler,#: AbstractParamHandler
         show: bool = True,
         save_dir: Path | str | None = None,
+        theme_name: str = "Light",
+        figure_width_mm: float = 160.0,
+        figure_dpi: int = 150,
+        figure_formats: tuple[str, ...] = ("png",),
+        matplotlib_only: bool = False,
+        figure_themes: tuple[str, ...] | None = None,
+        provenance: str | None = None,
+        export_csv: bool = False,
+        three_d_background: str = "theme",
+        three_d_point_size: float = 3.0,
+        three_d_view: str = "isometric",
+        three_d_axes: bool = True,
+        three_d_legend: bool = True,
+        three_d_only: bool = False,
     ) -> list[Path]:
     """
     A function to draw and plot the errors in a calibration given the results.
@@ -573,34 +803,75 @@ def visualise_calibration(
     :param param_handler: The parameter handler that organised the optimisation.
     :param show: open the figures in windows
     :param save_dir: a directory to write the figures into
+    :param theme_name: application theme for Matplotlib chrome only
+    :param figure_width_mm: output width for saved Matplotlib figures
+    :param figure_dpi: raster DPI for PNG output
+    :param figure_formats: Matplotlib output formats, e.g. PNG/SVG/PDF
+    :param matplotlib_only: skip 3D scene generation for a 2D-only export request
+    :param three_d_only: skip the 2D figures, for a viewer opened beside a GUI
+        that already shows them
     :return: the files written, if any
     """
-    if not _PYVISTA_OK:
+    if not _PYVISTA_OK and not matplotlib_only:
         raise ImportError("pyvista is required for visualisation. Install with: pip install pyvista")
-    import os as _os
-    if _os.name != "nt" and not _os.environ.get("DISPLAY") and not _os.environ.get("PYVISTA_OFF_SCREEN"):
-        _os.environ["PYVISTA_OFF_SCREEN"] = "true"
+    if not matplotlib_only:
+        import os as _os
+        if _os.name != "nt" and not _os.environ.get("DISPLAY") and not _os.environ.get("PYVISTA_OFF_SCREEN"):
+            _os.environ["PYVISTA_OFF_SCREEN"] = "true"
 
     diagnostics = CalibrationDiagnostics.from_results(o_results, param_handler)
 
+    if save_dir is not None:
+        output_dir = Path(save_dir)
+        output_names = ("error_distribution", "per_camera_coverage", "accuracy_precision")
+        targets = [output_dir / f"{name}.{output_format}"
+                   for name in output_names for output_format in figure_formats]
+        if export_csv:
+            targets.extend(output_dir / f"{name}.csv" for name in output_names)
+        existing = [str(path) for path in targets if path.exists()]
+        if existing:
+            raise FileExistsError("Refusing to overwrite existing assessment export(s): "
+                                  + ", ".join(existing))
+
     written: list[Path | None] = []
-    figures = [
+    figures = [] if three_d_only else [
         (cluster_plot([diagnostics.residuals]), "error_distribution"),
         (per_camera_coverage(diagnostics), "per_camera_coverage"),
         (accuracy_precision_plot(diagnostics), "accuracy_precision"),
     ]
+
+    # Apply GUI chrome in this isolated process without recolouring data series.
+    from pyCamSet.gui.theme import apply_matplotlib_theme
+    per_figure_themes = figure_themes or (theme_name,) * len(figures)
+    if three_d_only:
+        per_figure_themes = ()
+    if len(per_figure_themes) != len(figures):
+        raise ValueError("figure_themes must contain one theme per assessment figure")
+    for (figure, _), figure_theme in zip(figures, per_figure_themes):
+        apply_matplotlib_theme(figure, figure_theme)
     # plt.show() is global -- one call draws every figure that is still open --
     # so they are written first and then disposed of together
-    written += [save_figure(figure, name, save_dir) for figure, name in figures]
-    if show:
+    written += [save_figure(figure, name, save_dir, width_mm=figure_width_mm,
+                            dpi=figure_dpi, formats=figure_formats)
+                for figure, name in figures]
+    if save_dir is not None and export_csv:
+        written.extend(_write_assessment_csvs(diagnostics, save_dir, provenance))
+    if show and figures:
         plt.show()
     else:
         for figure, _ in figures:
             plt.close(figure)
 
-    for build, name in ((reconstruction_scene, "reconstruction"),
-                        (target_space_scene, "target_coordinates")):
-        written.append(finalise_plotter(build(diagnostics), name, show, save_dir))
+    if not matplotlib_only:
+        scenes = ((lambda: reconstruction_scene(diagnostics, three_d_point_size, three_d_legend),
+                   "reconstruction"),
+                  (lambda: target_space_scene(diagnostics, point_size=three_d_point_size,
+                                               show_legend=three_d_legend), "target_coordinates"))
+        for build, name in scenes:
+            plotter = build()
+            _apply_3d_cosmetics(plotter, theme_name, three_d_background,
+                                three_d_point_size, three_d_view, three_d_axes)
+            written.append(finalise_plotter(plotter, name, show, save_dir))
 
     # special_plots opens and drives its own window, and its signature is part
     # of the parameter handler API that lives outside this repository, so it
@@ -1144,12 +1415,22 @@ def render_calibration_pyvista_png(
     o_results: dict,
     param_handler,
     output_path: str,
+    width_mm: float = 160.0,
+    dpi: int = 150,
+    theme_name: str = "Light",
+    background: str = "theme",
+    point_size: float = 3.0,
+    view: str = "isometric",
+    axes: bool = True,
+    show_legend: bool = True,
 ) -> tuple[bool, str]:
     """Render calibration assessment offscreen with PyVista and save to *output_path*.
 
     :param o_results: The optimisation results dict with keys ``err`` and ``x``.
     :param param_handler: The parameter handler used in the optimisation.
     :param output_path: Destination file path for the PNG screenshot.
+    :param width_mm: Generic publication preset width; preserves the 8:3 view ratio.
+    :param dpi: Render density used to calculate the PNG pixel dimensions.
     :returns: ``(success, message)`` tuple.
     """
     if not _PYVISTA_OK:
@@ -1192,8 +1473,10 @@ def render_calibration_pyvista_png(
 
         pv.set_plot_theme('document')
         pv.global_theme.multi_rendering_splitting_position = 0.50
+        pixel_width, pixel_height = _publication_render_size(width_mm, dpi)
         try:
-            plotter = pv.Plotter(shape='1|2', off_screen=True, window_size=(1600, 600))
+            plotter = pv.Plotter(shape='1|2', off_screen=True,
+                                 window_size=(pixel_width, pixel_height))
         except Exception as plotter_exc:
             return False, (
                 "PyVista offscreen plotter could not be created. "
@@ -1210,7 +1493,9 @@ def render_calibration_pyvista_png(
         if np.any(m):
             seen_pts = pv.PolyData(reconstructed[m])
             seen_pts['Reprojection error (px)'] = error_subset[m]
-            plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=2, clim=[0, e_lim])
+            plotter.add_mesh(seen_pts, render_points_as_spheres=True, point_size=point_size,
+                             clim=[0, e_lim], show_scalar_bar=show_legend,
+                             scalar_bar_args={"title": "Reprojection error (px)"})
 
         # Subplot 1: target coordinates
         plotter.subplot(1)
@@ -1222,11 +1507,94 @@ def render_calibration_pyvista_png(
         if raw_obj_points:
             cube_locs = pv.PolyData(np.array(raw_obj_points))
             cube_locs['Reprojection Error (px)'] = errors_scene
-            plotter.add_mesh(cube_locs, render_points_as_spheres=True, point_size=4, clim=[0, e_lim])
+            plotter.add_mesh(cube_locs, render_points_as_spheres=True, point_size=point_size,
+                             clim=[0, e_lim], show_scalar_bar=show_legend,
+                             scalar_bar_args={"title": "Reprojection error (px)"})
 
-        plotter.screenshot(output_path)
+        _apply_3d_cosmetics(plotter, theme_name, background, point_size, view, axes)
+        save_pyvista_screenshot(plotter, output_path, width_mm, dpi)
         plotter.close()
         return True, f"PyVista screenshot saved to {output_path}"
 
     except Exception as exc:
         return False, f"PyVista offscreen render failed: {exc}"
+
+
+def export_calibration_3d(
+    o_results: dict,
+    param_handler,
+    output_path: str | Path,
+    provenance: str | None = None,
+) -> tuple[bool, str]:
+    """Export a reusable 3D scene (GLTF/OBJ) or target-frame point cloud (PLY).
+
+    GLTF retains scene geometry and material colours but not the interactive
+    camera/view state, scalar arrays, physical units, or text annotations.
+    OBJ retains geometry/material colours through its MTL companion, but loses
+    scalar arrays, units, view state, and annotation. PLY contains target-frame
+    point coordinates; this VTK writer drops point arrays, which are copied
+    into the metadata sidecar. PLY contains no camera meshes, view, or
+    annotations.
+    A JSON sidecar records the source/frame and these known losses.
+    """
+    if not _PYVISTA_OK:
+        return False, "PyVista is required for 3D export; select the PyVista backend."
+    path = Path(output_path)
+    fmt = path.suffix.lower()
+    if fmt not in {".gltf", ".obj", ".ply"}:
+        return False, "Choose GLTF, OBJ, or PLY; GLB is not emitted by this PyVista exporter."
+    metadata_path = path.with_suffix(path.suffix + ".metadata.json")
+    companion_mtl = path.with_suffix(".mtl") if fmt == ".obj" else None
+    existing = next((candidate for candidate in (path, metadata_path, companion_mtl)
+                     if candidate is not None and candidate.exists()), None)
+    if existing is not None:
+        return False, f"Refusing to overwrite an existing export: {existing}"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        diagnostics = CalibrationDiagnostics.from_results(o_results, param_handler)
+        if fmt == ".ply":
+            if len(diagnostics.object_points) == 0:
+                return False, "No target-frame points are available to export."
+            cloud = pv.PolyData(np.asarray(diagnostics.object_points, dtype=float))
+            cloud["Reprojection error (px)"] = np.asarray(diagnostics.point_error, dtype=float)
+            cloud.save(path)
+            frame = "target coordinates"
+            losses = ["camera geometry", "view state", "annotations",
+                      "PLY writer drops point arrays; reprojection errors are copied to this sidecar"]
+        else:
+            scene = reconstruction_scene(diagnostics)
+            try:
+                if fmt == ".gltf":
+                    scene.export_gltf(str(path), rotate_scene=False)
+                else:
+                    scene.export_obj(str(path))
+            finally:
+                scene.close()
+            frame = "scene coordinates"
+            losses = (["interactive camera/view state", "scalar arrays", "physical units", "text annotations"]
+                      if fmt == ".gltf" else
+                      ["scalar arrays", "physical units", "view state", "text annotations"])
+        metadata = {
+            "source": "CalibrationDiagnostics.from_results",
+            "source_camset": provenance,
+            "coordinate_frame": frame,
+            "units": "not declared by the calibration artifact",
+            "format": fmt.lstrip("."),
+            "format_limitations": losses,
+            "view_state_included": False,
+        }
+        if fmt == ".ply":
+            metadata["point_data_sidecar"] = {
+                "Reprojection error (px)": np.asarray(diagnostics.point_error, dtype=float).tolist(),
+                "units": {"Reprojection error (px)": "px"},
+                "row_count": len(diagnostics.point_error),
+                "note": "PLY writer round-trip drops this point array; values correspond by point row order.",
+            }
+        with metadata_path.open("x", encoding="utf-8") as stream:
+            json.dump(metadata, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        return True, f"Exported {path} and metadata sidecar {metadata_path}."
+    except FileExistsError as exc:
+        return False, f"Refusing to overwrite an existing export: {exc}"
+    except Exception as exc:
+        return False, f"3D export failed: {exc}"

@@ -17,14 +17,21 @@ Conventions
 from __future__ import annotations
 
 import re
+import csv
+import json
+import tempfile
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Callable, Optional
 
-from PySide6.QtCore import QThread, Signal, Qt
-from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+import shiboken6
+from PySide6.QtCore import QEvent, QObject, QStandardPaths, QThread, Signal, Qt
+from PySide6.QtGui import QActionGroup, QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
+    QAbstractSpinBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
@@ -37,12 +44,16 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QMenu,
+    QToolButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.calibration_targets.core.parameters import (
     Choice,
     Parameter,
@@ -80,53 +91,24 @@ TAB_EXPORT_CALIBRATION = "Export Calibration"
 # Styling helpers
 # ---------------------------------------------------------------------------
 
-ORANGE = "#e07b00"
-DARK_ORANGE = "#c06000"
-GREEN = "#2e7d32"
-DARK_GREEN = "#1b5e20"
-DULL_RED = "#8c3b3b"
-DARK_DULL_RED = "#733030"
-SECTION_COLOR = "#1976d2"
-BABY_BLUE = "#8fd3ff"
-DARK_BABY_BLUE = "#67bde8"
+BUTTON_ROLES = {"orange": "secondary", "green": "success", "blue": "primary"}
 
-ORANGE_BTN_STYLE = (
-    f"QPushButton {{ background-color: {ORANGE}; color: white; font-weight: bold;"
-    f" border-radius: 4px; padding: 4px 10px; }}"
-    f"QPushButton:hover {{ background-color: {DARK_ORANGE}; }}"
-    f"QPushButton:pressed {{ background-color: {DARK_ORANGE}; }}"
-)
 
-GREEN_BTN_STYLE = (
-    f"QPushButton {{ background-color: {GREEN}; color: white; font-weight: bold;"
-    f" border-radius: 4px; padding: 4px 10px; }}"
-    f"QPushButton:hover {{ background-color: {DARK_GREEN}; }}"
-    f"QPushButton:pressed {{ background-color: {DARK_GREEN}; }}"
-)
+class WheelMutationGuard(QObject):
+    """Ignore wheel changes on numeric/choice controls unless they have focus.
 
-BLUE_BTN_STYLE = (
-    f"QPushButton {{ background-color: {BABY_BLUE}; color: #083b5c; font-weight: bold;"
-    f" border-radius: 4px; padding: 4px 10px; }}"
-    f"QPushButton:hover {{ background-color: {DARK_BABY_BLUE}; }}"
-    f"QPushButton:pressed {{ background-color: {DARK_BABY_BLUE}; }}"
-)
+    An unfocused wheel gesture is normally an attempt to scroll the page, not
+    to silently alter a calibration setting. Consuming it here avoids
+    re-posting wheel events (and the resulting scroll-recursion risk).
+    """
 
-#: A continue button whose run produced nothing worth carrying forward. Dull
-#: rather than bright, because it is a warning against going on rather than
-#: an action of its own.
-BLOCKED_BTN_STYLE = (
-    f"QPushButton {{ background-color: {DULL_RED}; color: white; font-weight: bold;"
-    f" border-radius: 4px; padding: 4px 10px; }}"
-    f"QPushButton:hover {{ background-color: {DARK_DULL_RED}; }}"
-    f"QPushButton:pressed {{ background-color: {DARK_DULL_RED}; }}"
-)
-
-SECTION_STYLE = "QLabel { color: #1976d2; font-weight: bold; margin-top: 6px; }"
-
-TERMINAL_STYLE = (
-    "QTextEdit { background: #1e1e1e; color: #d4d4d4; font-family: Courier, monospace;"
-    " font-size: 10pt; border: none; }"
-)
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
+        if event.type() == QEvent.Type.Wheel and isinstance(
+                obj, (QAbstractSpinBox, QComboBox)):
+            if not obj.hasFocus():
+                event.accept()
+                return True
+        return False
 
 # ---------------------------------------------------------------------------
 # Section label factory
@@ -136,38 +118,43 @@ TERMINAL_STYLE = (
 def make_section_label(text: str) -> QLabel:
     """Return a styled section-header label."""
     lbl = QLabel(text)
-    lbl.setStyleSheet(SECTION_STYLE)
+    lbl.setProperty("designRole", "section")
     return lbl
 
 
 def make_separator() -> QFrame:
-    """Return a horizontal separator line."""
+    """Return a themed one-pixel horizontal hairline separator."""
     sep = QFrame()
-    sep.setFrameShape(QFrame.Shape.HLine)
-    sep.setFrameShadow(QFrame.Shadow.Sunken)
+    sep.setObjectName("hairline")
+    sep.setFrameShape(QFrame.Shape.NoFrame)
+    sep.setFixedHeight(1)
     return sep
 
 
 def make_orange_button(text: str, callback: Callable) -> QPushButton:
-    """Return an orange push button connected to *callback*."""
-    btn = QPushButton(text)
-    btn.setStyleSheet(ORANGE_BTN_STYLE)
-    btn.clicked.connect(callback)
-    return btn
+    """Return a secondary action button connected to *callback*."""
+    return _make_role_button(text, callback, BUTTON_ROLES["orange"])
+
+
+def make_warning_button(text: str, callback: Callable) -> QPushButton:
+    """Return an orange warning/navigation button connected to *callback*."""
+    return _make_role_button(text, callback, "warning")
 
 
 def make_green_button(text: str, callback: Callable) -> QPushButton:
-    """Return a green push button connected to *callback*."""
-    btn = QPushButton(text)
-    btn.setStyleSheet(GREEN_BTN_STYLE)
-    btn.clicked.connect(callback)
-    return btn
+    """Return a success/commit button connected to *callback*."""
+    return _make_role_button(text, callback, BUTTON_ROLES["green"])
 
 
 def make_blue_button(text: str, callback: Callable) -> QPushButton:
-    """Return a baby-blue action button connected to *callback*."""
+    """Return a primary action button connected to *callback*."""
+    return _make_role_button(text, callback, BUTTON_ROLES["blue"])
+
+
+def _make_role_button(text: str, callback: Callable, role: str) -> QPushButton:
+    """Create a button styled by the active application theme."""
     btn = QPushButton(text)
-    btn.setStyleSheet(BLUE_BTN_STYLE)
+    btn.setProperty("designRole", role)
     btn.clicked.connect(callback)
     return btn
 
@@ -203,11 +190,15 @@ def set_continue_blocked(btn: QPushButton, reasons: list[str]) -> None:
     if reasons:
         if not hasattr(btn, "_unblocked_tooltip"):
             btn._unblocked_tooltip = btn.toolTip()
-        btn.setStyleSheet(BLOCKED_BTN_STYLE)
+        btn.setProperty("designRole", "warning")
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
         btn.setToolTip("This run cannot be carried forward:\n\n"
                        + "\n\n".join(reasons))
         return
-    btn.setStyleSheet(GREEN_BTN_STYLE)
+    btn.setProperty("designRole", "success")
+    btn.style().unpolish(btn)
+    btn.style().polish(btn)
     btn.setToolTip(getattr(btn, "_unblocked_tooltip", btn.toolTip()))
 
 
@@ -239,7 +230,7 @@ def _continue_clicked(btn: QPushButton, callback: Callable) -> None:
 
 
 class MatplotlibFigureCard(QWidget):
-    """A labelled matplotlib card with per-figure Expand and Save PNG buttons."""
+    """A managed Matplotlib visual with presentation and source-data exports."""
 
     def __init__(
         self,
@@ -248,31 +239,137 @@ class MatplotlibFigureCard(QWidget):
         canvas_cls,
         parent: Optional[QWidget] = None,
         min_height: int = 300,
+        csv_export: Optional[dict[str, Any]] = None,
+        csv_disabled_reason: str = "CSV is unavailable: this visual has no tabular source adapter.",
+        canvas=None,
+        visual_id: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._title = title
         self._fig = fig
         self._canvas_cls = canvas_cls
+        self._csv_export = csv_export
+        from pyCamSet.gui.theme import apply_matplotlib_theme
+        from pyCamSet.gui.visual_style import (
+            VisualStyle, apply_visual_style, load_default_style, style_from_json,
+            style_path_for_visual,
+        )
+        legacy_visual_id = "figure:" + re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")
+        self._visual_id = visual_id or legacy_visual_id
+        from pyCamSet.gui.preferences import config_directory
+        self._style_path = style_path_for_visual(config_directory(), self._visual_id)
+        self._style = VisualStyle()
+        application = QApplication.instance()
+        theme_name = (application.property("pycamsetTheme") if application else None) or "Light"
+        apply_matplotlib_theme(fig, theme_name)
+        style_source = self._style_path
+        legacy_style_path = style_path_for_visual(config_directory(), legacy_visual_id)
+        if not style_source.exists() and self._visual_id != legacy_visual_id and legacy_style_path.exists():
+            # Read the old run-specific sidecar in place; migrate only on explicit save.
+            style_source = legacy_style_path
+        if style_source.exists():
+            try:
+                self._style = style_from_json(
+                    style_source.read_text(encoding="utf-8"),
+                    legacy_visual_id if style_source == legacy_style_path else self._visual_id)
+                apply_visual_style(
+                    fig, self._style, theme_name)
+            except (OSError, ValueError):
+                # Invalid preference files are ignored, never partially applied.
+                self._style = VisualStyle()
+        else:
+            # No style of its own: use the saved default for all figures, if any.
+            default = load_default_style(config_directory())
+            if default is not None:
+                self._style = default
+                apply_visual_style(fig, default, theme_name)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 8)
 
         header = QHBoxLayout()
-        header.addWidget(make_section_label(title))
-        header.addStretch()
+        title_label = make_section_label(title)
+        # Wrap rather than hold the card wide: in a narrow window a long title
+        # would otherwise set the minimum width of the whole page.
+        title_label.setWordWrap(True)
+        title_label.setMinimumWidth(80)
+        header.addWidget(title_label, 1)
         save_btn = QPushButton("Save PNG")
-        save_btn.setFixedWidth(82)
+        save_btn.setToolTip("Save PNG (at the selected size template)")
+        from pyCamSet.gui.action_icons import set_action_icon
+        set_action_icon(save_btn, "snapshot")
+        save_btn.setAccessibleName(f"Save PNG for {title}")
         save_btn.clicked.connect(self._save_png)
+        self._preset = QComboBox()
+        self._preset.addItem("Screen template · 160 mm · 150 dpi", (160.0, 150))
+        self._preset.addItem("Publication single-column template · 85 mm · 300 dpi", (85.0, 300))
+        self._preset.addItem("Publication double-column template · 180 mm · 300 dpi", (180.0, 300))
+        self._preset.setToolTip("Generic sizing templates only; not a claim of compliance with any named journal.")
+        from pyCamSet.gui.preferences import bind_export_preset
+        bind_export_preset(self._preset, self._visual_id)
+        # Compact, as in the optical-mapping app: one click saves a PNG, and
+        # the menu beside it holds the vector formats and the export size.  The
+        # size combo stays as the bound state the menu mirrors, but hidden: at
+        # full width it made every card, and so every page, hundreds of pixels
+        # wider than a small window.
+        self._preset.setVisible(False)
         header.addWidget(save_btn)
+        more_btn = QToolButton()
+        more_btn.setText("▾")
+        more_btn.setObjectName("saveMenuButton")
+        more_btn.setFixedSize(20, 28)
+        more_btn.setToolTip("More ways to save: SVG, PDF and the export size")
+        more_btn.setAccessibleName(f"More save options for {title}")
+        more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        save_menu = QMenu(more_btn)
+        save_menu.addAction("Save PNG", self._save_png)
+        for fmt in ("SVG", "PDF"):
+            save_menu.addAction(f"Save {fmt}",
+                                lambda output_format=fmt: self._save_vector(output_format))
+        save_menu.addSeparator()
+        size_menu = save_menu.addMenu("Export size")
+        size_group = QActionGroup(size_menu)
+        for index in range(self._preset.count()):
+            action = size_menu.addAction(self._preset.itemText(index))
+            action.setCheckable(True)
+            action.setChecked(index == self._preset.currentIndex())
+            action.triggered.connect(lambda _c=False, i=index: self._preset.setCurrentIndex(i))
+            size_group.addAction(action)
+        self._preset.currentIndexChanged.connect(
+            lambda i: size_group.actions()[i].setChecked(True) if 0 <= i < len(size_group.actions()) else None)
+        more_btn.setMenu(save_menu)
+        header.addWidget(more_btn)
+        self._save_menu = save_menu
+        header.addSpacing(6)
+        style_btn = QPushButton("Style…")
+        style_btn.setToolTip("Figure style options: fonts, colours, grid and legend")
+        set_action_icon(style_btn, "options")
+        style_btn.setAccessibleName(f"Figure style options for {title}")
+        style_btn.clicked.connect(self._edit_style)
+        header.addWidget(style_btn)
+        self._csv_btn = QPushButton("Save CSV")
+        set_action_icon(self._csv_btn, "chart")
+        has_csv_rows = csv_export is not None and bool(csv_export.get("rows"))
+        self._csv_btn.setEnabled(has_csv_rows)
+        self._csv_btn.setToolTip("Export source-backed numeric data." if has_csv_rows else csv_disabled_reason)
+        self._csv_btn.clicked.connect(self._save_csv)
+        header.addWidget(self._csv_btn)
         expand_btn = QPushButton("Expand")
-        expand_btn.setFixedWidth(78)
+        expand_btn.setMinimumWidth(78)
+        expand_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         expand_btn.clicked.connect(self._open_expanded)
         header.addWidget(expand_btn)
         layout.addLayout(header)
 
-        self._canvas = self._canvas_cls(self._fig)
+        self._canvas = canvas if canvas is not None else self._canvas_cls(self._fig)
         self._canvas.setMinimumHeight(min_height)
         self._canvas.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Expose the figure's visible heading to assistive technology without
+        # claiming a data summary that the canvas cannot reliably provide.
+        self._canvas.setAccessibleName(title)
+        self._canvas.setAccessibleDescription(
+            f"Scientific figure: {title}. Use the figure controls to expand or save it."
+        )
         layout.addWidget(self._canvas)
 
     def _save_png(self) -> None:
@@ -281,8 +378,129 @@ class MatplotlibFigureCard(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Figure as PNG", f"{safe_title}.png", "PNG Files (*.png)"
         )
-        if path:
-            self._fig.savefig(path, dpi=150, bbox_inches="tight")
+        if not path:
+            return
+        try:
+            from pyCamSet.gui.visual_style import _validate_user_style_filename
+            _validate_user_style_filename(Path(path).name)
+            width_mm, dpi = self._preset.currentData()
+            original_size = self._fig.get_size_inches().copy()
+            width_inches = width_mm / 25.4
+            height_inches = width_inches * float(original_size[1]) / float(original_size[0])
+            pixel_width = round(width_inches * dpi)
+            pixel_height = round(height_inches * dpi)
+            self._fig.set_size_inches(pixel_width / dpi, pixel_height / dpi, forward=False)
+            try:
+                self._fig.savefig(path, dpi=int(dpi), format="png")
+            finally:
+                self._fig.set_size_inches(original_size, forward=False)
+        except Exception as exc:
+            QMessageBox.warning(self, "PNG export failed", f"The figure could not be saved.\n\nTechnical detail: {exc}")
+
+    def _save_vector(self, output_format: str) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Save Figure as {output_format}", f"figure.{output_format.lower()}",
+            f"{output_format} Files (*.{output_format.lower()})")
+        if not path:
+            return
+        try:
+            from pyCamSet.gui.visual_style import _validate_user_style_filename
+            _validate_user_style_filename(Path(path).name)
+            width_mm, dpi = self._preset.currentData()
+            original_size = self._fig.get_size_inches().copy()
+            width_inches = width_mm / 25.4
+            height_inches = width_inches * float(original_size[1]) / float(original_size[0])
+            self._fig.set_size_inches(width_inches, height_inches, forward=False)
+            try:
+                self._fig.savefig(path, format=output_format.lower(), dpi=int(dpi))
+            finally:
+                self._fig.set_size_inches(original_size, forward=False)
+        except Exception as exc:
+            QMessageBox.warning(self, f"{output_format} export failed",
+                                f"The figure could not be saved.\n\nTechnical detail: {exc}")
+
+    def _save_csv(self) -> None:
+        if self._csv_export is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save source data as CSV", "figure-data.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            from pyCamSet.gui.visual_style import _validate_user_style_filename
+            _validate_user_style_filename(Path(path).name)
+            adapter = self._csv_export
+            with open(path, "w", newline="", encoding="utf-8") as stream:
+                stream.write("# metadata: " + json.dumps(adapter["metadata"], ensure_ascii=False) + "\n")
+                writer = csv.writer(stream)
+                writer.writerow(adapter["columns"])
+                writer.writerows(adapter["rows"])
+        except Exception as exc:
+            QMessageBox.warning(self, "CSV export failed", f"Source data could not be saved.\n\nTechnical detail: {exc}")
+
+    def _edit_style(self) -> None:
+        """Preview a visual-only style and persist it outside scientific runs."""
+        from PySide6.QtWidgets import QMessageBox
+        from pyCamSet.gui.visual_style import (
+            VisualStyle, VisualStyleDialog, _VISUAL_OVERRIDES,
+            _restore_presentation_state, apply_visual_style, style_to_json,
+        )
+
+        application = QApplication.instance()
+        theme_name = application.property("pycamsetTheme") if application else "Light"
+        dialog = VisualStyleDialog(self._fig, self._visual_id, self._style,
+                                   theme_name, self, lambda *_: self._canvas.draw_idle())
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        candidate = dialog.current
+        if candidate == self._style:
+            return
+        if candidate == VisualStyle():
+            # An empty style means "no style of its own": remove the file so
+            # the figure follows the saved default, or the theme without one.
+            from pyCamSet.gui.preferences import config_directory
+            from pyCamSet.gui.visual_style import load_default_style
+            try:
+                self._style_path.unlink(missing_ok=True)
+            except OSError as exc:
+                QMessageBox.warning(self, "Figure style not reset",
+                                    f"The saved style could not be removed.\n\nTechnical detail: {exc}")
+                return
+            self._style = load_default_style(config_directory()) or VisualStyle()
+            apply_visual_style(self._fig, self._style, theme_name)
+            self._canvas.draw_idle()
+            return
+        temporary_path = None
+        try:
+            candidate.validate()
+            self._style_path.parent.mkdir(parents=True, exist_ok=True)
+            # Stage beside the sidecar so promotion is atomic on the same filesystem.
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self._style_path.parent,
+                prefix=f".{self._style_path.name}.", suffix=".tmp", delete=False,
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+                temporary_file.write(style_to_json(candidate, self._visual_id))
+            temporary_path.replace(self._style_path)
+        except (OSError, ValueError) as exc:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            # Restore the exact pre-dialog artist and override states after a failed save.
+            self._style = dialog.original
+            _restore_presentation_state(self._fig, dialog.original_artist_state)
+            if dialog.original_override is None:
+                _VISUAL_OVERRIDES.pop(self._fig, None)
+            else:
+                _VISUAL_OVERRIDES[self._fig] = dialog.original_override
+            self._canvas.draw_idle()
+            QMessageBox.warning(self, "Figure style not saved",
+                                f"The style could not be saved.\n\nTechnical detail: {exc}")
+            return
+        self._style = candidate
+        apply_visual_style(self._fig, candidate, theme_name)
+        self._canvas.draw_idle()
 
     def _open_expanded(self) -> None:
         dlg = QDialog(self)
@@ -319,8 +537,13 @@ def make_scrollable_tab() -> tuple[QWidget, QVBoxLayout, QScrollArea]:
 # ---------------------------------------------------------------------------
 
 
-class CollapsibleSection(QWidget):
-    """A labelled section with a toggle header button and collapsible QFormLayout body.
+class CollapsibleSection(QFrame):
+    """A labelled card with a toggle header button and collapsible QFormLayout body.
+
+    The card chrome (tinted surface, hairline border, rounded corners) and the
+    header's look come from the application stylesheet through the
+    ``collapsibleSection`` and ``sectionToggle`` object names, so the section
+    follows live theme switches.
 
     Usage::
 
@@ -331,25 +554,25 @@ class CollapsibleSection(QWidget):
 
     def __init__(self, title: str, expanded: bool = True, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self.setObjectName("collapsibleSection")
+        # Never grow past the content: a collapsed card is one header tall.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self._title = title
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 2, 0, 2)
+        root.setContentsMargins(2, 2, 2, 2)
         root.setSpacing(0)
 
         self._btn = QPushButton()
+        self._btn.setObjectName("sectionToggle")
+        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn.setCheckable(True)
         self._btn.setChecked(expanded)
-        self._btn.setStyleSheet(
-            "QPushButton { text-align: left; font-weight: bold; color: #1976d2;"
-            " background: transparent; border: none; padding: 2px 0px; font-size: 10pt; }"
-            "QPushButton:hover { color: #0d47a1; }"
-        )
         self._btn.clicked.connect(self._on_toggle)
         root.addWidget(self._btn)
 
         self._body = QWidget()
         self._form = QFormLayout(self._body)
-        self._form.setContentsMargins(4, 0, 0, 4)
+        self._form.setContentsMargins(10, 2, 10, 8)
         self._form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         root.addWidget(self._body)
 
@@ -360,6 +583,11 @@ class CollapsibleSection(QWidget):
     def _update_label(self, expanded: bool) -> None:
         arrow = "▼" if expanded else "▶"
         self._btn.setText(f"{arrow}  {self._title}")
+        # Screen readers get the title and state in words, not the arrow glyph.
+        self._btn.setAccessibleName(self._title)
+        self._btn.setAccessibleDescription(
+            "Expanded section; press Space to collapse" if expanded
+            else "Collapsed section; press Space to expand")
 
     def _on_toggle(self, checked: bool) -> None:
         self._body.setVisible(checked)
@@ -456,6 +684,7 @@ def build_parameter_widget(meta) -> QWidget:
         elif meta.dtype == "json_vector":
             widget.setPlaceholderText("e.g. [k1,k2,p1,p2,k3] or blank")
     widget.setFixedWidth(220)
+    widget.setAccessibleName(meta.label)
     widget.setToolTip(build_parameter_tooltip(meta))
     return widget
 
@@ -714,7 +943,7 @@ class TargetSettingsForm(QWidget):
                     "Phase 1.")
                 form.addRow(self._backend_label, self._inherited_backend_label)
             self._backend_status = QLabel()
-            self._backend_status.setStyleSheet("font-size: 10px;")
+            set_text_role(self._backend_status, "hint")
             form.addRow("", self._backend_status)
 
         self._rows = QWidget()
@@ -899,9 +1128,8 @@ class TargetSettingsForm(QWidget):
         if shown:
             backend = self.backend()
             self._backend_status.setText(marker_backend_availability_text(backend))
-            self._backend_status.setStyleSheet(
-                "font-size: 10px; color: "
-                + ("#2a7a2a;" if marker_backend_available(backend) else "#8a4a00;"))
+            set_text_role(self._backend_status,
+                          "success" if marker_backend_available(backend) else "warning")
 
     def _on_backend_selected(self, index: int) -> None:
         """The detector combo moved: a choice, unless the form moved it."""
@@ -1167,7 +1395,7 @@ class TerminalWidget(QTextEdit):
     def __init__(self, show_cb: QCheckBox, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setReadOnly(True)
-        self.setStyleSheet(TERMINAL_STYLE)
+        self.setObjectName("terminalOutput")
         self.setMinimumHeight(110)
         self.setMaximumHeight(200)
         self._show_cb = show_cb
@@ -1264,29 +1492,52 @@ class RunSelectorWidget(QWidget):
         self,
         runs: list[dict],
         parent: Optional[QWidget] = None,
-        preselect: int = 3,
+        preselect: int = 1,
     ) -> None:
         super().__init__(parent)
         self._preselect = preselect
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        layout.addWidget(make_section_label("Saved runs"))
+        self._heading = make_section_label("Saved runs")
+        layout.addWidget(self._heading)
+
+        self._selection_summary = QLabel("No runs selected.")
+        self._selection_summary.setWordWrap(True)
+        self._selection_summary.setAccessibleName("Run selection summary")
+        layout.addWidget(self._selection_summary)
 
         self._list = QListWidget()
         self._list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self._list.setAccessibleName("Saved runs")
+        self._list.setAccessibleDescription(
+            "Select one or more saved runs to show their diagnostics."
+        )
         self._list.itemSelectionChanged.connect(self._emit_selection)
         layout.addWidget(self._list)
 
-        self._empty_lbl = QLabel("No runs saved yet.")
-        self._empty_lbl.setStyleSheet("color: gray;")
+        self._empty_lbl = QLabel("No saved runs are available. Run this phase, then refresh.")
+        self._empty_lbl.setWordWrap(True)
+        self._empty_lbl.setAccessibleName("No saved runs")
+        self._empty_lbl.setAccessibleDescription(
+            "The run list is empty. Complete a phase run and refresh to load it."
+        )
         layout.addWidget(self._empty_lbl)
 
         self._runs: list[dict] = []
         self.refresh(runs)
 
     def _emit_selection(self) -> None:
+        self._update_selection_summary()
         self.selection_changed.emit(self.get_selected())
+
+    def _update_selection_summary(self) -> None:
+        selected_count = len(self._list.selectedItems())
+        total_count = len(self._runs)
+        self._selection_summary.setText(
+            f"{selected_count} of {total_count} runs selected. "
+            "Select runs to compare their diagnostics."
+        )
 
     def get_selected(self) -> list[dict]:
         """Return currently selected run-metadata dicts."""
@@ -1304,6 +1555,7 @@ class RunSelectorWidget(QWidget):
         if not runs:
             self._list.hide()
             self._empty_lbl.show()
+            self._update_selection_summary()
             return
         self._empty_lbl.hide()
         self._list.show()
@@ -1314,6 +1566,7 @@ class RunSelectorWidget(QWidget):
         count = max(0, min(self._preselect, n))
         for i in range(n - count, n):
             self._list.item(i).setSelected(True)
+        self._update_selection_summary()
 
     def enforce_max_selection(self, max_selected: int) -> None:
         """Keep only the most recent selected rows when selection exceeds *max_selected*."""
@@ -1373,6 +1626,32 @@ class PhaseWorker(QThread):
             self.finished.emit({"error": str(exc)})
 
 
+def hold_run_button(button: Optional[QPushButton], worker: "PhaseWorker") -> None:
+    """Disable *button* and say so until *worker* finishes or is cancelled.
+
+    A second click while a run is going would start a second run into the
+    same workspace.  PhaseWorker emits ``finished`` on success, on error and
+    after a cancelled run, so the button always comes back.
+    """
+    if button is None:
+        return
+    if button.property("heldText") is None:
+        button.setProperty("heldText", button.text())
+        # Keep the width, so the row does not jump while the label is shorter.
+        button.setMinimumWidth(button.sizeHint().width())
+    button.setEnabled(False)
+    button.setText("Running…")
+
+    def release(*_args) -> None:
+        if not shiboken6.isValid(button):
+            return
+        button.setText(button.property("heldText"))
+        button.setProperty("heldText", None)
+        button.setEnabled(True)
+
+    worker.finished.connect(release)
+
+
 # ---------------------------------------------------------------------------
 # Shared image-folder validation helpers
 # ---------------------------------------------------------------------------
@@ -1429,7 +1708,7 @@ def render_predecessor_chain_section(layout, workspace_mgr: WorkspaceManager, ru
         phase = str(pred.get("phase", "unknown"))
         rid = str(pred.get("run_id", "unknown"))
         pred_hdr = QLabel(f"  {phase}  |  {rid}")
-        pred_hdr.setStyleSheet("font-weight: bold; margin-top: 4px; color: #555;")
+        set_text_role(pred_hdr, "subheading")
         layout.addWidget(pred_hdr)
 
         form = QFormLayout()
@@ -1446,7 +1725,7 @@ def render_predecessor_chain_section(layout, workspace_mgr: WorkspaceManager, ru
             )
             plbl = QLabel(param_txt)
             plbl.setWordWrap(True)
-            plbl.setStyleSheet("color: #444; font-size: 9pt;")
+            set_text_role(plbl, "muted")
             form.addRow("params:", plbl)
 
         diag = pred.get("diagnostics") or {}
@@ -1454,12 +1733,11 @@ def render_predecessor_chain_section(layout, workspace_mgr: WorkspaceManager, ru
             short_key = key.split("_", 1)[-1] if "_" in key else key
             dlbl = QLabel(str(val)[:120])
             dlbl.setWordWrap(True)
-            dlbl.setStyleSheet("font-size: 9pt;")
             form.addRow(f"{short_key}:", dlbl)
 
         if pred.get("error"):
             err_lbl = QLabel(str(pred["error"])[:200])
-            err_lbl.setStyleSheet("color: red; font-size: 9pt;")
+            set_text_role(err_lbl, "danger")
             err_lbl.setWordWrap(True)
             form.addRow("error:", err_lbl)
 

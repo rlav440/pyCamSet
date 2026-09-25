@@ -36,7 +36,11 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      # The ChArUco2 and Ccube2 pages draw their targets as the site is built,
+      # and those targets are read with aruco2, which lives in the submodule.
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: actions/setup-python@v5
         with:
@@ -51,11 +55,58 @@ jobs:
       - name: Install the native graphics libraries
         run: sudo apt-get update && sudo apt-get install -y libcairo2
 
+      # aruco2's sources use the universal intrinsics OpenCV added in 4.9
+      # (cv::VTraits, cv::v_eq); Ubuntu's libopencv-dev is 4.6, which cannot
+      # compile them.  conda-forge's headless build is where a new enough
+      # OpenCV comes from -- headless because nothing here opens a window.
+      # The env is created on every run, cached wheel or not: the wheel links
+      # its libraries at run time.
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: opencv
+          init-shell: none
+          condarc: |
+            channels: [conda-forge]
+          create-args: >-
+            libopencv=4.13.*=headless*
+
       # The examples on these pages run a real calibration as the site is built,
       # so unlike the sphinx-autoapi build this replaced -- which never imported
       # the package at all -- pyCamSet and its whole runtime stack have to be
       # installed here.
       - run: pip install -e ".[docs]"
+
+      # aruco2 is not on PyPI, so the pages that draw a ChArUco2 or a Ccube2
+      # need it built from the submodule.  See "Installing the aruco2 backend"
+      # in CITATION.md.  Compiling it is minutes of C++ that the submodule's
+      # commit decides entirely, so the wheel is kept against that commit --
+      # and against the OpenCV it was compiled against, which is the runtime it
+      # goes on linking to.
+      - name: Identify the aruco2 build
+        id: aruco2
+        run: |
+          echo "sha=$(git -C third_party/aruco2 rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "opencv=$(basename "$(ls "$HOME"/micromamba/envs/opencv/lib/libopencv_core.so.*.* | head -1)")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        id: aruco2-wheel
+        with:
+          path: ~/aruco2-wheel
+          key: >-
+            aruco2-${{ runner.os }}-py3.11-${{ steps.aruco2.outputs.opencv }}-${{ steps.aruco2.outputs.sha }}
+
+      # The wheel finds those libraries by the path they were built against,
+      # which is where the env is put on every run.
+      - name: Build aruco2
+        if: steps.aruco2-wheel.outputs.cache-hit != 'true'
+        run: |
+          opencv="$HOME/micromamba/envs/opencv"
+          pip wheel -v ./third_party/aruco2 -w ~/aruco2-wheel --no-deps \
+            --config-settings=cmake.define.OpenCV_DIR="$opencv/lib/cmake/opencv4" \
+            --config-settings=cmake.define.CMAKE_INSTALL_RPATH="$opencv/lib" \
+            --config-settings=cmake.define.CMAKE_BUILD_WITH_INSTALL_RPATH=ON
+
+      - run: pip install --no-index --find-links ~/aruco2-wheel aruco2
 
       - run: python -m mkdocs build --strict
 
@@ -74,6 +125,7 @@ jobs:
         with:
           ref: development
           path: development
+          submodules: true
 
       - uses: actions/setup-python@v5
         with:
@@ -84,6 +136,21 @@ jobs:
 
       - name: Install the native graphics libraries
         run: sudo apt-get update && sudo apt-get install -y libcairo2
+
+      # aruco2's sources use the universal intrinsics OpenCV added in 4.9
+      # (cv::VTraits, cv::v_eq); Ubuntu's libopencv-dev is 4.6, which cannot
+      # compile them.  conda-forge's headless build is where a new enough
+      # OpenCV comes from -- headless because nothing here opens a window.
+      # The env is created on every run, cached wheel or not: the wheel links
+      # its libraries at run time.
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: opencv
+          init-shell: none
+          condarc: |
+            channels: [conda-forge]
+          create-args: >-
+            libopencv=4.13.*=headless*
 
       # master is still the sphinx tree, and its toolchain is listed in the file
       # it has always been listed in -- except for sphinx-copybutton, which its
@@ -100,6 +167,33 @@ jobs:
 
       - name: Install development's mkdocs toolchain
         run: pip install -e "./development[docs]"
+
+      # Built from development's submodule: master's sphinx build imports
+      # nothing, so only the mkdocs half needs it.  Cached the same way, and
+      # under the same key, as the pull request check builds it.
+      - name: Identify the aruco2 build
+        id: aruco2
+        run: |
+          echo "sha=$(git -C development/third_party/aruco2 rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "opencv=$(basename "$(ls "$HOME"/micromamba/envs/opencv/lib/libopencv_core.so.*.* | head -1)")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        id: aruco2-wheel
+        with:
+          path: ~/aruco2-wheel
+          key: >-
+            aruco2-${{ runner.os }}-py3.11-${{ steps.aruco2.outputs.opencv }}-${{ steps.aruco2.outputs.sha }}
+
+      - name: Build development's aruco2 backend
+        if: steps.aruco2-wheel.outputs.cache-hit != 'true'
+        run: |
+          opencv="$HOME/micromamba/envs/opencv"
+          pip wheel -v ./development/third_party/aruco2 -w ~/aruco2-wheel --no-deps \
+            --config-settings=cmake.define.OpenCV_DIR="$opencv/lib/cmake/opencv4" \
+            --config-settings=cmake.define.CMAKE_INSTALL_RPATH="$opencv/lib" \
+            --config-settings=cmake.define.CMAKE_BUILD_WITH_INSTALL_RPATH=ON
+
+      - run: pip install --no-index --find-links ~/aruco2-wheel aruco2
 
       # development is warning-free, so it is held to that with --strict.
       - name: Build development into /dev

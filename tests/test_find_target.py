@@ -31,7 +31,7 @@ from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 from scipy.spatial.transform import Rotation
 from pyCamSet.cameras.telecentric_camera import TelecentricCamera
 
-from conftest import make_camera
+from conftest import UndrawableTarget, make_camera
 
 # The pose solver needs at least 8 points in a view, so the grid is 5x5.
 GRID = 5
@@ -39,7 +39,7 @@ SPACING = 0.02
 REF_MAGNIFICATION = 30000.0  # px per metre
 
 
-class StubTarget(AbstractTarget):
+class StubTarget(UndrawableTarget, AbstractTarget):
     """A planar grid that reports where its points land, ignoring the pixels.
 
     The image passed to ``find_in_image`` carries only a timestep index, which

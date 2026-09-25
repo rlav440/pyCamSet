@@ -13,6 +13,7 @@ from typing import Optional
 
 import numpy as np
 
+from pyCamSet.utils.paths import long_path
 from pyCamSet.workflow.detections import (
     DetectionFilter,
     extract_detection,
@@ -28,7 +29,6 @@ from pyCamSet.workflow.logs import (
 from pyCamSet.workflow.phase1 import target_of_params
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
-    as_io_path,
     make_run_id,
     path_exists,
     resolve_artifact,
@@ -238,7 +238,7 @@ def _lockbox(params: dict, cams, log: LogFn):
         log(f"Original source camset: {settings['original_source_camset']}")
         log(f"Edited lockbox copy: {settings['edited_source_camset']}")
 
-    source_camset = load_CameraSet(as_io_path(source))
+    source_camset = load_CameraSet(long_path(source))
     if set(source_camset.get_names()) != set(cams.get_names()):
         raise RuntimeError(
             "Effective lockbox source camera names do not match the active "
@@ -297,9 +297,9 @@ def _solve(params: dict, run_dir: Path, camset_in: Path,
         raise RuntimeError("pyCamSet optimisation modules are not importable.")
 
     log(f"Loading Phase 2 camset: {camset_in}")
-    cams = load_CameraSet(as_io_path(camset_in))
+    cams = load_CameraSet(long_path(camset_in))
     log(f"Loading Phase 1 detections: {detections_path}")
-    detections = extract_detection(load_pickle(as_io_path(detections_path)))
+    detections = extract_detection(load_pickle(long_path(detections_path)))
     if detections is None:
         raise RuntimeError(
             "Could not extract TargetDetection from Phase 1 pickle.")

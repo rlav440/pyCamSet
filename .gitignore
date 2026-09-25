@@ -1,4 +1,7 @@
 .idea/
+.vscode/
+.claude/
+.mcp.json
 .DS_Store
 __pycache__/
 docs/build/
@@ -9,6 +12,7 @@ tests/test_data/**/*.camset
 tests/test_data/*.camset
 tests/test_data/**/detected_datapoints*.pickle
 tests/test_data/**/detected_datapoints*.identity.json
+tests/test_data/**/detected_datapoints*
 tests/test_data/cam_test_cache.pkl
 bin/
 dump/

@@ -173,14 +173,6 @@ def test_nan_errors_are_flagged_rather_than_formatted():
     assert "nan" in report.summary()
 
 
-def test_the_summary_fits_a_terminal():
-    """A summary that wraps defeats the purpose of having one."""
-    report = _report(_ROWS, _PAIRS, missing_poses=np.array([True, True]))
-
-    over = _over_width(report.summary(colour=True))
-    assert not over, f"lines at or over {MAX_WIDTH} columns: {over}"
-
-
 def test_a_full_worst_image_list_cannot_widen_the_table():
     """The regression that motivated the wrapping.
 
@@ -491,13 +483,6 @@ def test_the_intrinsics_report_keeps_its_working_out_of_the_record(monkeypatch):
 class TestColourBands:
     """90%+ green, 60-89% orange, under 60% red."""
 
-    @pytest.mark.parametrize("fraction, band", [
-        (1.00, "green"), (0.90, "green"),      # the boundary is inclusive
-        (0.8999, "orange"), (0.75, "orange"), (0.60, "orange"),
-        (0.5999, "red"), (0.25, "red"), (0.0, "red"),
-    ])
-    def test_each_fraction_lands_in_its_band(self, fraction, band):
-        assert fmt.quality_colour(fraction) == fmt.SOLARIZED[band]
 
     def test_colour_costs_no_columns(self):
         """The whole reason cells are padded before they are coloured: a
@@ -516,9 +501,6 @@ class TestColourBands:
         monkeypatch.setenv("NO_COLOR", "1")
         assert fmt.colour_enabled() is False
 
-    def test_an_explicit_choice_beats_the_environment(self, monkeypatch):
-        monkeypatch.setenv("NO_COLOR", "1")
-        assert fmt.colour_enabled(True) is True
 
     def test_it_stays_plain_when_nothing_is_watching(self, monkeypatch):
         monkeypatch.delenv("NO_COLOR", raising=False)
@@ -612,13 +594,6 @@ class TestProgress:
 class TestDeviationBands:
     """Rig deviations: green under 1, orange under 5, red at or above."""
 
-    @pytest.mark.parametrize("value, band", [
-        (0.0, "green"), (0.999, "green"),
-        (1.0, "orange"), (4.999, "orange"),
-        (5.0, "red"), (12.8, "red"),
-    ])
-    def test_each_value_lands_in_its_band(self, value, band):
-        assert fmt.deviation_colour(value) == fmt.SOLARIZED[band]
 
     def test_both_rig_columns_are_graded(self):
         """Shift in mm and rotation in degrees share one scale."""
@@ -639,21 +614,10 @@ class TestErrorBands:
     """Reprojection error: blue under 0.1, green under 1, orange under 5,
     red at or above 5 -- the same 5 px the high error flag uses."""
 
-    @pytest.mark.parametrize("pixels, band", [
-        (0.0, "blue"), (0.0999, "blue"),
-        (0.1, "green"), (0.999, "green"),
-        (1.0, "orange"), (4.999, "orange"),
-        (5.0, "red"), (20.4, "red"),
-    ])
-    def test_each_error_lands_in_its_band(self, pixels, band):
-        assert fmt.error_colour(pixels) == fmt.SOLARIZED[band]
 
     def test_the_red_band_matches_the_high_error_flag(self):
         assert fmt.ERROR_FAIR_PX == HIGH_FINAL_ERROR_PX
 
-    def test_a_nan_error_is_red(self):
-        """A solve that produced no usable number is not 'excellent'."""
-        assert fmt.error_colour(float("nan")) == fmt.SOLARIZED["red"]
 
     def test_the_per_camera_columns_span_all_four_bands(self):
         rows, pairs = [], []

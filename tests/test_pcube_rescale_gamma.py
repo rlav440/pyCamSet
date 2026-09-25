@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from pyCamSet.calibration_targets.core.abstract_target import AbstractTarget
+from conftest import UndrawableTarget
 from pyCamSet.calibration_targets.core.target_detections import ImageDetection
 from pyCamSet.calibration_targets.markers.puzzleboard import (
     preprocess_puzzleboard_image,
@@ -93,7 +94,7 @@ def test_preparation_rejects_non_positive_or_non_finite_gamma(gamma):
                                      enabled=True, scale=0.25, gamma=gamma)
 
 
-class _CountingTarget(AbstractTarget):
+class _CountingTarget(UndrawableTarget, AbstractTarget):
     """Small real-folder target double for the production entry point."""
 
     def find_in_image(self, image, draw=False, camera=None, wait_len=1):
@@ -155,29 +156,19 @@ def test_production_detection_entry_threads_preparation_to_target_once(tmp_path)
 
 
 def test_pcube_cache_identity_includes_preprocessing_settings(tmp_path):
-    from pyCamSet.calibration.camera_calibrator import (
-        cache_matches,
-        cache_identity_path,
-        write_cache_identity,
-    )
+    """A slot detected under one preprocessing setting is not reused under another."""
+    from pyCamSet.calibration.detection_cache import cache_matches, save_to_cache
+    from pyCamSet.calibration_targets import TargetDetection
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
-    cache = tmp_path / "detected_datapoints.pickle"
-    cache.write_bytes(b"same detections")
+    cache = tmp_path / "detected_datapoints.npz"
     target = build_target({"type": "PuzzleBoardCube"})
-    write_cache_identity(cache, target, ["cam0"], None,
-                         preprocessing={"rescale_and_gamma": True,
-                                        "scale": 0.25, "gamma": 0.5})
+    settings = {"rescale_and_gamma": True, "scale": 0.25, "gamma": 0.5}
+    save_to_cache(TargetDetection(cam_names=["cam0"], data=np.array([[0, 0, 0, 1.0, 2.0]])),
+                  [(8, 12)], cache, target, ["cam0"], None, preprocessing=settings)
 
-    assert cache_matches(
-        cache, target, ["cam0"], None,
-        preprocessing={"rescale_and_gamma": True, "scale": 0.25, "gamma": 0.5})
-    assert not cache_matches(
-        cache, target, ["cam0"], None,
-        preprocessing={"rescale_and_gamma": True, "scale": 0.5, "gamma": 0.5})
-    assert json_identity(cache_identity_path(cache))["identity"]["preprocessing"]["scale"] == 0.25
-
-
-def json_identity(path):
-    import json
-    return json.loads(path.read_text(encoding="utf-8"))
+    assert cache_matches(cache, target, ["cam0"], None, preprocessing=settings)
+    assert not cache_matches(cache, target, ["cam0"], None,
+                             preprocessing=dict(settings, scale=0.5))
+    # a pass with no preprocessing does not take the preprocessed slot either
+    assert not cache_matches(cache, target, ["cam0"], None)

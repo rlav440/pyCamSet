@@ -38,9 +38,35 @@ TEST_DATA = REPO_ROOT / "tests" / "test_data"
 # Seed chosen once so a failure is reproducible; any fixed value would do.
 RANDOM_SEED = 20260909
 
+#: The registered targets that cannot be built at all without the optional
+#: aruco2 backend.  ChArUco, Ccube and CIco print aruco1 markers by default
+#: and only *offer* aruco2, so they build either way; the ChArUco2 family
+#: has no aruco1 equivalent and raises ImportError from its constructor.
+#:
+#: Kept here because five separate tests parametrize over every registered
+#: target and each has to skip the same three.  It was five separate copies
+#: of the tuple, and adding CIco2 updated two of them -- the other three
+#: went red on CI, where aruco2 is not installed, and stayed green locally,
+#: where it is.  ``test_aruco2_only_targets.py`` checks this against what
+#: the constructors actually do rather than trusting the list.
+ARUCO2_ONLY_TARGETS: frozenset[str] = frozenset({"ChArUco2", "Ccube2", "CIco2"})
+
+
+def skip_without_aruco2(name: str) -> None:
+    """
+    Skip the running test if *name* needs aruco2 and it is not installed.
+
+    :param name: a target name, as :data:`TARGET_CLASSES` keys it
+    """
+    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
+
+    if name in ARUCO2_ONLY_TARGETS and not ARUCO2_AVAILABLE:
+        pytest.skip(f"{name} is printed with aruco2 markers, which are not installed")
+
 MARKERS = {
     "data": "requires the image corpus in tests/test_data",
-    "slow": "takes more than ~10s; runs a full bundle adjustment",
+    "slow": "takes more than ~10s; runs a full bundle adjustment, or a "
+            "design-time search a checked-in constant came from",
     "gui": "requires the optional PySide6 dependency",
     "needs_jit": "asserts on numba's compiled behaviour; invalid with NUMBA_DISABLE_JIT",
     "needs_opengl": "renders through VTK, which needs an OpenGL context",
@@ -386,3 +412,27 @@ def charuco_problem(session_data_dir, charuco_target, charuco_detections):
     cams = run_initial_calibration(detections, charuco_target, camera_res, save=False)
     cams.set_resolutions_from_file(floc=session_data_dir / "calibration_charuco")
     return charuco_target, detections, cams
+
+
+class UndrawableTarget:
+    """The drawing half of :class:`AbstractTarget`, for a detection-only double.
+
+    A target must declare that it can be printed and plotted. A stub that
+    only detects says so here rather than in five separate bodies.
+    """
+
+    @classmethod
+    def printable_name(cls, values, kind="svg"):
+        raise NotImplementedError(f"{cls.__name__} is not drawn")
+
+    def save_printable(self, path, kind="svg", **options):
+        raise NotImplementedError(f"{type(self).__name__} is not drawn")
+
+    def save_to_svg(self, f_out, **options):
+        raise NotImplementedError(f"{type(self).__name__} is not drawn")
+
+    def save_to_pdf(self, f_out, data_format="raster", **options):
+        raise NotImplementedError(f"{type(self).__name__} is not drawn")
+
+    def plot(self):
+        raise NotImplementedError(f"{type(self).__name__} is not drawn")

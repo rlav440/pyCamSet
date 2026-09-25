@@ -5,7 +5,7 @@ Gates itself on the optional ``aruco2`` package, as
 it, so the module skips itself before its other imports.
 
 Each face is printed from the same vector layout as a ChArUco2 board
-(``charuco2/layout.py``), so a face texture is checked against aruco2's own
+(``markers/gridboard_layout.py``), so a face texture is checked against aruco2's own
 ``get_grid_board_image`` pixel for pixel at a scale where every cell and band
 edge lands on a whole pixel (see that module's docstring for which scales
 those are). The cube itself is Ccube's, so the end-to-end check here is
@@ -26,14 +26,14 @@ import pytest
 
 aruco2 = pytest.importorskip("aruco2")
 
-from pyCamSet.calibration_targets.ccube2 import target as ccube2_target_module
-from pyCamSet.calibration_targets.ccube2.target import Ccube2
-from pyCamSet.calibration_targets.ccube.target import NET_FORMS
-from pyCamSet.calibration_targets.charuco2 import layout
-from pyCamSet.calibration_targets.charuco2.target import ChArUco2
+from pyCamSet.calibration_targets import ccube2 as ccube2_target_module
+from pyCamSet.calibration_targets.ccube2 import Ccube2
+from pyCamSet.calibration_targets.ccube import NET_FORMS
+from pyCamSet.calibration_targets.markers import gridboard_layout as layout
+from pyCamSet.calibration_targets.charuco2 import ChArUco2
 from pyCamSet.calibration_targets.core.abstract_target import EXPORT_KINDS
 from pyCamSet.calibration_targets.core.target_registry import (
-    TARGET_LABELS, TARGET_NAMES, build_target, spec_of,
+    TARGET_LABELS, TARGET_NAMES,
 )
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     dictionary_marker_bits,
@@ -110,7 +110,7 @@ def test_ccube2_is_registered_labelled_and_exported() -> None:
 
 
 def test_ccube2_is_read_with_aruco2_only() -> None:
-    from pyCamSet.calibration.camera_calibrator import detector_backend_of
+    from pyCamSet.calibration.detection_cache import detector_backend_of
     from pyCamSet.workflow.detections import detection_cache_name
     from pyCamSet.workflow.targets import detector_backend_of_spec
 
@@ -120,7 +120,7 @@ def test_ccube2_is_read_with_aruco2_only() -> None:
     cube = Ccube2(n_points=3, length=20.0, border_fraction=0.2)
     assert detector_backend_of(cube) == "aruco2"
     assert detection_cache_name(1, detector_backend_of(cube)) == \
-        "detected_datapoints_aruco2.pickle"
+        "detected_datapoints_aruco2.npz"
 
 
 def test_ccube2_offers_what_charuco2_offers() -> None:
@@ -165,7 +165,7 @@ def test_ccube2_folds_its_faces_as_a_ccube_does(n_points) -> None:
     interior corners are a Ccube's corners, in the same order. A lattice
     turned or mirrored within its face keeps every spacing and plane, so
     only this pins which physical corner a gid is."""
-    from pyCamSet.calibration_targets.ccube.target import Ccube
+    from pyCamSet.calibration_targets.ccube import Ccube
 
     cube = Ccube2(n_points=n_points, length=40.0, border_fraction=0.2,
                   draw_res=(200, 200))
@@ -180,15 +180,6 @@ def test_ccube2_faces_have_disjoint_marker_ids() -> None:
     cube = Ccube2(n_points=4, length=20.0, border_fraction=0.15)
     assert cube.face_ids == [list(range(k * 16, (k + 1) * 16)) for k in range(6)]
 
-
-def test_ccube2_rebuilds_from_what_it_recorded() -> None:
-    spec = {"type": "Ccube2", "n_points": 6, "length": 35.0,
-            "border_fraction": 0.12, "aruco_dict": "DICT_5X5_1000"}
-    built = build_target(spec)
-    again = build_target(spec_of(built))
-    assert type(again) is type(built)
-    assert again.input_args == built.input_args
-    assert (again.point_data == built.point_data).all()
 
 
 @pytest.mark.parametrize("values,refused", [
@@ -494,13 +485,13 @@ def test_a_vector_pdf_of_single_faces_says_it_is_raster(tmp_path: Path, caplog) 
     import logging
 
     cube = Ccube2(n_points=4, length=20.0, border_fraction=0.15, draw_res=(400, 400))
-    with caplog.at_level(logging.WARNING, logger="pyCamSet.calibration_targets.ccube2.target"):
+    with caplog.at_level(logging.WARNING, logger="pyCamSet.calibration_targets.ccube2"):
         cube.save_printable(tmp_path / "faces.pdf", kind="pdf_vector", individual_faces=True)
     assert any("raster" in record.getMessage() and record.levelno == logging.WARNING
                for record in caplog.records)
 
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="pyCamSet.calibration_targets.ccube2.target"):
+    with caplog.at_level(logging.WARNING, logger="pyCamSet.calibration_targets.ccube2"):
         cube.save_printable(tmp_path / "faces2.pdf", kind="pdf_raster", individual_faces=True)
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
@@ -555,7 +546,7 @@ def test_a_vector_pdf_draws_the_outline_and_numbers_it_is_asked_to(
 
 def test_a_face_per_page_pdf_draws_the_outline_and_numbers_it_is_asked_to(
         tmp_path: Path, monkeypatch) -> None:
-    from pyCamSet.calibration_targets.ccube2 import target as ccube2_target
+    from pyCamSet.calibration_targets import ccube2 as ccube2_target
 
     cube = Ccube2(n_points=4, length=20.0, border_fraction=0.15, draw_res=(200, 200))
     pages = []
@@ -715,23 +706,13 @@ def test_the_vector_net_is_the_raster_net(tmp_path: Path) -> None:
         assert np.mean(np.abs(drawn - half_turned) > 127) > 0.1, f"face {k}"
 
 
-def test_generate_ccube2_target_builds_and_returns_saved_path(tmp_path: Path) -> None:
-    from pyCamSet.calibration_targets.ccube2.generate import (
-        build_ccube2, default_output_name, generate_ccube2_target,
-    )
-
-    cube = build_ccube2(n_points=4, length=20, border_fraction=0.15)
+def test_a_ccube2_names_itself_and_writes_itself(tmp_path: Path) -> None:
+    cube = Ccube2(20, 4, border_fraction=0.15)
     assert cube.point_data.shape == (6, 25, 3)
-    assert default_output_name(4, 20, "pdf_vector") == "ccube2_4points_20mm.pdf"
+    assert Ccube2.printable_name(
+        {"n_points": 4, "length": 20}, "pdf_vector") == "ccube2_4points_20mm.pdf"
 
-    built, saved = generate_ccube2_target(
-        n_points=5,
-        length=20,
-        output_dir=tmp_path,
-        file_name="nested/ccube2.txt",
-        export_kind="svg",
-    )
-    assert isinstance(built, Ccube2)
+    saved = cube.save_printable(tmp_path / "nested/ccube2.txt", "svg")
     assert saved == (tmp_path / "nested/ccube2.svg").resolve()
     assert saved.exists()
     assert saved.stat().st_size > 0

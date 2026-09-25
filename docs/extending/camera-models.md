@@ -211,7 +211,7 @@ telecentric camera does not have. So a new model usually needs its own seed.
 
 Here the seed is easy, because with distortion and telecentricity error set
 aside the model is *linear* — $uv = A P + b$ — and the bundle adjustment refines
-both afterwards. `pyCamSet.cameras.telecentric_calibration` is the whole thing:
+both afterwards. `pyCamSet.calibration.telecentric` is the whole thing:
 a least-squares fit per view, the magnification read off as the row norms of
 `A` (the rows of a rotation are unit length), and the nearest orthonormal rows
 recovered by SVD.
@@ -219,7 +219,7 @@ recovered by SVD.
 ```python exec="true" result="text"
 import numpy as np
 from pyCamSet.cameras.telecentric_camera import TelecentricCamera
-from pyCamSet.cameras.telecentric_calibration import calibrate_telecentric
+from pyCamSet.calibration.telecentric import calibrate_telecentric
 from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
 truth = TelecentricCamera(

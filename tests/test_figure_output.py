@@ -19,6 +19,7 @@ import pytest
 
 from pyCamSet.utils import gui_safety
 from pyCamSet.utils.visualisation import finalise_figure, finalise_plotter
+from conftest import skip_without_aruco2
 
 
 @pytest.fixture
@@ -259,6 +260,9 @@ def test_special_plots_are_skipped_when_nobody_is_watching(
 # rather than anything a user would see.  These say so here instead.
 PLANAR_TARGETS = ["ChArUco", "ChArUco2", "PuzzleBoard"]
 CUBE_TARGETS = ["Ccube", "Ccube2", "PuzzleBoardCube"]
+# Drawn the same way a cube is, but kept apart because they are not cubes and
+# the groups have to cover every registered target between them.
+ICOSAHEDRAL_TARGETS = ["CIco", "CIco2", "PuzzleBoardIco"]
 
 
 def _skip_without_cairo():
@@ -273,11 +277,13 @@ def _skip_without_cairo():
         pytest.skip(f"native cairo is unavailable: {err}")
 
 
-def test_the_two_groups_cover_every_target():
-    """A fifth target has to decide which of these it is."""
+def test_the_groups_cover_every_target():
+    """A new target has to decide which of these it is."""
     from pyCamSet.calibration_targets import TARGET_NAMES
 
-    assert sorted(PLANAR_TARGETS + CUBE_TARGETS) == sorted(TARGET_NAMES)
+    assert sorted(
+        PLANAR_TARGETS + CUBE_TARGETS + ICOSAHEDRAL_TARGETS
+    ) == sorted(TARGET_NAMES)
 
 
 @pytest.mark.parametrize("name", PLANAR_TARGETS)
@@ -292,12 +298,7 @@ def test_a_flat_target_draws_itself_into_a_figure(name, no_new_figures):
     """
     _skip_without_cairo()
     from pyCamSet.calibration_targets import target_class
-    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
-
-    if name == "ChArUco2" and not ARUCO2_AVAILABLE:
-        # ChArUco2 has no aruco1 equivalent -- it cannot be built at all
-        # without aruco2, unlike ChArUco/PuzzleBoard's own dependencies.
-        pytest.skip("aruco2 is not installed")
+    skip_without_aruco2(name)
 
     figure = plt.figure()
     try:
@@ -310,18 +311,13 @@ def test_a_flat_target_draws_itself_into_a_figure(name, no_new_figures):
 
 
 @pytest.mark.needs_opengl
-@pytest.mark.parametrize("name", CUBE_TARGETS)
-def test_a_cube_target_renders_a_scene(name, no_new_figures):
-    """What the docs capture from a cube: a plotter that renders, which is
+@pytest.mark.parametrize("name", CUBE_TARGETS + ICOSAHEDRAL_TARGETS)
+def test_a_solid_target_renders_a_scene(name, no_new_figures):
+    """What the docs capture from a solid: a plotter that renders, which is
     what pyvista serialises into the page's turnable frame."""
     _skip_without_cairo()
     from pyCamSet.calibration_targets import target_class
-    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
-
-    if name == "Ccube2" and not ARUCO2_AVAILABLE:
-        # Ccube2's faces are ChArUco2 boards, which cannot be built at all
-        # without aruco2.
-        pytest.skip("aruco2 is not installed")
+    skip_without_aruco2(name)
 
     if sys.platform == "darwin" and gui_safety.qt_application_is_running():
         # An earlier GUI test left a QApplication in this process, and a real

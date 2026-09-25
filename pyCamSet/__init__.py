@@ -9,12 +9,15 @@ from typing import TYPE_CHECKING, Any
 # Type checkers and editors follow the same declarations.
 if TYPE_CHECKING:
     from .calibration import calibrate_cameras
-    from .calibration_targets.ccube.target import Ccube
-    from .calibration_targets.ccube2.target import Ccube2
-    from .calibration_targets.charuco.target import ChArUco
-    from .calibration_targets.charuco2.target import ChArUco2
-    from .calibration_targets.puzzleboard.target import PuzzleBoard
-    from .calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
+    from .calibration_targets.ccube import Ccube
+    from .calibration_targets.ccube2 import Ccube2
+    from .calibration_targets.charuco import ChArUco
+    from .calibration_targets.charuco2 import ChArUco2
+    from .calibration_targets.puzzleboard import PuzzleBoard
+    from .calibration_targets.cico import CIco
+    from .calibration_targets.cico2 import CIco2
+    from .calibration_targets.puzzleboard_cube import PuzzleBoardCube
+    from .calibration_targets.puzzleboard_ico import PuzzleBoardIco
     from .cameras import Camera, CameraSet
     from .utils.calibration_report import CalibrationReport
     from .utils.logs import setup_logging
@@ -45,6 +48,9 @@ __all__ = [
     "Ccube2",
     "PuzzleBoard",
     "PuzzleBoardCube",
+    "PuzzleBoardIco",
+    "CIco",
+    "CIco2",
 ]
 
 # Plain re-exports: name -> (module to import, attribute on it). Each is a
@@ -71,6 +77,18 @@ class _MissingPuzzleBoard:
         )
 
 
+class _MissingPuzzleBoardIco:
+    """Placeholder raised when the optional PuzzleBoard dependency is absent."""
+
+    def __init__(self, *args, **kwargs):
+        raise ImportError(
+            "PuzzleBoardIco requires the optional 'puzzle_board' dependency, which is "
+            "not installed. It is not on PyPI, so install it from source: "
+            "pip install 'puzzle_board @ "
+            "git+https://github.com/PStelldinger/PuzzleBoard.git'."
+        )
+
+
 class _MissingPuzzleBoardCube:
     """Placeholder raised when the optional PuzzleBoard dependency is absent."""
 
@@ -85,7 +103,7 @@ class _MissingPuzzleBoardCube:
 
 def _resolve_charuco() -> Any:
     try:
-        from .calibration_targets.charuco.target import ChArUco
+        from .calibration_targets.charuco import ChArUco
     except Exception:
         # cairosvg requires the Cairo native library, which may not be present
         # in all environments. ChArUco generation is optional for reconstruction.
@@ -95,7 +113,7 @@ def _resolve_charuco() -> Any:
 
 def _resolve_charuco2() -> Any:
     try:
-        from .calibration_targets.charuco2.target import ChArUco2
+        from .calibration_targets.charuco2 import ChArUco2
     except Exception:
         # A graphics or native import failing (svgwrite, cv2, ...).  A missing
         # aruco2 is not one: the module imports without it, and building a
@@ -106,7 +124,7 @@ def _resolve_charuco2() -> Any:
 
 def _resolve_ccube() -> Any:
     try:
-        from .calibration_targets.ccube.target import Ccube
+        from .calibration_targets.ccube import Ccube
     except Exception:
         # Ccube generation has the same optional Cairo/native-graphics dependency.
         return None
@@ -115,7 +133,7 @@ def _resolve_ccube() -> Any:
 
 def _resolve_ccube2() -> Any:
     try:
-        from .calibration_targets.ccube2.target import Ccube2
+        from .calibration_targets.ccube2 import Ccube2
     except Exception:
         # A graphics or native import failing, as for ChArUco2.  A missing
         # aruco2 is not one: Ccube2's faces are ChArUco2 boards, so building
@@ -126,7 +144,7 @@ def _resolve_ccube2() -> Any:
 
 def _resolve_puzzleboard() -> Any:
     try:
-        from .calibration_targets.puzzleboard.target import PuzzleBoard
+        from .calibration_targets.puzzleboard import PuzzleBoard
     except ModuleNotFoundError as _e:
         if (_e.name or "").split(".")[0] == "puzzle_board":
             return _MissingPuzzleBoard
@@ -139,7 +157,7 @@ def _resolve_puzzleboard() -> Any:
 
 def _resolve_puzzleboard_cube() -> Any:
     try:
-        from .calibration_targets.puzzleboard_cube.target import PuzzleBoardCube
+        from .calibration_targets.puzzleboard_cube import PuzzleBoardCube
     except ModuleNotFoundError as _e:
         if (_e.name or "").split(".")[0] == "puzzle_board":
             return _MissingPuzzleBoardCube
@@ -148,6 +166,39 @@ def _resolve_puzzleboard_cube() -> Any:
         # PuzzleBoardCube generation shares the same optional Cairo/native-graphics dependency.
         return None
     return PuzzleBoardCube
+
+
+def _resolve_cico() -> Any:
+    try:
+        from .calibration_targets.cico import CIco
+    except Exception:
+        # CIco generation has the same optional Cairo/native-graphics dependency.
+        return None
+    return CIco
+
+
+def _resolve_cico2() -> Any:
+    try:
+        from .calibration_targets.cico2 import CIco2
+    except Exception:
+        # A graphics or native import failing, as for ChArUco2.  A missing
+        # aruco2 is not one: CIco2's faces are ChArUco2 boards, so building
+        # one without it raises the ImportError that says how to install it.
+        return None
+    return CIco2
+
+
+def _resolve_puzzleboard_ico() -> Any:
+    try:
+        from .calibration_targets.puzzleboard_ico import PuzzleBoardIco
+    except ModuleNotFoundError as _e:
+        if (_e.name or "").split(".")[0] == "puzzle_board":
+            return _MissingPuzzleBoardIco
+        return None
+    except Exception:
+        # PuzzleBoardIco generation shares the same optional Cairo/native-graphics dependency.
+        return None
+    return PuzzleBoardIco
 
 
 # Each optional target has its own three-way import outcome (class,
@@ -159,6 +210,9 @@ _LAZY_RESOLVERS: dict[str, Any] = {
     "Ccube2": _resolve_ccube2,
     "PuzzleBoard": _resolve_puzzleboard,
     "PuzzleBoardCube": _resolve_puzzleboard_cube,
+    "PuzzleBoardIco": _resolve_puzzleboard_ico,
+    "CIco": _resolve_cico,
+    "CIco2": _resolve_cico2,
 }
 
 

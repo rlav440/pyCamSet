@@ -131,26 +131,16 @@ def test_max_ims_can_be_raised_but_not_lowered(detection):
 # --------------------------------------------------------------------------
 
 
-def test_get_by_cam(detection):
-    subset = detection.get(cam="cam_0")
-    data = subset.get_data()
+@pytest.mark.parametrize("direction, column, rows, value", [
+    (dict(cam="cam_0"), COL_CAM, 4, 0),
+    (dict(global_im_num=1), COL_IM, 2, 1),
+    (dict(key=[1]), COL_KEY, 3, 1),
+])
+def test_get_selects_along_one_direction(detection, direction, column, rows, value):
+    data = detection.get(**direction).get_data()
 
-    assert data.shape[0] == 4
-    assert np.all(data[:, COL_CAM] == 0)
-
-
-def test_get_by_im_num(detection):
-    data = detection.get(global_im_num=1).get_data()
-
-    assert data.shape[0] == 2
-    assert np.all(data[:, COL_IM] == 1)
-
-
-def test_get_by_key(detection):
-    data = detection.get(key=[1]).get_data()
-
-    assert data.shape[0] == 3
-    assert np.all(data[:, COL_KEY] == 1)
+    assert data.shape[0] == rows
+    assert np.all(data[:, column] == value)
 
 
 def test_get_preserves_the_camera_names(detection):
@@ -162,16 +152,6 @@ def test_get_with_no_matches_returns_an_empty_detection(detection):
     empty = detection.get(cam="cam_2").get(global_im_num=1)
     assert empty.get_data() is None
     assert empty.has_data() is False
-
-
-def test_get_rejects_more_than_one_direction(detection):
-    with pytest.raises(ValueError, match="only get one item at a time"):
-        detection.get(cam="cam_0", global_im_num=1)
-
-
-def test_get_rejects_an_unknown_direction(detection):
-    with pytest.raises(ValueError, match="not a gettable item"):
-        detection.get(nonsense=1)
 
 
 def test_get_by_index_is_not_gettable(detection):
@@ -219,28 +199,15 @@ def test_the_lists_partition_the_data(detection):
 # --------------------------------------------------------------------------
 
 
-def test_delete_row_by_cam(detection):
-    remaining = detection.delete_row(cam="cam_0")
-    data = remaining.get_data()
-
-    assert data.shape[0] == 3
-    assert 0 not in data[:, COL_CAM]
-
-
-def test_delete_row_by_a_list_of_cams(detection):
-    remaining = detection.delete_row(cam=["cam_0", "cam_1"])
-    assert remaining.get_data().shape[0] == 1
-
-
-def test_delete_row_by_im_num(detection):
-    remaining = detection.delete_row(global_im_num=0)
-    assert remaining.get_data().shape[0] == 2
-    assert np.all(remaining.get_data()[:, COL_IM] == 1)
-
-
-def test_delete_row_by_index(detection):
-    remaining = detection.delete_row(index=[0, 1])
-    assert remaining.get_data().shape[0] == 5
+@pytest.mark.parametrize("direction, rows", [
+    (dict(cam="cam_0"), 3),
+    (dict(cam=["cam_0", "cam_1"]), 1),      # a list of cameras, not just one
+    (dict(global_im_num=0), 2),
+    (dict(index=[0, 1]), 5),                # index is a delete-only direction
+])
+def test_delete_row_removes_along_one_direction(detection, direction, rows):
+    remaining = detection.delete_row(**direction)
+    assert remaining.get_data().shape[0] == rows
 
 
 def test_delete_row_does_not_mutate_the_original(detection):
@@ -249,14 +216,16 @@ def test_delete_row_does_not_mutate_the_original(detection):
     assert detection.get_data().shape[0] == before
 
 
-def test_delete_row_rejects_an_unknown_direction(detection):
+@pytest.mark.parametrize("method", ["get", "delete_row"])
+def test_a_direction_must_be_one_this_container_knows(detection, method):
     with pytest.raises(ValueError, match="not a gettable item"):
-        detection.delete_row(nonsense=1)
+        getattr(detection, method)(nonsense=1)
 
 
-def test_delete_row_rejects_more_than_one_direction(detection):
+@pytest.mark.parametrize("method", ["get", "delete_row"])
+def test_only_one_direction_at_a_time(detection, method):
     with pytest.raises(ValueError, match="only get one item at a time"):
-        detection.delete_row(cam="cam_0", global_im_num=1)
+        getattr(detection, method)(cam="cam_0", global_im_num=1)
 
 
 def test_delete_col_removes_a_column(detection):
@@ -364,19 +333,12 @@ def test_adding_detections_with_different_cameras_is_refused(detection):
 # --------------------------------------------------------------------------
 
 
-def test_sort_by_cam(detection):
-    data = detection.sort("cam").get_data()
-    assert np.all(np.diff(data[:, COL_CAM]) >= 0)
-
-
-def test_sort_by_im_num(detection):
-    data = detection.sort("global_im_num").get_data()
-    assert np.all(np.diff(data[:, COL_IM]) >= 0)
-
-
-def test_sort_by_key(detection):
-    data = detection.sort("key").get_data()
-    assert np.all(np.diff(data[:, COL_KEY]) >= 0)
+@pytest.mark.parametrize("sort_key, column", [
+    ("cam", COL_CAM), ("global_im_num", COL_IM), ("key", COL_KEY),
+])
+def test_sort_orders_by_the_key_it_is_given(detection, sort_key, column):
+    data = detection.sort(sort_key).get_data()
+    assert np.all(np.diff(data[:, column]) >= 0)
 
 
 def test_sort_by_several_keys_respects_the_order(detection):

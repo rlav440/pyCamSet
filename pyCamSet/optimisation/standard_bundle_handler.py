@@ -17,8 +17,6 @@ try:
 except ImportError:  # pragma: no cover - exercised in headless installs
     pv = None
     _PYVISTA_OK = False
-from itertools import combinations
-
 from typing import TYPE_CHECKING
 
 from scipy.spatial.distance import cdist
@@ -36,21 +34,54 @@ if TYPE_CHECKING:
     from pyCamSet.cameras import CameraSet, Camera
 
 
-def find_not_colinear_pts(points):
+def find_gauge_points(points, candidates=None):
     """
-    Given a set of points mxn, finds 3 points that are not co-linear.
-    :param points: The points to search for.
-    :return: The indicies of the returned points.
+    Chooses the coordinates to hold fixed to remove the seven gauge freedoms
+    of a self calibration: three translations, three rotations and the scale.
+
+    Two points, held in all three of their coordinates, remove six of them:
+    the translation, the scale, and every rotation but the one about the line
+    AB between them.  A single coordinate of a third point C removes that
+    last one.  Rotating about AB carries C along the normal of the plane ABC,
+    so the coordinate held is the axis most nearly parallel to that normal;
+    a coordinate lying in the plane of ABC is unchanged by the rotation and
+    would constrain nothing.  C is taken as far from AB as the data allows,
+    and A and B as far apart, so that each held coordinate is the one the
+    residuals respond to most strongly.
+
+    A point that no camera saw is not a parameter of the optimisation, so
+    holding it fixed removes no freedom at all; ``candidates`` is the set of
+    points that may be used, which makes the gauge choice depend on the
+    detections rather than on the target alone.
+
+    :param points: the (n, 3) geometry of the target.
+    :param candidates: indices of the points that may be held fixed. The
+        default allows all of them.
+    :return: the three point indices, and the axis of the third point.
+    :raises ValueError: if the points available cannot fix a gauge.
     """
-    ind0 = 0
-    for ind1, ind2 in combinations(np.arange(1, points.shape[0]), 2):
-        AB = points[ind0] - points[ind1]
-        AC = points[ind0] - points[ind2]
-        score = np.linalg.norm(np.cross(AB, AC))
-        if score > 1e-8:
-            return ind0, ind1, ind2
-    else:
-        raise ValueError("No set of values that were not colinear were found in the provided data.")
+    inds = np.arange(len(points)) if candidates is None else np.asarray(candidates)
+    if len(inds) < 3:
+        raise ValueError(
+            f"Fixing the gauge needs three points, and only {len(inds)} are available.")
+
+    pts = points[inds]
+    i0 = inds[np.argmax(np.linalg.norm(pts - np.mean(pts, axis=0), axis=1))]
+    span = np.linalg.norm(pts - points[i0], axis=1)
+    i1 = inds[np.argmax(span)]
+    if np.max(span) == 0:
+        raise ValueError("Every point available to fix the gauge is at the same location.")
+
+    ab = (points[i1] - points[i0]) / np.max(span)
+    normals = np.cross(ab, pts - points[i0])
+    distance = np.linalg.norm(normals, axis=1)  # each point's distance from AB
+    furthest = np.argmax(distance)
+    if distance[furthest] < 1e-6 * np.max(span):
+        raise ValueError(
+            "The points available to fix the gauge are colinear, so no rotation "
+            "about them can be constrained.")
+
+    return (int(i0), int(i1), int(inds[furthest])), int(np.argmax(np.abs(normals[furthest])))
 
 
 def _gauge_square_size(target) -> float:
@@ -170,62 +201,74 @@ class SelfBundleHandler(TemplateBundleHandler):
         super().__init__(camset, target, detection, fixed_params, options, missing_poses) 
 
         self.flat_point_data = np.copy(self.point_data.reshape((-1)))
-
-
-        # if bundle_points_unfixed is not None:
-        #     logger.warning(
-        #         """
-        #         A list of unfixed bundle points was provided. The calibration fixes arbitrary points to break gauge symmetries. 
-        #         Unless overridden with the always_correct_gauge=True, the optimisation will no longer attempt to return the output geometry to the provided scale. 
-        #         """)
-        #     self.correct_gauge = always_correct_gauge
-        #
-        #     self.bdpt_unfixed = bundle_points_unfixed
-        # else:
-
-        #fix the gauge of the optimisation by fixing 7 params of the target
-
-        self.fixed_inds = find_not_colinear_pts(self.flat_point_data.reshape((-1,3)))
-        i0, i1, i2 = self.fixed_inds
-        self.feat_unfixed = np.ones(self.flat_point_data.shape[0], dtype=bool)
-        self.feat_unfixed[3*i0:3*i0+3] = False
-        self.feat_unfixed[3*i1:3*i1+3] = False
-        self.feat_unfixed[3*i2] = False
-
-        # then look wt the detection data - if a feature isn't seen, report it as unseen
-        n_points = np.prod(self.point_data.shape[:2])
-        dd = self.detection.return_flattened_keys(self.target.point_data.shape[:-1]).get_data()[:, 2]
-        # cd = np.arange(n_points)//81
-        # good_face_mask = (cd == 1) | (cd == 4) | (cd == 5)
-        # self.visible_feature_mask = np.isin(np.arange(n_points), dd) & good_face_mask
-        self.visible_feature_mask = np.isin(np.arange(n_points), dd) 
-
-
-
-
-        for idf, vf in enumerate(self.visible_feature_mask): #fix all unseen features to shrink the optimisation
-            if not vf:
-                self.feat_unfixed[3*idf:3*idf + 3] = False
-        
-
-        superBundlePrimitive = self.bundlePrimitive
-
-        self.bundlePrimitive = StandardBundlePrimitive(
-            superBundlePrimitive.poses, self.flat_point_data, superBundlePrimitive.extr, superBundlePrimitive.intr,
-            extr_unfixed=superBundlePrimitive.extr_unfixed, intr_unfixed=superBundlePrimitive.intr_unfixed, poses_unfixed=superBundlePrimitive.poses_unfixed, bundle_points_unfixed=self.feat_unfixed
-        )
+        self.super_primitive = self.bundlePrimitive
 
         self.param_len = None
         self.jac_mask = None
         self.missing_poses: list | None = missing_poses
+        self._setup_free_points()
         self.op_fun: fb.optimisation_function = self._intr_block() + self._extr_block() + fb.rigidTform3d() +  fb.free_point()
+
+        # The kernels index a dense parameter array whose blocks are as long
+        # as the arrays build_param_list packs: one entry per camera, per
+        # image and per target feature. Left to infer them, make_param_struct
+        # takes each count from the largest index in the detections it is
+        # given, so a trailing image or feature that nothing detected makes
+        # its block one element short -- which shifts every block after it.
+        # The per image poses come before the per key geometry, so an
+        # undetected last image has the kernels reading the target's
+        # coordinates six parameters early, and the residuals then measure
+        # nothing to do with the reprojection they stand for. Stating the
+        # counts keeps the kernels' layout the one the parameter mask and
+        # build_param_list describe.
+        self.problem_maximums = {
+            "max_cams": self.camset.get_n_cams(),
+            "max_imgs": self.detection.max_ims,
+            "max_keys": int(np.prod(self.point_data.shape[:-1])),
+        }
+
+    def _setup_free_points(self):
+        """
+        Decides which feature coordinates this solve may move, and rebuilds
+        the bundle primitive around them.
+
+        Which features are solvable depends on which detections the optimiser
+        is allowed to fit, so this has to be redone whenever that changes --
+        when ``missing_poses`` arrives from a previous solve, for instance.  A
+        feature seen only in a pose that solve discarded has no residual here
+        either, and leaving it free puts three all-zero columns in the
+        jacobian; taking the gauge from one is worse still, since it fixes the
+        seven freedoms against a point nothing constrains.
+        """
+        n_points = int(np.prod(self.point_data.shape[:-1]))
+        seen_keys = self._flat_detections()[:, 2]
+        # a feature no camera saw cannot be solved for, so it is held fixed
+        self.visible_feature_mask = np.isin(np.arange(n_points), seen_keys)
+        self.feat_unfixed = np.repeat(self.visible_feature_mask, 3)
+
+        self.fixed_inds, self.gauge_axis = find_gauge_points(
+            self.flat_point_data.reshape((-1, 3)),
+            candidates=np.flatnonzero(self.visible_feature_mask),
+        )
+        i0, i1, i2 = self.fixed_inds
+        self.feat_unfixed[3*i0:3*i0+3] = False
+        self.feat_unfixed[3*i1:3*i1+3] = False
+        self.feat_unfixed[3*i2 + self.gauge_axis] = False
+
+        # the same arrays the super primitive holds, so a value written to
+        # either -- a fixed parameter, say -- is seen by the cost function
+        super_primitive = self.super_primitive
+        self.bundlePrimitive = StandardBundlePrimitive(
+            super_primitive.poses, self.flat_point_data, super_primitive.extr, super_primitive.intr,
+            extr_unfixed=super_primitive.extr_unfixed, intr_unfixed=super_primitive.intr_unfixed, poses_unfixed=super_primitive.poses_unfixed, bundle_points_unfixed=self.feat_unfixed
+        )
 
     def _kernel_extra_args(self) -> tuple:
         # the target geometry is a parameter here, not a fixed template
         return ()
 
     def _kernel_maximums(self):
-        return None
+        return self.problem_maximums
 
     def parameter_groups(self) -> list[ParamGroup]:
         """The blocks of this problem; the free target points are eliminated."""
@@ -250,9 +293,9 @@ class SelfBundleHandler(TemplateBundleHandler):
         :params threads: the number of threads to use.
 
         """
-        target_shape = self.target.point_data.shape
-        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
-        temp_loss = self.op_fun.make_full_loss_fn(dd, threads)
+        dd = self._flat_detections()
+        self._base_residual_count = 2 * int(dd.shape[0])  # two per observation
+        temp_loss = self.op_fun.make_full_loss_fn(dd, threads, self.problem_maximums)
         def loss_fun(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
@@ -267,10 +310,12 @@ class SelfBundleHandler(TemplateBundleHandler):
         :params threads: the number of threads to use for the optimisation.
         :returns jac_fn: a callable jacobian function that returns the jacobian of the given paramaters.
         """
-        target_shape = self.target.point_data.shape
-        dd = self.detection.return_flattened_keys(target_shape[:-1]).get_data()
+        # the same rows the loss uses, or the jacobian describes a
+        # different problem from the residuals being minimised
+        dd = self._flat_detections()
         temp_loss = self.op_fun.make_jacobean(
-            dd, threads, unfixed_params=self.parameter_mask())
+            dd, threads, unfixed_params=self.parameter_mask(),
+            problem_maximums=self.problem_maximums)
         def jac_fn(params):
             inps = self.get_bundle_adjustment_inputs(params) #return proj, extr, poses
             param_str = self.op_fun.build_param_list(*inps)
@@ -313,42 +358,120 @@ class SelfBundleHandler(TemplateBundleHandler):
         """
         Sets the initial values of the calibration from a previous calibration of the same system.
         The previous system must have used a TemplateBundleHandler.
+
+        A parameter vector only carries what its own solve left free, so the
+        previous vector cannot be copied into this one: anything that solve
+        held fixed is absent from it, and every parameter after the gap lands
+        one slot early. What the two solves fix need not even agree -- a
+        camera pinned there may be free here, and the reverse -- so the
+        previous solution is expanded through the masks that produced it,
+        giving a value for every camera, and then re-packed against the masks
+        of this problem.
+
+        A parameter this solve fixes keeps the value it was fixed at, which is
+        what ``fixed_params`` asked for; one it leaves free starts from the
+        previous solve's answer, fixed there or not.
+
         :param prev_cams: The calibrated camseet to use.
+        :raises ValueError: if the previous calibration was not a templated
+            adjustment, or describes a different rig to this one.
         """
-        self.initial_params = np.empty(self.bundlePrimitive.bdpt_end)
-
-        if not isinstance(prev_cams.calibration_handler, TemplateBundleHandler):
+        prev_handler = prev_cams.calibration_handler
+        if not isinstance(prev_handler, TemplateBundleHandler):
             raise ValueError("Previous camera set was not a templated adjustment")
-        self.missing_poses =  prev_cams.calibration_handler.missing_poses
+        if prev_cams.calibration_params is None:
+            raise ValueError(
+                "The previous camera set holds no calibration parameters, so "
+                "there is no solution to start this one from.")
 
-        # A fixed-parameter Phase 4 handler has a shorter vector than its
-        # Phase 3 predecessor, so copying the old flat vector by position can
-        # either broadcast-fail or shift poses into camera slots.  Rehydrate
-        # the predecessor's primitive arrays first, then pack only parameters
-        # that remain free in this handler.
-        previous_model = prev_cams.calibration_handler.bundlePrimitive.return_bundle_primitives(
-            prev_cams.calibration_params
-        )
-        previous_intr, previous_extr, previous_poses = previous_model[:3]
-        self.bundlePrimitive.intr[...] = previous_intr
-        self.bundlePrimitive.extr[...] = previous_extr
-        self.bundlePrimitive.poses[...] = previous_poses
+        prev_primitive = prev_handler.bundlePrimitive
+        prev_params = np.asarray(prev_cams.calibration_params, dtype=float)
+        if prev_params.shape[0] != prev_primitive.pose_end:
+            raise ValueError(
+                f"The previous calibration's {prev_params.shape[0]} parameters "
+                f"do not fill its own intrinsic, extrinsic and pose blocks, "
+                f"which take {prev_primitive.pose_end}. A parameter vector from "
+                "a self calibration carries a target geometry block as well, "
+                "and cannot be read as a templated one.")
 
-        free_parameters = []
-        for value, is_free in zip(self.bundlePrimitive.intr, self.bundlePrimitive.intr_unfixed):
-            if is_free:
-                free_parameters.append(value)
-        for value, is_free in zip(self.bundlePrimitive.extr, self.bundlePrimitive.extr_unfixed):
-            if is_free:
-                free_parameters.append(value)
-        for value, is_free in zip(self.bundlePrimitive.poses, self.bundlePrimitive.poses_unfixed):
-            if is_free:
-                free_parameters.append(value)
-        self.initial_params[:self.bundlePrimitive.pose_end] = np.concatenate(free_parameters)
-        self.initial_params[ 
-            self.bundlePrimitive.pose_end:
-        ] = prev_cams.calibration_handler.target.point_data.copy().flatten()[self.feat_unfixed]
-        # print(prev_cams.calibration_handler.target.point_data.flatten()[:20])
+        self._adopt_missing_poses(prev_handler.missing_poses)
+
+        # Expanding through the previous solve's masks fills in whatever it
+        # held fixed from the arrays it fixed them in, so every camera and
+        # pose comes back whole however that solve was parameterised.
+        prev_intr, prev_extr, prev_poses = (
+            np.copy(a) for a in prev_primitive.return_bundle_primitives(prev_params))
+
+        bundle = self.bundlePrimitive
+        for name, prev_vals, vals, unfixed in (
+            ("intrinsic", prev_intr, bundle.intr, bundle.intr_unfixed),
+            ("extrinsic", prev_extr, bundle.extr, bundle.extr_unfixed),
+            ("pose", prev_poses, bundle.poses, bundle.poses_unfixed),
+        ):
+            if prev_vals.shape != vals.shape:
+                raise ValueError(
+                    f"The previous calibration's {name} block is "
+                    f"{prev_vals.shape}, and this one's is {vals.shape}. The "
+                    "two calibrations describe different problems, so one "
+                    "cannot seed the other.")
+            vals[unfixed] = prev_vals[unfixed]
+
+        prev_points = prev_handler.target.point_data.copy().flatten()
+        if prev_points.shape != self.flat_point_data.shape:
+            raise ValueError(
+                f"The previous calibration's target has "
+                f"{prev_points.shape[0] // 3} features, and this one's has "
+                f"{self.flat_point_data.shape[0] // 3}.")
+
+        self.initial_params = np.empty(bundle.bdpt_end)
+        self.initial_params[:bundle.intr_end] = bundle.intr[bundle.intr_unfixed].flatten()
+        self.initial_params[bundle.intr_end:bundle.extr_end] = (
+            bundle.extr[bundle.extr_unfixed].flatten())
+        self.initial_params[bundle.extr_end:bundle.pose_end] = (
+            bundle.poses[bundle.poses_unfixed].flatten())
+        self.initial_params[bundle.pose_end:] = prev_points[self.feat_unfixed]
+
+    def _adopt_missing_poses(self, missing_poses):
+        """
+        Takes on the poses a previous solve gave up on.
+
+        A pose it could not estimate -- unposed by the initial estimate, or
+        thrown out as an outlier -- is absent from its parameter vector,
+        because ``calc_initial_params`` holds such poses fixed.  Its value in
+        that solve is therefore the identity it was initialised to, not an
+        estimate of anything.  Carrying that identity over while still fitting
+        the detections it came from asks this solve to reproject a target
+        sitting in the camera's centre, which is where the enormous initial
+        error comes from.  So the pose is held fixed here too and its
+        detections are dropped, exactly as the previous solve had them.
+
+        Rebuilding the free points afterwards matters as much: without it the
+        gauge could be fixed on a feature only those discarded poses saw.
+
+        :param missing_poses: the previous solve's mask, or None
+        """
+        if missing_poses is None:
+            return
+
+        missing = np.asarray(missing_poses, dtype=bool)
+        n_poses = self.super_primitive.poses.shape[0]
+        if missing.shape != (n_poses,):
+            raise ValueError(
+                f"The previous calibration marks {missing.size} poses missing, "
+                f"and this problem has {n_poses} poses.")
+        self.missing_poses = missing
+
+        if not np.any(missing):
+            return
+        logger.info(
+            f"{int(missing.sum())} poses the previous calibration could not "
+            "estimate are held fixed, and their detections excluded")
+        self.super_primitive.poses_unfixed = (
+            self.super_primitive.poses_unfixed & ~missing)
+        self.super_primitive.calc_free_poses()
+        # which features are solvable, and which may take the gauge, both
+        # follow from the detections that are left
+        self._setup_free_points()
 
     def get_initial_params(self) -> np.ndarray:
         """
@@ -403,75 +526,101 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         return new_cams, ps
 
+    def _scale_against_target(self, point_estimate, ref_points) -> float:
+        """
+        How much the solved points must grow to match the target as drawn.
+
+        Read from the distances between features rather than their positions,
+        which is what makes it independent of where the solve put them.
+
+        :param point_estimate: the solved feature positions
+        :param ref_points: the same features, as the target is drawn
+        :raises ValueError: when the target offers no valid distance pair
+        """
+        valid_map = self.target.valid_map
+        vm = self.visible_feature_mask
+
+        if isinstance(valid_map, np.ndarray):
+            new_map = ch.calc_distance_subset(point_estimate, point_estimate, valid_map[:,:2])
+            ref_map = ch.calc_distance_subset(ref_points, ref_points, valid_map[:,:2])
+        elif valid_map is True:
+            inds = np.triu_indices(point_estimate[vm].shape[0], k=1)
+            new_map = cdist(point_estimate[vm], point_estimate[vm])[inds]
+            ref_map = cdist(ref_points[vm], ref_points[vm])[inds]
+            # One square's edge only: every other distance is some multiple of
+            # it, and a pair a whole board apart is the least well solved.
+            #
+            # Several target classes keep their declared square size in
+            # millimetres while storing point_data in metres; using the
+            # declaration directly then leaves no valid pair and aborts the
+            # self calibration, so it is read back in point_data's own units.
+            mask = np.isclose(ref_map, _gauge_square_size(self.target))
+            new_map, ref_map = new_map[mask], ref_map[mask]
+            if len(ref_map) == 0:
+                raise ValueError(
+                    "No pair of visible features was one square apart, so the "
+                    "target's square size does not match its geometry.")
+        elif valid_map is False:
+            raise ValueError(
+                "The target reports no valid distance comparisons, so its "
+                "scale cannot be recovered.")
+        else:
+            raise ValueError(
+                "target.valid_map must be True for all comparisons, or an "
+                f"(n, 2) array of index pairs; got {type(valid_map).__name__}.")
+
+        scale = float(np.mean(ref_map / new_map))
+        if np.isnan(scale):
+            raise ValueError(
+                "The scale came out NaN, so the distances it was read from "
+                "did not exist.")
+        return scale
+
     def apply_gauge_transform(self, proj, extr, poses, point_estimate) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Maps a set of parameters from an existing representation to the scale and transformation that best matches the provided model.
         The transformation is garunteed to preserve the calibration result.
-        The first pose also remains as the identity.
 
-        :param proj: The array describing the intrinsic + distortion of the camera. Untouched by this transform.
+        Where that gauge lands depends on what the camera's pose can hold. A
+        camera with a translation takes the whole of it, its intrinsics never
+        move, and the first pose stays as the identity. A camera without one --
+        a telecentric lens -- cannot absorb a translation, so the poses take
+        that part and the scale goes into the magnification instead; the first
+        pose then keeps its rotation but carries the gauge translation. Both
+        preserve every predicted pixel, which is the property that matters and
+        the one the tests check.
+
+        :param proj: The array describing the intrinsic + distortion of the camera. Untouched for a camera whose extrinsic carries a translation; rescaled for one whose does not.
         :param extr: The array containing the extrinsics of the camera system.
         :param poses: The array containing the extimated poses of the calibration target.
         :param point_estimate: The array containing the estimated locations of the calibration target features.
         :return: A tuple containing updated proj, extr, poses, and point estimate.
         """
-        n_points = np.prod(self.point_data.shape[:2])
-        cd = np.arange(n_points)//(n_points//6)
-        good_face_mask = np.ones(n_points, dtype=bool) #(cd == 1) | (cd == 4) | (cd == 5)
+        poses = poses.copy()
+        extr = extr.copy()
+        proj = proj.copy()
 
         ref_points = self.target.point_data.reshape((-1,3))
-        valid_map = self.target.valid_map
-        vm = self.visible_feature_mask & good_face_mask
+        vm = self.visible_feature_mask
 
-
-
-        # labels = np.arange(len(ref_points))
-        # s = pv.Plotter()
-        # s.add_point_labels(ref_points[vm], labels[vm])
-        # s.show()
-        # raise ValueError()
-
-        
-        if isinstance(valid_map, bool):
-            if valid_map == False:
-                raise ValueError("Target has given a valid map of False, which indicates no distance comparisons are valid.")
-            #use cdist, take the upper
-            inds = np.triu_indices(point_estimate[vm].shape[0], k=1)
-            new_map = cdist(point_estimate[vm], point_estimate[vm])[inds]
-            ref_map = cdist(ref_points[vm], ref_points[vm])[inds]
-            dt = _gauge_square_size(self.target)
-            # dt = 0.0045 #hard coded for today
-            mask = np.isclose(ref_map, dt)
-            new_map = new_map[mask]
-            ref_map = ref_map[mask]
-            
-            if len(ref_map) == 0:
-                raise ValueError("The mask of valid distance pairs was empty, indicating an issue with the square size of the target.")
-
-        elif isinstance(valid_map, np.ndarray):
-            new_map = ch.calc_distance_subset(point_estimate, point_estimate, valid_map[:,:2])
-            ref_map = ch.calc_distance_subset(ref_points, ref_points, valid_map[:,:2])
-        else:
-            raise ValueError("The target.valid_map property either needs to be true, for all comparisons being valid, or a nx2 list of index pairs.")
-        s = np.mean(ref_map/new_map)
+        s = self._scale_against_target(point_estimate, ref_points)
         logger.info(f"Scale factor found {s}")
-
         new_points = s * point_estimate
-        if np.isnan(s):
-            raise ValueError("Found S as nan, indicating that the requisite mappings did not exist")
         try:
             update_tform = gu.make_4x4h_tform(*ch.n_estimate_rigid_transform(
-                new_points[self.visible_feature_mask & good_face_mask],
-                ref_points[self.visible_feature_mask & good_face_mask])
+                new_points[vm], ref_points[vm])
             ) #this mapping from used points to a reference space
-        except Exception as e:
-            logger.critical("Failed to find an acceptable gauge transform, returning the identity")
-            logger.critical(f"Gave error: {e}")
-            update_tform = np.eye(4)
+        except Exception as exc:
+            # Returning the identity here would hand back an ungauged result
+            # that this method's contract says is gauged, and no caller can
+            # tell the two apart.
+            raise ValueError(
+                "Could not find a gauge transform against the target, so the "
+                "solved geometry cannot be put back in the target's frame."
+            ) from exc
 
         inv_update = np.linalg.inv(update_tform)
-        # inv_update = np.eye(4)
-        gauged_points = gu.h_tform(s * point_estimate, update_tform)
+        new_points = gu.h_tform(new_points, update_tform)
         # Only the points nothing observed are left where they are.
         #
         # This handler holds a few scalars at their model coordinates to pin the
@@ -495,56 +644,84 @@ class SelfBundleHandler(TemplateBundleHandler):
         # separates this rule from one keyed on the parameter mask.
         # Leaving such a point behind moves its pixel.
         unobserved = ~np.asarray(self.visible_feature_mask, dtype=bool)
-        new_points = np.where(unobserved[:, None], point_estimate, gauged_points)
+        new_points = np.where(unobserved[:, None], point_estimate, new_points)
         #proj matricies never change: scale invariance!
 
-        # A world scale has to be absorbed somewhere, or the pixels move.
-        #
-        # A pinhole camera absorbs it in the extrinsic TRANSLATION, which the
-        # loop below does by scaling that field: its projection divides by z, so
-        # the camera's own position is the only thing the scale can change.
-        #
-        # A lens whose projection has no divide by z is different.  Its pixel
-        #
-        #     u = m*x/(1 + eps*z) + c
-        #
-        # is unchanged by scaling the world only if the lens takes the scale:
-        # (m/s)(s*x)/(1 + (eps/s)(s*z)) is the original expression.  Its
-        # extrinsic is rotation alone -- there is no translation field to carry
-        # the scale, which is why the loop below is a no-op for such a camera --
-        # so the compensation belongs in the intrinsic, and the target's own
-        # pose is re-expressed against the moved frame in one piece rather than
-        # being conjugated on both sides as a pinhole pose is.
-        #
-        # Both branches are exact: each is the identity on the reprojection.
-        if len(extr) and np.shape(extr[0])[0] < 6:
-            proj = np.asarray(proj, dtype=float).copy()
-            proj[:, 0] = proj[:, 0] / s          # m_x
-            proj[:, 2] = proj[:, 2] / s          # m_y
-            proj[:, 5] = proj[:, 5] / s          # eps
-            for i in range(len(poses)):
-                ### scale change, then the frame the target is expressed in
-                pose = gu.make_4x4h_tform(poses[i][:3], poses[i][3:] * s)
-                poses[i][:3], poses[i][3:] = gu.ext_4x4_to_rod(
-                    pose @ inv_update)
-            return proj, extr, poses, new_points
+        # Which world frame the cameras end up in depends on what their pose
+        # can hold.  A camera with a translation absorbs the whole gauge
+        # change, so the frame is the reference one.  A camera without one --
+        # a telecentric lens, whose translation is unidentifiable -- cannot,
+        # so the frame keeps the rotation and the scale and leaves the
+        # translation to the poses, which are rigid and can carry it.
+        rotation_only = self._extr_block.params.n_params == 3
+        if rotation_only:
+            left = np.eye(4)
+            left[:3, :3] = update_tform[:3, :3]
+        else:
+            left = update_tform
 
         for i in range(len(poses)):
             ### scale change
             poses[i][3:] = poses[i][3:] * s
             ### rigid change
             pose = gu.make_4x4h_tform(poses[i][:3], poses[i][3:])
-            new_pose = update_tform @ pose @ inv_update
+            new_pose = left @ pose @ inv_update
             poses[i][:3], poses[i][3:] = gu.ext_4x4_to_rod(new_pose)
 
-        for i in range(len(extr)):
-            ### scale change
-            extr[i][3:] = extr[i][3:] * s
-            ### rigid change
-            og_tform = gu.make_4x4h_tform(extr[i][:3], extr[i][3:])
-            new_tform = og_tform @ inv_update
-            extr[i][:3], extr[i][3:] = gu.ext_4x4_to_rod(new_tform)
+        if rotation_only:
+            proj, extr = self._regauge_rotation_only(proj, extr, s, left)
+        else:
+            for i in range(len(extr)):
+                ### scale change
+                extr[i][3:] = extr[i][3:] * s
+                ### rigid change
+                og_tform = gu.make_4x4h_tform(extr[i][:3], extr[i][3:])
+                new_tform = og_tform @ inv_update
+                extr[i][:3], extr[i][3:] = gu.ext_4x4_to_rod(new_tform)
         return proj, extr, poses, new_points
+
+    def _regauge_rotation_only(self, proj, extr, s, left):
+        """
+        The gauge change for a camera whose pose carries no translation.
+
+        A pinhole camera absorbs the gauge in its extrinsic: the pixel is
+        ``K*(Y_xy/Y_z)``, unchanged by scaling the camera-frame point, so the
+        scale rides on ``t`` and the intrinsics never move.  A telecentric
+        camera has no ``t`` to put it in -- the translation is unidentifiable,
+        which is why its extrinsic block is rotation only -- and its pixel,
+        ``m*Y_x/(1 + eps*Y_z)``, is not scale invariant.  So for this model the
+        gauge lands in the intrinsics instead.
+
+        Because the poses took the translation, the world this camera sees has
+        changed by ``R_T`` and ``s`` alone.  With ``R' = R @ R_T^T`` the
+        camera-frame point becomes exactly ``s*Y``, so
+
+            m'   = m   / s
+            eps' = eps / s
+
+        and nothing else moves: ``c`` is untouched because there is no
+        in-plane shift left to absorb, and ``k`` acts on a radius built from
+        ``m*Y*w``, which is preserved.  This is exact, not a small-angle or
+        small-``eps`` argument -- see
+        ``test_the_gauge_transform_leaves_a_telecentric_projection_alone``.
+        """
+        inv_left = np.linalg.inv(left)
+        for i in range(len(extr)):
+            # No translation to scale and none to carry: the pose is the
+            # rotation alone, and stays that way.
+            og_tform = gu.make_4x4h_tform(extr[i][:3], np.zeros(3))
+            new_tform = og_tform @ inv_left
+            rod, _ = gu.ext_4x4_to_rod(new_tform)
+            extr[i][:3] = rod
+
+            if s == 0.0 or not np.isfinite(s):
+                raise ValueError(
+                    f"The gauge scale came out as {s}, so the solve has no "
+                    "usable scale to re-express the magnification against.")
+            proj[i][0] = proj[i][0] / s   # m_x
+            proj[i][2] = proj[i][2] / s   # m_y
+            proj[i][5] = proj[i][5] / s   # eps
+        return proj, extr
 
     
     def special_plots(self, x):
@@ -558,37 +735,10 @@ class SelfBundleHandler(TemplateBundleHandler):
                 "Install it with: pip install pyCamSet[viz]"
             )
         og_data = self.target.point_data.reshape((-1,3))
-        n_points = np.prod(self.point_data.shape[:2])
-        cd = np.arange(n_points)//(n_points//6)
+        vm = self.visible_feature_mask
 
-        t0, t1, t2 = 1, 4, 5
-        #
-        good_face_mask = (cd == t0) | (cd == t1) | (cd == t2)
-        m1 = cd == t0
-        m4 = cd == t1
-        m5 = cd == t2
-
-        vm = self.visible_feature_mask # & good_face_mask
-        # vm = np.ones_like(vm)
-        # m1 = vm.copy()
-        # m4 = vm.copy()
-        # m5 = vm.copy()
-
-        
-        # The gauge transform used to be computed here and then discarded one
-        # line later, so it cost a rigid-transform estimate per call and -- for
-        # a telecentric set, whose poses are three wide -- raised before the
-        # line that ignored it.  What is drawn is the recovered target against
-        # the original model, both ungauged, so the call was never the input.
-        un_gauged_data = self.get_bundle_adjustment_inputs(x)
-        _, _, _, final_data = un_gauged_data
-        unfixed_points = un_gauged_data[-1].copy()
-
+        _, _, _, final_data = self.apply_gauge_transform(*self.get_bundle_adjustment_inputs(x))
         diff = (final_data - og_data) * 1000
-
-        #xclude difs over 2 mm
-        mask = np.linalg.norm(diff, axis=1) < 2
-        # vm &= mask
 
         scale = 5
         descale = 1000//scale
@@ -597,51 +747,37 @@ class SelfBundleHandler(TemplateBundleHandler):
         s.title = "Target Self-calibration Results."
         s.add_arrows(
             (og_data*descale)[vm], diff[vm], label = f"Recovered shape change ({scale}x mag)", 
-            # (og_data*descale), diff, label = f"Recovered shape change ({scale}x mag)", 
-                # cmap='Blues',
                 cmap="Greens",
-                # cmap='Oranges',
         )
         s.remove_scalar_bar()
         s.add_scalar_bar(title="Euclidean displacement from initial model (mm).")
         s.add_mesh(pv.PolyData(og_data*descale), color='k', label = "Original Model", point_size=0.3)
-        # s.add_mesh(pv.PolyData(final_data*descale), color='g', label = "Best-scaled Model")
-        # s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[0]]*descale), color='k', label="Points used to fix gauge symmetry")
-        # s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[1]]*descale), color='k')
-        # s.add_mesh(pv.Line((0,0,0), unfixed_points[self.fixed_inds[2]]*descale), color='k')
 
-        p1, np1, cp1 = pv.fit_plane_to_points(final_data[vm & m1]*descale, return_meta=True)
-        p4, np4, cp4 = pv.fit_plane_to_points(final_data[vm & m4]*descale, return_meta=True)
-        p5, np5, cp5 = pv.fit_plane_to_points(final_data[vm & m5]*descale, return_meta=True)
+        for face in og_data.reshape((-1, self.point_data.shape[-2], 3)):
+            lattice = pv.PolyData(face*descale, lines=make_connectivity(face))
+            s.add_mesh(lattice, style='wireframe', line_width=2, color='lightgrey')
 
-        s1 = pv.PolyData(og_data[m1]*descale, lines=make_connectivity(og_data[m1]))
-        s.add_mesh(s1, style='wireframe', line_width=2, color='k', opacity=0.1)
-        s4 = pv.PolyData(og_data[m4]*descale, lines=make_connectivity(og_data[m4]))
-        s.add_mesh(s4, style='wireframe', line_width=2, color='k', opacity=0.1)
-        s5 = pv.PolyData(og_data[m5]*descale, lines=make_connectivity(og_data[m5]))
-        s.add_mesh(s5, style='wireframe', line_width=2, color='k', opacity=0.1)
-
-        labels = np.arange(len(og_data))
-        s.add_point_labels(descale * og_data[vm], labels[vm])
-        # s.add_mesh(pv.PolyData(final_data[vm & m2]), point_size=6)
-        # s.add_mesh(p1, color='lightblue', opacity=0.7)
-        # s.add_mesh(p4, color='lightblue', opacity=0.7)
-        # s.add_mesh(p5, color='lightblue', opacity=0.7)
         s.add_legend(bcolor='w', border=True)
 
         camera = s.camera
         camera.position = (-60, -60, -36)
         camera.focal_point = (0,0,0)
         camera.up = (0,0,-1)
-        # camera.angle = 0.02
+        s.reset_camera()
 
         s.show()
 
 
 def make_connectivity(pts):
+    """
+    The lines of the lattice a face's points sit on, as pyvista reads them.
+
+    :param pts: the (n, 3) points of one face, in the row major order a board
+        numbers its corners in.
+    :return: a flat list of (2, start, end) line entries.
+    """
     n_pts = pts.shape[0]
-    n_points_per_line = int(np.sqrt(pts.shape[0]))
-    #take the input points
+    n_points_per_line = row_length(pts)
     connectivity = []
     for idp, _ in enumerate(pts):
         if (idp + n_points_per_line < n_pts):
@@ -651,20 +787,23 @@ def make_connectivity(pts):
     return connectivity
 
 
+def row_length(pts):
+    """
+    How many of a face's points lie on one row of its lattice.
 
-def rms_plane(c, n, data):
-    norms = np.sum((data - c) * n, axis=1)
-    return np.mean(np.abs(norms), axis=0)
+    The points of a face are numbered row major, so the first step that turns
+    away from the direction of the first one has left the first row. A square
+    face gives the square root; a rectangular board gives its own width, which
+    assuming the square root would have drawn a lattice at a diagonal to.
 
-
-def angle_between_planes(normal1, normal2):
-    # Normalize the vectors
-    normal1_unit = normal1 / np.linalg.norm(normal1)
-    normal2_unit = normal2 / np.linalg.norm(normal2)
-    
-    # Calculate the dot product
-    dot_product = np.dot(normal1_unit, normal2_unit)
-    
-    # Calculate the angle in radians and then convert to degrees
-    angle = np.arccos(dot_product)
-    return np.degrees(angle)
+    :param pts: the (n, 3) points of one face.
+    :return: the number of points in a row.
+    """
+    step = pts[1] - pts[0]
+    step = step / np.linalg.norm(step)
+    for idp in range(2, len(pts)):
+        next_step = pts[idp] - pts[idp - 1]
+        next_step = next_step / np.linalg.norm(next_step)
+        if np.linalg.norm(np.cross(step, next_step)) > 1e-6:
+            return idp
+    return len(pts)

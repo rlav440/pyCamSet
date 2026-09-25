@@ -96,12 +96,6 @@ def _initial_pose_params(
 ) -> np.ndarray:
     """Estimates a starting pose per image, packed as the handler wants them.
 
-    The handler's own ``calc_initial_params`` cannot be used here.  It runs
-    outlier rejection across the set of target poses, whose spread is
-    undefined for a single image, and it re-estimates the camera extrinsics --
-    which is precisely what this module holds fixed.  ``pose_in_detections``
-    is no good either: it prompts on stdin.
-
     :return: the free parameters, which with every camera fixed are exactly
         six numbers per image
     """
@@ -132,11 +126,6 @@ def _solve_poses(
         target=target,
         detection=detection,
         fixed_params=fix_all_cameras(cameras),
-        # fixed_pose defaults to 0, which is the right gauge choice when
-        # calibrating -- the target defines the world frame.  Here the
-        # calibrated cameras already define it, and the target pose is the
-        # unknown, so fixing one would leave that image with nothing to solve
-        # (and, for a single image, nothing to solve at all).
         options={"verbosity": 0, "fixed_pose": []},
     )
     bundler.set_initial_params(_initial_pose_params(detection, target, cameras))
@@ -162,8 +151,6 @@ def find_target_pose_at_timestep(
     _check_cameras_cover(images.keys(), cameras)
 
     detection = TargetDetection(cam_names=cameras.get_names())
-    # .items(), not .values(): the values are the images alone, so unpacking a
-    # name out of them either raised or silently shredded the array.
     for cam_name, image in images.items():
         datum = target.find_in_image(image, camera=cameras[cam_name])
         detection.add_detection(detection=datum, cam_name=cam_name, global_im_num=0)
@@ -181,7 +168,6 @@ def find_target_poses(
     ) -> np.ndarray:
     """
     Bundle adjustment based optimisation of a sequence of target positions.
-
     Every camera's list is indexed by timestep, so entry i of each list must be
     the same instant.
 

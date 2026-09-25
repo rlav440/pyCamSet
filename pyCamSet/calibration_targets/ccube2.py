@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 from pyCamSet.calibration_targets.core import (
     AbstractTarget, ImageDetection, FaceToShape, exclude_by_prefix,
 )
-from pyCamSet.calibration_targets.core.abstract_target import EXPORT_SUFFIXES
+from pyCamSet.calibration_targets.core.abstract_target import (
+    EXPORT_SUFFIXES, export_path)
 from pyCamSet.calibration_targets.core.parameters import (
     DocumentedParameters,
     Parameterisation,
@@ -35,17 +36,17 @@ from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     refuse_rotation_ambiguous_markers,
     warn_known_false_detections,
 )
-from pyCamSet.calibration_targets.charuco2.layout import (
+from pyCamSet.calibration_targets.markers.gridboard_layout import (
     band_depth,
     grid_board_corners,
     grid_board_rectangles,
     rasterise_rectangles,
     rectangles_svg_path,
 )
-from pyCamSet.calibration_targets.charuco2.target import _EXCLUDED_DICT_PREFIXES
+from pyCamSet.calibration_targets.charuco2 import _EXCLUDED_DICT_PREFIXES
 # The cube itself is Ccube's: the same face transforms, the same net and the
 # same way of placing a face in it. Only what is printed on a face differs.
-from pyCamSet.calibration_targets.ccube.target import (
+from pyCamSet.calibration_targets.ccube import (
     NET_FORMS,
     TFORMS,
     Ccube,
@@ -77,7 +78,7 @@ class Ccube2(AbstractTarget):
 
     Ccube's cube, net and face transforms, with every face printed as
     aruco2's ``GridBoard`` design (see
-    :class:`~pyCamSet.calibration_targets.charuco2.target.ChArUco2`): a marker
+    :class:`~pyCamSet.calibration_targets.charuco2.ChArUco2`): a marker
     on every square, and ``(n_points+1)^2`` corners per face, the face's own
     border included.
 
@@ -88,8 +89,8 @@ class Ccube2(AbstractTarget):
     one board per call, so a cube is six calls per image.
 
     **Printing is true vector.** Every face is drawn from the one layout in
-    :mod:`pyCamSet.calibration_targets.charuco2.layout`, the one ChArUco2
-    prints from, and a face's tabbed band lies in its blank margin.
+    :mod:`pyCamSet.calibration_targets.markers.gridboard_layout`, the one
+    ChArUco2 prints from, and a face's tabbed band lies in its blank margin.
 
     **Ccube2 has not been validated on a real printed and photographed
     cube.** Every check behind it runs against rendered images, including a
@@ -435,7 +436,7 @@ class Ccube2(AbstractTarget):
 
     def save_to_pdf(
             self,
-            f_out: Path | str | None = None,
+            f_out: Path | str,
             border_width: float = 10,
             individual_faces=False,
             data_format: str = "raster",
@@ -460,14 +461,7 @@ class Ccube2(AbstractTarget):
         :param draw_board_ids: draw each face's number, in its band.
         :return: the file written.
         """
-        if f_out is None:
-            f_out = Path(
-                f'Ccube2_length_{self.length * 1000:.2f}mm'
-                f'_{self.n_points}_points_at'
-                f'_{self.square_size * 1000:.2f}mm.pdf'
-            )
-        f_out = Path(f_out).expanduser().with_suffix(".pdf").resolve()
-        f_out.parent.mkdir(parents=True, exist_ok=True)
+        f_out = export_path(f_out, ".pdf")
         blank_f = int(border_width * 0.0393701 * self.dpi)
         # The textures as built carry both the outline and the number; any
         # other choice is drawn afresh rather than silently ignored.
@@ -499,20 +493,8 @@ class Ccube2(AbstractTarget):
             return f_out
 
         if data_format == "vector":
-            try:
-                import pyCamSet.utils.cairo_dll_helper  # noqa: F401
-                import cairosvg
-            except OSError as _cairo_err:
-                raise OSError(
-                    f"{_cairo_err}\n\n"
-                    "pyCamSet's Ccube2 target code requires the native 'cairo' "
-                    "library, which cairosvg requires but pip cannot install on its own.\n"
-                    "Install the native cairo library for your platform, then re-import pyCamSet:\n"
-                    "  - conda (Windows/Linux/macOS):  conda install -c conda-forge cairo\n"
-                    "  - Debian/Ubuntu:                 apt install libcairo2\n"
-                    "  - macOS (Homebrew):              brew install cairo\n"
-                    "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
-                ) from _cairo_err
+            from pyCamSet.utils.cairo_dll_helper import cairosvg_or_explain
+            cairosvg = cairosvg_or_explain()
             svg_out = f_out.with_suffix(".svg")
             self.save_to_svg(
                 f_out=svg_out,
@@ -539,7 +521,7 @@ class Ccube2(AbstractTarget):
 
     def save_to_svg(
             self,
-            f_out: Path | str | None = None,
+            f_out: Path | str,
             border_width: float = 10,
             draw_cut_outline: bool = True,
             draw_board_ids: bool = True,
@@ -559,26 +541,7 @@ class Ccube2(AbstractTarget):
         :param draw_board_ids: draw each face's number, in its band.
         :param suppress_svg_log: skip the "Saved" log line.
         """
-        default_name = (
-            f"Ccube2_length_{self.length * 1000:.2f}mm_"
-            f"{self.n_points}_points_at_{self.square_size * 1000:.2f}mm_true_vector.svg"
-        )
-
-        raw_f_out = f_out
-        if isinstance(f_out, str):
-            f_out = Path(f_out)
-
-        if f_out is None:
-            f_out = Path.cwd() / default_name
-        else:
-            # If user passed a directory, write default file inside it.
-            raw_s = str(raw_f_out) if raw_f_out is not None else ""
-            looks_like_dir = raw_s.endswith(("/", "\\"))
-            if (f_out.exists() and f_out.is_dir()) or looks_like_dir:
-                f_out = f_out / default_name
-
-        f_out = f_out.expanduser().with_suffix(".svg").resolve()
-        f_out.parent.mkdir(parents=True, exist_ok=True)
+        f_out = export_path(f_out, ".svg")
 
         face_w, face_h = self.face_extent()
         local_outline = np.array(

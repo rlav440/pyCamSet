@@ -67,7 +67,7 @@ detections, camera_res = detect_datapoints_in_imfile(
 )
 ```
 
-The result is cached beside the images as `detected_datapoints.pickle`, which is
+The result is cached beside the images as `detected_datapoints.npz`, which is
 what makes re-running a calibration cheap — the run above loads that cache
 rather than re-detecting, but only when the cache was made for the same
 target, cameras and image cap; otherwise it redetects and overwrites the
@@ -91,8 +91,8 @@ saw the target in no image cannot be calibrated, and a board seen in only a
 handful of images constrains almost nothing.
 
 ```python exec="true" source="above" session="calibrate"
-from pyCamSet.calibration.camera_calibrator import (
-    images_per_camera, validate_detections)
+from pyCamSet.calibration.camera_calibrator import images_per_camera
+from pyCamSet.utils.setup_reports import validate_detections
 
 validate_detections(
     detections, target, image_counts=images_per_camera(f_loc))
@@ -113,8 +113,8 @@ Each camera is calibrated on its own, by OpenCV, from the board observations it
 made.
 
 ```python exec="true" source="above" session="calibrate"
-from pyCamSet.calibration.camera_calibrator import (
-    report_initial_calibration, run_initial_calibration)
+from pyCamSet.calibration.camera_calibrator import run_initial_calibration
+from pyCamSet.utils.intrinsics_report import report_initial_calibration
 
 initial_cams = run_initial_calibration(
     detections, target, camera_res, save=False)
@@ -365,10 +365,33 @@ pulls the cloud well below the diagonal — the features are now reproduced far
 more tightly than they sit from where they were drawn, which is the signature of
 a target that was genuinely printed and folded out of shape.
 
-The world-space view, cameras and all, is
-[`reconstruction_scene`][pyCamSet.utils.visualisation.reconstruction_scene]; all
-five plots at once, and written to PNGs given a `save_dir`, are
-`cams.visualise_calibration()`.
+### Where the target moved
+
+The handler that solved the free target draws how the recovered points moved via
+[`special_plots`][pyCamSet.optimisation.standard_bundle_handler.SelfBundleHandler.special_plots],
+a diagnosis plot for self optimising cameras.
+
+```python exec="true" source="above" session="calibrate"
+free_cams.calibration_handler.special_plots(free_cams.calibration_params)
+```
+
+The lattice is formed from the original locations of each feature. Each arrow runs
+from a feature's drawn position to where the free solve put it, magnified five
+times for visibility.
+Unseen features can't be optimised, so aren't drawn.
+
+pyCamSet fixes seven points when optimising the target to remove "gauge freedoms", essentially 
+scaling, rotation, and translation of the whole system expressed through bulk motion of the target points.
+For use and visualisation, the cameras and target are mapped back to the closest scale and rotation of the target.
+
+This leaves the arrows to represent pure shape variation.
+A face bowing away from its plane, or a fold that did not come to a right angle, moves a whole face's worth of features the
+same way. This is pretty common for a folded net target!
+In a standard calibration, this fabrication error gets blamed on the cameras.
+
+Some arrows disagree with their neighbours: these can be the solve pushing noise
+into the geometry instead.
+Here, it's likely a few points with limited visibility, but if this plot overall looks worse, this is a case for keeping the fixed-target result.
 
 ## Saving
 

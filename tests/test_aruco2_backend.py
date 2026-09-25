@@ -30,8 +30,8 @@ from pyCamSet.calibration_targets.markers.backend_registry import (
     marker_backend_available,
     validate_marker_backend,
 )
-from pyCamSet.calibration_targets.charuco.target import ChArUco
-from pyCamSet.calibration_targets.ccube.target import Ccube
+from pyCamSet.calibration_targets.charuco import ChArUco
+from pyCamSet.calibration_targets.ccube import Ccube
 from pyCamSet.calibration_targets.markers.aruco_opencv import (
     ARUCO_OPENCV_DETECTOR,
 )
@@ -491,7 +491,7 @@ def test_legacy_correctly_configured_odd_x_even_board_never_warns_or_drifts(capl
     return must exactly match a target built FRESH for that exact frame (no
     cross-frame state, e.g. a warmed detector cache, changing what is
     detected)."""
-    logger_name = "pyCamSet.calibration_targets.charuco.target"
+    logger_name = "pyCamSet.calibration_targets.charuco"
     for backend in ("aruco1", "aruco2"):
         for nx, ny in _LEGACY_POLICY_SIZES:
             printed = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0, legacy=False)
@@ -560,7 +560,7 @@ def test_legacy_correctly_configured_board_never_warns_with_background(caplog):
     of 16 probe corners for this false-positive shape, so
     LEGACY_WARNING_MIN_PROBE_CORNERS=20 (with margin) is what this test
     guards."""
-    logger_name = "pyCamSet.calibration_targets.charuco.target"
+    logger_name = "pyCamSet.calibration_targets.charuco"
     for nx, ny in [(7, 6), (9, 6)]:
         printed = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0, legacy=False)
         img = np.ascontiguousarray(printed.board.generateImage((900, 900)), dtype=np.uint8)
@@ -660,7 +660,7 @@ def test_legacy_correctly_configured_small_board_never_warns_with_background(cap
     lighter sweep than the original (2 background shades, 10 seeds, 40
     crops = 800 frames/size, vs. that test's 2700) keeps this bounded while
     still exercising every size the scaled threshold must hold for."""
-    logger_name = "pyCamSet.calibration_targets.charuco.target"
+    logger_name = "pyCamSet.calibration_targets.charuco"
     sizes = [(nx, ny) for nx, ny in _LEGACY_POLICY_SIZES if (nx, ny) not in [(7, 6), (9, 6)]]
     for nx, ny in sizes:
         printed = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0, legacy=False)
@@ -749,7 +749,7 @@ def test_legacy_correctly_configured_large_board_never_warns_with_background(cap
     shades, 10 seeds, 40 crops = 800 frames/size): a correctly configured
     board must never warn just because the new, smaller ceiling makes a
     mismatch easier to report."""
-    logger_name = "pyCamSet.calibration_targets.charuco.target"
+    logger_name = "pyCamSet.calibration_targets.charuco"
     for nx, ny in _LARGE_LEGACY_SIZES:
         printed = ChArUco(num_squares_x=nx, num_squares_y=ny, square_size=10.0, legacy=False)
         img = np.ascontiguousarray(printed.board.generateImage((900, 900)), dtype=np.uint8)
@@ -864,7 +864,7 @@ def test_ccube_legacy_warning_names_the_actual_face_flag(caplog):
         cube = Ccube(n_points=6, length=20.0, legacy=False, marker_backend=backend)
 
         with caplog.at_level(logging.WARNING,
-                             logger="pyCamSet.calibration_targets.ccube.target"):
+                             logger="pyCamSet.calibration_targets.ccube"):
             det = cube.find_in_image(tex)
 
         n = 0 if det.keys is None else len(det.keys)
@@ -958,7 +958,7 @@ def test_charuco_warn_legacy_once_check_then_set_is_atomic():
     release = threading.Event()
     target.board = _SlowLegacyBoard(entered, release)
 
-    logger_name = "pyCamSet.calibration_targets.charuco.target"
+    logger_name = "pyCamSet.calibration_targets.charuco"
     messages: list[str] = []
 
     class _Recorder(logging.Handler):
@@ -1014,7 +1014,7 @@ def test_ccube_warn_legacy_once_check_then_set_is_atomic():
     release = threading.Event()
     board = _SlowLegacyBoard(entered, release)
 
-    logger_name = "pyCamSet.calibration_targets.ccube.target"
+    logger_name = "pyCamSet.calibration_targets.ccube"
     messages: list[str] = []
 
     class _Recorder(logging.Handler):
@@ -1104,10 +1104,10 @@ def test_legacy_warn_probe_paid_once_per_target_not_every_frame(monkeypatch):
     every qualifying frame for the rest of the target's life repeated the
     full probe cost even though given_legacy_warning was already True and
     no further warning could ever fire."""
-    import pyCamSet.calibration_targets.charuco.target as charuco_mod
+    import pyCamSet.calibration_targets.charuco as charuco_mod
     import pyCamSet.calibration_targets.markers.aruco2 as aruco2_mod
 
-    # aruco1's probe is called from charuco.target; aruco2's is called from
+    # aruco1's probe is called from charuco; aruco2's is called from
     # markers.aruco2 (shared by both ChArUco's and Ccube's aruco2 branch).
     gate_module = {"aruco1": charuco_mod, "aruco2": aruco2_mod}
 
@@ -1142,11 +1142,11 @@ def test_legacy_warn_probe_paid_once_per_target_not_every_frame(monkeypatch):
 
 def test_ccube_legacy_warn_probe_paid_once_per_target_not_every_frame(monkeypatch):
     """Ccube companion to the ChArUco test above (P2, round-1 review):
-    ccube/target.py's own call site (aruco1: ccube.target's imported
+    ccube.py's own call site (aruco1: ccube's imported
     should_warn_legacy_mismatch; aruco2: shared with ChArUco via
     markers.aruco2) must likewise stop paying for the probe once
     given_legacy_warning is already True."""
-    import pyCamSet.calibration_targets.ccube.target as ccube_mod
+    import pyCamSet.calibration_targets.ccube as ccube_mod
     import pyCamSet.calibration_targets.markers.aruco2 as aruco2_mod
 
     gate_module = {"aruco1": ccube_mod, "aruco2": aruco2_mod}
@@ -1902,8 +1902,8 @@ def test_the_detection_cache_follows_the_detector_a_real_target_is_read_with():
     """The detector is chosen per detection run, so the cache a run reads
     has to be named for it -- including for ChArUco2, which carries no
     ``marker_backend`` of its own and is only ever read with aruco2."""
-    from pyCamSet.calibration.camera_calibrator import detector_backend_of
-    from pyCamSet.calibration_targets.charuco2.target import ChArUco2
+    from pyCamSet.calibration.detection_cache import detector_backend_of
+    from pyCamSet.calibration_targets.charuco2 import ChArUco2
     from pyCamSet.workflow.detections import detection_cache_name
 
     board1 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0)
@@ -1915,8 +1915,8 @@ def test_the_detection_cache_follows_the_detector_a_real_target_is_read_with():
 
     assert detector_backend_of(board1) == "aruco1"
     assert detection_cache_name(1, detector_backend_of(board1)) == \
-        "detected_datapoints.pickle"
+        "detected_datapoints.npz"
     for target in (board2, cube2, grid_board):
         assert detector_backend_of(target) == "aruco2"
         assert detection_cache_name(1, detector_backend_of(target)) == \
-            "detected_datapoints_aruco2.pickle"
+            "detected_datapoints_aruco2.npz"

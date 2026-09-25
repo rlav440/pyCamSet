@@ -3,7 +3,6 @@ import base64
 import logging
 import json
 import os
-import ntpath
 import re
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -16,7 +15,8 @@ import importlib
 from copy import copy
 
 from pyCamSet.utils.calibration_report import CalibrationReport
-from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_apde_pair_scores
+from pyCamSet.utils.paths import long_path
+from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_convergence_pair_scores
 
 logger = logging.getLogger(__name__)
 
@@ -26,37 +26,19 @@ if TYPE_CHECKING:
     from pyCamSet.cameras import CameraSet
 
 
-def _normalise_windows_open_path(path: Path | str) -> str:
-    """
-    Return a path string suitable for open() on Windows long paths.
-    """
-    p_str = os.fspath(path)
-    if os.name != "nt" or not ntpath.isabs(p_str) or p_str.startswith("\\\\?\\"):
-        return p_str
-
-    # Python can open >260 char paths when prefixed with \\?\ on Windows.
-    if len(p_str) >= 248:
-        if p_str.startswith("\\\\"):
-            return "\\\\?\\UNC\\" + p_str[2:]
-        return "\\\\?\\" + p_str
-    return p_str
-
 def save_pickle(dic, filename):
     """
     Saves an object to a pickle file
 
-    Serialises to bytes in memory first, then writes those bytes, rather than
-    streaming straight from ``dill.dump`` -- a caller that needs to know
-    exactly what was written (e.g. to hash it for a cache identity sidecar,
-    without a second, racy read of the file back off disk) gets those same
-    bytes back as the return value.
+    Serialises to bytes in memory first, then writes those bytes, so a
+    caller that needs to know exactly what was written gets them back.
 
     :param dic: object to save
     :param filename: filename to save to
     :return: the bytes written
     """
     data = dill.dumps(dic)
-    with open(_normalise_windows_open_path(filename), 'wb') as f:
+    with open(long_path(filename), 'wb') as f:
         f.write(data)
     return data
 
@@ -68,20 +50,39 @@ def load_pickle(filename):
     :return: object
     """
 
-    with open(_normalise_windows_open_path(filename), 'rb') as f:
+    with open(long_path(filename), 'rb') as f:
         object_n = dill.load(f)
     return object_n
+
+
+#: Modules that have moved, by the path a saved file may still record.  A
+#: camset names the module of its target and handler; the target packages
+#: were flattened into modules, so every file saved before that names a path
+#: that no longer imports, and would load without its calibration.
+MOVED_MODULES = {
+    "pyCamSet.calibration_targets.ccube.target": "pyCamSet.calibration_targets.ccube",
+    "pyCamSet.calibration_targets.ccube2.target": "pyCamSet.calibration_targets.ccube2",
+    "pyCamSet.calibration_targets.charuco.target": "pyCamSet.calibration_targets.charuco",
+    "pyCamSet.calibration_targets.charuco2.target": "pyCamSet.calibration_targets.charuco2",
+    "pyCamSet.calibration_targets.puzzleboard.target": "pyCamSet.calibration_targets.puzzleboard",
+    "pyCamSet.calibration_targets.puzzleboard_cube.target":
+        "pyCamSet.calibration_targets.puzzleboard_cube",
+    "pyCamSet.cameras.zhang_calibration": "pyCamSet.calibration.zhang",
+    "pyCamSet.cameras.telecentric_calibration": "pyCamSet.calibration.telecentric",
+}
 
 
 def instance_obj(class_module, class_name, **kwargs):
     """
     A function to instantiate an object from a module and class name
 
-    :param class_module: The module name
+    :param class_module: The module name, as recorded; a module that has
+        since moved is found at its new path (see ``MOVED_MODULES``)
     :param class_name: The class name
     :param kwargs: The keyword arguments to pass to the class
     :return:
     """
+    class_module = MOVED_MODULES.get(class_module, class_module)
     class_var = getattr(importlib.import_module(class_module), class_name)
     return class_var(**kwargs)
 
@@ -228,7 +229,7 @@ def save_camset(
 
     save_path = Path(f_name)
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(_normalise_windows_open_path(save_path), 'w', encoding="utf-8", newline="\n") as f:
+    with open(long_path(save_path), 'w', encoding="utf-8", newline="\n") as f:
         json.dump(save_dict, fp=f, indent=4)
 
     return
@@ -251,7 +252,7 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
     :return: A camera set object.
     """
 
-    with open(_normalise_windows_open_path(f_loc), encoding="utf-8") as f:
+    with open(long_path(f_loc), encoding="utf-8") as f:
         saved_structure = json.load(fp=f)
 
     # make the camerasets
@@ -426,7 +427,6 @@ def decompress(save_dict, prealloc_arr=None):
         arr=np.frombuffer(prealloc_arr.data, dtype=dtype, count=arr_size)
 
     for i in range(num_chunks):
-        size=save_dict['sizes'][i]
         c=save_dict['data'][i]
         blosc.decompress_ptr(base64.b64decode(c),
                              arr[max_num*i:].__array_interface__['data'][0])
@@ -688,17 +688,18 @@ def camset_to_apde(
     to APDe-MVS and are handled here, around that call, rather than inside
     ``write_to_txt`` itself:
 
-    - the pair score. ``write_to_txt``'s default pairing
-      (``pyCamSet.reconstruction.acmmp_utils.calc_pairs``) windows
-      candidates by the angle *between camera view vectors* and caps the
-      list at ``r.max_n_view`` -- tuned for a roughly forward-facing
-      capture, not a calibration rig whose cameras converge on a shared
-      target and so have *opposing* view directions by construction. This
-      instead computes
-      ``pyCamSet.reconstruction.acmmp_utils.calc_apde_pair_scores``'s
-      convergence-point score and passes it as ``write_to_txt``'s
-      ``pair_scores`` argument, which writes every other view, ranked by
-      that score, capped at ``max_src_views`` -- see that parameter below.
+    - the pair score. ``write_to_txt`` would score this rig at its
+      convergence point anyway (its ``pair_scoring="auto"`` default picks
+      that for a rig whose cameras look at a shared point), but it would
+      also cap the list at ``r.max_n_view``, which is a reconstruction
+      quality knob rather than the downstream reader's hard limit. So this
+      computes
+      ``pyCamSet.reconstruction.acmmp_utils.calc_convergence_pair_scores``
+      explicitly and passes it as ``write_to_txt``'s ``pair_scores``
+      argument, which writes every other view, ranked by that score, capped
+      at ``max_src_views`` -- see that parameter below. The scores reaching
+      pair.txt are row-normalised, so each reference view's best candidate
+      is written as 1.
     - ``cam_index_map.txt``, and removing a previous, larger export's stale
       ``cams/*_cam.txt`` files before writing -- neither has a COLMAP/MVSNet
       analogue, so both stay specific to this exporter.
@@ -798,7 +799,7 @@ def camset_to_apde(
             len(distorted), ", ".join(distorted),
         )
 
-    scores, well_conditioned = calc_apde_pair_scores(cams)
+    scores, well_conditioned = calc_convergence_pair_scores(cams)
     if not well_conditioned:
         logger.warning(
             "camset_to_apde: camera axes are near-parallel (the rig does not "

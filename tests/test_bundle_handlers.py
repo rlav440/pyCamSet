@@ -26,7 +26,7 @@ from pyCamSet.optimisation.numba_schur import ParamGroup, spec_from_groups
 from pyCamSet.optimisation.standard_bundle_handler import (
     SelfBundleHandler,
     StandardBundlePrimitive,
-    find_not_colinear_pts,
+    find_gauge_points,
 )
 from pyCamSet.optimisation.template_handler import (
     DEFAULT_OPTIONS,
@@ -34,6 +34,8 @@ from pyCamSet.optimisation.template_handler import (
     TemplateBundlePrimitive,
     check_feasiblity_and_update_refpose,
     check_for_target_misalignment,
+    estimate_initial_rig,
+    per_image_reprojection,
 )
 from pyCamSet.utils.general_utils import make_4x4h_tform
 
@@ -226,30 +228,55 @@ def test_standard_primitive_fixed_points_shrink_the_vector():
 
 
 # --------------------------------------------------------------------------
-# find_not_colinear_pts: what picks the gauge
+# find_gauge_points: what picks the gauge
 # --------------------------------------------------------------------------
 
 
-def test_find_not_colinear_pts_picks_a_spanning_triple():
+def test_find_gauge_points_picks_a_spanning_triple():
     points = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [0, 1, 0]])
-    i0, i1, i2 = find_not_colinear_pts(points)
+    (i0, i1, i2), axis = find_gauge_points(points)
 
     a = points[i0] - points[i1]
     b = points[i0] - points[i2]
     assert np.linalg.norm(np.cross(a, b)) > 1e-8
 
 
-def test_find_not_colinear_pts_prefers_the_earliest_valid_pair():
-    """Index 0 is always the anchor, and the search is in combination order."""
-    points = np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
-    assert find_not_colinear_pts(points) == (0, 1, 2)
+def test_the_held_coordinate_is_the_one_a_rotation_moves():
+    """The last freedom is a rotation about AB, which carries C along the
+    normal of ABC: a coordinate in the plane of ABC would not see it."""
+    points = np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    (i0, i1, i2), axis = find_gauge_points(points)
+
+    ab = points[i1] - points[i0]
+    tangent = np.cross(ab / np.linalg.norm(ab), points[i2] - points[i0])
+    assert abs(tangent[axis]) == pytest.approx(np.linalg.norm(tangent))
 
 
-def test_find_not_colinear_pts_rejects_a_colinear_target():
-    """A degenerate target cannot fix a gauge, and must say so."""
-    points = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
+def test_find_gauge_points_fixes_only_points_it_is_offered():
+    """A point no camera saw is not a parameter, so holding it fixed removes
+    no freedom: the gauge has to be taken from the points that were seen."""
+    points = np.array(
+        [[0.0, 0, 0], [1, 0, 0], [0, 1, 0], [9, 0, 0], [9, 9, 0], [-9, 0, 0]]
+    )
+    seen = [0, 1, 2]
+
+    assert set(find_gauge_points(points, candidates=seen)[0]) <= set(seen)
+    # left to the whole target, the wider spread of the unseen points wins
+    assert set(find_gauge_points(points)[0]) - set(seen)
+
+
+def test_find_gauge_points_rejects_colinear_candidates():
+    """A degenerate choice cannot fix a gauge, and must say so -- even when
+    the target as a whole is not degenerate."""
+    points = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [0, 1, 0]])
     with pytest.raises(ValueError, match="colinear"):
-        find_not_colinear_pts(points)
+        find_gauge_points(points, candidates=[0, 1, 2])
+
+
+def test_find_gauge_points_needs_three_points():
+    points = np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    with pytest.raises(ValueError, match="three points"):
+        find_gauge_points(points, candidates=[0, 1])
 
 
 # --------------------------------------------------------------------------
@@ -480,6 +507,164 @@ def test_outlier_exclusion_does_not_read_stdin(synthetic_problem, monkeypatch):
     handler.find_and_exclude_transform_outliers(errors)
 
 
+# find_and_exclude_transform_outliers reads only missing_poses and the error
+# array it is handed, so these size them for the statistic rather than for the
+# three image fixture: MAD has nothing to say about two surviving samples.
+N_MANY = 12
+
+
+def _even_errors():
+    """A believable spread of per image error, with no outlier in it."""
+    return np.linspace(0.9, 1.1, N_MANY)
+
+
+def test_outlier_exclusion_still_fires_when_an_image_has_no_error(synthetic_problem):
+    """An image with no recoverable pose has a NaN error, and a NaN used to
+    turn the whole detector off: the median went NaN, every comparison
+    against it read False, and nothing was ever removed -- not the unposed
+    image, and not the genuinely bad one beside it."""
+    cams, target, detection, _ = synthetic_problem
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "y"}
+    )
+    handler.missing_poses = np.zeros(N_MANY, dtype=bool)
+
+    errors = _even_errors()
+    errors[1] = 1000.0
+    errors[2] = np.nan
+
+    handler.find_and_exclude_transform_outliers(errors)
+
+    assert handler.missing_poses[1], "the bad image was hidden by the NaN"
+    assert handler.missing_poses[2], "the image with no error at all was kept"
+    assert int(np.sum(handler.missing_poses)) == 2
+
+
+def test_outlier_exclusion_records_what_it_removed(synthetic_problem):
+    """Phase 3 reports D3.1 and D3.2 from these two attributes.  Never set,
+    both getattr calls fell back to empty and every run reported that no
+    poses were missing and no outliers were removed."""
+    cams, target, detection, _ = synthetic_problem
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "y"}
+    )
+    handler.missing_poses = np.zeros(N_MANY, dtype=bool)
+    handler.missing_poses[0] = True  # already missing before rejection ran
+
+    errors = _even_errors()
+    errors[2] = 1000.0
+
+    handler.find_and_exclude_transform_outliers(errors)
+
+    before = handler.missing_poses_before_outlier_rejection
+    after = handler.missing_poses_after_outlier_rejection
+    assert list(np.where(before)[0]) == [0]
+    assert list(np.where(after)[0]) == [0, 2]
+    assert int(np.sum(after)) - int(np.sum(before)) == 1
+
+
+# --------------------------------------------------------------------------
+# The initial rig estimate, and what it says about an image it could not place
+# --------------------------------------------------------------------------
+
+
+def _cam_relative_poses(cams, poses):
+    """``target_in_camera[cam, image]``: the target pose as each camera sees it."""
+    return np.array([[cams[name].extrinsic @ pose for pose in poses]
+                     for name in cams.get_names()])
+
+
+def test_an_unplaced_image_comes_back_as_a_nan_pose(synthetic_problem):
+    """calc_initial_params decides an image is unposed with isnan(pose[0, 0]).
+
+    An image no camera could place must not come back as a finite pose, or
+    that check never fires and the image enters the solve with a pose that is
+    not a pose.
+    """
+    cams, target, detection, poses = synthetic_problem
+    target_in_camera = _cam_relative_poses(cams, poses)
+    target_in_camera[:, 1] = np.nan   # no camera placed image 1
+
+    _, target_poses, per_im = estimate_initial_rig(
+        target_in_camera, cams, 0, target, detection)
+
+    unposed = np.array([np.isnan(t[0, 0]) for t in target_poses])
+    assert list(np.where(unposed)[0]) == [1]
+    assert np.isnan(per_im[1])
+    assert np.all(np.isfinite(per_im[[0, 2]]))
+
+
+def test_a_fully_observed_problem_leaves_every_pose_finite(synthetic_problem):
+    cams, target, detection, poses = synthetic_problem
+
+    _, target_poses, per_im = estimate_initial_rig(
+        _cam_relative_poses(cams, poses), cams, 0, target, detection)
+
+    assert np.all(np.isfinite(target_poses))
+    assert np.all(np.isfinite(per_im))
+
+
+def test_the_estimate_recovers_the_rig_it_was_generated_from(synthetic_problem):
+    """Exact detections must give back the cameras that made them."""
+    cams, target, detection, poses = synthetic_problem
+
+    extrinsics, target_poses, per_im = estimate_initial_rig(
+        _cam_relative_poses(cams, poses), cams, 0, target, detection)
+
+    truth = np.array([cams[name].extrinsic for name in cams.get_names()])
+    relative_est = np.array([e @ np.linalg.inv(extrinsics[0]) for e in extrinsics])
+    relative_truth = np.array([t @ np.linalg.inv(truth[0]) for t in truth])
+
+    assert np.allclose(relative_est, relative_truth, atol=1e-6)
+    assert np.all(per_im < 1e-6)
+
+
+def test_the_world_frame_is_anchored_on_the_reference_image(synthetic_problem):
+    """The solve holds one target pose fixed, so the gauge has to match it."""
+    cams, target, detection, poses = synthetic_problem
+
+    for reference in range(N_IMAGES):
+        _, target_poses, _ = estimate_initial_rig(
+            _cam_relative_poses(cams, poses), cams, reference, target, detection)
+        assert np.allclose(target_poses[reference], np.eye(4), atol=1e-6)
+
+
+def test_per_image_reprojection_is_a_mean_not_a_sum():
+    """A sum grows with how many points were detected, so a half detected
+    image scored better than a fully detected one and MAD ranked on the
+    spread of point counts rather than the spread of error."""
+    # image 0: four points at 2 px.  image 1: one point, also at 2 px.
+    detection_data = np.array([[0, 0, 0, 0, 0], [0, 0, 1, 0, 0],
+                               [0, 0, 2, 0, 0], [0, 0, 3, 0, 0],
+                               [0, 1, 0, 0, 0]], dtype=float)
+    costs = np.full(5, 2.0)
+
+    per_image = per_image_reprojection(
+        costs, detection_data, 2, np.ones(2, dtype=bool))
+
+    assert np.allclose(per_image, [2.0, 2.0])
+
+
+def test_per_image_reprojection_is_nan_where_there_is_nothing_to_average():
+    detection_data = np.array([[0, 0, 0, 0, 0]], dtype=float)
+    costs = np.array([2.0])
+
+    unreachable = per_image_reprojection(
+        costs, detection_data, 2, np.array([False, True]))
+    assert np.isnan(unreachable[0])   # viable says no
+    assert np.isnan(unreachable[1])   # viable says yes, but nothing detected
+
+
+def test_per_image_reprojection_can_pick_out_one_camera():
+    detection_data = np.array([[0, 0, 0, 0, 0], [1, 0, 0, 0, 0]], dtype=float)
+    costs = np.array([2.0, 8.0])
+    viable = np.ones(1, dtype=bool)
+
+    assert per_image_reprojection(costs, detection_data, 1, viable, 0)[0] == 2.0
+    assert per_image_reprojection(costs, detection_data, 1, viable, 1)[0] == 8.0
+    assert per_image_reprojection(costs, detection_data, 1, viable)[0] == 5.0
+
+
 # --------------------------------------------------------------------------
 # SelfBundleHandler, on the real corpus
 # --------------------------------------------------------------------------
@@ -498,15 +683,20 @@ def test_self_handler_fixes_seven_gauge_freedoms(self_handler):
     """Three points pin the frame: 3 + 3 + 1 coordinates held fixed.
 
     Without that the target geometry could translate, rotate and scale freely
-    and the normal equations would be singular.
+    and the normal equations would be singular.  The seven are held on top of
+    the unseen points, which are fixed for a different reason.
     """
     fixed_from_gauge = 7
-    prim = self_handler.bundlePrimitive
+    unseen_coords = 3 * int((~self_handler.visible_feature_mask).sum())
 
-    n_visible_coords = 3 * int(self_handler.visible_feature_mask.sum())
-    assert int((~self_handler.feat_unfixed).sum()) >= fixed_from_gauge
-    # every free coordinate is a visible one
-    assert prim.free_bdpt <= n_visible_coords
+    assert int((~self_handler.feat_unfixed).sum()) == unseen_coords + fixed_from_gauge
+
+
+@pytest.mark.data
+def test_the_gauge_is_fixed_on_points_that_were_seen(self_handler):
+    """Holding a point no camera saw removes nothing: it was never free."""
+    for index in self_handler.fixed_inds:
+        assert self_handler.visible_feature_mask[index]
 
 
 @pytest.mark.data
@@ -590,6 +780,119 @@ def test_set_from_templated_camset_requires_a_templated_calibration(self_handler
 
     with pytest.raises(ValueError, match="not a templated adjustment"):
         self_handler.set_from_templated_camset(cams)
+
+
+# --------------------------------------------------------------------------
+# Seeding a self-calibration from a previous solve that fixed parameters
+# --------------------------------------------------------------------------
+
+
+def _solved_camset(synthetic_problem, fixed_params=None):
+    """The synthetic problem as a camset carrying a finished templated solve.
+
+    The parameters themselves are arbitrary -- the seeding only moves them
+    around -- but their length is not: it is whatever that solve left free.
+    """
+    cams, target, detection, _ = synthetic_problem
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detection,
+        fixed_params=fixed_params, options={"outliers": "n"},
+    )
+    rng = np.random.default_rng(0)
+    cams.calibration_handler = handler
+    cams.calibration_params = rng.normal(size=handler.bundlePrimitive.pose_end)
+    return cams, target, detection, handler
+
+
+def test_set_from_templated_camset_reads_a_solve_that_fixed_parameters(
+        synthetic_problem):
+    """The previous vector omits what that solve fixed, so it cannot be copied.
+
+    Fixing one camera's intrinsics leaves nine fewer parameters in the
+    previous vector than this problem's camera blocks take, and copying it
+    straight in either raises or shifts every later parameter by nine.
+    """
+    fixed = {"left": {"int": np.arange(9, dtype=float)}}
+    cams, target, detection, prev = _solved_camset(synthetic_problem, fixed)
+
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    assert len(cams.calibration_params) < handler.bundlePrimitive.pose_end
+
+    handler.set_from_templated_camset(cams)
+
+    assert len(handler.initial_params) == handler.bundlePrimitive.bdpt_end
+    # the round trip through this problem's own layout returns the previous
+    # solve's cameras and poses, in full
+    intr, extr, poses, _ = handler.get_bundle_adjustment_inputs(
+        handler.initial_params)
+    assert np.allclose(intr, prev.bundlePrimitive.intr)
+    assert np.allclose(extr, prev.bundlePrimitive.extr)
+    assert np.allclose(poses, prev.bundlePrimitive.poses)
+
+
+def test_set_from_templated_camset_carries_a_previously_fixed_value_over(
+        synthetic_problem):
+    """A parameter pinned there and free here starts from the value it was pinned at."""
+    pinned = np.arange(9, dtype=float)
+    cams, target, detection, _ = _solved_camset(
+        synthetic_problem, {"left": {"int": pinned}})
+
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    handler.set_from_templated_camset(cams)
+
+    assert np.allclose(handler.bundlePrimitive.intr[0], pinned)
+    assert handler.bundlePrimitive.intr_unfixed[0]
+
+
+def test_set_from_templated_camset_keeps_this_solves_fixed_values(
+        synthetic_problem):
+    """What this solve fixes stays where fixed_params put it, not where the last solve left it."""
+    cams, target, detection, _ = _solved_camset(
+        synthetic_problem, {"left": {"int": np.arange(9, dtype=float)}})
+
+    pinned_now = np.full(9, 7.0)
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection,
+        fixed_params={"left": {"int": pinned_now}}, options={"outliers": "n"},
+    )
+    handler.set_from_templated_camset(cams)
+
+    assert not handler.bundlePrimitive.intr_unfixed[0]
+    assert np.allclose(handler.bundlePrimitive.intr[0], pinned_now)
+    intr, _, _, _ = handler.get_bundle_adjustment_inputs(handler.initial_params)
+    assert np.allclose(intr[0], pinned_now)
+
+
+def test_set_from_templated_camset_refuses_a_self_calibration_vector(
+        synthetic_problem):
+    """A self-calibration's vector carries a geometry block a templated read would misplace."""
+    cams, target, detection, _ = _solved_camset(synthetic_problem)
+
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    handler.set_from_templated_camset(cams)
+    # a SelfBundleHandler is a TemplateBundleHandler, so the isinstance check
+    # passes and only the block lengths give it away
+    cams.calibration_handler = handler
+    cams.calibration_params = handler.initial_params
+
+    with pytest.raises(ValueError, match="self calibration"):
+        SelfBundleHandler(
+            camset=cams, target=target, detection=detection,
+            options={"outliers": "n"},
+        ).set_from_templated_camset(cams)
+
+
+def test_set_from_templated_camset_needs_parameters_to_read(synthetic_problem):
+    cams, target, detection, _ = _solved_camset(synthetic_problem)
+    cams.calibration_params = None
+
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    with pytest.raises(ValueError, match="no calibration parameters"):
+        handler.set_from_templated_camset(cams)
 
 
 def test_an_image_with_no_detections_does_not_make_the_problem_degenerate(

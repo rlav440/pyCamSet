@@ -16,6 +16,7 @@ from pyCamSet.optimisation.numba_schur import (
     SchurSolver,
     _diag_scale,
     _solve_reduced,
+    levenberg_marquardt,
     spec_from_groups,
 )
 
@@ -261,3 +262,30 @@ def test_schur_and_trust_region_agree_on_a_real_calibration(data_dir):
     assert rpe(schur["fun"]) <= rpe(trf["fun"]) + 0.02
     assert schur["jac"] is not None, "the result must carry a jacobian for the camera set"
     assert schur["x"].shape == trf["x"].shape
+
+
+class _NoSolver:
+    """Enough of a SchurSolver to reach the exits that never step."""
+
+    spec = type("_Spec", (), {"keep_free": np.array([], dtype=int),
+                              "elim_free": np.array([], dtype=int)})()
+
+
+@pytest.mark.parametrize(("jac", "max_iter", "status"), [
+    (lambda x: np.zeros((1, 2, 3)), 0, 1),
+    (lambda x: np.full((1, 2, 3), np.nan), 5, 5),
+])
+def test_a_solve_that_never_steps_still_returns_a_result(jac, max_iter, status):
+    """Both exits leave before a gradient exists.
+
+    A non-finite jacobian is a documented outcome -- a point has moved onto
+    or behind a camera plane -- and reporting it used to raise
+    UnboundLocalError from the optimality field instead.
+    """
+    result = levenberg_marquardt(
+        loss=lambda x: np.zeros(2), jac_blocks=jac, x0=np.zeros(3),
+        solver=_NoSolver(), max_iter=max_iter)
+
+    assert result.status == status
+    assert result.success is False
+    assert result.optimality == np.inf

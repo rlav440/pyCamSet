@@ -12,6 +12,7 @@ matplotlib
 opencv-python>=4.8
 tqdm
 numba
+threadpoolctl
 natsort
 coloredlogs
 blosc

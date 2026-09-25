@@ -8,7 +8,7 @@ only prerequisite is an optional package skips itself with
 from collection, so a missing dependency shows up as one reported skip
 instead of thirty tests silently never running.
 
-The board is printed from a vector layout (``charuco2/layout.py``), not from
+The board is printed from a vector layout (``markers/gridboard_layout.py``), not from
 aruco2's raster, so the layout is checked here against aruco2's own
 ``get_grid_board_image`` pixel for pixel. That comparison is exact only at
 scales where every cell and band edge lands on a whole pixel: aruco2 draws a
@@ -30,12 +30,9 @@ import pytest
 
 aruco2 = pytest.importorskip("aruco2")
 
-from pyCamSet.calibration_targets.charuco2 import layout
-from pyCamSet.calibration_targets.charuco2.target import ChArUco2
+from pyCamSet.calibration_targets.markers import gridboard_layout as layout
+from pyCamSet.calibration_targets.charuco2 import ChArUco2
 from pyCamSet.calibration_targets.core.abstract_target import EXPORT_KINDS
-from pyCamSet.calibration_targets.core.target_registry import (
-    TARGET_NAMES, build_target, spec_of,
-)
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     detect_grid_board_corners,
     dictionary_marker_bits,
@@ -108,10 +105,6 @@ def _rasterise_svg(svg_path: Path, px_per_mm: float) -> np.ndarray:
     return np.array(Image.open(io.BytesIO(png_bytes)).convert("L"))
 
 
-def test_charuco2_is_registered() -> None:
-    assert "ChArUco2" in TARGET_NAMES
-
-
 def test_charuco2_offers_only_the_aruco2_backend() -> None:
     assert list(ChArUco2.DETECTOR_BACKENDS) == ["aruco2"]
 
@@ -121,13 +114,6 @@ def test_charuco2_excludes_apriltag_dictionaries() -> None:
     values = [c.value for c in choices]
     assert values, "ChArUco2 must offer at least one dictionary"
     assert not any(v.startswith("DICT_APRILTAG_") for v in values)
-
-
-def test_charuco2_detector_takes_no_parameters() -> None:
-    """aruco2.detect_grid_board takes no DetectionParameters -- there must
-    be nothing here for a form to show or a study to sweep."""
-    detector = ChArUco2.DETECTOR_BACKENDS["aruco2"]
-    assert detector.parameters == ()
 
 
 def test_charuco2_construction_builds_a_deterministic_corner_grid() -> None:
@@ -141,16 +127,6 @@ def test_charuco2_construction_builds_a_deterministic_corner_grid() -> None:
     expected = np.array(
         [[col * 10.0, row * 10.0] for row in range(8) for col in range(6)])
     assert np.allclose(positions, expected)
-
-
-def test_charuco2_rebuilds_from_what_it_recorded() -> None:
-    spec = {"type": "ChArUco2", "num_squares_x": 5, "num_squares_y": 6,
-            "square_size": 12.5}
-    built = build_target(spec)
-    again = build_target(spec_of(built))
-    assert type(again) is type(built)
-    assert again.input_args == built.input_args
-    assert (again.point_data == built.point_data).all()
 
 
 def test_charuco2_refuses_a_board_its_dictionary_cannot_fill() -> None:
@@ -233,7 +209,117 @@ def test_layout_imports_without_aruco2() -> None:
     probe = (
         "import sys\n"
         "sys.modules['aruco2'] = None\n"
-        "from pyCamSet.calibration_targets.charuco2 import layout\n"
+        "from pyCamSet.calibration_targets.markers import gridboard_layout as layout\n"
+        "import numpy as np\n"
+        "bits = np.zeros((4, 4, 4), bool)\n"
+        "rects = layout.grid_board_rectangles((2, 2), 1.0, bits, origin=(3, 4))\n"
+        "assert rects.shape[1] == 4\n"
+        "print('OK')\n"
+    )
+    finished = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True,
+        cwd=Path(__file__).resolve().parents[1], timeout=300)
+    assert finished.returncode == 0, finished.stderr
+    assert "OK" in finished.stdout
+
+
+def test_layout_origin_moves_every_shape_and_corner() -> None:
+    bits = grid_board_marker_bits((3, 2), int(aruco2.DICT_4X4_1000))
+    at_zero = layout.grid_board_rectangles((3, 2), 5.0, bits)
+    moved = layout.grid_board_rectangles((3, 2), 5.0, bits, origin=(2.0, -1.5))
+    assert np.allclose(moved, at_zero + [2.0, -1.5, 2.0, -1.5])
+
+    corners = layout.grid_board_corners((3, 2), 5.0, origin=(2.0, -1.5))
+    assert corners.shape == (12, 2)
+    assert np.allclose(corners[4], [2.0, 3.5])  # gid 4 = row 1, col 0
+    assert layout.grid_board_bounds((3, 2), 5.0, origin=(2.0, -1.5)) == \
+        pytest.approx((0.75, -2.75, 18.25, 9.75))
+
+
+# -- printing -----------------------------------------------------------------
+
+
+def test_charuco2_refuses_a_board_its_dictionary_cannot_fill() -> None:
+    """One marker per square: a 50-marker dictionary fills 7x7, not 8x7."""
+    ChArUco2(num_squares_x=7, num_squares_y=7, a_dict="DICT_4X4_50")
+    with pytest.raises(ValueError, match="needs 56 markers.*holds only 50"):
+        ChArUco2(num_squares_x=8, num_squares_y=7, a_dict="DICT_4X4_50")
+
+
+@pytest.mark.parametrize("values,refused", [
+    ({"num_squares_x": 5.7, "num_squares_y": 5.0}, "whole number of squares"),
+    ({"num_squares_x": 5.0, "num_squares_y": 5.5}, "whole number of squares"),
+    ({"num_squares_x": True, "num_squares_y": 5}, "whole number of squares"),
+])
+def test_a_board_that_is_not_a_charuco2_is_refused(values, refused) -> None:
+    """A non-integer num_squares_x/num_squares_y must be refused outright,
+    not silently truncated to a smaller board (int(5.7) == 5) -- see
+    Ccube2's identical guard on n_points."""
+    with pytest.raises(ValueError, match=refused):
+        ChArUco2(square_size=10.0, **values)
+
+
+def test_a_whole_number_of_squares_written_as_a_float_builds() -> None:
+    """A spec read back from JSON may carry 5.0 for 5."""
+    board = ChArUco2(num_squares_x=5.0, num_squares_y=6.0, square_size=10.0)
+    assert board.num_squares_x == 5 and isinstance(board.num_squares_x, int)
+    assert board.num_squares_y == 6 and isinstance(board.num_squares_y, int)
+
+
+# -- the layout against aruco2's own renderer ---------------------------------
+
+
+@pytest.mark.parametrize("shape", _BOARD_SHAPES)
+@pytest.mark.parametrize("dict_name, bit_size", _COMPATIBLE_BIT_SIZES)
+@pytest.mark.parametrize("id_set", ["default", "offset", "shuffled"])
+def test_layout_raster_is_aruco2s_board_image_pixel_for_pixel(
+        shape, dict_name, bit_size, id_set) -> None:
+    """The vector layout, rasterised, is exactly what aruco2 draws: cell
+    polarity and orientation, inverted squares, band tabs and corner squares
+    -- for default ids and for a board with its own id set, as a cube face
+    has."""
+    dict_int = int(getattr(aruco2, dict_name))
+    n = shape[0] * shape[1]
+    ids = {
+        "default": None,
+        "offset": list(range(100, 100 + n)),
+        "shuffled": [int(i) for i in
+                     np.random.default_rng(n).permutation(250)[:n]],
+    }[id_set]
+
+    reference = render_grid_board_image(shape, dict_int, bit_size, ids)
+
+    # A square size that is not the pixel size, so the scale is exercised.
+    square_size = 7.0
+    marker_bits = dictionary_marker_bits(dict_int)
+    px_per_unit = marker_bits * bit_size / square_size
+    rects = layout.grid_board_rectangles(
+        shape, square_size, grid_board_marker_bits(shape, dict_int, ids))
+    x_min, y_min, _, _ = layout.grid_board_bounds(shape, square_size)
+    drawn = layout.rasterise_rectangles(
+        rects, px_per_unit, top_left=(x_min, y_min), shape=reference.shape)
+
+    assert np.array_equal(drawn, reference)
+
+
+def test_charuco2_render_is_aruco2s_board_image_at_a_compatible_dpi() -> None:
+    """The target's own raster output is the same image: at 1 px/mm a 12 mm
+    square is 12 px, bit size 3 for a 4x4 dictionary."""
+    target = ChArUco2(num_squares_x=5, num_squares_y=4, square_size=12.0)
+    image, px_per_mm = target._render(25.4)
+
+    direct = aruco2.get_grid_board_image((5, 4), target._aruco_dict_int, 3)
+    assert px_per_mm == pytest.approx(1.0)
+    assert np.array_equal(image, direct)
+
+
+def test_layout_imports_without_aruco2() -> None:
+    """The shared geometry is numpy only, so a cube face (or a docs build)
+    can use it with aruco2 blocked."""
+    probe = (
+        "import sys\n"
+        "sys.modules['aruco2'] = None\n"
+        "from pyCamSet.calibration_targets.markers import gridboard_layout as layout\n"
         "import numpy as np\n"
         "bits = np.zeros((4, 4, 4), bool)\n"
         "rects = layout.grid_board_rectangles((2, 2), 1.0, bits, origin=(3, 4))\n"
@@ -502,24 +588,13 @@ def test_grid_board_marker_bits_refuses_an_id_the_dictionary_lacks() -> None:
         grid_board_marker_bits((2, 2), int(aruco2.DICT_4X4_50), [0, 1, 2, 50])
 
 
-def test_generate_charuco2_target_builds_and_returns_saved_path(tmp_path: Path) -> None:
-    from pyCamSet.calibration_targets.charuco2.generate import (
-        build_charuco2, default_output_name, generate_charuco2_target,
-    )
-
-    target = build_charuco2(num_squares_x=5, num_squares_y=7, square_size=4)
+def test_a_charuco2_board_names_itself_and_writes_itself(tmp_path: Path) -> None:
+    spec = {"num_squares_x": 5, "num_squares_y": 7, "square_size": 4}
+    target = ChArUco2(**spec)
     assert target.point_data.shape == (1, 6 * 8, 3)
-    assert default_output_name(5, 7, 4, "pdf_vector") == "charuco2_5x7_4mm.pdf"
+    assert ChArUco2.printable_name(spec, "pdf_vector") == "charuco2_5x7_4mm.pdf"
 
-    board, saved = generate_charuco2_target(
-        num_squares_x=5,
-        num_squares_y=7,
-        square_size=4,
-        output_dir=tmp_path,
-        file_name="nested/charuco2.txt",
-        export_kind="svg",
-    )
-    assert isinstance(board, ChArUco2)
+    saved = target.save_printable(tmp_path / "nested/charuco2.txt", "svg")
     assert saved == (tmp_path / "nested/charuco2.svg").resolve()
     assert saved.exists()
     assert saved.stat().st_size > 0

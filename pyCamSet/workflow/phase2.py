@@ -12,6 +12,7 @@ from typing import Optional
 
 import numpy as np
 
+from pyCamSet.utils.paths import long_path
 from pyCamSet.cameras.lens_models import DEFAULT_LENS_MODEL
 from pyCamSet.workflow.detections import (
     DetectionFilter,
@@ -24,7 +25,6 @@ from pyCamSet.workflow.logs import LogFn, captured_output, discard
 from pyCamSet.workflow.phase1 import target_of_params
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
-    as_io_path,
     make_run_id,
     path_exists,
     resolve_artifact,
@@ -35,9 +35,9 @@ _LOG = logging.getLogger(__name__)
 try:
     from pyCamSet.calibration.camera_calibrator import (
         detect_datapoints_in_imfile,
-        report_initial_calibration,
         run_initial_calibration,
     )
+    from pyCamSet.utils.intrinsics_report import report_initial_calibration
     from pyCamSet.utils.saving import load_pickle
 
     BACKEND_OK = True
@@ -298,7 +298,7 @@ def _calibrate_pruned(params: dict, run_dir: Path,
 
     log(f"Loading Phase 1 detections: {detections_path}")
     detections, cam_res = extract_detection_and_cam_res(
-        load_pickle(as_io_path(detections_path)))
+        load_pickle(long_path(detections_path)))
 
     filtered = prune.apply(detections, log)
     pruned_path = save_detections(
@@ -330,7 +330,7 @@ def _load_or_detect(params: dict, target, root: Path,
     if detections_path is not None and path_exists(detections_path):
         log(f"Using detections: {detections_path}")
         detections, cam_res = extract_detection_and_cam_res(
-            load_pickle(as_io_path(detections_path)))
+            load_pickle(long_path(detections_path)))
         if selected and set(getattr(detections, "cam_names", []) or []) != selected:
             log("Detection artifact camera set does not match selected "
                 "cameras; running fresh detection on selected subset.")

@@ -299,6 +299,12 @@ SHIPPED_CHAINS = {
         lambda: fb.projection() + fb.extrinsic3D() + fb.free_point(),
     "telecentric_intrinsic_telecentric_extrinsic_template_points":
         lambda: fb.telecentric_intrinsic() + fb.telecentric_extrinsic() + fb.template_points(),
+    # Phase 4 through a telecentric lens. Nothing generated this chain until
+    # the self-calibration gauge transform learned to handle a rotation-only
+    # extrinsic, so it had no shipped kernel to be checked against.
+    "telecentric_intrinsic_telecentric_extrinsic_rigidTform3d_free_point":
+        lambda: (fb.telecentric_intrinsic() + fb.telecentric_extrinsic()
+                 + fb.rigidTform3d() + fb.free_point()),
 }
 
 

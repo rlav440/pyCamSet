@@ -108,9 +108,8 @@ class Camera:
 
         self.intrinsic = intrinsic
         self.original_matrix = deepcopy(self.intrinsic)  # stored for reference #TODO rename to original_intrinsic_matrix
-        # cv2.calibrateCamera hands back a (1, 5) distortion, and the compiled
-        # distort kernel indexes it as a flat 5, so a camera built straight
-        # from an initial calibration could not project its own points.
+        # The compiled distort kernel indexes a flat 5, but
+        # cv2.calibrateCamera hands back a (1, 5).
         self.distortion_coefs = np.reshape(np.asarray(distortion_coefs, dtype=float), -1)
         self.cam_to_world = None
 
@@ -126,18 +125,13 @@ class Camera:
         :param other: The other object. if it's not a camera, returns false.
         :return: True or false.
         """
-        # type, not isinstance: a TelecentricCamera holding the same arrays is
-        # a different model of the world, not an equal camera, and isinstance
-        # lets every subclass compare equal to its base.
+        # type, not isinstance: a TelecentricCamera holding the same arrays
+        # is a different model of the world, not an equal camera.
         if type(self) is not type(other):
             return False
-        # np.allclose, not all(np.isclose(...)): isclose returns an array, and
-        # all() of a list of arrays raises "truth value is ambiguous" -- which
-        # made every comparison of two real cameras an error rather than a
-        # bool, and CameraSet.__eq__ with it.
-        # Compare shapes first: allclose broadcasts, so a (5,) and a (1, 5)
-        # distortion model, or two models of different length, would otherwise
-        # compare equal or raise instead of returning False.
+        # Shapes first, then np.allclose: allclose broadcasts, so a (5,) and
+        # a (1, 5) distortion would otherwise compare equal, and
+        # all(np.isclose(...)) over arrays raises rather than returning bool.
         pairs = (
             (self.intrinsic, other.intrinsic),
             (self.extrinsic, other.extrinsic),
@@ -344,11 +338,6 @@ class Camera:
             centered = centered[None, ...]
         dist_zero = np.all(np.isclose(self.distortion_coefs, 0))
         if distort and not dist_zero:
-            # distorted = [distort_points(
-            #     pt,
-            #     self.intrinsic,
-            #     self.distortion_coefs
-            # ) for pt in centered]
             pr_distort(centered, self.intrinsic, self.distortion_coefs)
 
             if mode == "image":
@@ -435,48 +424,28 @@ class Camera:
         :returns mesh: A PV mesh showing the camera object's viewcone
         """
         _require_pyvista()
+        corners = np.array([
+            [0, 0],
+            [0, self.res[1]],
+            [self.res[0], 0],
+            [self.res[0], self.res[1]],
+        ])
+        rays = vector_cam_points('linear', corners, self.intrinsic, self.cam_to_world)
+        far = rays * view_len + self.position
+
         if triangle:
-            p1 = self.position
-
-            pts = np.array([
-                [0, 0],
-                [0, self.res[1]],
-                [self.res[0], 0],
-                [self.res[0], self.res[1]],
-            ])
-
-            vs = vector_cam_points('linear', pts, self.intrinsic, self.cam_to_world)
-
-            [p6, p7, p8, p9] = vs * view_len + p1
-
-            verts = np.stack((p6, p7, p8, p9, p1))
-
+            # A pyramid: the far quad, and an apex at the camera.
+            verts = np.vstack((far, self.position))
             faces = np.array([[3, 0, 1, 2],
                               [3, 2, 3, 0],
                               [3, 4, 1, 0],
                               [3, 4, 2, 1],
                               [3, 4, 3, 2],
                               [3, 4, 0, 3]])
-
-            return pv.PolyData(verts, faces)
         else:
-            cam_len = 0.025
-            p1 = self.position
-
-            pts = np.array([
-                [0, 0],
-                [0, self.res[1]],
-                [self.res[0], 0],
-                [self.res[0], self.res[1]],
-            ])
-
-            vs = vector_cam_points('linear', pts, self.intrinsic, self.cam_to_world)
-
-            [p2, p3, p4, p5] = vs * cam_len + p1
-            [p6, p7, p8, p9] = vs * view_len + p1
-
-            verts = np.stack((p2, p3, p4, p5, p6, p7, p8, p9))
-
+            # A frustum: a near quad a fixed distance out, and the far one.
+            near = rays * 0.025 + self.position
+            verts = np.vstack((near, far))
             faces = np.array([[3, 0, 1, 2],
                               [3, 2, 3, 0],
                               [3, 4, 5, 6],
@@ -489,9 +458,7 @@ class Camera:
                               [3, 7, 6, 2],
                               [3, 3, 0, 4],
                               [3, 4, 7, 3]])
-
-            return pv.PolyData(verts, faces)
-
+        return pv.PolyData(verts, faces)
     def get_image_cord_sensor_map(self):
         """
         Returns a version of the sensor map in image coordinates, rather than the default opencv
@@ -612,10 +579,7 @@ class Camera:
 
         :param roi: [xmin, xmax, ymin, ymax], in pixels
         """
-        # Grouped by axis, matching the documented order.  This previously
-        # destructured [ymin, xmin, xmax, ymax], so the second element was
-        # read as the x origin and the first as the y origin -- a caller
-        # following the docstring cropped to the wrong place.
+        # Grouped by axis, matching the documented order.
         [xmin, xmax, ymin, ymax] = roi
         if xmax > self.res[0] or ymax > self.res[1]:
             raise ValueError('crop bounds outside of camera viewpoint')
@@ -630,10 +594,8 @@ class Camera:
         """
         Returns the camera to the original intrinsic matrix
         """
-        # A copy, not the array itself: crop_to_roi and scale_self_2n mutate
-        # self.intrinsic in place, so handing out the stored original aliased
-        # the two together and the first crop after a reset destroyed the
-        # reference copy -- leaving every later reset returning the crop.
+        # A copy: crop_to_roi and scale_self_2n mutate self.intrinsic in
+        # place, which would otherwise destroy the stored original.
         self.intrinsic = deepcopy(self.original_matrix)
         self._update_state()
 

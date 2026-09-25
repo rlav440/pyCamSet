@@ -140,9 +140,9 @@ def detection_extremes(features: np.ndarray) -> Optional[tuple[tuple[int, int], 
 
 def _load_detections(pickle_path: Path):
     from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
-    from pyCamSet.workflow.workspace import as_io_path
+    from pyCamSet.utils.paths import long_path
 
-    with open(as_io_path(pickle_path), "rb") as handle:
+    with open(long_path(pickle_path), "rb") as handle:
         payload = pickle.load(handle)
     return Phase1DiagnosticsTab._extract_detections_obj(payload)
 

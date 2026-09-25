@@ -12,7 +12,8 @@ from tempfile import TemporaryDirectory
 from typing import Any, Iterator, Optional
 
 from pyCamSet.workflow.logs import LogFn, discard
-from pyCamSet.workflow.workspace import as_io_path, get_camera_subfolders
+from pyCamSet.utils.paths import long_path
+from pyCamSet.workflow.workspace import get_camera_subfolders
 
 
 @dataclass(frozen=True)
@@ -124,7 +125,7 @@ def save_detections(path: Path, detections, cam_res=None) -> Path:
         import pickle as pickler
 
     payload = detections if cam_res is None else (detections, cam_res)
-    with open(as_io_path(path), "wb") as fh:
+    with open(long_path(path), "wb") as fh:
         pickler.dump(payload, fh)
     return path
 
@@ -139,15 +140,14 @@ def detection_cache_name(upscale_factor: int = 1,
 
     :param upscale_factor: the upscale the pass ran at
     :param marker_backend: the detector it read the markers with; only
-        ``"aruco2"`` changes the name, so an ArUco 1 cache keeps the name it
-        always had
+        ``"aruco2"`` changes the name
     """
     name = "detected_datapoints"
     if upscale_factor != 1:
         name += f"_upscale{upscale_factor}x"
     if marker_backend == "aruco2":
         name += "_aruco2"
-    return f"{name}.pickle"
+    return f"{name}.npz"
 
 
 @contextlib.contextmanager

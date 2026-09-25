@@ -2,43 +2,20 @@ from dataclasses import dataclass
 import numpy as np
 from pathlib import Path
 import importlib
-from matplotlib import pyplot as plt
 
-# from .abstract_function_blocks import optimisation_function
-#
-
-# The sparsity of the generated jacobian is inferred by evaluating each
-# function block numerically and testing entries against 0 and 1, which become
-# literals in the emitted source. One sample cannot tell a structural zero from
-# a derivative that merely vanishes at the sampled point, so several are taken
-# and an entry is only treated as constant when it holds that value at every
-# one of them. The probe is cheap -- the matrices are (mat_size, mat_size) with
-# mat_size ~30, and 100 samples of every block costs well under a millisecond.
+# Sparsity is inferred by evaluating each block numerically and testing
+# entries against 0 and 1, stochastic, so 100x samples witha constant seed
 SPARSITY_PROBE_SAMPLES = 100
-
-# Fixed so codegen is reproducible. A dedicated Generator is used rather than
-# the global numpy RNG so that generating a template neither depends on nor
-# perturbs the caller's random state.
 SPARSITY_PROBE_SEED = 0
 
-
-# we take a function and have some parameters of interest.
-# we take the matricies and left collapse them.
-# then we can represent the multiplication in some form of hierachical way.
-# list represents a sum, tuple represents a product.
-# matrix is represented by a dictionairy.
-# indx class represents the origin of data
+# The chain of block jacobians is left-collapsed into a tree: a list is a
+# sum, a tuple a product, a dict one matrix, and Indx where a value came from.
 
 
 def convert_matrix(mat_samples, size, matnum):
     """
     given jacobian samples of one function block, converts them to the form
     used for encapsulation
-
-    An entry is encoded as the literal 0 or 1 only when it holds that value in
-    every sample. Encoding it from a single sample bakes a coincidental zero
-    into the generated source, which then drops that derivative term for every
-    future input -- a silent loss of jacobian columns rather than an error.
 
     :param mat_samples: an (n_samples, size, size) stack of evaluated jacobians
     :param size: the side length of the jacobian
@@ -148,7 +125,6 @@ def map_outputs_to_jac(output, jac, param_slices, n_blocks, ide, m2i, output_off
     #work out where the points go for the matrix
     out_ind_start = param_slices[2*n_blocks + 2*ide] 
     out_ind_end = param_slices[2*n_blocks + 2*ide + 1] 
-    # print("output inds: ", out_ind_start, out_ind_end)
 
     inp_ind_start = param_slices[2*n_blocks + 2*ide + 2] 
     inp_ind_end = param_slices[2*n_blocks + 2*ide + 1 + 2]
@@ -158,11 +134,9 @@ def map_outputs_to_jac(output, jac, param_slices, n_blocks, ide, m2i, output_off
     param_start = param_slices[2*ide]
     param_end = param_slices[2*ide + 1]
     n_param = param_end - param_start
-    # print("number of params", n_param)
 
     ll = n_inputs + n_param
     for idc, output_var in enumerate(range(out_ind_start, out_ind_end)):
-        # print("output_vars to grab: ", idc*ll, n_param)
         jac[output_var, param_start:param_end] = output[idc*ll:idc*ll + n_param] 
 
         #also write the mat to ind arr
@@ -190,13 +164,6 @@ def input_buffer_width(blocks) -> int:
 def check_block_stays_in_bounds(element, probe_inp_len: int):
     """
     Raises when a block's kernel reads past the input buffer it is given.
-
-    numba compiles with bounds checking off, so a kernel that indexes past its
-    input silently differentiates adjacent memory instead of failing.  That is
-    invisible on a platform where the adjacent bytes happen to be nonzero and
-    catastrophic where they are zero.  The pure-Python original of the same
-    kernel is bounds checked by numpy, so running it once per code generation
-    turns the whole class of mistake into an immediate, portable error.
 
     :param element: the function block to check
     :param probe_inp_len: the width of the buffer the probe will pass
@@ -230,16 +197,6 @@ def check_all_params_reach_the_output(out_mat, param_len, n_outputs=2):
     """
     Raises when a parameter has no surviving derivative path to the residuals.
 
-    The generated jacobian encodes its own sparsity, so a derivative term that
-    is wrongly treated as structurally zero simply disappears from the emitted
-    source. The optimiser then sees a column of zeros, cannot move that
-    parameter, and converges to a worse answer with no error raised -- which is
-    exactly how the macos-14 Ccube regression behaved (69 of 183 columns dead,
-    6.17 px instead of 2.62 px).
-
-    The check is over the encoded structure rather than numbers, so it costs
-    nothing and runs on every code generation.
-
     :param out_mat: the encoded jacobian, keyed by (row, column)
     :param param_len: the number of parameter columns
     :param n_outputs: the number of residual rows the jacobian writes
@@ -263,13 +220,8 @@ def check_all_params_reach_the_output(out_mat, param_len, n_outputs=2):
 
 def create_optimisable_compute_flow(opfun, out_name:str, in_name:str):
     """
-    We use multivariate calculus to perpetuate the derivatives of each function block.
-    This can be expressed as a product of the jacobians of each individual function block (expanded to operate on each function block).
-    While this works, the individual construction of each jacobian involves a lot of busy work + copies.
+    multivariable calculus expresses a product of the jacobians of each individual function block (expanded to operate on each function block).
     The below code creates a mapping from a vector containing the outputs of all function blocks to partial derivatives of the overall function.
-
-    There are some issues: the implementation is lazy and checks for values ==1 or == 0, which will break with complex derivatives.
-    It is also recursive, so will hit the recursion limit in python for very long function chains!
     
     :param opfun: an optimisation function defined by combinign abstract function block derived classes with defined jacobians.
     :param out_name: the name of the output array to write into.
@@ -292,20 +244,8 @@ def create_optimisable_compute_flow(opfun, out_name:str, in_name:str):
     locs = np.cumsum(out_sizes) #this is actually quite a large array, but still kind of small
 
     mat_ind_2_derivout_ind = [{} for _ in range(n_blocks)]
-    
-    #create and build the matricies
-    # Seeded locally so the emitted source is reproducible and independent of
-    # the caller's random state.
     rng = np.random.default_rng(SPARSITY_PROBE_SEED)
 
-    # The generated code hands every block a slice of one shared input buffer.
-    # Size the probe's buffer from each block's declared read width, not from
-    # num_inp: a template block reads its template coordinates out of the same
-    # buffer without differentiating them, so num_inp understates what the
-    # kernel touches. Getting this wrong hands the kernel a short array and its
-    # reads run past the end -- numba does not bounds check, so it silently
-    # differentiates whatever follows in memory. That is what cost the Ccube
-    # calibration 3.5 px on arm64 (zeros there, nonzero heap on x86_64).
     probe_inp_len = input_buffer_width(opfun.function_blocks)
     for element in opfun.function_blocks:
         check_block_stays_in_bounds(element, probe_inp_len)
@@ -317,9 +257,6 @@ def create_optimisable_compute_flow(opfun, out_name:str, in_name:str):
 
         for ids in range(SPARSITY_PROBE_SAMPLES):
             jac = np.eye(mat_size)
-            # NaN rather than np.empty: an entry the kernel fails to write is
-            # then neither 0 nor 1, so the term is emitted instead of being
-            # silently dropped, and the probe stays deterministic.
             output = np.full(outsize, np.nan)
             element.compute_jac(
                 inp=rng.random(probe_inp_len),
@@ -336,16 +273,8 @@ def create_optimisable_compute_flow(opfun, out_name:str, in_name:str):
     for i in range(len(matricies) -1):
         matricies[i+1] = encapsulate_multiplication(matricies[i], matricies[i+1], mat_size)
         
-        # print(f"\n\n\n###################### multiplaction {i} ##################")
-        # for key, value in matricies[i+1].items():
-        #     if (key[0] == param_len) or (key[0] == param_len + 1):
-        #     # if not (value ==0 or value==1):
-        #         print(f"{key} = {value}")
 
     out_mat = matricies[i+1]            
-
-    # Fail at generation time rather than silently emitting a jacobian that
-    # cannot move some parameters.
     check_all_params_reach_the_output(out_mat, param_len)
 
     #with this structure in place, what we then need to do is to write the code that converts this to a multiplication
@@ -405,110 +334,3 @@ def import_fn(opfun):
     importlib.invalidate_caches()
     top_module = importlib.import_module(file_string)
     return top_module.matflow
-
-
-def test_compute_flow(opfun, out_name:str, in_name:str):
-    """
-    We use multivariate calculus to perpetuate the derivatives of each function block.
-    This can be expressed as a product of the jacobians of each individual function block (expanded to operate on each function block).
-    While this works, the individual construction of each jacobian involves a lot of busy work + copies.
-    The below code creates a mapping from a vector containing the outputs of all function blocks to partial derivatives of the overall function.
-
-    There are some issues: the implementation is lazy and checks for values ==1 or == 0, which will break with complex derivatives.
-    It is also recursive, so will hit the recursion limit in python for very long function chains!
-    
-    :param opfun: an optimisation function defined by combinign abstract function block derived classes with defined jacobians.
-    :param out_name: the name of the output array to write into.
-    
-    :returns a list of strings that are lines that can be evaluated to map input arrays to an output.
-    """
-
-    opfun._prep_for_computation()
-
-    param_slices, _, _, _ = opfun._get_function_constants()
-    mat_size = param_slices[-1] 
-    n_blocks = len(opfun.function_blocks)
-    param_len = param_slices[2*(n_blocks-1) + 1] 
-
-    mat_ind_2_derivout_ind = [{} for _ in range(n_blocks)]
-    
-    out_sizes = [0]
-    for element in opfun.function_blocks:
-        elem_outsize = (element.params.n_params + element.num_inp) * element.num_out
-        out_sizes.append(elem_outsize)
-    locs = np.cumsum(out_sizes)
-    output_arr = np.empty(locs[-1])
-
-    #create and build the matricies
-    matricies = []
-    for ide, element in enumerate(opfun.function_blocks):
-        jac = np.eye(mat_size)
-        outsize = (element.params.n_params + element.num_inp) * element.num_out
-        output = np.empty(outsize)
-        inps = np.random.random(element.num_inp)
-        params = np.random.random(element.params.n_params)
-        element.compute_jac(
-            inp=inps,
-            params=params,
-            output=output,
-            memory=np.empty(element.array_memory),
-        )
-        #write the permutation into the array.
-        output_arr[locs[ide]:locs[ide+1]] = output
-
-        map_outputs_to_jac(output, jac, param_slices, n_blocks, ide, mat_ind_2_derivout_ind, locs)
-        matricies.append(jac)
-
-    for i in range(len(matricies) -1):
-        matricies[i+1] = matricies[i] @ matricies[i+1]
-    out_mat = matricies[i+1]            
-
-    view_elems = out_mat[param_len:param_len+2, :param_len]
-    data = np.empty_like(view_elems)
-    mapper = import_fn(opfun) 
-    mapper(output_arr, data)
-   
-    fig, ax = plt.subplots(3,1)
-    ax[0].imshow(view_elems)
-    ax[1].imshow(data)
-    ax[2].imshow(np.abs(view_elems - data))
-    plt.show()
-    assert np.all(np.isclose(data, view_elems))
-
-
-if __name__ == "__main__":
-    from numba import njit
-    from pyCamSet import load_CameraSet
-    from pyCamSet.utils.general_utils import benchmark
-    cams = load_CameraSet('tests/test_data/calibration_ccube/self_calib_test.camset')
-    opfun = cams.calibration_handler.op_fun
-
-    lines = create_optimisable_compute_flow(opfun, "output", "input")
-    write_fun(opfun, lines, 'input', 'output')
-    test_compute_flow(opfun, "output", "input")
-    temp = import_fn(opfun)
-    data = np.empty((2,50))
-    inps = np.random.random(69)
-    temp(inps,data)
-    
-    @njit
-    def array_mult(n0, n1, n2):
-        return n0@n1@n2
-
-    n0 = np.eye(33)
-    n1 = np.eye(33)
-    n2 = np.eye(33)
-    array_mult(n0,n1,n2)
-    print("Compiled calculation")
-    benchmark(lambda :temp(inps, data), repeats=1000, mode='us')
-    print("Matrix multiplication")
-    benchmark(lambda :array_mult(n0,n1,n2), repeats=1000, mode='us')
-
-
-    
-
-
-
-
-
-

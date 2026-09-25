@@ -32,12 +32,16 @@ the others.
 
 The length of a Ccube2 is in millimetres.
 
-```python
+```python exec="true" source="above" session="ccube2"
 from pyCamSet import Ccube2
 
 target = Ccube2(length=40, n_points=6)
 target.plot()
 ```
+
+Plotting it is how you check that the virtual target and the real one line up
+before spending a session photographing the wrong thing — here that the faces
+carry the marker ids the printed net carries, in the same order.
 
 | Argument | Default | |
 |---|---|---|

@@ -8,7 +8,6 @@ import pytest
 
 from pyCamSet import ChArUco, calibrate_cameras
 from pyCamSet.calibration.camera_calibrator import run_bundle_adjustment
-from pyCamSet.calibration_targets.charuco.generate import build_charuco
 from pyCamSet.calibration_targets.core.target_detections import ImageDetection, TargetDetection
 from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
 
@@ -65,6 +64,6 @@ def test_empty_and_mismatched_detection_inputs_are_explicit() -> None:
 
 
 def test_empty_target_folder_raises_instead_of_silently_continuing(tmp_path: Path) -> None:
-    target = build_charuco(5, 7, 4)
+    target = ChArUco(5, 7, 4)
     with pytest.raises(ValueError, match="No images were found"):
         target.find_in_imfolder(tmp_path / "cam0", ["cam0"], threads=1)

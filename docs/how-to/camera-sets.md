@@ -386,6 +386,15 @@ that cannot be inferred from the camera set — it is a statement about the scen
 Passing `ims` also undistorts and writes the images themselves, since a depth
 estimator wants them rectified.
 
+The view-pair list, `pair.txt`, is scored for the rig it is given. A rig whose
+cameras converge on a shared target — an ordinary calibration rig — is scored by
+the angle each pair subtends at that convergence point; anything else, such as a
+forward-facing capture, is scored by the angle between view vectors and windowed
+by `ReconParams`' `minangle` and `maxangle`. Each reference view keeps its
+`max_n_view` best candidates, written best first and scored relative to its own
+best one. Pass `pair_scoring="view_angle"` or `pair_scoring="convergence"` to
+choose instead of letting the rig decide.
+
 ---
 
 For every method and everything a `CameraSet` carries, see the

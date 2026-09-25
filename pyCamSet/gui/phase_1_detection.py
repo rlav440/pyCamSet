@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyCamSet.gui.theme import set_text_role
+from pyCamSet.utils.paths import long_path
 from pyCamSet.gui.shared_functions import (
     hold_run_button,
     CollapsibleSection,
@@ -91,7 +92,6 @@ from pyCamSet.workflow.recent_targets import (
 from pyCamSet.workflow.targets import describe_target, TARGET_KEY
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
-    as_io_path,
     get_camera_subfolders,
     path_exists,
     workspace_path_for,
@@ -1340,9 +1340,9 @@ class Phase1DiagnosticsTab(QWidget):
                             self, "No detections file",
                             "No pickle found for this run.")
                     return
-                # as_io_path, like path_exists above: a raw open() fails on
+                # long_path, like path_exists above: a raw open() fails on
                 # a Windows path past 260 characters.
-                with open(as_io_path(private_path), "rb") as fh:
+                with open(long_path(private_path), "rb") as fh:
                     payload = pickle.load(fh)
             else:
                 payload = phase1_workflow.load_matching_image_folder_cache(

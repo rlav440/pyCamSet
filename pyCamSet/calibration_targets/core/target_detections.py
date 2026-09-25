@@ -2,7 +2,6 @@ from __future__ import annotations
 from functools import reduce
 import numpy as np
 from copy import copy
-from matplotlib import pyplot as plt
 
 
 class ImageDetection:
@@ -248,6 +247,32 @@ class TargetDetection:
         self._glomp_buffer()
         return self._data
 
+    def as_arrays(self) -> tuple[list[str], np.ndarray | None, int]:
+        """
+        The whole of this detection as plain data.
+
+        Everything else an instance holds is rebuilt by ``__init__``, so
+        this is what a file has to carry.
+
+        :return: the camera names, the detection array, and the image count
+        """
+        self._glomp_buffer()
+        return list(self.cam_names), self._data, int(self.max_ims)
+
+    @classmethod
+    def from_arrays(cls, cam_names: list[str], data: np.ndarray | None,
+                    max_ims: int) -> TargetDetection:
+        """
+        Rebuild a detection from what :meth:`as_arrays` returned.
+
+        :param cam_names: the camera names, in their original order
+        :param data: the detection array, or None for an empty detection
+        :param max_ims: the number of images the detection spans
+        """
+        if data is not None and data.size == 0:
+            data = None
+        return cls(cam_names=list(cam_names), data=data, max_ims=int(max_ims))
+
     def __add__(self, other:TargetDetection) -> TargetDetection:
         """
         :param other: Another target detection with the same cameras
@@ -430,57 +455,3 @@ class TargetDetection:
         dim_1_keys = np.sum(data[:, 2:-2]*prods, axis=1).reshape((-1, 1))
         new_data = np.concatenate([data[:, :2], dim_1_keys, data[:, -2:]], axis=1)
         return TargetDetection(self.cam_names, new_data, self.max_ims)
-
-    def parse_detections_to_reconstructable(self, draw_distribution=False):
-        """
-        Given the reference detection, detects which localised features can be triangulated, in which frame.
-        It returns the subset of the data that can be used, and additional data that indicates the slices to use.
-        It also calculates 
-        
-        :param draw_distribution: If true will draw an image number x feature number boolean plot, indicating which
-            feature can be reconstructed in which image.
-
-        :return feature_inds:
-        :return im_dst:
-        :return per_feature_count:
-        :return reconstructable_data: 
-        """
-        data = self.sort(["keys", "images"]).get_data()
-        # find keys that are reconstructable: that is keys that are seen by two+ cameras in a time point
-        _, unique_key_inv, per_feature_count = np.unique(  # unique im num keys, etc
-            data[:, 1:-2], axis=0, return_inverse=True, return_counts=True
-        )
-
-        viable_mask = per_feature_count > 1 #all features that are viabe
-        data_recon_subset = data[viable_mask[unique_key_inv]] 
-        
-        #each task consists of all detections of a feature at a time point
-        _, task_start_index, task_count = np.unique(
-            data_recon_subset[:, 1:-2], axis=0, return_index=True, return_counts=True
-        )
-        sorted_task_count = task_count[np.argsort(task_start_index)]
-        task_start_points = np.append(0, np.cumsum(sorted_task_count))
-
-
-        # for a key/feature, how many images are in that key over all images in which that feature is visible
-        _, feature_index = np.unique(data_recon_subset[:, 2:-2], axis=0)
-        feature_inds = np.append(np.sort(feature_index), data_recon_subset.shape[0])
-        im_dst = np.zeros((len(feature_inds) - 1, self.max_ims))
-        idx = 0
-        for i in range(len(feature_inds) - 1):
-            j = 0
-            while task_start_points[idx] < feature_inds[i + 1]:
-                im_dst[i, j] = sorted_task_count[idx]
-                idx += 1;
-                j += 1
-
-        per_feature_count = np.sum(im_dst > 0, axis=1)
-        if draw_distribution:
-            fig, ax = plt.subplots(1, 2)
-            ax[0].imshow(im_dst)
-            ax[0].set_title('Feature visibility in cameras')
-            ax[1].plot(per_feature_count, '.')
-            ax[1].set_title('number visible images.')
-            plt.show()
-
-        return feature_inds, im_dst, per_feature_count, data_recon_subset

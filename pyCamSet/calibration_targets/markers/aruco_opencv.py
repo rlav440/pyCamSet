@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 from cv2 import aruco
 
@@ -120,3 +121,25 @@ class ArucoOpenCVDetector(DetectorParameterisation):
 #: Shared rather than built per target: the settings live on the target, and
 #: this holds only the description of them.
 ARUCO_OPENCV_DETECTOR = ArucoOpenCVDetector()
+
+
+def marker_bit_grid(dictionary: cv2.aruco.Dictionary, marker_id: int) -> np.ndarray:
+    """A marker as its printed cells, one-cell border included, 1 for black.
+
+    Rendered and thresholded rather than unpacked from the dictionary's
+    packed bytes, whose layout differs across OpenCV builds.
+    """
+    marker_size = int(dictionary.markerSize)
+    n_cells = marker_size + 2
+    cell_px = 24
+    side = n_cells * cell_px
+
+    marker_img = np.zeros((side, side), dtype=np.uint8)
+    cv2.aruco.generateImageMarker(dictionary, int(marker_id), side, marker_img, 1)
+
+    grid = np.zeros((n_cells, n_cells), dtype=np.uint8)
+    for r in range(n_cells):
+        for c in range(n_cells):
+            block = marker_img[r * cell_px:(r + 1) * cell_px, c * cell_px:(c + 1) * cell_px]
+            grid[r, c] = 1 if float(block.mean()) < 127.5 else 0
+    return grid

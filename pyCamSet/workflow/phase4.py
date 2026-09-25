@@ -13,11 +13,11 @@ from typing import Optional
 
 import numpy as np
 
+from pyCamSet.utils.paths import long_path
 from pyCamSet.workflow.diagnostics import per_camera_mean_reprojection
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
-    as_io_path,
     make_run_id,
 )
 
@@ -149,7 +149,7 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet optimisation modules are not importable.")
 
-    previous_cams = load_CameraSet(as_io_path(phase3_camset))
+    previous_cams = load_CameraSet(long_path(phase3_camset))
     if phase3_run is not None and phase3_run.get("status") == "failed":
         raise RuntimeError(
             "The selected Phase 3 run failed; refusing to start Phase 4. "
@@ -192,7 +192,7 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     # A Phase 4 result is not accepted merely because the solver returned.
     # Reload the exact bytes written to disk and verify the camera identity
     # before recording a quality disposition.
-    reloaded = load_CameraSet(as_io_path(camset_out))
+    reloaded = load_CameraSet(long_path(camset_out))
     if set(reloaded.get_names()) != set(previous_cams.get_names()):
         raise RuntimeError(
             "Phase 4 save/reload changed the active camera set; refusing "

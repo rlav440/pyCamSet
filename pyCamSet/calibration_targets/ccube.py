@@ -17,12 +17,14 @@ from tqdm import tqdm
 from pyCamSet.calibration_targets.core import (
     AbstractTarget, ImageDetection, FaceToShape, exclude_by_prefix,
 )
+from pyCamSet.calibration_targets.markers.aruco_opencv import marker_bit_grid
 from pyCamSet.calibration_targets.markers.backend_registry import (
     ARUCO1_BACKEND,
     dict_names_for_backend,
     dictionary_id,
 )
-from pyCamSet.calibration_targets.core.abstract_target import EXPORT_SUFFIXES
+from pyCamSet.calibration_targets.core.abstract_target import (
+    EXPORT_SUFFIXES, export_path)
 from pyCamSet.calibration_targets.core.parameters import (
     DocumentedParameters,
     Parameterisation,
@@ -49,20 +51,8 @@ _MIN_POINTS = 3
 _DEFAULT_DICT_NAME = "DICT_4X4_1000"
 
 
-# TFORMS = [
-# 	([-1.209,-1.209, 1.209],[ 0.5,-0.5, 0.5]),
-# 	([ 1.209,-1.209, 1.209],[ 0.5, 0.5,-0.5]),
-# 	([0.   ,0.   ,1.571],[ 0.5,-0.5,-0.5]),
-# 	([2.221,0.   ,2.221],[-0.5, 0.5,-0.5]),
-# 	([3.142,0.   ,0.   ],[-0.5, 0.5, 0.5]),
-# 	([-1.571, 0.   , 0.   ],[-0.5,-0.5, 0.5]),
-# ]
-
-# TFORMS Purpose - these are the transforms to get from the local coordinates of each face
-# to the global coordinates of the cube. They are in the form of (rotation, translation),
-# where rotation is in radians and translation is in the same units as the length of the
-# cube (m). The order of the faces is: front, right, back, left, top, bottom. The
-# rotations are around the x, y, and z axes respectively.
+# Local face coordinates to cube coordinates, as (rotation in radians,
+# translation in cube lengths), for front, right, back, left, top, bottom.
 TFORMS = [
     (([2.22144147, 2.22144147, 0.        ]), ([-0.5, -0.5,  0.5])),
     (([-1.57079633,  0.        ,  0.        ]), ([-0.5, -0.5,  0.5])),
@@ -72,8 +62,7 @@ TFORMS = [
     (([1.20919958, 1.20919958, 1.20919958]), ([-0.5, -0.5, -0.5])),
 ]
 
-# NET_FORMS Purpose - These are the transforms to get from the local coordinates of each
-# face to the 3D coordinates of the net layout.
+# Local face coordinates to the printable net's coordinates.
 NET_FORMS=[
 	[[1.0,0.0,0.0], [0.0,1.0,0.0],[0.0,0.0,1.0]],
 	[[0.0,1.0,0.0], [-1.0,0.0,0.0],[0.0,0.0,1.0]],
@@ -243,9 +232,7 @@ class Ccube(AbstractTarget):
         self.actual_border_fraction = None
         self.line_fraction = line_fraction
         self.marker_backend = marker_backend
-        # FIX 1 (R1): only coerce ints. The pre-existing API also accepts a
-        # cv2.aruco.Dictionary object (split_aruco_dictionary handles both);
-        # keep the original object for the aruco1 path exactly as before.
+        # A cv2.aruco.Dictionary is also accepted, and is passed through.
         if isinstance(aruco_dict, (int, str)):
             self._aruco_dict_int = dictionary_id(aruco_dict, marker_backend)
             aruco_dict = self._aruco_dict_int
@@ -259,8 +246,6 @@ class Ccube(AbstractTarget):
         else:
             split = int((n_points - 1) * (n_points + 1) / 2)
         self.markers_per_face = split
-        # D6: in aruco2 mode split the RESOLVED cv2 Dictionary (built from
-        # aruco2 bytes), never the raw int.
         resolved_dict = resolve_dictionary(aruco_dict, marker_backend)
         if 6 * split > (held := int(resolved_dict.bytesList.shape[0])):
             # The only ceiling a cube has: six faces are cut from one marker
@@ -276,9 +261,8 @@ class Ccube(AbstractTarget):
                 (n_points, n_points), self.square_size,
                 markerLength=0.75 * self.square_size,
                 dictionary=a_dict,
-                # legacy=True,
             )
-            for a_dict in self.a_dicts][:6] #only need 6 of them!
+            for a_dict in self.a_dicts][:6]
         if legacy:
             [b.setLegacyPattern(True) for b in self.boards]
         self.n_points = n_points
@@ -287,7 +271,6 @@ class Ccube(AbstractTarget):
         blank_face, board_offset = make_blank_square(draw_res, line_fraction, border_fraction)
         sub_res = (draw_res[0] - 2 * board_offset, draw_res[1] - 2*board_offset)
         self.textures = [blank_face.copy() for _ in range(6)]
-        # debug_t = []
         for idb, (t, board) in enumerate(zip(self.textures, self.boards)):
             t[board_offset:-board_offset, board_offset:-board_offset] = board.generateImage(sub_res)
             font = cv2.FONT_HERSHEY_SIMPLEX
@@ -299,13 +282,9 @@ class Ccube(AbstractTarget):
             cv2.putText(labelled, f"{idb}", (t.shape[0]//100, t.shape[0]//100 * 99 ), font, font_scale, 0, thickness)
             t[...] = labelled
 
-            # debug_t.append(board.draw(draw_res)) #DEBUG
-        # self.textures = debug_t
-
         bd = np.array([board.getChessboardCorners() for board in self.boards])
         coord_bump = self.length*border_fraction/2
         board_coords = bd + np.array([coord_bump, coord_bump, 0])
-        # board_coords = bd #DEBUG
         self.base_face = np.array([
                             [0, self.length,0],
                             [self.length, self.length,0],
@@ -313,7 +292,6 @@ class Ccube(AbstractTarget):
                             [0, 0,0],
                         ])
 
-        # breakpoint()
         self.faceData = FaceToShape(
             face_local_coords=board_coords,
             face_transforms=[make_4x4h_tform(*t) for t in TFORMS],
@@ -324,20 +302,10 @@ class Ccube(AbstractTarget):
 
         self.board_detectors = None
         self.given_legacy_warning = False
-        #: The message ``_warn_legacy_once`` fired, once it has (else None).
-        #: Read back by ``_process_image`` in a worker process, whose own
-        #: ``logger.warning`` call never reaches the main process's logger
-        #: (round-2 review, P1) -- see charuco/target.py's own
-        #: ``legacy_warning_message`` and ``abstract_target.py``.
+        #: The warning ``_warn_legacy_once`` fired, for a worker process to
+        #: hand back: its own ``logger.warning`` never reaches the caller.
         self.legacy_warning_message: str | None = None
-        #: Guards ``given_legacy_warning``'s check-then-set in
-        #: ``_warn_legacy_once`` against genuine concurrent callers sharing
-        #: this instance (round-3 review, P2) -- without it, two threads can
-        #: both observe ``given_legacy_warning`` as False before either sets
-        #: it, each fire its own (possibly differently-worded, per-face)
-        #: warning, and both pay for the opposite-pattern probe. Same
-        #: per-instance-lock pattern as the module-level
-        #: ``_CHARUCO_DETECTOR_CACHE_LOCK`` in markers/aruco2.py.
+        #: So that two threads sharing this target cannot both warn.
         self._legacy_warning_lock = threading.Lock()
 
     def _warn_legacy_once(self, idb: int, board) -> None:
@@ -388,55 +356,31 @@ class Ccube(AbstractTarget):
 
     def save_to_pdf(
             self,
-            f_out: Path | None = None,
+            f_out: Path | str,
             border_width: float = 10,
             individual_faces=False,
             data_format: str = "raster",
     ):
         if individual_faces:
+            # One file per face, named from the path asked for: face 0 used
+            # to take that path and the other five landed in the working
+            # directory under a default name.
+            base = export_path(f_out, ".png")
             for idf, face in enumerate(tqdm(self.textures)):
                 blank_f = int(border_width * 0.0393701 * self.dpi)
                 dims = np.array(face.shape) + blank_f * 2
                 full_im = np.ones((dims)) * 255
                 full_im[blank_f:-blank_f, blank_f:-blank_f] = face
-
-                if f_out is None:
-                    f_out = Path(f'Ccube_length_{self.length * 1000:.2f}mm' \
-                                 f'_{self.n_points}_points_at' \
-                                 f'_{self.square_size * 1000:.2f}mm_face_{idf}.png')
                 full_im = full_im.astype(np.uint8)
                 with Image.fromarray(full_im) as im:
-                    im.save(fp=f_out, resolution=self.dpi)
-                f_out = None
+                    im.save(fp=base.with_name(f"{base.stem}_face_{idf}.png"),
+                            resolution=self.dpi)
             return
 
         if data_format == "vector":
-            try:
-                # Register the native Cairo DLL location before cairosvg needs it.
-                # This used to run eagerly in pyCamSet/__init__.py, forcing every
-                # pyCamSet import to pay for it even when cairo was never touched;
-                # it now runs only on this lazily-reached export path.
-                import pyCamSet.utils.cairo_dll_helper  # noqa: F401
-                import cairosvg
-            except OSError as _cairo_err:
-                raise OSError(
-                    f"{_cairo_err}\n\n"
-                    "pyCamSet's ChArUco/Ccube target code requires the native 'cairo' "
-                    "library, which cairosvg requires but pip cannot install on its own.\n"
-                    "Install the native cairo library for your platform, then re-import pyCamSet:\n"
-                    "  - conda (Windows/Linux/macOS):  conda install -c conda-forge cairo\n"
-                    "  - Debian/Ubuntu:                 apt install libcairo2\n"
-                    "  - macOS (Homebrew):              brew install cairo\n"
-                    "  - Windows (no conda):            install GTK/cairo and put the DLL on PATH"
-                ) from _cairo_err
-            if f_out is None:
-                f_out = Path(
-                    f'Ccube_length_{self.length * 1000:.2f}mm'
-                    f'_{self.n_points}_points_at'
-                    f'_{self.square_size * 1000:.2f}mm.pdf'
-                )
-            else:
-                f_out = Path(f_out)
+            from pyCamSet.utils.cairo_dll_helper import cairosvg_or_explain
+            cairosvg = cairosvg_or_explain()
+            f_out = export_path(f_out, ".pdf")
             svg_out = f_out.with_suffix(".svg")
             self.save_to_svg(
                 f_out=svg_out,
@@ -456,31 +400,22 @@ class Ccube(AbstractTarget):
         full_im = np.ones((dims)) * 255
         full_im[blank_f:-blank_f, blank_f:-blank_f] = im_board
 
-        if f_out is None:
-            f_out = f'Ccube_length_{self.length * 1000:.2f}mm' \
-                    f'_{self.n_points}_points_at' \
-                    f'_{self.square_size * 1000:.2f}mm.pdf'
+        f_out = export_path(f_out, ".pdf")
         full_im = full_im.astype(np.uint8)
         with Image.fromarray(full_im) as im:
             im.save(fp=f_out, resolution=self.dpi)
 
-    # SVG export pipeline
     def charuco_layout_per_face(self) -> list[dict]:
-        """
-        Returns per-face board layout descriptors needed for vector reconstruction of each face.
-        Each dict is expected to include: n_cols, n_rows, square, marker, dictionary.
-        This method isolates project-specific board bookkeeping from generic SVG writing logic below.
-        """
-        # Each entry corresponds to one face and contains all parameters needed to reconstruct that face's geometry in vector format.
+        """What each face is, for the vector export to redraw it from."""
         layouts: list[dict] = []
         square_m = float(self.square_size)
         marker_m = float(self.square_size * 0.75)
         board_offset_m = float(self.length * self.input_border_fraction * 0.5)
         for board in self.boards:
-            n_cols = int(board.getChessboardSize()[0]) # Number of chess squares in x direction
-            n_rows = int(board.getChessboardSize()[1]) # Number of chess squares in y direction
-            dct = board.getDictionary() # OpenCV ArUco dictionary object used by this face
-            ids = np.asarray(board.getIds()).reshape(-1).astype(int) # List of marker ids on this face, as 1D array for easier indexing
+            n_cols = int(board.getChessboardSize()[0])
+            n_rows = int(board.getChessboardSize()[1])
+            dct = board.getDictionary()
+            ids = np.asarray(board.getIds()).reshape(-1).astype(int)
             layouts.append({
                 "n_cols": n_cols,
                 "n_rows": n_rows,
@@ -490,7 +425,6 @@ class Ccube(AbstractTarget):
                 "dictionary": dct,
                 "board": board,
             })
-        # Returns collected per-face descriptors for downstream vector export.
         return layouts
 
     def iter_marker_slots_for_face(self, layout: dict) -> Iterable[dict]:
@@ -528,7 +462,7 @@ class Ccube(AbstractTarget):
         return (1 - u) * (1 - v) * p00 + u * (1 - v) * p10 + u * v * p11 + (1 - u) * v * p01
 
     def net_affine_for_face(self, face_index: int) -> np.ndarray:
-        # NET_FORMS is defined in row/col convention for draw_net; convert to x/y for polygon geometry.
+        # NET_FORMS is in draw_net's row/col convention; polygons want x/y.
         f_rc = np.asarray(NET_FORMS[face_index], dtype=float)
         if f_rc.shape != (3, 3):
             raise ValueError(f"NET_FORMS[{face_index}] must be 3x3, got {f_rc.shape}.")
@@ -546,123 +480,24 @@ class Ccube(AbstractTarget):
         return A
 
     def face_extent(self) -> tuple[float, float]:
-        # Converts the stored face side length to float to avoid downstream dtype surprises in numpy/svg operations.
-        side_m = float(self.length)  # Uses cube face side length in metres, consistent with class geometry units.
-        return side_m, side_m  # Returns full face width and height in metres; Ccube faces are modelled as squares of side self.length.
-
-    @staticmethod
-    def aruco_bits_for_id(dictionary: cv2.aruco.Dictionary, marker_id: int) -> np.ndarray:
-        # Reads marker bit resolution (e.g., 4 for DICT_4X4_* dictionaries) from dictionary metadata.
-        marker_size = int(dictionary.markerSize)  # This determines the expected output bit-grid dimensions.
-
-        # Retrieves raw bytes entry for one marker from dictionary storage.
-        raw = np.asarray(dictionary.bytesList[marker_id])  # Python binding shape varies across OpenCV versions/builds.
-
-        # Flattens raw bytes to one-dimensional array to remove binding-specific extra dimensions/channels.
-        raw_flat = raw.reshape(-1)  # Produces a contiguous linear byte representation independent of original shape.
-
-        # Computes expected packed byte count for one marker bit pattern (ceil(marker_size^2 / 8)).
-        expected_n = int((marker_size * marker_size + 7) // 8)  # Matches C++ getBitsFromByteList byte-count rule.
-
-        # Trims or pads byte vector to expected length to satisfy OpenCV assertion constraints.
-        if raw_flat.size < expected_n:  # Handles rare cases where binding returns fewer bytes than expected.
-            pad = np.zeros(expected_n - raw_flat.size, dtype=raw_flat.dtype)  # Creates zero padding bytes.
-            raw_flat = np.concatenate([raw_flat, pad])  # Extends byte vector to required length.
-        elif raw_flat.size > expected_n:  # Handles common cases where extra channel/copy bytes are present.
-            raw_flat = raw_flat[:expected_n]  # Keeps only canonical packed marker payload.
-
-        # Formats bytes as 1xN uint8 matrix as required by Dictionary_getBitsFromByteList.
-        byte_list = raw_flat.astype(np.uint8).reshape(1, -1)  # Ensures dtype/shape align with OpenCV API expectations.
-
-        # Tries direct packed-byte decoding first (fast path).
-        try:
-            bits = cv2.aruco.Dictionary_getBitsFromByteList(byte_list,
-                                                            marker_size)  # Decodes packed bytes to marker bit grid.
-            bits = np.asarray(bits, dtype=np.uint8)  # Normalises output type for consistent downstream processing.
-            if bits.shape == (marker_size, marker_size):  # Validates expected bit-grid shape.
-                return bits  # Returns successful direct decode.
-        except cv2.error:
-            pass  # Falls back to image-threshold decoding when packed-byte API path fails on this build.
-
-        # Fallback path: render marker image and convert modules to bits by block averaging.
-        side = marker_size * 20  # Chooses render size as integer multiple of marker_size for clean module partitioning.
-        marker_img = np.zeros((side, side), dtype=np.uint8)  # Allocates image buffer for generated marker.
-        cv2.aruco.generateImageMarker(dictionary, int(marker_id), side, marker_img,
-                                      1)  # Renders marker with one-bit border.
-
-        # Removes one-cell border introduced by generator to isolate the marker payload region.
-        cell = side // (marker_size + 2)  # Computes nominal module pixel width including border.
-        inner = marker_img[cell:-cell, cell:-cell]  # Crops border, leaving marker_size x marker_size payload grid area.
-
-        # Re-estimates payload cell size after crop to avoid accumulation of integer rounding error.
-        inner_cell = inner.shape[0] // marker_size  # Computes pixel width per payload module.
-
-        # Allocates output bit matrix.
-        out = np.zeros((marker_size, marker_size), dtype=np.uint8)  # Stores decoded binary modules.
-
-        # Decodes each payload module by average intensity threshold.
-        for r in range(marker_size):  # Iterates payload rows.
-            for c in range(marker_size):  # Iterates payload columns.
-                block = inner[
-                    r * inner_cell:(r + 1) * inner_cell, c * inner_cell:(c + 1) * inner_cell]  # Extracts module block.
-                out[r, c] = 1 if float(block.mean()) < 127.5 else 0  # Black module -> 1, white module -> 0.
-
-        # Returns fallback-decoded bit matrix.
-        return out
-
-    @staticmethod
-    def aruco_marker_grid_for_id(dictionary: cv2.aruco.Dictionary, marker_id: int) -> np.ndarray:
-        """Returns full marker grid (payload + one-cell border), with 1=black and 0=white."""
-        marker_size = int(dictionary.markerSize)
-        n_cells = marker_size + 2
-        cell_px = 24
-        side = n_cells * cell_px
-
-        marker_img = np.zeros((side, side), dtype=np.uint8)
-        cv2.aruco.generateImageMarker(dictionary, int(marker_id), side, marker_img, 1)
-
-        grid = np.zeros((n_cells, n_cells), dtype=np.uint8)
-        for r in range(n_cells):
-            for c in range(n_cells):
-                block = marker_img[r * cell_px:(r + 1) * cell_px, c * cell_px:(c + 1) * cell_px]
-                grid[r, c] = 1 if float(block.mean()) < 127.5 else 0
-        return grid
+        side_m = float(self.length)
+        return side_m, side_m
 
     @staticmethod
     def apply_affine_xy(pts_xy: np.ndarray, A: np.ndarray) -> np.ndarray:
-        # Appends homogeneous coordinate 1 to each point so affine transform can be applied by matrix multiply.
-        pts_h = np.c_[pts_xy, np.ones((pts_xy.shape[0], 1), dtype=float)]  # Shape: (N,3) for homogeneous coordinates.
-        # Applies affine matrix and drops homogeneous dimension, yielding transformed x,y points.
-        return (A @ pts_h.T).T[:, :2]  # Shape: (N,2) in target coordinate system.
+        """(N, 2) points through a 3x3 affine."""
+        pts_h = np.c_[pts_xy, np.ones((pts_xy.shape[0], 1), dtype=float)]
+        return (A @ pts_h.T).T[:, :2]
 
     def save_to_svg(
             self,
-            f_out: Path | str | None = None,
+            f_out: Path | str,
             border_width: float = 10,
             draw_cut_outline: bool = True,
             draw_board_ids: bool = True,
             suppress_svg_log: bool = False,
     ) -> Path:
-        default_name = (
-            f"Ccube_length_{self.length * 1000:.2f}mm_"
-            f"{self.n_points}_points_at_{self.square_size * 1000:.2f}mm_true_vector.svg"
-        )
-
-        raw_f_out = f_out
-        if isinstance(f_out, str):
-            f_out = Path(f_out)
-
-        if f_out is None:
-            f_out = Path.cwd() / default_name
-        else:
-            # If user passed a directory, write default file inside it.
-            raw_s = str(raw_f_out) if raw_f_out is not None else ""
-            looks_like_dir = raw_s.endswith(("/", "\\"))
-            if (f_out.exists() and f_out.is_dir()) or looks_like_dir:
-                f_out = f_out / default_name
-
-        f_out = f_out.expanduser().with_suffix(".svg").resolve()
-        f_out.parent.mkdir(parents=True, exist_ok=True)
+        f_out = export_path(f_out, ".svg")
 
         face_w, face_h = self.face_extent()
         black_polys_global: list[np.ndarray] = []
@@ -707,7 +542,7 @@ class Ccube(AbstractTarget):
             for slot in self.iter_marker_slots_for_face(layout):
                 marker_id = int(slot["id"])
                 q = np.asarray(slot["quad_xy"], dtype=float)  # (4,2): tl,tr,br,bl
-                grid = self.aruco_marker_grid_for_id(dct, marker_id)  # 1=black, 0=white
+                grid = marker_bit_grid(dct, marker_id)  # 1=black, 0=white
                 n_rows, n_cols = grid.shape
 
                 for r in range(n_rows):
@@ -845,8 +680,8 @@ class Ccube(AbstractTarget):
 
 
         if self.marker_backend == "aruco2":
-            # D5: detect ONCE with the parent dictionary int, then interpolate
-            # per face with the face-local board.
+            # Detect once with the parent dictionary, then interpolate per
+            # face with that face's own board.
             markers = detect_markers(image, self._aruco_dict_int)
             seen_keys = []
             seen_data = []
@@ -864,18 +699,10 @@ class Ccube(AbstractTarget):
                     image,
                     board,
                     face_markers,
-                    # warn_legacy is called as a zero-arg callable (see
-                    # interpolate_board_corners's docstring); bind the
-                    # CURRENT loop iteration's face index and board via
-                    # default args so the warning names the face that
-                    # actually failed, not whichever board the loop has
-                    # moved on to by the time it fires (see
-                    # _warn_legacy_once's docstring, P3). Once this target
-                    # has already warned, withhold the callback entirely
-                    # (P2, round-1 review): interpolate_board_corners only
-                    # pays for the opposite-pattern probe when warn_legacy
-                    # is not None, so this also stops the probe itself
-                    # being paid on every later qualifying face/frame.
+                    # Bound through default args, so the warning names the
+                    # face that failed rather than wherever the loop has
+                    # reached. None once warned: the callee only pays for
+                    # the opposite-pattern probe when it is given one.
                     warn_legacy=(
                         None if self.given_legacy_warning else
                         (lambda _i=idb, _b=board: self._warn_legacy_once(_i, _b))
@@ -903,16 +730,10 @@ class Ccube(AbstractTarget):
         for idb, bd in enumerate(self.board_detectors):
             c_corners, c_ids, mloc, mid =  bd.detectBoard(image)
             if c_corners is None and mloc is not None:
-                # Approved policy: detect using ONLY this face's configured
-                # legacy pattern -- no retry under the opposite one, and
-                # self.boards[idb]'s own legacy flag is never touched here.
-                # A strong-evidence mismatch still gets a once-per-target
-                # warning naming the face (never corners) -- see
-                # markers.legacy_probe.should_warn_legacy_mismatch. Once
-                # already warned, skip the probe itself (P2, round-1
-                # review): it is expensive (a throwaway board + detector +
-                # a whole detectBoard call) and can never change the
-                # outcome once given_legacy_warning is True.
+                # A mismatch warns but never retries under the other
+                # pattern, and never takes corners from it. The probe costs
+                # a throwaway board, detector and detectBoard call, so it is
+                # skipped once this target has warned.
                 if (not self.given_legacy_warning) and should_warn_legacy_mismatch(
                     self.boards[idb], self.detection_options, image,
                     len(mloc), mloc, mid,
@@ -940,8 +761,3 @@ class Ccube(AbstractTarget):
         return ImageDetection(keys=seen_keys, image_points=seen_data)
 
 
-
-if __name__ == '__main__':
-    test = Ccube(n_points=7, length=4)
-    test.plot()
-    # test.get_printable_texture()

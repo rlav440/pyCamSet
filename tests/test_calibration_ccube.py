@@ -7,7 +7,6 @@ import pytest
 from cv2 import aruco
 
 from pyCamSet import Ccube, calibrate_cameras
-from pyCamSet.calibration_targets.ccube.generate import build_ccube, generate_ccube_target
 
 MAX_MEAN_REPROJECTION_PX = 5.10
 
@@ -44,7 +43,7 @@ def test_ccube_construction_parameters_excludes_apriltag(backend: str) -> None:
 
 
 def test_ccube_texture_is_detector_compatible_and_detects(tmp_path: Path) -> None:
-    target = build_ccube(n_points=5, length=40)
+    target = Ccube(n_points=5, length=40)
     assert len(target.boards) == 6
     assert target.point_data.shape[0] == 6
     assert all(texture.ndim == 2 for texture in target.textures)
@@ -52,13 +51,7 @@ def test_ccube_texture_is_detector_compatible_and_detects(tmp_path: Path) -> Non
     assert detection.has_data
     assert detection.data_len >= 4
 
-    _, saved = generate_ccube_target(
-        n_points=5,
-        length=40,
-        output_dir=tmp_path,
-        file_name="nested/ccube.txt",
-        export_kind="svg",
-    )
+    saved = target.save_printable(tmp_path / "nested/ccube.txt", "svg")
     assert saved == (tmp_path / "nested/ccube.svg").resolve()
     assert saved.exists()
     assert saved.stat().st_size > 0

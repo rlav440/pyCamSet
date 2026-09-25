@@ -19,11 +19,11 @@ import signal
 
 from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
 from pyCamSet.cameras import CameraSet, Camera
-from pyCamSet.cameras.telecentric_calibration import calibrate_telecentric
+from pyCamSet.calibration.telecentric import calibrate_telecentric
 from pyCamSet.cameras.lens_models import LENS_MODELS
-from pyCamSet.cameras.zhang_calibration import calibrate_zhang
+from pyCamSet.calibration.zhang import calibrate_zhang
 from pyCamSet.cameras.telecentric_camera import TelecentricCamera
-from pyCamSet.cameras.telecentric_calibration import is_planar, pose_from_affine
+from pyCamSet.calibration.telecentric import is_planar, pose_from_affine
 from pyCamSet.calibration_targets.core.parameters import (
     NO_PARAMETERS,
     DetectorParameterisation,
@@ -39,6 +39,25 @@ EXPORT_KINDS = ("svg", "pdf_vector", "pdf_raster")
 
 #: The file a printable format is written to.
 EXPORT_SUFFIXES = {"svg": ".svg", "pdf_vector": ".pdf", "pdf_raster": ".pdf"}
+
+
+def export_path(f_out: Path | str, suffix: str) -> Path:
+    """Where a target writes itself, with the directory made.
+
+    :param f_out: where the caller asked for it
+    :param suffix: the extension the format is written under, which
+        replaces whatever was asked for
+    """
+    path = Path(f_out).expanduser().with_suffix(suffix).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+class PoseEstimationError(ValueError):
+    """A detection that cannot give a pose.
+
+    A ValueError, because that is what this raised before it had a name.
+    """
 
 
 def get_keys(data):
@@ -66,25 +85,14 @@ def init_worker(detector_class, input_args): #: Optional['AbstractTarget']):
 
 def _looks_like_native_opencv_error(exc: BaseException) -> bool:
     """
-    Whether ``exc`` carries OpenCV's own C++ exception message shape --
-    ``OpenCV(<version>) <file>:<line>: error: (<code>:<name>) <what> in
-    function '<func>'`` -- rather than a Python-level message pyCamSet or a
-    target itself wrote.
+    Whether ``exc`` carries OpenCV's own message shape, ``OpenCV(<version>)
+    <file>:<line>: error: ...``, rather than one Python wrote.
 
-    The rare, clustered OpenCV-internal failure documented in
-    ``tests/test_detection_error_isolation.py`` ("a rare, clustered
-    cv2.error ... that is not caused by aruco2 and can hit any cv2 aruco
-    call in an affected process") normally surfaces as ``cv2.error``, which
-    is isolated per-image below. aruco2's own grid-board detector
-    (``markers/aruco2_gridboard.py``) can translate the SAME class of
-    native OpenCV assertion into a Python ``ValueError`` instead -- that
-    module's ``_is_cornersubpix_edge_failure`` documents one specific such
-    message; this is the general form of that same check, used here to
-    isolate any OTHER native-OpenCV-shaped ``ValueError`` the same way a
-    ``cv2.error`` already is. A hand-written ``ValueError`` -- a malformed
-    board, a bad argument, an unsupported image dtype -- never has this
-    shape, so it is left to propagate and abort the folder/Pool: it is a
-    programming or configuration error, not a transient detection failure.
+    A native OpenCV assertion reaches us as ``cv2.error``, except through
+    aruco2's grid-board detector, which re-raises it as ``ValueError``.
+    Both are isolated per image; a hand-written ``ValueError`` -- a
+    malformed board, a bad dtype -- never has this shape and propagates, as
+    a programming error should.
     """
     return str(exc).lstrip().startswith("OpenCV(")
 
@@ -244,38 +252,24 @@ def _report_folder_detection_failures(
 
 class AbstractTarget(ABC):
     """
-    This is an abstract calibration target. It implements most of the functionality
-    required to calibrate an object with a calibration target.
-    Inheriting targets must define:
-    1. A function to detect themselves in an input image
-    2. the self.point_data array. For a target this is an array of the generic form
-    (u,v ... w, n, 3) where u ... w are relevant dimensions, and n,3 is "n" 3d
-    and co planar points. As an example, a cube forms a (6,n,3) point_data array, as there are 6 co-planar faces with n points on each face.
+    A calibration target: points in space, and a way to find them in an image.
 
-    Saving is achieved by calling the __init__ of the super and passing a dictionary of
-    the required parameters to initialise the target.
+    What a subclass must provide is declared, not described -- see this
+    class's abstract methods. Beyond those it must set ``self.point_data``,
+    of shape ``(u, ... w, n, 3)`` where the leading dimensions index
+    coplanar groups and ``n`` is the points in one: a cube is ``(6, n, 3)``,
+    six faces of n points. It must also pass its arguments to
+    ``super().__init__(inputs=locals())``, which is what lets a target be
+    rebuilt in a worker process or from a saved camset.
 
-    Inheriting targets may also define: a printable shape, which is either the target, or can then be folded onto a base shape and a plotting function which draws some visualisation of the target.
-
-    A target is also detected somehow, and what that detection can be told is
-    described rather than hardcoded: :data:`DETECTOR_BACKENDS` names the
-    detectors this target can read itself with and
-    :meth:`own_detector_parameters` any settings of its own
-    ``find_in_image``, which are the ones that are nobody else's business --
-    a cube's face-consistency gate is not the detector's. Together they are
-    :meth:`detector_parameterisation`, which is what a form builds itself
-    from and what a study sweeps. A target that is never detected declares
-    neither and gets an empty parameterisation, which works.
-
-    What the target *is* is described the same way, by
-    :meth:`construction_parameters`: the arguments that decide where its
-    points are, each with the bounds and the prose a form needs to offer
-    it. An interface builds its target controls from that rather than from
-    a list of which widget each target reads, so a target it has never
-    heard of gets a form. The prose is the constructor's own docstring,
-    read back from the ``:param:`` entry that documents each argument, so
-    a target is described in the one place a person maintaining it is
-    already looking.
+    A target describes itself rather than being hardcoded into an interface.
+    :meth:`construction_parameters` names the arguments that decide where
+    its points are, and :data:`DETECTOR_BACKENDS` with
+    :meth:`own_detector_parameters` name what reads it and what that reading
+    can be told. Both are read from the ``:param:`` entries of the methods
+    that take them, so a form, a study and this class agree by
+    construction, and a target an interface has never heard of still gets a
+    form.
     """
 
     #: The detectors this target can read itself with, by the name its
@@ -290,10 +284,10 @@ class AbstractTarget(ABC):
             if isinstance(v, np.ndarray):
                 inputs[k] = v.tolist()
 
-        self.point_data: np.ndarray = None # An
+        self.point_data: np.ndarray = None
 
         self.point_local = None #: np.ndarray = self.make_local()
-        self.original_points = None # = self.point_data.copy()
+        self.original_points = None
         self.valid_map = True
 
         # The backend is settled first because the arguments are described in
@@ -355,6 +349,7 @@ class AbstractTarget(ABC):
         return NO_PARAMETERS
 
     @classmethod
+    @abstractmethod
     def printable_name(cls, values: dict, kind: str = "svg") -> str:
         """
         A filename that says what a target is.
@@ -365,18 +360,22 @@ class AbstractTarget(ABC):
         :param values: the construction parameters, as declared
         :param kind: one of :data:`EXPORT_KINDS`
         """
-        raise NotImplementedError
 
+    @abstractmethod
     def save_printable(self, path: Path, kind: str = "svg", **options) -> Path:
         """
         Write this target as a file to print.
+
+        Dispatches to :meth:`save_to_svg` or :meth:`save_to_pdf`. Its
+        signature and ``:param:`` entries are what
+        :meth:`export_parameters` offers, so an option a target takes is
+        declared here.
 
         :param path: where to write it
         :param kind: one of :data:`EXPORT_KINDS`
         :param options: the values of :meth:`export_parameters`
         :raises ValueError: for a format this target cannot be written as
         """
-        raise NotImplementedError
 
     @classmethod
     def own_detector_parameters(cls) -> DetectorParameterisation:
@@ -419,32 +418,40 @@ class AbstractTarget(ABC):
         self.point_local = self.make_local()
         self.original_points = self.point_data.copy()
 
+    @abstractmethod
     def plot(self):
+        """Show this target, for a person to look at."""
+
+    @abstractmethod
+    def save_to_svg(self, f_out: Path | str, **options) -> Path:
         """
-        Notes: A function to plot and view the object instance.
+        Write this target as a vector SVG, at true millimetre scale.
+
+        :param f_out: where to write it; the suffix is replaced
+        :return: the path written
         """
 
-        raise NotImplementedError
+    @abstractmethod
+    def save_to_pdf(self, f_out: Path | str, data_format: str = "raster",
+                    **options) -> Path:
+        """
+        Write this target as a PDF.
 
-    def save_to_pdf(self):
+        :param f_out: where to write it; the suffix is replaced
+        :param data_format: ``"vector"`` or ``"raster"``
+        :return: the path written
         """
-        Notes: Implemented by a method that saves a printable version of the
-        target to a pdf. Printable version contains information necessary to
-        recreate
-        """
-        raise NotImplementedError
 
     @abstractmethod
     def find_in_image(self, image, draw=False, camera: Camera=None, wait_len = 1) -> ImageDetection:
         """
-        Notes: Detects the calibration target in an image
+        Detects the calibration target in an image.
 
         :param image: a mxn or mxnx3 image input
         :param draw: whether to draw the target
         :param camera: A camera object for use in camera aware detections
         :return: An ImageDetection object, containing the detected data
         """
-        raise NotImplementedError
 
     def find_in_imfolder(
         self, file: Path, cam_names, draw=False, n_lim=None,
@@ -480,11 +487,9 @@ class AbstractTarget(ABC):
         if cam_names is None:
             cam_names = [cam_name]
 
-        # breakpoint()
 
         detections = TargetDetection(cam_names=cam_names)
        
-        # threads=1
         if threads == 1:
             detections = TargetDetection(cam_names=cam_names)
             n_unreadable = 0
@@ -494,11 +499,7 @@ class AbstractTarget(ABC):
                     im_file,
                     cv2.IMREAD_UNCHANGED if rescale_and_gamma else cv2.IMREAD_COLOR)
                 if im is None:
-                    # cv2.imread does not raise on an unreadable or
-                    # undecodable file, it returns None -- checked explicitly
-                    # here, before resize or find_in_image ever see it, so a
-                    # corrupt file is a per-image failure rather than an
-                    # AttributeError/TypeError that would abort the folder.
+                    # cv2.imread returns None rather than raising.
                     logger.warning(
                         f"{cam_name}: could not read image {im_file} "
                         f"(unreadable or undecodable); recording it as "
@@ -507,15 +508,11 @@ class AbstractTarget(ABC):
                     n_unreadable += 1
                     detections.add_detection(cam_name, idx, ImageDetection())
                     continue
-                # cv2.error is isolated here: a rare, OpenCV-internal
-                # failure on one frame (clustered, not caused by aruco2 --
-                # see stage A investigation) must not abort the whole folder.
-                # aruco2's grid-board detector can hand the same failure back
-                # as a ValueError instead (see
-                # _looks_like_native_opencv_error), so that is isolated too,
-                # but only when it has OpenCV's own native message shape. A
-                # programming error -- including a ValueError without that
-                # shape -- must still surface, so nothing else is caught.
+                # One frame's OpenCV failure must not abort the folder.
+                # aruco2's detector reports the same failure as a
+                # ValueError, isolated only when it carries OpenCV's own
+                # message shape; any other ValueError is a programming
+                # error and surfaces.
                 try:
                     if upscale_factor > 1 and not rescale_and_gamma:
                         im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
@@ -552,9 +549,7 @@ class AbstractTarget(ABC):
         ) for idx, im_file in enumerate(im_locs)]
         # use a Pool of worker processes.
         if not (processname := multiprocessing.current_process().name) == "MainProcess":
-            # print(processname)
             logger.critical("Python multiprocessing attempted to start an infinite loop. Use the if __name__ == '__main__' idiom in your calling script to prevent this")
-            # multiprocessing.parent_process().terminate()
             raise RuntimeError()
 
         with multiprocessing.Pool(processes=threads, initializer=init_worker, initargs=(self.__class__, self.input_args)) as pool:
@@ -562,24 +557,15 @@ class AbstractTarget(ABC):
         # add the detections from the results in the main process
         n_unreadable = 0
         n_detect_error = 0
-        # A worker's own logger.warning calls (e.g. a legacy-pattern-mismatch
-        # warning fired inside find_in_image) never reach this process, so
-        # _process_image hands the message back with its image's result
-        # instead (see its own docstring). Deduplicated by message text
-        # rather than logged per-image: several workers can each
-        # independently fire the SAME once-per-(worker-)target warning
-        # (every worker rebuilds its own fresh target instance), and a
-        # multi-face target (Ccube) can legitimately raise more than one
-        # DISTINCT message (different faces) -- both are logged, each once.
+        # A worker's warnings come back with its result rather than
+        # through the log. Deduplicated by text: every worker rebuilds
+        # its own target and so fires the same once-per-target warning,
+        # while a multi-face target can raise several distinct ones.
         warning_messages: dict[str, None] = {}
         for cam, idx, detection, error, unreadable, warning_message in results:
             detections.add_detection(cam, idx, detection)
             if error is not None:
                 if unreadable:
-                    # Matches the threads==1 message below verbatim: `error`
-                    # is already just "unreadable or undecodable" here, so
-                    # this is not doubling that reason inside a second,
-                    # differently-worded "detection failed" sentence.
                     logger.warning(
                         f"{cam}: could not read image {im_locs[idx]} "
                         f"(unreadable or undecodable); recording it as "
@@ -593,23 +579,14 @@ class AbstractTarget(ABC):
                     )
                     n_detect_error += 1
             if warning_message is not None:
-                # A plain dict, not a set: insertion-ordered, so the
-                # messages log in the order their images were dispatched --
-                # deterministic and easier to read than set iteration order.
+                # A dict, not a set: insertion-ordered, so messages log in
+                # the order their images were dispatched.
                 warning_messages.setdefault(warning_message, None)
-        # Deduplicated again against messages already logged by an EARLIER
-        # find_in_imfolder call on this SAME (main-process) target instance
-        # (round-4 review, P2): the real multi-camera workflow calls
-        # find_in_imfolder once per camera subfolder on one target instance
-        # (camera_calibrator.py), and every one of those calls rebuilds its
-        # own fresh Pool workers from self.input_args, so a worker can never
-        # know a previous camera folder already reported the same message.
-        # Kept as a dedicated instance attribute rather than reusing
-        # given_legacy_warning: that flag specifically means "self's OWN
-        # find_in_image call saw a mismatch", and several tests rely on it
-        # staying False on this main-process instance under threads>1 (self
-        # never runs detection itself on that path -- see
-        # test_legacy_warning_reaches_main_process_under_multiprocessing).
+        # Also against messages an earlier call on this same instance logged:
+        # one target serves every camera folder in turn, and each call builds
+        # fresh workers that cannot know what a previous folder reported.
+        # Separate from given_legacy_warning, which means "self's own
+        # find_in_image saw a mismatch" and stays False on this path.
         already_logged = getattr(self, "_imfolder_logged_legacy_warnings", None)
         if already_logged is None:
             already_logged = set()
@@ -660,7 +637,6 @@ class AbstractTarget(ABC):
         cam = camset[ref_cam]
         poses = []
         for im_list in detections.get_image_list():
-            # first try to get the pose with the reference cam
             try:
                 pose = self.target_pose_in_cam_image(im_list, cam)
                 pose = (cam.cam_to_world @  #cam -> world
@@ -677,7 +653,6 @@ class AbstractTarget(ABC):
                 else:
                     pose = None
             poses.append(pose)
-            # then try to get the pose with any other cams.
         p_detected = np.array([False if p is None else True for p in poses])
         poses = [p for p in poses if p is not None]
         mloc = np.mean([p[:3, 3] for p in poses], axis=0)
@@ -687,8 +662,9 @@ class AbstractTarget(ABC):
         logger.info("Begining outlier detection")
         while cyclic_outlier_detection and num_loops < 10:
             ans = mad_outlier_detection([np.linalg.norm(p[:3,3] - mloc) for p in poses], out_thresh=5)
-            inds = np.arange(len(p_detected))[p_detected][ans]
             if ans is not None:
+                    # Indexing with None would insert an axis, not raise.
+                inds = np.arange(len(p_detected))[p_detected][ans]
                 user_in = "g"
                 while not (user_in == 'y' or user_in == 'n'):
                     user_in = ask_yes_no(
@@ -742,7 +718,6 @@ class AbstractTarget(ABC):
             normals.append(plane_fit(face.T)[1])
         normals = np.array(normals)
 
-        # create the change of basis maxtrixes
         v_3 = np.array([np.cross(v_d, v_n) for v_d, v_n in zip(init_dir, normals)])
 
         v_3 /= np.linalg.norm(v_3, axis=1, keepdims=True)
@@ -978,137 +953,123 @@ class AbstractTarget(ABC):
                 np.asarray(board_rms, dtype=float))
 
     def target_pose_in_cam_image(
-            self, detection: TargetDetection, cam: Camera, 
-            refine:bool = False, mode="throw", give_error=False) -> np.ndarray | tuple[np.ndarray, float]:
+            self, detection: TargetDetection, cam: Camera,
+            mode="throw", give_error=False) -> np.ndarray | tuple[np.ndarray, float]:
         """
-        This function gives a pose estimate of the cube in an image as seen by a camera.
+        The pose of the target in one image, as one camera saw it.
 
-        :param detection: a detection containing data from a single image.
-        :param cam: a camera model to use
-        :param refine: Whether to use LM refinement of the estimate.
-        :param mode: whether to throw an error or return nan arrays.
-
-        :return: a 4x4 transformation of the target giving the transformation from target to camera coordinates
+        :param detection: a detection containing data from a single image
+        :param cam: the camera that saw it
+        :param mode: ``"throw"`` to raise when no pose can be found,
+            ``"nan"`` to return NaN instead
+        :param give_error: also return the fit's RMS reprojection error
+        :return: the 4x4 transform from target to camera coordinates
+        :raises PoseEstimationError: under ``mode="throw"``, when the
+            detection cannot give a pose
         """
-        
+        try:
+            ext, rms = self._pose_from_detection(detection, cam)
+        except PoseEstimationError:
+            if mode != "nan":
+                raise
+            ext, rms = np.full((4, 4), np.nan), np.nan
+        return (ext, rms) if give_error else ext
+
+    def _pose_from_detection(
+            self, detection: TargetDetection, cam: Camera) -> tuple[np.ndarray, float]:
+        """
+        The pose and its RMS error, or why there is none.
+
+        Every failure raises, so the caller above is the one place that
+        decides what a failure looks like to whoever asked.
+
+        :raises PoseEstimationError: for any detection that cannot give one
+        """
         if not detection.has_data():
-            if mode == "nan":
-                if give_error:
-                    return np.ones((4,4)) * np.nan, np.nan
-                return np.ones((4,4)) * np.nan
-            raise ValueError(f"The detection had no data  at all, including for camera {cam.name}")
-
+            raise PoseEstimationError(
+                f"The detection had no data at all, including for camera {cam.name}")
 
         datum = detection.get(cam=cam.name).get_data()
         if datum is None:
-            if mode == "nan":
-                if give_error:
-                    return np.ones((4,4)) * np.nan, np.nan
-                return np.ones((4,4)) * np.nan
-            raise ValueError(f"The detection had no data for camera {cam.name}")
+            raise PoseEstimationError(
+                f"The detection had no data for camera {cam.name}")
 
-        n_im = np.unique(datum[:, 0])  # check that only one camera and one image is here.
+        n_im = np.unique(datum[:, 0])
         if len(n_im) > 1:
-            if mode == "nan":
-                if give_error:
-                    return np.ones((4,4)) * np.nan, np.nan
-                return np.ones((4,4)) * np.nan
-            raise ValueError(f"passed detection contained info from {n_im} ims. \n"
+            raise PoseEstimationError(
+                f"passed detection contained info from {n_im} ims. \n"
                 "Pose estimation only works with 1 image")
 
         keys = get_keys(datum)
         object_points = self.point_data[tuple(keys.astype(int).T)]
         image_points = datum[:, -2:]
         if len(object_points) < 8:
-            if mode == "nan":
-                if give_error:
-                    return np.ones((4,4)) * np.nan, np.nan
-                return np.ones((4,4)) * np.nan
-            raise ValueError("Inadequate number of corners for pose estimation")
-
+            raise PoseEstimationError(
+                "Inadequate number of corners for pose estimation")
         if len(object_points) < 12:
             logger.warning("Low number of points used for pose estimation")
 
         if isinstance(cam, TelecentricCamera):
-            # solvePnP assumes a perspective camera, and filters its solutions
-            # on the sign of a depth a telecentric camera does not have.  The
-            # affine fit that replaces it has no alternative solutions to pick
-            # between, so it short circuits the rest of this.
-            try:
-                ext, rms = pose_from_affine(
-                    object_points, cam.undistort_points(image_points),
-                    cam.magnification, cam.principal_point)
-            except (ValueError, np.linalg.LinAlgError):
-                if mode == "nan":
-                    if give_error:
-                        return np.ones((4, 4)) * np.nan, np.nan
-                    return np.ones((4, 4)) * np.nan
-                raise
-            if rms > 20:
-                logger.warning(
-                    f"Past 20 pixel error for failed detection - counting detection "
-                    f"as a failure (camera={cam.name}, pose={n_im[0]}) ")
-                if mode == "nan":
-                    if give_error:
-                        return np.ones((4, 4)) * np.nan, np.nan
-                    return np.ones((4, 4)) * np.nan
-                raise ValueError("Failed a detection")
-            if give_error:
-                return ext, rms
-            return ext
+            return self._affine_pose(object_points, image_points, cam, n_im[0])
+        return self._pnp_pose(object_points, image_points, cam, n_im[0])
 
+    def _affine_pose(self, object_points, image_points, cam: Camera,
+                     im_num) -> tuple[np.ndarray, float]:
+        """
+        A telecentric camera's pose, fitted affinely.
+
+        solvePnP assumes a perspective camera and filters its solutions on
+        the sign of a depth a telecentric camera does not have. The affine
+        fit has no alternative solutions to pick between.
+        """
         try:
-            _, rvec, tvec, err_list = cv2.solvePnPGeneric(object_points.astype("float32"),
-                                                          image_points.astype("float32"),
-                                                          cam.intrinsic,
-                                                          cam.distortion_coefs
-                                                          )
+            ext, rms = pose_from_affine(
+                object_points, cam.undistort_points(image_points),
+                cam.magnification, cam.principal_point)
+        except (ValueError, np.linalg.LinAlgError) as exc:
+            raise PoseEstimationError(
+                f"The affine pose fit failed for camera {cam.name}") from exc
+        self._check_pose_error(rms, cam, im_num)
+        return ext, rms
 
-            passing_t = []
-            passing_r = []
-            for e, t in enumerate(tvec):
-                if t[-1] < 0:
-                    continue
-                passing_t.append(tvec[e])
-                passing_r.append(rvec[e])
-            tvec, rvec = passing_t, passing_r
-            if not passing_t:
-                if mode == "nan":
-                    if give_error:
-                        return np.ones((4,4)) * np.nan, np.nan
-                    return np.ones((4,4)) * np.nan
-                raise ValueError("Opencv failed to find a non-negative pose")
+    def _pnp_pose(self, object_points, image_points, cam: Camera,
+                  im_num) -> tuple[np.ndarray, float]:
+        """A perspective camera's pose, from the solution in front of it."""
+        try:
+            _, rvec, tvec, err_list = cv2.solvePnPGeneric(
+                object_points.astype("float32"),
+                image_points.astype("float32"),
+                cam.intrinsic,
+                cam.distortion_coefs,
+            )
+        except cv2.error as exc:
+            raise PoseEstimationError("Opencv failed to find a pose") from exc
 
+        in_front = [e for e, t in enumerate(tvec) if t[-1] >= 0]
+        if not in_front:
+            raise PoseEstimationError("Opencv failed to find a non-negative pose")
 
-        except cv2.error as e:
-            if mode == "nan":
-                if give_error:
-                    return np.ones((4,4)) * np.nan, np.nan
-                return np.ones((4,4)) * np.nan
-            raise ValueError("Opencv failed to find a pose")
+        # Only the solutions in front of the camera: the rest are not the
+        # ones being chosen between, so they do not judge the fit either.
+        errors = [err_list[e] for e in in_front]
+        self._check_pose_error(np.max(errors).squeeze(), cam, im_num)
+        best = in_front[int(np.argmin(errors))]
+        return make_4x4h_tform(rvec[best], tvec[best]), float(np.mean(errors))
 
-        
-        max_err = np.argmax(err_list)
-        min_err = np.argmin(err_list)
-        if (err := err_list[max_err].squeeze()) > 5:
-            logger.warning(f"Initial error of {err: .2f} found for a pose detection (camera={cam.name}, pose={n_im[0]}).")
+    @staticmethod
+    def _check_pose_error(err: float, cam: Camera, im_num) -> None:
+        """
+        Warn on a poor fit, and refuse a hopeless one.
 
-        if (err := err_list[max_err].squeeze()) > 20:
-            logger.warning(f"Past 20 pixel error for failed detection - counting detection as a failure (camera={cam.name}, pose={n_im[0]}) ")
-            if mode == "nan":
-                if give_error:
-                    return np.ones((4,4)) * np.nan, np.nan
-                return np.ones((4,4)) * np.nan
-            raise ValueError("Failed a detection")
-
-        ext = make_4x4h_tform(
-            rvec[min_err],
-            tvec[min_err],
-        )
-        
-        if not refine:
-            if give_error:
-                return ext, np.mean(err_list)
-            return ext # from target -> cam coordinates
-        else: 
-            raise NotImplementedError
+        :raises PoseEstimationError: past 20 pixels, which is a detection
+            that did not find the target rather than a poor view of it
+        """
+        if err > 5:
+            logger.warning(
+                f"Initial error of {err: .2f} found for a pose detection "
+                f"(camera={cam.name}, pose={im_num}).")
+        if err > 20:
+            logger.warning(
+                f"Past 20 pixel error for failed detection - counting detection "
+                f"as a failure (camera={cam.name}, pose={im_num}) ")
+            raise PoseEstimationError("Failed a detection")

@@ -200,9 +200,6 @@ adjustment starts from. Its diagnostics cover per-camera RMS reprojection
 (D2.1), the intrinsics and distortion themselves (D2.2, D2.3), the spread
 across views (D2.5) and per-view error (D2.6, D2.7).
 
-Phases 2 and 3 offer no detector: they read the detections of the Phase 1 run
-they continue, so the target section shows that run's detector instead.
-
 **Lens model** is set here, because this is the phase that builds the cameras.
 Leave it on Pinhole for a conventional lens. Choose Telecentric when the optics
 are, or the fit is badly conditioned: a telecentric lens images with parallel
@@ -214,6 +211,9 @@ disagree despite square pixels, and whose first distortion coefficient is far
 from zero — together with a rig that will not hold still in the Phase 3
 consistency report. Phase 3 needs no setting of its own; it reads the model
 from the cameras Phase 2 produced.
+
+Phases 2 and 3 offer no detector: they read the detections of the Phase 1 run
+they continue, so the target section shows that run's detector instead.
 
 ### Phase 3 — Bundle Adjustment
 
@@ -386,20 +386,24 @@ in light grey rather than black, so they stay visible.
 ![The Create Target dialog.](../assets/gui/create-target-light.png#only-light)
 ![The Create Target dialog.](../assets/gui/create-target-dark.png#only-dark)
 
-**Create Target…** generates a printable ChArUco1, ChArUco1 ccube, ChArUco2,
-ChArUco2 ccube, PuzzleBoard or PuzzleBoardCube. Both halves of the form are
+**Create Target…** generates a printable ChArUco1, ChArUco1 ccube, ChArUco1
+icosahedron, ChArUco2, ChArUco2 ccube, ChArUco2 icosahedron, PuzzleBoard,
+PuzzleBoardCube or PuzzleBoard icosahedron. Both halves of the form are
 built from what the selected target declares about itself — the arguments that
 decide what it is, and the options that decide how it is drawn — so the form and
 the validation follow the target rather than being written out per target.
 
-The dialog asks for no detector: a ChArUco1 or ChArUco1 ccube prints identically
-for ArUco 1 and ArUco 2, so the same printed board can be read with either, and
+The dialog asks for no detector: a ChArUco1 board, ccube or icosahedron prints
+identically for ArUco 1 and ArUco 2, so the same printed board can be read with either, and
 the other targets have only one detector. The detector is chosen in Phase 1
-instead.
+instead. The screenshot above predates this:
+it still shows a Detector row, and "Ccube" where the dialog now says
+"ChArUco1 ccube".
 
 The labels are the names the GUI shows; saved settings and scripts use the class
 names, which are unchanged: ChArUco1 is `ChArUco`, ChArUco1 ccube is `Ccube`,
-ChArUco2 is `ChArUco2`, and ChArUco2 ccube is `Ccube2`.
+ChArUco1 icosahedron is `CIco`, ChArUco2 is `ChArUco2`, ChArUco2 ccube is
+`Ccube2`, and ChArUco2 icosahedron is `CIco2`.
 
 **Visualise Target** opens the target in a window of its own, so it can be
 compared against the form that drew it. **Save Target** writes the SVG or PDF.
@@ -423,7 +427,8 @@ Sweeps the detector's settings, scores the calibrations that result, and retains
 the best. The settings offered are the ones the selected target's detector says
 it can be swept over. A study runs detections of its own, so this tab keeps a
 **Detector** choice, which behaves as it does in Phase 1. The work runs on a
-background thread, so the window stays responsive.
+background thread, so the window stays responsive. The screenshot above predates
+the new target names, and shows "Ccube" where the tab now says "ChArUco1 ccube".
 
 This tab needs Optuna, which is optional. Without it the tab still appears, but
 **Start** is disabled with a tooltip saying why:

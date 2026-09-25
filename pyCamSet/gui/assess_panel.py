@@ -373,7 +373,7 @@ class AssessCalibrationPanel(QWidget):
             accuracy_precision_plot, cluster_plot, per_camera_coverage,
         )
         built = {
-            "error_distribution": cluster_plot([diagnostics.residuals], alphas=[0.1]),
+            "error_distribution": cluster_plot([diagnostics.residuals]),
             "per_camera_coverage": per_camera_coverage(diagnostics),
             "accuracy_precision": accuracy_precision_plot(diagnostics),
         }

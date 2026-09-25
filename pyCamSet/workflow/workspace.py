@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from pyCamSet.utils.general_utils import get_subfolder_names
+from pyCamSet.utils.paths import long_path
 
 WORKSPACE_DIR_NAME = ".pycamset_workspace"
 
@@ -38,39 +39,33 @@ _LEGACY_PHASES = {
 # ---------------------------------------------------------------------------
 # Filesystem access
 #
-# Windows caps a path at 260 characters unless it is given in extended-length
-# form, and a workspace path is a nested one by construction: an image folder,
-# then the workspace, then a phase, then a run id.  Every filesystem call here
-# goes through these rather than through Path directly.
+# A workspace path is nested by construction -- image folder, workspace,
+# phase, run id -- so every filesystem call here goes through long_path().
 # ---------------------------------------------------------------------------
-
-
-def _extended(path: Path | str) -> str:
-    """Return *path* in Windows extended-length form; unchanged elsewhere."""
-    raw = str(path)
-    if os.name != "nt":
-        return raw
-    absolute = os.path.abspath(raw)
-    if absolute.startswith("\\\\?\\"):
-        return absolute
-    if absolute.startswith("\\\\"):
-        return "\\\\?\\UNC\\" + absolute[2:]
-    return "\\\\?\\" + absolute
 
 
 def path_exists(path: Path | str) -> bool:
     """Whether *path* exists, long Windows paths included."""
-    if os.name != "nt":
-        return Path(path).exists()
-    return os.path.exists(_extended(path))
+    return long_path(path).exists()
 
 
 def copy_file(src: Path | str, dst: Path | str) -> None:
     """Copy *src* to *dst* with its metadata, long Windows paths included."""
-    if os.name != "nt":
-        shutil.copy2(Path(src), Path(dst))
-        return
-    shutil.copy2(_extended(src), _extended(dst))
+    shutil.copy2(long_path(src), long_path(dst))
+
+
+def delete_file(path: Path | str) -> None:
+    """Remove *path* if it is there, long Windows paths included.
+
+    A no-op, not an error, when *path* is already gone -- callers use this to
+    make sure a stale file (e.g. a cache's identity sidecar that must never
+    end up paired with a different cache) is absent, not to report whether
+    one was found.
+    """
+    try:
+        os.remove(long_path(path))
+    except FileNotFoundError:
+        pass
 
 
 def delete_file(path: Path | str) -> None:
@@ -90,17 +85,7 @@ def delete_file(path: Path | str) -> None:
 
 def ensure_directory(path: Path | str) -> None:
     """Create *path* and any missing parents."""
-    if os.name != "nt":
-        os.makedirs(Path(path), exist_ok=True)
-        return
-    os.makedirs(_extended(path), exist_ok=True)
-
-
-def as_io_path(path: Path | str) -> Path:
-    """Return *path* in the form to hand to a library that opens it itself."""
-    if os.name != "nt":
-        return Path(path)
-    return Path(_extended(path))
+    os.makedirs(long_path(path), exist_ok=True)
 
 
 def get_camera_subfolders(root: Path) -> list[Path]:
@@ -236,7 +221,7 @@ class WorkspaceManager:
         # setdefault, so re-saving a run keeps the time it was first made.
         metadata = dict(metadata)
         metadata.setdefault("created_at", datetime.now().isoformat())
-        with open(_extended(meta_path), "w", encoding="utf-8") as fh:
+        with open(long_path(meta_path), "w", encoding="utf-8") as fh:
             json.dump(metadata, fh, indent=2, default=str)
 
         # Deliberately not remembered here.  A run is written by tests, by a
@@ -264,13 +249,13 @@ class WorkspaceManager:
             return []
 
         runs_dir = self.workspace_path / self._runs_dir_name(phase)
-        runs_dir_io = _extended(runs_dir)
+        runs_dir_io = long_path(runs_dir)
         if not os.path.exists(runs_dir_io):
             return []
 
         entries: list[tuple[float, dict]] = []
         for run_name in sorted(os.listdir(runs_dir_io)):
-            meta_path = _extended(runs_dir / run_name / "metadata.json")
+            meta_path = long_path(runs_dir / run_name / "metadata.json")
             if not os.path.exists(meta_path):
                 continue
             try:
@@ -373,7 +358,7 @@ class WorkspaceManager:
         if self.workspace_path is None:
             raise RuntimeError("Workspace path is not set.")
         handoff_path = self.workspace_path / "handoff.json"
-        with open(_extended(handoff_path), "w", encoding="utf-8") as fh:
+        with open(long_path(handoff_path), "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2, default=str)
 
     def read_handoff(self) -> dict:
@@ -384,7 +369,7 @@ class WorkspaceManager:
         if not path_exists(handoff_path):
             return {}
         try:
-            with open(_extended(handoff_path), encoding="utf-8") as fh:
+            with open(long_path(handoff_path), encoding="utf-8") as fh:
                 return json.load(fh)
         except (json.JSONDecodeError, OSError):
             return {}

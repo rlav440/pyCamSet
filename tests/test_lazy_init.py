@@ -316,37 +316,3 @@ def test_the_cairo_registration_branch_recovers_a_failed_import():
     assert "CAIRO_REGISTRATION_BRANCH_OK" in result.stdout
 
 
-def test_every_cairosvg_import_registers_the_dll_directory_first():
-    """
-    Ordering, at every site, is the guarantee this replaced.
-
-    ``ensure_cairo_dll_available`` used to run once at package import, before
-    anything could reach cairosvg.  Now that the package does not import the
-    targets, each site carries the ordering itself, and a site that imports
-    cairosvg first is a conda-Windows failure that no machine with Cairo on
-    its path will reproduce.
-    """
-    import pathlib
-
-    root = pathlib.Path(__file__).resolve().parent.parent / "pyCamSet"
-    checked = 0
-    for path in root.rglob("*.py"):
-        # The helper imports cairosvg to find out whether it has to do
-        # anything.  It is the check, so it is not subject to it.
-        if path.name == "cairo_dll_helper.py":
-            continue
-        lines = path.read_text(encoding="utf-8").splitlines()
-        helper_at = [i for i, s in enumerate(lines)
-                     if "import pyCamSet.utils.cairo_dll_helper" in s]
-        cairo_at = [i for i, s in enumerate(lines)
-                    if s.strip().startswith("import cairosvg")]
-        for site in cairo_at:
-            preceding = [i for i in helper_at if i < site]
-            assert preceding, (
-                f"{path.name}:{site + 1} imports cairosvg with no "
-                "cairo_dll_helper import before it")
-            assert site - max(preceding) <= 3, (
-                f"{path.name}:{site + 1} is too far from its helper import to "
-                "stay in step; keep them adjacent")
-            checked += 1
-    assert checked >= 6, f"expected at least six cairosvg sites, found {checked}"

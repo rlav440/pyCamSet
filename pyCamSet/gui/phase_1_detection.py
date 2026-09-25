@@ -1451,19 +1451,11 @@ class Phase1DiagnosticsTab(QWidget):
         }
         # Load only the validated presentation sidecar; science/run files stay untouched.
         from pyCamSet.gui.preferences import config_directory
-        from pyCamSet.gui.visual_style import (
-            VisualStyle, style_from_json, style_path_for_visual, apply_visual_style,
-        )
+        from pyCamSet.gui.visual_style import apply_visual_style, load_style_for_visual
         style_id = "phase1:detection-overlay"
-        sidecar = style_path_for_visual(config_directory(), style_id)
-        saved_style = VisualStyle()
-        try:
-            saved_style = style_from_json(sidecar.read_text(encoding="utf-8"), style_id)
-        except FileNotFoundError:
-            pass
-        except (OSError, ValueError):
-            # Fail closed: malformed preferences leave the theme defaults active.
-            pass
+        # Its own style, else the saved default for all figures, else the
+        # theme; a malformed file falls back rather than half-applying.
+        saved_style, _source = load_style_for_visual(config_directory(), style_id)
         self._draw_state["style"] = saved_style
         apply_visual_style(fig, saved_style,
                            (app.property("pycamsetTheme") if app else None) or "Light")
@@ -1480,25 +1472,34 @@ class Phase1DiagnosticsTab(QWidget):
         from PySide6.QtWidgets import QApplication, QMessageBox
         from pyCamSet.gui.preferences import config_directory
         from pyCamSet.gui.visual_style import (
-            VisualStyle, VisualStyleDialog, apply_visual_style,
-            style_from_json, style_path_for_visual, style_to_json,
+            VisualStyle, VisualStyleDialog, apply_visual_style, load_default_style,
+            load_style_for_visual, style_path_for_visual, style_to_json,
         )
 
         visual_id = "phase1:detection-overlay"
         config_dir = config_directory()
         style_path = style_path_for_visual(config_dir, visual_id)
-        current = VisualStyle()
-        try:
-            if style_path.exists():
-                current = style_from_json(style_path.read_text(encoding="utf-8"), visual_id)
-        except (OSError, ValueError):
-            current = VisualStyle()
+        current, _source = load_style_for_visual(config_dir, visual_id)
         app = QApplication.instance()
         theme = (app.property("pycamsetTheme") if app else None) or "Light"
         figure = self._draw_state["fig"]
         dialog = VisualStyleDialog(figure, visual_id, current, theme, self,
                                    lambda *_: self._draw_state["canvas"].draw_idle())
         if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if dialog.current == VisualStyle():
+            # An empty style means "no style of its own": remove the file so
+            # the overlay follows the saved default, or the theme without one.
+            try:
+                style_path.unlink(missing_ok=True)
+            except OSError as exc:
+                QMessageBox.warning(self, "Overlay style not reset",
+                                    f"The saved style could not be removed.\n\nTechnical detail: {exc}")
+                return
+            fallback = load_default_style(config_dir) or VisualStyle()
+            self._draw_state["style"] = fallback
+            apply_visual_style(figure, fallback, theme)
+            self._draw_state["canvas"].draw_idle()
             return
         temporary_path = None
         try:

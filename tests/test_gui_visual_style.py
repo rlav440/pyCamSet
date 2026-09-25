@@ -34,7 +34,7 @@ def test_style_json_round_trip_is_versioned_and_visual_specific():
                         suggested_preset="Science",
                         suggested_preset_registry=SUGGESTED_PRESET_REGISTRY_VERSION)
     text = style_to_json(style, "phase2:view-errors")
-    assert json.loads(text)["version"] == 4
+    assert json.loads(text)["version"] == 5
     assert style_from_json(text, "phase2:view-errors") == style
     assert json.loads(text)["style"]["suggested_preset_registry"] == SUGGESTED_PRESET_REGISTRY_VERSION
     with pytest.raises(ValueError, match="different visual"):
@@ -42,7 +42,7 @@ def test_style_json_round_trip_is_versioned_and_visual_specific():
 
 
 def test_science_suggestion_cites_reviewed_2025_guide_not_old_pdf():
-    assert SUGGESTED_PRESET_REGISTRY_VERSION == "figure-suggestions-v2"
+    assert SUGGESTED_PRESET_REGISTRY_VERSION == "figure-suggestions-v3"
     assert "Science/AAAS: Guide to Preparing Figures (2025)" in SUGGESTED_PRESET_CITATIONS
     assert "67f37ac8-4d02-4625-8a05-230568cb8323/author_prep_guide_2025.pdf" in SUGGESTED_PRESET_CITATIONS
     assert "archived PDF inspected" in SUGGESTED_PRESET_CITATIONS

@@ -6,16 +6,16 @@ from __future__ import annotations
 
 import json
 from weakref import WeakKeyDictionary
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 SCHEMA = "pycamset.visual-style"
-VERSION = 4
+VERSION = 5
 # This text registry is the citation source of truth for suggested presets.
 # The 2025 Science guide was inspected via its 2026-07-30 Wayback PDF snapshot;
 # direct access to the publisher PDF returned 403 during verification.
-SUGGESTED_PRESET_REGISTRY_VERSION = "figure-suggestions-v2"
+SUGGESTED_PRESET_REGISTRY_VERSION = "figure-suggestions-v3"
 SUGGESTED_PRESET_CITATIONS = (
     "Suggestions only; not journal compliance. Nature: Preparing figures, "
     "https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/ "
@@ -23,10 +23,53 @@ SUGGESTED_PRESET_CITATIONS = (
     "https://www.science.org/cms/asset/67f37ac8-4d02-4625-8a05-230568cb8323/author_prep_guide_2025.pdf "
     "(archived PDF inspected 2026-07-30; direct publisher fetch returned 403). "
     "DejaVu Sans fallback: DejaVu Fonts licence, https://dejavu-fonts.github.io/License.html. "
-    "Cell and IEEE controls are generic starting points without verified journal-specific prescriptions."
+    "Cell and IEEE controls are generic starting points without verified journal-specific prescriptions. "
+    "Presentation (large) and Grayscale/minimal are lab design presets shared with the optical-mapping "
+    "GUI, not journal styles. Typefaces are limited to open-source families with a recorded licence."
 )
+
+#: Suggested appearances, shared with the lab's optical-mapping GUI.  Each is a
+#: starting point the user can edit, never a claim of journal compliance.  The
+#: palette recolours data line series only (see apply_visual_style).
+PRESETS: dict[str, dict[str, Any]] = {
+    "Nature": {"label": "Nature suggestion", "font_family": "DejaVu Sans", "font_size": 7.0,
+               "font_weight": "normal", "line_width": 1.2, "marker_size": 4.5,
+               "text_colour": "#000000", "title_colour": "#000000",
+               "figure_background": "#ffffff", "axes_background": "#ffffff",
+               "series_palette": ["#000000", "#c00000", "#1f4e9c", "#2e7d32", "#e36c0a", "#6a3d9a"]},
+    "Science": {"label": "Science suggestion", "font_family": "DejaVu Sans", "font_size": 7.0,
+                "font_weight": "normal", "line_width": 1.2, "marker_size": 4.5,
+                "text_colour": "#000000", "title_colour": "#000000",
+                "figure_background": "#ffffff", "axes_background": "#ffffff",
+                "series_palette": ["#000000", "#1f4e9c", "#c00000", "#2e7d32", "#e36c0a", "#6a3d9a"]},
+    "Cell": {"label": "Cell suggestion", "font_family": "DejaVu Sans", "font_size": 7.0,
+             "font_weight": "normal", "line_width": 1.2, "marker_size": 4.5,
+             "text_colour": "#000000", "title_colour": "#000000",
+             "figure_background": "#ffffff", "axes_background": "#ffffff",
+             "series_palette": ["#000000", "#c00000", "#1f4e9c", "#6a3d9a", "#2e7d32", "#e36c0a"]},
+    "IEEE": {"label": "IEEE suggestion", "font_family": "DejaVu Serif", "font_size": 8.0,
+             "font_weight": "normal", "line_width": 1.2, "marker_size": 4.5,
+             "text_colour": "#000000", "title_colour": "#000000",
+             "figure_background": "#ffffff", "axes_background": "#ffffff",
+             "series_palette": ["#000000", "#555555", "#8b0000", "#1f4e9c", "#2e7d32", "#4a4a4a"]},
+    "Presentation": {"label": "Presentation (large)", "font_family": "DejaVu Sans", "font_size": 18.0,
+                     "font_weight": "normal", "line_width": 2.5, "marker_size": 8.0,
+                     "text_colour": "#1a1a1a", "title_colour": "#1a1a1a",
+                     "figure_background": "#ffffff", "axes_background": "#ffffff",
+                     "series_palette": ["#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b"]},
+    "Grayscale": {"label": "Grayscale/minimal", "font_family": "DejaVu Sans", "font_size": 10.0,
+                  "font_weight": "normal", "line_width": 1.2, "marker_size": 4.5,
+                  "text_colour": "#000000", "title_colour": "#000000",
+                  "figure_background": "#ffffff", "axes_background": "#ffffff",
+                  "series_palette": ["#000000", "#444444", "#888888", "#bbbbbb", "#666666", "#999999"]},
+}
+
+#: The document identity of the style that applies to every figure without
+#: a style of its own ("Save as default for all figures").
+DEFAULT_VISUAL_ID = "default:all-figures"
 _VISUAL_OVERRIDES = WeakKeyDictionary()
 _DETECTION_OVERLAY_BASELINES = WeakKeyDictionary()
+_LINE_COLOUR_BASELINES = WeakKeyDictionary()
 
 
 @dataclass
@@ -59,6 +102,7 @@ class VisualStyle:
     colormap: str | None = None
     suggested_preset: str | None = None
     suggested_preset_registry: str | None = None
+    series_palette: list[str] | None = None
 
     def validate(self) -> None:
         """Reject unknown, malformed or out-of-range style state."""
@@ -117,8 +161,13 @@ class VisualStyle:
                 _validate_colour(values["colour"], f"series_styles[{series_id!r}].colour")
         if self.colormap is not None and self.colormap not in {"viridis", "plasma", "inferno", "magma", "cividis", "coolwarm", "RdBu_r"}:
             raise ValueError("unsupported colormap")
-        if self.suggested_preset is not None and self.suggested_preset not in {"Nature", "Science", "Cell", "IEEE"}:
+        if self.suggested_preset is not None and self.suggested_preset not in PRESETS:
             raise ValueError("unsupported suggested preset")
+        if self.series_palette is not None:
+            if not isinstance(self.series_palette, list) or not 1 <= len(self.series_palette) <= 12:
+                raise ValueError("series_palette must list 1 to 12 colours")
+            for index, colour in enumerate(self.series_palette):
+                _validate_colour(colour, f"series_palette[{index}]")
         if self.suggested_preset is None and self.suggested_preset_registry is not None:
             raise ValueError("preset registry requires a suggested preset")
         if self.suggested_preset_registry is not None and (
@@ -158,7 +207,7 @@ def style_from_json(text: str, expected_visual_id: str | None = None) -> VisualS
         raise ValueError(f"Invalid style JSON: {exc}") from exc
     if not isinstance(document, dict) or set(document) != {"schema", "version", "visual_id", "style"}:
         raise ValueError("Style document has missing or unknown top-level keys")
-    if document["schema"] != SCHEMA or type(document["version"]) is not int or document["version"] not in {1, 2, 3, VERSION}:
+    if document["schema"] != SCHEMA or type(document["version"]) is not int or document["version"] not in {1, 2, 3, 4, VERSION}:
         raise ValueError("Unsupported style schema or version")
     if not isinstance(document["visual_id"], str) or not document["visual_id"]:
         raise ValueError("visual_id must be a non-empty string")
@@ -182,6 +231,8 @@ def style_from_json(text: str, expected_visual_id: str | None = None) -> VisualS
     if document["version"] == 3:
         values = {**values, "overlay_marker": None, "overlay_line_width": None,
                   "overlay_line_style": None, "overlay_opacity": None}
+    if document["version"] < 5:
+        values = {**values, "series_palette": None}
     if set(values) != set(VisualStyle.__dataclass_fields__):
         raise ValueError("Style has missing or unknown keys")
     style = VisualStyle(**values)
@@ -216,8 +267,10 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
                     "linestyles": collection.get_linestyles() if hasattr(collection, "get_linestyles") else None,
                     "alpha": collection.get_alpha() if hasattr(collection, "get_alpha") else None,
                 }
+    line_baselines = _LINE_COLOUR_BASELINES.setdefault(figure, WeakKeyDictionary())
     figure.set_facecolor(style.figure_background or tokens["surface"])
     for axes_index, axes in enumerate(figure.axes):
+        data_line_index = 0
         axes.set_facecolor(style.axes_background or tokens["surface"])
         axes.title.set_color(style.text_colour or tokens["text"])
         if style.title_colour is not None:
@@ -232,6 +285,8 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
         if style.grid_visible is not None:
             axes.grid(style.grid_visible)
         for line in axes.lines:
+            if line not in line_baselines:
+                line_baselines[line] = line.get_color()
             if style.line_width is not None:
                 line.set_linewidth(style.line_width)
             if style.marker_size is not None:
@@ -239,6 +294,16 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
             series_id = line.get_gid()
             if series_id is None and line.get_label() and not line.get_label().startswith("_"):
                 series_id = f"line:{axes_index}:{line.get_label()}"
+            # A preset palette recolours data series only: lines drawn in data
+            # coordinates.  Reference lines (axhline/axvline thresholds use a
+            # blended transform) keep their meaning-carrying colours, and
+            # bars, scatters and images are never touched.
+            if line.get_transform() is axes.transData:
+                if style.series_palette:
+                    line.set_color(style.series_palette[data_line_index % len(style.series_palette)])
+                else:
+                    line.set_color(line_baselines[line])
+                data_line_index += 1
             if series_id in style.series_colours:
                 line.set_color(style.series_colours[series_id])
             series = style.series_styles.get(series_id, {})
@@ -280,6 +345,7 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
                                      else baseline["alpha"])
         legend = axes.get_legend()
         if legend is not None:
+            _sync_legend_swatches(axes, legend)
             if style.legend_visible is not None:
                 legend.set_visible(style.legend_visible)
             if style.legend_colour is not None or style.text_colour is not None:
@@ -295,14 +361,35 @@ def apply_visual_style(figure: Any, style: VisualStyle, theme_name: str = "Light
             for image in opted_in:
                 image.set_cmap(style.colormap)
     # Font properties are applied to existing text artists, not data artists.
+    # The family always resolves to an approved open-source typeface.
+    from pyCamSet.gui.figure_fonts import resolve_figure_font
+    font_family = resolve_figure_font(style.font_family)
     for text in figure.findobj(match=lambda artist: hasattr(artist, "set_fontsize")):
         if style.font_size is not None:
             text.set_fontsize(style.font_size)
-        if style.font_family is not None:
-            text.set_fontfamily(style.font_family)
+        if font_family is not None:
+            text.set_fontfamily(font_family)
         if style.font_weight is not None:
             text.set_fontweight(style.font_weight)
     figure.canvas.draw_idle()
+
+
+def _sync_legend_swatches(axes: Any, legend: Any) -> None:
+    """Make each legend swatch match its restyled line.
+
+    Legend entries are separate proxy artists, so recolouring a line leaves
+    its swatch showing the old colour.  Entries are matched to lines by
+    label; entries without a matching line are left alone.
+    """
+    lines = {line.get_label(): line for line in axes.lines}
+    handles = getattr(legend, "legend_handles", None) or getattr(legend, "legendHandles", [])
+    for text, handle in zip(legend.get_texts(), handles):
+        line = lines.get(text.get_text())
+        if line is None or not hasattr(handle, "set_linestyle"):
+            continue
+        handle.set_color(line.get_color())
+        handle.set_linewidth(line.get_linewidth())
+        handle.set_linestyle(line.get_linestyle())
 
 
 def refresh_visual_style(figure: Any, theme_name: str) -> None:
@@ -409,6 +496,71 @@ def style_path_for_visual(app_config_dir: Path, visual_id: str) -> Path:
     return app_config_dir / "visual-styles" / f"{digest}.json"
 
 
+def default_style_path(app_config_dir: Path) -> Path:
+    """Where the style for every figure without its own style is kept."""
+    return app_config_dir / "visual-styles" / "default.json"
+
+
+def as_default_style(style: VisualStyle) -> VisualStyle:
+    """Strip what only makes sense for one figure (its series and colour map)."""
+    return replace(style, series_colours={}, series_styles={}, colormap=None)
+
+
+def load_default_style(app_config_dir: Path) -> VisualStyle | None:
+    """Return the saved default style, or None when there is none or it is invalid."""
+    path = default_style_path(app_config_dir)
+    try:
+        return style_from_json(path.read_text(encoding="utf-8"), DEFAULT_VISUAL_ID)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        # Fail closed: a damaged default never half-applies; the theme wins.
+        return None
+
+
+def save_default_style(app_config_dir: Path, style: VisualStyle) -> Path:
+    """Atomically store *style* as the default for all figures."""
+    import tempfile
+
+    path = default_style_path(app_config_dir)
+    text = style_to_json(as_default_style(style), DEFAULT_VISUAL_ID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                     prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+        temporary = Path(handle.name)
+        handle.write(text)
+    temporary.replace(path)
+    return path
+
+
+def clear_default_style(app_config_dir: Path) -> None:
+    """Remove the default, so figures without their own style follow the theme."""
+    default_style_path(app_config_dir).unlink(missing_ok=True)
+
+
+def load_style_for_visual(app_config_dir: Path, visual_id: str,
+                          legacy_path: Path | None = None) -> tuple[VisualStyle, str]:
+    """Resolve a figure's style: its own, else the saved default, else the theme.
+
+    Returns the style and where it came from: ``"visual"``, ``"default"`` or
+    ``"theme"``.  A malformed per-figure file falls back rather than failing.
+    """
+    own = style_path_for_visual(app_config_dir, visual_id)
+    candidates = [(own, visual_id)]
+    if legacy_path is not None and not own.exists():
+        candidates.append((legacy_path, None))
+    for path, expected in candidates:
+        if path.exists():
+            try:
+                return style_from_json(path.read_text(encoding="utf-8"), expected), "visual"
+            except (OSError, ValueError):
+                break
+    default = load_default_style(app_config_dir)
+    if default is not None:
+        return default, "default"
+    return VisualStyle(), "theme"
+
+
 def _validate_user_style_filename(path: str) -> None:
     """Reject filenames that Windows reserves, regardless of the current OS."""
     if "\0" in path:
@@ -434,7 +586,7 @@ class VisualStyleDialog:
             QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
             QScrollArea, QVBoxLayout, QWidget,
         )
-        from PySide6.QtGui import QFontDatabase
+        from pyCamSet.gui.figure_fonts import available_fonts, resolve_figure_font
 
         class _Dialog(QDialog):
             def __init__(self):
@@ -455,9 +607,13 @@ class VisualStyleDialog:
                 form = QFormLayout()
                 content_layout.addLayout(form)
                 self.font = QComboBox()
-                self.font.addItems(["Sans Serif"] + sorted(QFontDatabase.families()))
-                self.font.setEditable(True)
-                self.font.setCurrentText(style.font_family or "Sans Serif")
+                # Only open-source families with a recorded licence that can
+                # render here; an older style's other family shows as the
+                # approved family that replaces it.
+                self.font.addItems(["Sans Serif"] + list(available_fonts()))
+                self.font.setCurrentText(resolve_figure_font(style.font_family) or "Sans Serif")
+                self.font.setToolTip("Open-source typefaces with a recorded licence; "
+                                     "DejaVu families are bundled and always available.")
                 form.addRow("Typeface:", self.font)
                 self.font_weight = QComboBox()
                 self.font_weight.addItems(["Theme default", "Normal", "Bold"])
@@ -550,10 +706,10 @@ class VisualStyleDialog:
                 scale_note.setAccessibleName("Scientific colour-scale limits are protected")
                 content_layout.addWidget(scale_note)
                 self.preset = QComboBox()
-                self.preset.addItems(["Custom", "Nature suggestion", "Science suggestion",
-                                      "Cell suggestion", "IEEE suggestion"])
-                self.preset.setCurrentIndex({None: 0, "Nature": 1, "Science": 2,
-                                             "Cell": 3, "IEEE": 4}[style.suggested_preset])
+                self.preset.addItem("Custom", None)
+                for key, preset in PRESETS.items():
+                    self.preset.addItem(preset["label"], key)
+                self.preset.setCurrentIndex(max(0, self.preset.findData(style.suggested_preset)))
                 form.addRow("Suggested appearance:", self.preset)
                 citation = QLabel(SUGGESTED_PRESET_CITATIONS)
                 citation.setProperty("sourceRevision", SUGGESTED_PRESET_REGISTRY_VERSION)
@@ -595,10 +751,30 @@ class VisualStyleDialog:
                 root.addLayout(row)
                 save = QPushButton("Save JSON…")
                 load = QPushButton("Load JSON…")
-                reset = QPushButton("Reset")
+                reset = QPushButton("Reset to theme")
+                reset.setToolTip("Clear this figure's settings; it then follows the saved "
+                                 "default style, or the GUI theme when there is none.")
                 row.addWidget(save)
                 row.addWidget(load)
                 row.addWidget(reset)
+                default_row = QHBoxLayout()
+                root.addLayout(default_row)
+                self.save_default = QPushButton("Save as default for all figures")
+                self.save_default.setToolTip(
+                    "Use these settings for every figure that has no style of its own, "
+                    "including figures opened later. Per-series colours and colour maps "
+                    "stay with this figure.")
+                self.clear_default = QPushButton("Clear default")
+                self.clear_default.setToolTip("Figures without their own style follow the GUI theme again.")
+                self.default_status = QLabel("")
+                self.default_status.setWordWrap(True)
+                self.default_status.setProperty("textRole", "muted")
+                default_row.addWidget(self.save_default)
+                default_row.addWidget(self.clear_default)
+                default_row.addWidget(self.default_status, stretch=1)
+                self.save_default.clicked.connect(self._save_as_default)
+                self.clear_default.clicked.connect(self._clear_default)
+                self._show_default_status()
                 buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
                                            QDialogButtonBox.StandardButton.Cancel)
                 root.addWidget(buttons)
@@ -677,11 +853,13 @@ class VisualStyleDialog:
                                      if self.overlay_opacity.value() != 1.0 else None),
                     series_colours=series_colours, series_styles=series_styles,
                     colormap=(self.colormap.currentText() if self.colormap.currentIndex() else None),
-                    suggested_preset=(None if self.preset.currentIndex() == 0
-                                      else ("Nature", "Science", "Cell", "IEEE")[self.preset.currentIndex() - 1]),
+                    suggested_preset=self.preset.currentData(),
                     suggested_preset_registry=(
-                        None if self.preset.currentIndex() == 0
-                        else SUGGESTED_PRESET_REGISTRY_VERSION))
+                        None if self.preset.currentData() is None
+                        else SUGGESTED_PRESET_REGISTRY_VERSION),
+                    # The palette belongs to the chosen preset; Custom has none.
+                    series_palette=(list(PRESETS[self.preset.currentData()]["series_palette"])
+                                    if self.preset.currentData() is not None else None))
 
             def _load_series_colour(self, *_):
                 stable_id = self.series_id.currentData()
@@ -694,16 +872,20 @@ class VisualStyleDialog:
                                                     "+": 7, "x": 8, ".": 9}.get(settings.get("marker"), 0))
 
             def _apply_suggested_preset(self, index):
-                """Offer a restrained typography starting point, never compliance."""
-                if index == 0:
+                """Fill the controls from a shared preset: a starting point, never compliance."""
+                key = self.preset.itemData(index)
+                if key is None:
                     return
-                self.font.setCurrentText("DejaVu Sans")
-                self.font_weight.setCurrentIndex(1)
-                self.font_size.setValue(8)
-                self.line_width.setValue(1.2)
-                self.marker_size.setValue(4.5)
-                self.text_colour.clear()
-                self.title_colour.clear()
+                preset = PRESETS[key]
+                self.font.setCurrentText(resolve_figure_font(preset["font_family"]))
+                self.font_weight.setCurrentIndex({"normal": 1, "bold": 2}[preset["font_weight"]])
+                self.font_size.setValue(preset["font_size"])
+                self.line_width.setValue(preset["line_width"])
+                self.marker_size.setValue(preset["marker_size"])
+                self.text_colour.setText(preset["text_colour"])
+                self.title_colour.setText(preset["title_colour"])
+                self.figure_background.setText(preset["figure_background"])
+                self.axes_background.setText(preset["axes_background"])
                 self.tick_colour.clear()
                 self.axes_colour.clear()
                 self.legend_colour.clear()
@@ -754,6 +936,39 @@ class VisualStyleDialog:
                 self.legend.setChecked(False)
                 self._preview(force=True)
 
+            def _show_default_status(self):
+                from pyCamSet.gui.preferences import config_directory
+                exists = default_style_path(config_directory()).is_file()
+                self.clear_default.setEnabled(exists)
+                self.default_status.setText(
+                    "A default style is saved." if exists
+                    else "No default style: figures follow the GUI theme.")
+
+            def _save_as_default(self):
+                from PySide6.QtWidgets import QMessageBox
+                from pyCamSet.gui.preferences import config_directory
+                try:
+                    candidate = self._read()
+                    candidate.validate()
+                    save_default_style(config_directory(), candidate)
+                except (OSError, ValueError) as exc:
+                    QMessageBox.warning(self, "Default style not saved",
+                                        f"The default style could not be saved.\n\nTechnical detail: {exc}")
+                    return
+                self._show_default_status()
+                self.default_status.setText("Saved: figures without their own style now use it.")
+
+            def _clear_default(self):
+                from PySide6.QtWidgets import QMessageBox
+                from pyCamSet.gui.preferences import config_directory
+                try:
+                    clear_default_style(config_directory())
+                except OSError as exc:
+                    QMessageBox.warning(self, "Default style not cleared",
+                                        f"The default style could not be removed.\n\nTechnical detail: {exc}")
+                    return
+                self._show_default_status()
+
             def _save(self):
                 from PySide6.QtWidgets import QMessageBox
                 path, _ = QFileDialog.getSaveFileName(self, "Save visual style", "visual-style.json",
@@ -792,7 +1007,7 @@ class VisualStyleDialog:
                             self.legend, self.legend_value)
                 blocked = [control.blockSignals(True) for control in controls]
                 try:
-                    self.font.setCurrentText(candidate.font_family or "Sans Serif")
+                    self.font.setCurrentText(resolve_figure_font(candidate.font_family) or "Sans Serif")
                     self.font_weight.setCurrentIndex({None: 0, "normal": 1, "bold": 2}[candidate.font_weight])
                     self.font_size.setValue(candidate.font_size or 10)
                     self.line_width.setValue(candidate.line_width or 1.5)
@@ -827,8 +1042,7 @@ class VisualStyleDialog:
                     self.legend.setChecked(candidate.legend_visible is not None)
                     self.legend_value.setChecked(bool(candidate.legend_visible))
                     self.colormap.setCurrentIndex(self.colormap.findText(candidate.colormap or "Theme default"))
-                    self.preset.setCurrentIndex({None: 0, "Nature": 1, "Science": 2,
-                                                 "Cell": 3, "IEEE": 4}[candidate.suggested_preset])
+                    self.preset.setCurrentIndex(max(0, self.preset.findData(candidate.suggested_preset)))
                 finally:
                     for control, was_blocked in zip(controls, blocked):
                         control.blockSignals(was_blocked)

@@ -268,13 +268,36 @@ legend/grid visibility, and stable-ID series colours. Detection montages also
 offer overlay marker-size and colour controls; the source image and detection
 coordinates are not edited. Styles are kept per visual in the application
 configuration directory, separately from scientific run artefacts, and can be
-saved to or loaded from versioned JSON. Reset returns to theme defaults. Unknown
-or malformed style fields are rejected rather than partially applied. A scale
+saved to or loaded from versioned JSON. Unknown or malformed style fields are
+rejected rather than partially applied.
+
+**Suggested appearance** offers the same six starting points as the lab's
+optical-mapping GUI: Nature, Science, Cell and IEEE suggestions, **Presentation
+(large)** (18 pt text and heavy lines for projection) and **Grayscale/minimal**
+(black text and a grey series ramp for print). Each fills the typography, line,
+marker, text and background controls, which stay editable, and recolours the
+figure's data line series from its palette. Reference lines such as thresholds,
+bars, scatter points and images keep their own colours, and a series given its
+own colour keeps it.
+
+**Save as default for all figures** makes the current settings the style of
+every figure that has no style of its own, including figures opened later;
+per-series colours and colour maps stay with the figure they were set on.
+**Clear default** returns those figures to the GUI theme. **Reset to theme**
+removes the figure's own style, after which it follows the saved default, or
+the theme when there is none.
+
+The typeface list holds only open-source families with a recorded licence (the
+same list as the optical-mapping GUI). The bundled DejaVu families are always
+available; Liberation, Noto, Open Sans, Roboto, Lato, Source Sans Pro, PT Sans,
+PT Serif and Latin Modern Roman appear when installed. A style saved earlier
+with another family is drawn with the approved family of the same kind, for
+example DejaVu Serif in place of Times New Roman. A scale
 bar remains unavailable unless a calibrated pixel-to-world transform and units
 are supplied; no physical length is inferred. Error bars remain unavailable:
 the GUI has no source-backed uncertainty producer or error-bar control, so
 fail-closed behaviour for unavailable uncertainty cannot yet be
-tested. The Nature/Science styles are suggestions, not journal-compliance
+tested. The journal styles are suggestions, not journal-compliance
 presets. The Science link cites the 2025 *Guide to Preparing Figures*; its PDF
 was inspected in a 30 July 2026 archive snapshot because a direct publisher
 fetch returned 403. The separate 2026 *Science Advances* guide is not the

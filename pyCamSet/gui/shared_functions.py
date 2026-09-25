@@ -248,7 +248,8 @@ class MatplotlibFigureCard(QWidget):
         self._csv_export = csv_export
         from pyCamSet.gui.theme import apply_matplotlib_theme
         from pyCamSet.gui.visual_style import (
-            VisualStyle, apply_visual_style, style_from_json, style_path_for_visual,
+            VisualStyle, apply_visual_style, load_default_style, style_from_json,
+            style_path_for_visual,
         )
         legacy_visual_id = "figure:" + re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")
         self._visual_id = visual_id or legacy_visual_id
@@ -273,6 +274,12 @@ class MatplotlibFigureCard(QWidget):
             except (OSError, ValueError):
                 # Invalid preference files are ignored, never partially applied.
                 self._style = VisualStyle()
+        else:
+            # No style of its own: use the saved default for all figures, if any.
+            default = load_default_style(config_directory())
+            if default is not None:
+                self._style = default
+                apply_visual_style(fig, default, theme_name)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 8)
@@ -415,6 +422,21 @@ class MatplotlibFigureCard(QWidget):
             return
         candidate = dialog.current
         if candidate == self._style:
+            return
+        if candidate == VisualStyle():
+            # An empty style means "no style of its own": remove the file so
+            # the figure follows the saved default, or the theme without one.
+            from pyCamSet.gui.preferences import config_directory
+            from pyCamSet.gui.visual_style import load_default_style
+            try:
+                self._style_path.unlink(missing_ok=True)
+            except OSError as exc:
+                QMessageBox.warning(self, "Figure style not reset",
+                                    f"The saved style could not be removed.\n\nTechnical detail: {exc}")
+                return
+            self._style = load_default_style(config_directory()) or VisualStyle()
+            apply_visual_style(self._fig, self._style, theme_name)
+            self._canvas.draw_idle()
             return
         temporary_path = None
         try:

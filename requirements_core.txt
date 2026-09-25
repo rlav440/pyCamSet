@@ -24,3 +24,4 @@ svgwrite
 pillow
 docstring_parser
 pyvista
+pyvistaqt

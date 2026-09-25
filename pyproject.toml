@@ -52,7 +52,9 @@ dependencies = [
     # for the lean install that leaves it out.
     "PySide6",
     # Embeds the Assess Calibration 3D views in the GUI.  Pure Python over
-    # qtpy; the GUI falls back to a separate viewer window without it.
+    # qtpy, so it is part of the lean install too; it needs a Qt binding only
+    # when a view is embedded, and the GUI offers a separate viewer window
+    # when it cannot.
     "pyvistaqt",
 ]
 

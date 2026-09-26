@@ -239,7 +239,7 @@ class PuzzleBoardCube(AbstractTarget):
 
     @classmethod
     def construction_parameters(cls, backend: str | None = None) -> Parameterisation:
-        """What decides where a cube's corners are."""
+        """What decides the square grid and physical size of a cube."""
         return DocumentedParameters(cls.__init__, "n_points", "length")
 
     @classmethod
@@ -255,7 +255,7 @@ class PuzzleBoardCube(AbstractTarget):
 
     @classmethod
     def printable_name(cls, values: dict, kind: str = "svg") -> str:
-        return (f"puzzleboard_cube_{int(values['n_points'])}points_"
+        return (f"pcube_{int(values['n_points'])}squares_"
                 f"{float(values['length']):g}mm{EXPORT_SUFFIXES[kind]}")
 
     def save_printable(self, path, kind: str = "svg", border_width: float = 10.0,
@@ -295,9 +295,9 @@ class PuzzleBoardCube(AbstractTarget):
     ):
         """Initialise a cube whose six faces use disjoint windows of the periodic code.
 
-        :param n_points: Corners per face -- corners along one edge of one
-            of the cube's six faces. Each face is a separate window of the
-            periodic code. Suggested: 10-30.
+        :param n_points: Squares per face -- PuzzleBoard squares along one
+            edge of one of the cube's six faces. Each face is a separate
+            window of the periodic code. Suggested: 10-30.
         :param length: Cube edge (mm) -- the printed edge length of the
             cube, in millimetres. Suggested: 100-300.
         :param detection_options: what the detector is told, by the keys
@@ -615,6 +615,8 @@ class PuzzleBoardCube(AbstractTarget):
             fh.write(svg_text)
             fh.flush()
         if (not f_out.exists()) or f_out.stat().st_size == 0:
+
+
             raise IOError(f"SVG write failed: {f_out}")
         if not suppress_svg_log:
             logging.info("Saved PuzzleBoard cube SVG: %s", f_out)
@@ -640,6 +642,8 @@ class PuzzleBoardCube(AbstractTarget):
             logging.info("Saved PuzzleBoard cube Vector PDF: %s", f_out)
             return f_out
         if data_format != "raster":
+
+
             raise ValueError("data_format must be one of: raster, vector")
         png = cairosvg.svg2png(
             bytestring=svg_bytes,

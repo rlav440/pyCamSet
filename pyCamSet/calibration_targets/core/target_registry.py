@@ -55,6 +55,7 @@ TARGET_LABELS: dict[str, str] = {
     "CIco": "ChArUco1 icosahedron",
     "CIco2": "ChArUco2 icosahedron",
     "PuzzleBoardIco": "PuzzleBoard icosahedron",
+    "PuzzleBoardCube": "pcube",
 }
 
 

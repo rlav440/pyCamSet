@@ -9,6 +9,61 @@ from pyCamSet.calibration_targets.core.parameters import (
 )
 
 
+def _validate_preprocessing_value(value: float, name: str) -> float:
+    """Return a finite positive preprocessing value, or explain the error."""
+    value = float(value)
+    if not np.isfinite(value) or value <= 0.0:
+        raise ValueError(f"preprocessing {name} must be finite and greater than zero")
+    return value
+
+
+def preprocess_puzzleboard_image(
+    image: np.ndarray,
+    *,
+    enabled: bool = False,
+    scale: float = 0.25,
+    gamma: float = 0.5,
+) -> np.ndarray:
+    """Apply the optional one-pass pcube image preparation.
+
+    The frozen comparator is intentionally explicit: uint16 input is reduced
+    by taking its upper byte, uint8 input remains uint8, gamma is applied once,
+    and one area resize follows. RGB/BGR channels are corrected independently;
+    an RGBA/BGRA alpha channel is reduced/resized but is not gamma-corrected.
+    """
+    scale = _validate_preprocessing_value(scale, "scale")
+    gamma = _validate_preprocessing_value(gamma, "gamma")
+    image = np.asarray(image)
+    if image.ndim not in (2, 3):
+        raise ValueError("PuzzleBoard images must be grayscale, RGB, or RGBA arrays")
+    if image.ndim == 3 and image.shape[2] not in (3, 4):
+        raise ValueError("PuzzleBoard images must have three or four channels")
+    if image.dtype == np.uint16:
+        base = (image >> 8).astype(np.uint8)
+    elif image.dtype == np.uint8:
+        base = image
+    else:
+        raise ValueError("PuzzleBoard preprocessing accepts only uint8 or uint16 images")
+    if not enabled:
+        return image
+
+    corrected = base.copy()
+    if base.ndim == 2:
+        colour_data = base.astype(np.float32) / 255.0
+        corrected = np.power(colour_data, gamma).astype(np.float32) * 255.0
+        corrected = corrected.astype(np.uint8)
+    else:
+        channels = base.shape[2]
+        colour_channels = channels - 1 if channels == 4 else channels
+        corrected_float = np.power(
+            base[..., :colour_channels].astype(np.float32) / 255.0, gamma) * 255.0
+        corrected[..., :colour_channels] = corrected_float.astype(np.uint8)
+    if scale == 1.0:
+        return corrected
+    return cv2.resize(corrected, None, fx=scale, fy=scale,
+                      interpolation=cv2.INTER_AREA)
+
+
 def prepare_puzzleboard_image(image: np.ndarray) -> np.ndarray:
     """Convert a pyCamSet image to the RGB format expected by PuzzleBoard."""
     image = np.asarray(image)

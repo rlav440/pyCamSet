@@ -98,9 +98,22 @@ def run(params: dict,
             diagnostics["error"] = error
 
     run_id = make_run_id()
+    # Validation reports are normally dictionaries, but the backend seam also
+    # accepts report-like objects.  Keep status persistence independent of the
+    # concrete report container so a valid detector result cannot be turned
+    # into a failed run merely because a caller supplied an object report.
+    if isinstance(report, dict):
+        blocking_flags = list(report.get("blocking_flags", []) or [])
+    else:
+        blocking_flags = list(getattr(report, "blocking_flags", []) or [])
     metadata = {
         "run_id": run_id,
         "phase": "phase1",
+        "status": (
+            "failed" if error else
+            "incomplete" if blocking_flags else
+            "complete"
+        ),
         "params": params,
         "diagnostics": diagnostics,
         "report": report,
@@ -125,6 +138,10 @@ def run(params: dict,
         log(f"Artifact saved: {saved}")
         workspace.save_run("phase1", run_id, metadata)
 
+    if blocking_flags:
+        log("Phase 1 incomplete: " + "; ".join(map(str, blocking_flags)))
+    else:
+        log("Phase 1 complete.")
     log(f"Run saved: {run_id}")
     return metadata
 
@@ -397,7 +414,10 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
         detections, target, image_counts=cam_img_counts, n_lim=params["n_lim"])
 
     diagnostics = _diagnostics(report, detections, cam_res, log)
-    log("Phase 1 complete.")
+    if getattr(report, "blocking_flags", None):
+        log("Phase 1 detection finished with blocking flags.")
+    else:
+        log("Phase 1 complete.")
     return detections, cam_res, diagnostics, report.to_dict()
 
 

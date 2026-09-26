@@ -15,11 +15,13 @@ before, and validated each of them against rules the targets now state.
 """
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -30,12 +32,15 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.calibration_targets.core.target_registry import build_target, target_class
-from pyCamSet.gui.viewer_process import spawn_viewer
+from pyCamSet.gui.viewer_process import run_viewer, spawn_viewer
+from pyCamSet.gui.three_d_style import ThreeDStyleControls
 from pyCamSet.gui.shared_functions import (
     DETECTOR_NONE,
     TargetSettingsForm,
@@ -81,7 +86,18 @@ class CreateTargetDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Create Target")
-        self.resize(620, 720)
+        screen = self.screen() or QApplication.primaryScreen()
+        available = screen.availableGeometry().size() if screen else None
+        if available is None:
+            self.setMinimumSize(480, 520)
+            self.resize(620, 720)
+        else:
+            # Keep this secondary form inside the usable display area while
+            # retaining a sensible minimum on ordinary-sized screens.
+            minimum_width = min(480, available.width())
+            minimum_height = min(520, available.height())
+            self.setMinimumSize(minimum_width, minimum_height)
+            self.resize(min(620, available.width()), min(720, available.height()))
         #: Set once the person has typed their own name into the field;
         #: :meth:`_sync_default_name` leaves it alone from then on.
         self._name_is_user_set = False
@@ -112,6 +128,7 @@ class CreateTargetDialog(QDialog):
         root.addLayout(form)
 
         self._format_combo = QComboBox()
+        self._format_combo.setAccessibleName("Target export format")
         self._format_combo.addItems(list(_EXPORT_CHOICES))
         self._format_combo.currentIndexChanged.connect(self._sync_default_name)
         form.addRow("Export format:", self._format_combo)
@@ -125,35 +142,63 @@ class CreateTargetDialog(QDialog):
 
         out_row = QHBoxLayout()
         self._out_dir_edit = QLineEdit(str(Path.cwd()))
+        self._out_dir_edit.setAccessibleName("Target output directory")
         browse_btn = QPushButton("Browse\u2026")
-        browse_btn.setFixedWidth(70)
+        browse_btn.setMinimumWidth(70)
+        browse_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         browse_btn.clicked.connect(self._browse_output_dir)
         out_row.addWidget(self._out_dir_edit)
         out_row.addWidget(browse_btn)
         form.addRow("Output directory:", out_row)
 
         self._name_edit = QLineEdit()
+        self._name_edit.setAccessibleName("Target output file name")
         self._name_edit.textEdited.connect(self._on_name_edited)
         form.addRow("Output file name:", self._name_edit)
 
-        self._on_target_changed()
-
         root.addWidget(make_separator())
         btn_row = QHBoxLayout()
-        btn_row.addWidget(make_blue_button("Save Target", self._save_target))
-        btn_row.addWidget(make_blue_button("Visualise Target", self._visualise_target))
+        save_button = make_blue_button("Save Target", self._save_target)
+        save_button.setAccessibleName("Save calibration target")
+        btn_row.addWidget(save_button)
+        visualise_button = make_blue_button("Visualise Target", self._visualise_target)
+        visualise_button.setAccessibleName("Visualise calibration target")
+        btn_row.addWidget(visualise_button)
+        save_view_button = QPushButton("Save Target View PNG")
+        save_view_button.setAccessibleName("Save calibration target visualisation as PNG")
+        save_view_button.setToolTip("Save the target using the same renderer used by Visualise Target.")
+        save_view_button.clicked.connect(self._save_target_view_png)
+        btn_row.addWidget(save_view_button)
+        self._save_geometry_button = QPushButton("Export Target Geometry")
+        self._save_geometry_button.setAccessibleName("Export calibration target scene geometry")
+        self._save_geometry_button.setToolTip("Export reusable 3D scene meshes when this target renderer supports them.")
+        self._save_geometry_button.clicked.connect(self._save_target_geometry)
+        btn_row.addWidget(self._save_geometry_button)
+        self._on_target_changed()
         btn_row.addStretch()
         close_btn = QPushButton("Close")
+        close_btn.setAccessibleName("Close target dialog")
         close_btn.clicked.connect(self.close)
         btn_row.addWidget(close_btn)
         root.addLayout(btn_row)
 
         self._status = QLabel("")
-        self._status.setStyleSheet("color: #2e7d32;")
+        self._status.setAccessibleName("Target generation status")
+        self._status.setAccessibleDescription("Save and visualisation feedback for the target")
+        set_text_role(self._status, "success")
         root.addWidget(self._status)
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
+        self._three_d_style = ThreeDStyleControls(
+            self, visual_id="create-target:pyvista", show_open3d_note=False)
+        self._three_d_style.setToolTip(
+            "Presentation-only PyVista target view options; saved PNG uses the same settings.")
+        self._three_d_style.legend.setChecked(False)
+        self._three_d_style.legend.setVisible(False)
+        root.addWidget(self._three_d_style)
+        self._three_d_style.setVisible(
+            "return_scene" in inspect.signature(self._target_class().plot).parameters)
 
     def _browse_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select output directory")
@@ -174,6 +219,11 @@ class CreateTargetDialog(QDialog):
             self._export_form.addRow(f"{parameter.label}:", widget)
             self._export_widgets[parameter.key] = widget
         self._export_rows.setVisible(bool(self._export_widgets))
+        self._save_geometry_button.setEnabled(
+            "return_scene" in inspect.signature(self._target_class().plot).parameters)
+        if hasattr(self, "_three_d_style"):
+            self._three_d_style.setVisible(
+                "return_scene" in inspect.signature(self._target_class().plot).parameters)
         self._sync_default_name()
 
     def _export_kind(self) -> str:
@@ -303,10 +353,62 @@ class CreateTargetDialog(QDialog):
 
         ok, detail = spawn_viewer(
             "pyCamSet.utils.visualise_target",
-            [json.dumps(collected["spec"], default=str)],
+            [json.dumps(collected["spec"], default=str),
+             *self._three_d_arguments()],
         )
         if not ok:
             QMessageBox.critical(self, "Visualise Failed", detail)
             self._terminal.append_line(f"ERROR: {detail}")
             return
         self._terminal.append_line("Opened the target in a separate window.")
+
+    def _export_target_view(self, extension: str, description: str) -> None:
+        """Offer a renderer-backed export from the normal Create Target window."""
+        collected = self._collect()
+        if collected is None:
+            return
+        filters = "PNG image (*.png)" if extension == ".png" else "3D scene (*.ply *.obj *.gltf)"
+        default_name = collected["file_name"] + extension
+        path, _ = QFileDialog.getSaveFileName(
+            self, description, str(collected["out_dir"] / default_name), filters)
+        if not path:  # Cancelling the picker must not start a renderer process.
+            return
+        output_path = Path(path)
+        if output_path.exists():
+            answer = QMessageBox.question(
+                self, "Replace existing file?", f"{output_path} already exists. Replace it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        arguments = [json.dumps(collected["spec"], default=str)]
+        arguments.extend(self._three_d_arguments())
+        flag = "--save-png" if extension == ".png" else "--save-geometry"
+        arguments.extend([flag, str(output_path), "--overwrite"])
+        self._status.setText(f"Saving target visualisation to {output_path}…")
+        self._status.repaint()
+        ok, detail = run_viewer("pyCamSet.utils.visualise_target", arguments)
+        if ok:
+            self._status.setText(f"Saved target visualisation: {output_path}")
+            self._terminal.append_line(f"Saved target visualisation: {output_path}")
+        else:
+            QMessageBox.critical(self, "Target export failed", detail)
+            self._status.setText("Target visualisation export failed.")
+            self._terminal.append_line(f"ERROR: {detail}")
+
+    def _save_target_view_png(self) -> None:
+        """Save the rendered target PNG through the standalone renderer process."""
+        self._export_target_view(".png", "Save Target View PNG")
+
+    def _save_target_geometry(self) -> None:
+        """Save supported scene meshes; Matplotlib-only targets disable this action."""
+        self._export_target_view(".obj", "Export Target Geometry")
+
+    def _three_d_arguments(self) -> list[str]:
+        """Pass PyVista cosmetics only to target renderers that expose a scene."""
+        if "return_scene" not in inspect.signature(self._target_class().plot).parameters:
+            return []
+        application = QApplication.instance()
+        theme_name = (application.property("pycamsetTheme") if application else None) or "Light"
+        return [*self._three_d_style.viewer_arguments(), "--3d-theme", str(theme_name)]

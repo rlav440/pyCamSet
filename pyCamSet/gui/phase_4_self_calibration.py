@@ -15,7 +15,7 @@ from typing import Callable, Optional
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QButtonGroup,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -34,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.gui.shared_functions import (
     CollapsibleSection,
     IMAGE_FOLDER_SCHEMATIC,
@@ -45,6 +47,7 @@ from pyCamSet.gui.shared_functions import (
     make_blue_button,
     make_green_button,
     make_orange_button,
+    make_warning_button,
     make_section_label,
     make_separator,
     render_predecessor_chain_section,
@@ -64,9 +67,6 @@ from pyCamSet.workflow.workspace import (
     resolve_artifact,
 )
 from pyCamSet.gui.assess_calibration import (
-    launch_visualise_calibration_for_run,
-    launch_visualise_calibration_open3d_for_run,
-    launch_save_pyvista_png_for_run,
     merge_phase3_phase4_runs,
     select_latest_visualisation_run,
 )
@@ -114,9 +114,15 @@ class Phase4Tab(QWidget):
 
         form_widget = QWidget()
         form_root = QVBoxLayout(form_widget)
+        # Pack sections at the top; spare height must not open gaps between them.
+        form_root.setAlignment(Qt.AlignmentFlag.AlignTop)
         form_root.setContentsMargins(0, 0, 0, 0)
         form_root.setSpacing(4)
-        top_row.addWidget(form_widget, stretch=1)
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        form_scroll.setWidget(form_widget)
+        top_row.addWidget(form_scroll, stretch=1)
 
         # ── Paths (collapsible) ────────────────────────────────────────
         paths_sect = CollapsibleSection("Paths", expanded=False)
@@ -128,7 +134,8 @@ class Phase4Tab(QWidget):
         self._floc_edit.setToolTip(IMAGE_FOLDER_SCHEMATIC)
         self._floc_edit.textChanged.connect(self._sync_workspace_from_floc)
         floc_btn = QPushButton("Browse…")
-        floc_btn.setFixedWidth(70)
+        floc_btn.setMinimumWidth(70)
+        floc_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
         floc_row.addWidget(floc_btn)
@@ -149,7 +156,8 @@ class Phase4Tab(QWidget):
         self._phase3_camset_edit.setPlaceholderText("Optional override: optimised phase3 camset")
         self._phase3_camset_edit.textChanged.connect(self._update_source_label)
         p3cam_btn = QPushButton("Browse…")
-        p3cam_btn.setFixedWidth(70)
+        p3cam_btn.setMinimumWidth(70)
+        p3cam_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         p3cam_btn.clicked.connect(self._browse_phase3_camset)
         p3cam_clear = QPushButton("Clear")
         p3cam_clear.setFixedWidth(55)
@@ -161,7 +169,7 @@ class Phase4Tab(QWidget):
 
         self._source_lbl = QLabel("Source: auto")
         self._source_lbl.setWordWrap(True)
-        self._source_lbl.setStyleSheet("color: #666;")
+        set_text_role(self._source_lbl, "muted")
         paths_sect.addRow("", self._source_lbl)
 
         # ── Self-Calibration Options ───────────────────────────────────
@@ -185,13 +193,13 @@ class Phase4Tab(QWidget):
 
         self._max_nfev_spin = QSpinBox()
         self._max_nfev_spin.setRange(5, 5000)
-        self._max_nfev_spin.setValue(300)
+        self._max_nfev_spin.setValue(1000)
         self._max_nfev_spin.setFixedWidth(110)
         self._max_nfev_spin.setToolTip(
             "Concept: maximum cost-function evaluations for the solver.\n\n"
-            "Default: 300\n"
+            "Default: 1000\n"
             "Range: 5–5000\n"
-            "Guidance: increase to 1000 if the solver reports non-convergence.\n"
+            "Guidance: increase above 1000 if the solver reports non-convergence.\n"
             "Self-calibration is sensitive; prefer more evaluations over fewer."
         )
         opts_form.addRow("max_nfev:", self._max_nfev_spin)
@@ -246,6 +254,8 @@ class Phase4Tab(QWidget):
 
         self._outliers_combo = QComboBox()
         self._outliers_combo.setObjectName("outliers_combo")
+        # Size to its short choices, like the numeric fields beside it.
+        self._outliers_combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._outliers_combo.addItems(["n", "y"])
         self._outliers_combo.setCurrentText("n")
         self._outliers_combo.setToolTip(
@@ -309,14 +319,13 @@ class Phase4Tab(QWidget):
         self._retry_btn = make_green_button("Retry", self._run_phase4)
         self._retry_btn.setEnabled(False)
         btn_row.addWidget(self._retry_btn)
-        btn_row.addWidget(make_orange_button("Diagnostics ▼", self._open_diagnostics))
+        btn_row.addWidget(make_warning_button("Diagnostics ▼", self._open_diagnostics))
         btn_row.addWidget(make_green_button("Assess Calibration", self._open_assess_calibration))
         btn_row.addStretch()
-        form_root.addLayout(btn_row)
+        root.addLayout(btn_row)
         self._status_lbl = QLabel("Ready")
-        self._status_lbl.setStyleSheet("color: #666;")
-        form_root.addWidget(self._status_lbl)
-        form_root.addStretch()
+        set_text_role(self._status_lbl, "muted")
+        root.addWidget(self._status_lbl)
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
@@ -592,7 +601,7 @@ class Phase4DiagnosticsTab(QWidget):
         root.setContentsMargins(6, 6, 6, 6)
 
         top_btn_row = QHBoxLayout()
-        top_btn_row.addWidget(make_orange_button("▲ Self-Calibration Settings", self._go_to_settings))
+        top_btn_row.addWidget(make_warning_button("▲ Self-Calibration Settings", self._go_to_settings))
         top_btn_row.addStretch()
         root.addLayout(top_btn_row)
 
@@ -637,50 +646,10 @@ class Phase4DiagnosticsTab(QWidget):
         summary_root.addWidget(self._summary_scroll)
         self._sub_tabs.addTab(self._summary_widget, "Summary (D4.1-D4.10)")
 
-        self._visual_widget = QWidget()
-        visual_layout = QVBoxLayout(self._visual_widget)
-        visual_btn_row = QHBoxLayout()
-        self._pyvista_cb = QCheckBox("PyVista")
-        self._pyvista_cb.setChecked(True)
-        self._pyvista_cb.setToolTip("Use PyVista backend (opens native window).")
-        visual_btn_row.addWidget(self._pyvista_cb)
-        self._open3d_cb = QCheckBox("Open3D")
-        self._open3d_cb.setChecked(False)
-        self._open3d_cb.setToolTip("Use Open3D backend (opens a separate interactive window).")
-        visual_btn_row.addWidget(self._open3d_cb)
-        # Enforce mutual exclusivity via QButtonGroup.
-        self._backend_group = QButtonGroup(self)
-        self._backend_group.setExclusive(True)
-        self._backend_group.addButton(self._pyvista_cb)
-        self._backend_group.addButton(self._open3d_cb)
-        self._backend_group.buttonClicked.connect(self._on_backend_changed)
-        self._visual_btn = QPushButton("Assess Calibration")
-        self._visual_btn.clicked.connect(self._run_visualise_target)
-        visual_btn_row.addWidget(self._visual_btn)
-        self._save_png_btn = QPushButton("Save PNG")
-        self._save_png_btn.setToolTip("Save the current visualisation as PNG.")
-        self._save_png_btn.clicked.connect(self._save_visualisation_png)
-        visual_btn_row.addWidget(self._save_png_btn)
-        visual_btn_row.addStretch()
-        visual_layout.addLayout(visual_btn_row)
-        # Shows which run/phase the most recent Assess Calibration click actually
-        # resolved to -- lets a user comparing PyVista vs. Open3D (or comparing this
-        # tab against Phase 3's own Assess Calibration tab) immediately see whether
-        # they are looking at two different camsets/runs on purpose, rather than
-        # mistaking a run-selection mismatch for a rendering disagreement.
-        self._current_run_label = QLabel("")
-        self._current_run_label.setStyleSheet("color: #888; font-style: italic;")
-        visual_layout.addWidget(self._current_run_label)
-        self._open3d_output = QLabel("")
-        self._open3d_output.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._open3d_output.setMinimumHeight(400)
-        self._open3d_output.setStyleSheet("background: #1a1a2e; color: #666;")
-        self._open3d_output.setText("Select Open3D backend and click Assess Calibration to render here.")
-        self._open3d_output.setWordWrap(True)
-        self._open3d_output.setVisible(False)
-        visual_layout.addWidget(self._open3d_output)
-        visual_layout.addStretch()
-        self._sub_tabs.addTab(self._visual_widget, "Assess Calibration")
+        from pyCamSet.gui.assess_panel import AssessCalibrationPanel
+        self._assess = AssessCalibrationPanel("phase4", self._assessment_run, parent=self)
+        self._visual_widget = self._assess
+        self._sub_tabs.addTab(self._assess, "Assess Calibration")
 
         self.refresh()
 
@@ -706,10 +675,12 @@ class Phase4DiagnosticsTab(QWidget):
         self._all_runs = self._combined_runs()
         self._run_selector.refresh(self._all_runs)
         self._render_summary(self._run_selector.get_selected())
+        self._assess.refresh_run()
 
     def _on_selection_changed(self, _runs: list[dict]) -> None:
         self._run_selector.enforce_max_selection(4)
         self._render_summary(self._run_selector.get_selected())
+        self._assess.refresh_run()
 
     def _render_summary(self, runs: list[dict]) -> None:
         while self._summary_layout.count():
@@ -721,7 +692,7 @@ class Phase4DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select one or more runs to inspect diagnostics.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._summary_layout.addWidget(lbl)
             return
@@ -729,7 +700,7 @@ class Phase4DiagnosticsTab(QWidget):
         for run in runs:
             phase = str(run.get("phase", "unknown"))
             hdr = QLabel(f"Run: {run.get('run_id', 'unknown')} ({phase})")
-            hdr.setStyleSheet("font-weight: bold; margin-top: 8px;")
+            set_text_role(hdr, "subheading")
             self._summary_layout.addWidget(hdr)
             form = QFormLayout()
             form.setContentsMargins(16, 0, 0, 0)
@@ -739,10 +710,10 @@ class Phase4DiagnosticsTab(QWidget):
                 d = run.get("diagnostics", {})
                 gate = d.get("quality_gate") or {}
                 status = str(run.get("status", "unknown"))
-                status_label = QLabel(status)
-                status_label.setStyleSheet(
-                    "color: #2e7d32; font-weight: bold;" if status == "complete"
-                    else "color: #c62828; font-weight: bold;")
+                # The mark and the word carry the outcome; colour only reinforces it.
+                complete = status == "complete"
+                status_label = QLabel(("✓ " if complete else "✗ ") + status)
+                set_text_role(status_label, "success" if complete else "danger")
                 form.addRow("Disposition:", status_label)
                 flags = gate.get("blocking_flags", [])
                 form.addRow(
@@ -775,7 +746,8 @@ class Phase4DiagnosticsTab(QWidget):
                         best_val = valid[best_cam]
                         worst_lbl = QLabel(f"worst={worst_cam} ({worst_val:.2f} px), best={best_cam} ({best_val:.2f} px)")
                         if worst_val > 3 * best_val and best_val > 0:
-                            worst_lbl.setStyleSheet("color: red; font-weight: bold;")
+                            worst_lbl.setText("✗ " + worst_lbl.text() + " — worst is over 3× the best")
+                            set_text_role(worst_lbl, "danger")
                         form.addRow("D4.12 per-camera reprojection:", worst_lbl)
                         for cam_name in sorted(d412.keys()):
                             val = d412[cam_name]
@@ -798,73 +770,12 @@ class Phase4DiagnosticsTab(QWidget):
             render_predecessor_chain_section(self._summary_layout, self._workspace_mgr, run)
         self._summary_layout.addStretch()
 
-    def _on_backend_changed(self, btn) -> None:
-        """Handle backend selector toggle — update Open3D output visibility."""
-        if self._open3d_cb.isChecked():
-            self._open3d_output.setText("Click Assess Calibration to open an interactive Open3D window.")
-            self._open3d_output.setVisible(True)
-        else:
-            self._open3d_output.setVisible(False)
-
-    def _on_pyvista_toggled(self, state: int) -> None:
-        # Kept for backwards compatibility; QButtonGroup handles exclusivity.
-        self._open3d_output.setVisible(False)
-
-    def _on_open3d_toggled(self, state: int) -> None:
-        # Kept for backwards compatibility; QButtonGroup handles exclusivity.
-        self._open3d_output.setVisible(bool(state))
-
-    def _run_visualise_target(self) -> None:
-        selected = self._run_selector.get_selected()
-        chosen = select_latest_visualisation_run(selected, self._all_runs)
-        if chosen is None:
-            if self._info_cb.isChecked():
-                QMessageBox.information(self, "Select run", "Select at least one run first.")
-            return
-        self._current_run_label.setText(
-            f"Currently showing: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}"
-        )
-        if self._open3d_cb.isChecked():
-            # On Linux, EGL offscreen rendering is typically available, so we
-            # can embed the Open3D view in the GUI. On Windows, EGL support is
-            # missing so we fall back to a separate native Open3D window.
-            _open3d_widget = self._open3d_output if os.name != "nt" else None
-            ok, msg = launch_visualise_calibration_open3d_for_run(chosen, output_widget=_open3d_widget)
-        else:
-            ok, msg = launch_visualise_calibration_for_run(chosen)
-        if not ok:
-            QMessageBox.warning(self, "Assess Calibration", msg)
-
-    def _save_visualisation_png(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Visualisation as PNG", "calibration_assessment.png", "PNG Files (*.png)"
-        )
-        if not path:
-            return
-        if self._open3d_cb.isChecked():
-            # Open3D opens a separate native window — no embedded pixmap to save.
-            QMessageBox.information(
-                self, "Save PNG",
-                "PNG export is not available with the Open3D backend.\n"
-                "Switch to the PyVista backend to save a PNG export.",
-            )
-        else:
-            # PyVista: offscreen render to PNG.
-            selected = self._run_selector.get_selected()
-            chosen = select_latest_visualisation_run(selected, self._all_runs)
-            if chosen is None:
-                QMessageBox.warning(self, "Save PNG", "Select at least one run first.")
-                return
-            self._current_run_label.setText(
-                f"Currently showing: {chosen.get('phase', 'unknown')} | {chosen.get('run_id', 'unknown')}"
-            )
-            from pathlib import Path
-            ok, msg = launch_save_pyvista_png_for_run(chosen, Path(path))
-            if ok:
-                QMessageBox.information(self, "Save PNG", msg)
-            else:
-                QMessageBox.warning(self, "Save PNG", f"Could not save PNG:\n{msg}")
+    def _assessment_run(self) -> Optional[dict]:
+        """The run Assess Calibration shows: the latest of those selected."""
+        return select_latest_visualisation_run(
+            self._run_selector.get_selected(), getattr(self, "_all_runs", []))
 
     def visualise_from_primary(self) -> None:
-        self._sub_tabs.setCurrentWidget(self._visual_widget)
-        self._run_visualise_target()
+        """Open Assess Calibration; its figures draw on their own."""
+        self._assess.refresh_run()
+        self._sub_tabs.setCurrentWidget(self._assess)

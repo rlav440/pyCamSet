@@ -2,27 +2,30 @@
 
 Run from the repository root, in an environment with the GUI installed::
 
-    python docs/capture_gui_screenshots.py
+    python scripts/capture_gui_screenshots.py
 
 Widgets are rendered with ``QWidget.grab()`` rather than captured from the
 screen.  That renders the window into an offscreen buffer, so it works the
 same under Wayland, X11 and a headless runner, needs no compositor
 cooperation, and never catches a stray notification or cursor.
 
-Two things are pinned so that the output does not depend on the machine that
-made it.  The platform plugin is forced to ``offscreen``, and the style and
-palette are set explicitly -- left alone, Qt follows the desktop theme, and the
-same script produces light screenshots on one machine and dark ones on the
-next.  Each tab is therefore captured twice, once per theme, and the guide
-shows whichever matches the reader's:
+Three things are pinned so that the output does not depend on the machine
+that made it.  The platform plugin defaults to ``offscreen``; the application's
+own Light and Dark themes (``pyCamSet.gui.theme``) are applied explicitly,
+overriding whatever theme the person running the script last chose; and the
+window reads a throwaway configuration directory, so no one's saved folders
+or parameters appear in the documentation.  Each tab is captured twice, once
+per theme, and the guide shows whichever matches the reader's:
 
 ::
 
    ![The Phase 1 tab.](../assets/gui/phase-1-detection-light.png#only-light)
    ![The Phase 1 tab.](../assets/gui/phase-1-detection-dark.png#only-dark)
 
-Setting ``QT_QPA_PLATFORM`` yourself overrides the offscreen default, and
-the rendering will differ; leave it unset to reproduce the committed images.
+Setting ``QT_QPA_PLATFORM`` yourself overrides the offscreen default.  On
+Windows the offscreen plugin has no font database and draws every label as an
+empty box; there, run with ``QT_QPA_PLATFORM=windows`` -- windows are still
+rendered with ``grab()`` and never shown on screen.
 
 Images land in ``docs/assets/gui/``.
 """
@@ -30,10 +33,13 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 # Must be set before QApplication is constructed.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Read and write preferences in a scratch directory, never the user's own.
+os.environ.setdefault("PYCAMSET_CONFIG_DIR", tempfile.mkdtemp(prefix="pycamset-screenshots-"))
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = REPO_ROOT / "docs" / "assets" / "gui"
@@ -50,35 +56,9 @@ def _slug(tab_label: str) -> str:
     return out.strip("-")
 
 
-def _dark_palette():
-    """The standard Fusion dark palette, so dark mode does not need a theme."""
-    from PySide6.QtGui import QColor, QPalette
-
-    p = QPalette()
-    window, base, text = QColor(53, 53, 53), QColor(35, 35, 35), QColor(220, 220, 220)
-    for role, colour in [
-        (QPalette.Window, window),
-        (QPalette.WindowText, text),
-        (QPalette.Base, base),
-        (QPalette.AlternateBase, window),
-        (QPalette.ToolTipBase, window),
-        (QPalette.ToolTipText, text),
-        (QPalette.Text, text),
-        (QPalette.Button, window),
-        (QPalette.ButtonText, text),
-        (QPalette.BrightText, QColor(255, 80, 80)),
-        (QPalette.Link, QColor(90, 160, 240)),
-        (QPalette.Highlight, QColor(60, 115, 175)),
-        (QPalette.HighlightedText, QColor(255, 255, 255)),
-    ]:
-        p.setColor(role, colour)
-    p.setColor(QPalette.Disabled, QPalette.Text, QColor(130, 130, 130))
-    p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(130, 130, 130))
-    return p
-
-
 def _capture_create_target(app, suffix: str) -> str:
     """Grab the Create Target dialog, which the corner button opens."""
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QCheckBox
 
     from pyCamSet.gui.create_target import CreateTargetDialog
@@ -87,6 +67,7 @@ def _capture_create_target(app, suffix: str) -> str:
     terminal_cb.setChecked(True)
 
     dialog = CreateTargetDialog(terminal_cb=terminal_cb, parent=None)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
     # The field defaults to the working directory, which would put whoever ran
     # this script's home directory in the documentation.
     dialog._out_dir_edit.setText("/path/to/targets")
@@ -101,13 +82,19 @@ def _capture_create_target(app, suffix: str) -> str:
     return name
 
 
-def _capture(app, suffix: str) -> list[str]:
-    """Build a fresh window and grab every visible tab."""
+def _capture(app, suffix: str, theme_name: str) -> list[str]:
+    """Build a fresh window in *theme_name* and grab every visible tab."""
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QTabWidget
 
     from pyCamSet.gui.main_window import PyCamSetApp
+    from pyCamSet.gui.theme import apply_theme, refresh_matplotlib_theme
 
     window = PyCamSetApp()
+    # The window applies the last saved theme; the documented one wins.
+    apply_theme(app, theme_name)
+    refresh_matplotlib_theme(theme_name)
+    window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
     window.resize(*WINDOW_SIZE)
     window.show()
     app.processEvents()
@@ -135,21 +122,20 @@ def _capture(app, suffix: str) -> list[str]:
 
 
 def main() -> int:
-    from PySide6.QtGui import QPalette
-    from PySide6.QtWidgets import QApplication, QStyleFactory
+    from PySide6.QtWidgets import QApplication
 
+    from pyCamSet.gui.theme import apply_theme
     from pyCamSet.utils.report_format import force_colour
 
     force_colour(True)
     app = QApplication.instance() or QApplication(sys.argv)
-    app.setStyle(QStyleFactory.create("Fusion"))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     total = 0
-    for suffix, palette in [("light", QPalette()), ("dark", _dark_palette())]:
-        app.setPalette(palette)
-        names = _capture(app, suffix)
+    for suffix, theme_name in [("light", "Light"), ("dark", "Dark")]:
+        names = _capture(app, suffix, theme_name)
+        apply_theme(app, theme_name)
         names.append(_capture_create_target(app, suffix))
         total += len(names)
         print(f"  {suffix}: {len(names)} images")

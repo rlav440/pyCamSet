@@ -254,6 +254,10 @@ class WorkspaceManager:
             # caller merging several load_runs results can sort across them
             # without re-reading mtimes.
             data["_recency_ts"] = _run_recency(data, meta_path)
+            # Where the record was read from: a workspace copied to another
+            # drive keeps its old absolute artifact paths, and the run's own
+            # directory is how its files are still found.
+            data["_run_dir"] = str(runs_dir / run_name)
             entries.append((data["_recency_ts"], data))
 
         entries.sort(key=lambda pair: pair[0])

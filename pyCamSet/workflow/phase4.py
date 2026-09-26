@@ -247,7 +247,8 @@ def _diagnostics(optimisation, handler, stats: dict,
         optimisation, handler, stats, residual_norm.reshape(-1, 1),
         initial_euclid, final_euclid, int(len(detection_data)),
         out_cams=out_cams, previous_cams=previous_cams,
-        params=params, phase3_status=phase3_status)
+        params=params, phase3_status=phase3_status,
+        phase3_run_id=(phase3_run or {}).get("run_id"))
 
     diagnostics = {
         "D4.1_n_free_target_points": int(np.sum(visible)),
@@ -295,7 +296,8 @@ def _quality_gate(optimisation, handler, stats: dict,
                   final_euclid: float, observation_count: int, *,
                   out_cams=None, previous_cams=None,
                   params: Optional[dict] = None,
-                  phase3_status: Optional[str] = None) -> dict:
+                  phase3_status: Optional[str] = None,
+                  phase3_run_id: Optional[str] = None) -> dict:
     """Fail closed when Phase 4 produced no scientifically usable result."""
     blocking: list[str] = []
     values = np.asarray(residual_xy, dtype=float)
@@ -325,6 +327,9 @@ def _quality_gate(optimisation, handler, stats: dict,
     if phase3_status not in (None, "complete"):
         blocking.append(
             f"Phase 3 input disposition was {phase3_status}; re-run it before hand-off")
+    if phase3_status != "complete" or not str(phase3_run_id or "").strip():
+        blocking.append(
+            "Phase 3 input lacks an identified run with complete status")
 
     detection_data = np.asarray(handler.get_detection_data(flatten=True))
     cam_indices = (detection_data[:, 0].astype(int)
@@ -372,6 +377,9 @@ def _quality_gate(optimisation, handler, stats: dict,
         "finite_parameters": finite_parameters,
         "finite_residuals": finite_residuals,
         "solver_success": solver_success,
+        "phase3_provenance_complete": (
+            phase3_status == "complete"
+            and bool(str(phase3_run_id or "").strip())),
         "error_reduced": error_reduced,
         "objective_cost_reduced": objective_cost_reduced,
         "camera_coverage": camera_coverage,

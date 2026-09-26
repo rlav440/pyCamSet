@@ -37,13 +37,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.workflow.recent_folders import (
     forget_folder,
     load_recent_folders,
     remember_folder,
 )
 from pyCamSet.gui.shared_functions import (
-    BLUE_BTN_STYLE,
     IMAGE_FOLDER_SCHEMATIC,
     RunSelectorWidget,
     TAB_PHASE1,
@@ -148,7 +148,7 @@ class Phase0Tab(QWidget):
         self._cam_checkboxes.clear()
         if not self._camera_names:
             lbl = QLabel("(no cameras found)")
-            lbl.setStyleSheet("color: gray; font-size: 10px;")
+            set_text_role(lbl, "hint")
             self._cameras_layout.addWidget(lbl)
             self._rebuilding_cameras = False
             return
@@ -185,12 +185,24 @@ class Phase0Tab(QWidget):
         form = QFormLayout(form_widget)
         form.setContentsMargins(0, 0, 0, 0)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        root.addWidget(form_widget)
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        # The form sits above a stretch so spare height stays below it rather
+        # than opening gaps between its rows.
+        form_page = QWidget()
+        form_page_layout = QVBoxLayout(form_page)
+        form_page_layout.setContentsMargins(0, 0, 0, 0)
+        form_page_layout.addWidget(form_widget)
+        form_page_layout.addStretch(1)
+        form_scroll.setWidget(form_page)
+        root.addWidget(form_scroll, stretch=1)
 
         form.addRow(make_section_label("Paths"))
 
         recent_row = QHBoxLayout()
         self._recent_combo = QComboBox()
+        self._recent_combo.setAccessibleName("Recent image folders")
         self._recent_combo.setToolTip(
             "Image folders this machine has calibrated before.  Picking one "
             "fills in the folder below, which populates every later phase "
@@ -198,7 +210,9 @@ class Phase0Tab(QWidget):
         )
         self._recent_combo.activated.connect(self._on_recent_selected)
         recent_forget_btn = QPushButton("Forget")
-        recent_forget_btn.setFixedWidth(70)
+        recent_forget_btn.setAccessibleName("Forget selected recent folder")
+        recent_forget_btn.setMinimumWidth(70)
+        recent_forget_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         recent_forget_btn.setToolTip("Remove the selected folder from this list.")
         recent_forget_btn.clicked.connect(self._forget_selected_recent)
         recent_row.addWidget(self._recent_combo)
@@ -207,11 +221,14 @@ class Phase0Tab(QWidget):
 
         floc_row = QHBoxLayout()
         self._floc_edit = QLineEdit()
+        self._floc_edit.setAccessibleName("Image folder (f_loc)")
         self._floc_edit.setPlaceholderText("Root folder with per-camera sub-folders")
         self._floc_edit.setToolTip(IMAGE_FOLDER_SCHEMATIC)
         self._floc_edit.textChanged.connect(self._on_floc_change)
         floc_btn = QPushButton("Browse…")
-        floc_btn.setFixedWidth(70)
+        floc_btn.setAccessibleName("Browse for image folder")
+        floc_btn.setMinimumWidth(70)
+        floc_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         floc_btn.setToolTip(IMAGE_FOLDER_SCHEMATIC)
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
@@ -219,6 +236,7 @@ class Phase0Tab(QWidget):
         form.addRow("Image folder (f_loc):", floc_row)
 
         self._ws_edit = QLineEdit()
+        self._ws_edit.setAccessibleName("Workspace folder")
         self._ws_edit.setPlaceholderText("<f_loc>/.pycamset_workspace")
         self._ws_edit.setToolTip(
             "Workspace is fixed to <image_folder>/.pycamset_workspace."
@@ -229,6 +247,7 @@ class Phase0Tab(QWidget):
 
         btn_row = QHBoxLayout()
         self._confirm_btn = make_blue_button("Confirm Image Folder Validity", self._confirm_image_folder_validity)
+        self._confirm_btn.setAccessibleName("Confirm image folder validity")
         self._confirm_btn.setToolTip(
             "Validate that camera subfolders are present and each has "
             "the same non-zero image count."
@@ -236,20 +255,23 @@ class Phase0Tab(QWidget):
         btn_row.addWidget(self._confirm_btn)
 
         self._ok_lbl = QLabel("")
-        self._ok_lbl.setStyleSheet("color: #2e7d32; font-size: 16px;")
+        set_text_role(self._ok_lbl, "success")
         btn_row.addWidget(self._ok_lbl)
 
         self._continue_btn = make_continue_button(self._continue_to_next)
+        self._continue_btn.setAccessibleName("Continue to Phase 1")
         self._continue_btn.setToolTip(
             "Proceed to Phase 1 after successful folder validation."
         )
         self._continue_btn.setEnabled(False)
         btn_row.addWidget(self._continue_btn)
         btn_row.addStretch()
-        form.addRow(btn_row)
+        root.addLayout(btn_row)
 
         self._status_lbl = QLabel("")
-        self._status_lbl.setStyleSheet("color: #2e7d32; font-size: 11px;")
+        self._status_lbl.setAccessibleName("Image folder validation status")
+        self._status_lbl.setAccessibleDescription("Validation feedback for the selected image folder")
+        set_text_role(self._status_lbl, "success")
         self._status_lbl.setWordWrap(True)
         form.addRow("", self._status_lbl)
 
@@ -260,8 +282,11 @@ class Phase0Tab(QWidget):
         self._cameras_layout = QVBoxLayout(self._cameras_area)
         self._cameras_layout.setContentsMargins(0, 0, 0, 0)
         self._cameras_layout.setSpacing(2)
-        self._cameras_placeholder = QLabel("(confirm image folder to populate)")
-        self._cameras_placeholder.setStyleSheet("color: gray; font-size: 10px;")
+        self._cameras_placeholder = QLabel(
+            "No cameras yet. Choose an image folder above, then press "
+            "Confirm Image Folder Validity; the cameras found are listed here.")
+        self._cameras_placeholder.setWordWrap(True)
+        set_text_role(self._cameras_placeholder, "muted")
         self._cameras_layout.addWidget(self._cameras_placeholder)
         cam_scroll = QScrollArea()
         cam_scroll.setWidgetResizable(True)
@@ -536,7 +561,7 @@ class Phase0DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select one or more runs from the list to compare.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._diag_layout.addWidget(lbl)
             return
@@ -544,7 +569,7 @@ class Phase0DiagnosticsTab(QWidget):
         for run in runs:
             run_id = run.get("run_id", "unknown")
             hdr = QLabel(f"Run: {run_id}")
-            hdr.setStyleSheet("font-weight: bold; margin-top: 8px;")
+            set_text_role(hdr, "subheading")
             self._diag_layout.addWidget(hdr)
 
             diag = run.get("diagnostics", {})

@@ -136,7 +136,8 @@ def test_a_blocked_run_turns_the_button_red_and_says_why(qt_app, monkeypatch):
         "report": {"blocking_flags": ["cam2 saw nothing"]},
     })
 
-    assert sf.DULL_RED in btn.styleSheet()
+    # The theme styles the role; the role, not an inline colour, is the contract.
+    assert btn.property("designRole") == "warning"
     assert "cam2 saw nothing" in btn.toolTip()
     assert lines == ["Cannot continue: cam2 saw nothing"]
 
@@ -165,7 +166,7 @@ def test_a_clean_run_leaves_the_button_green(qt_app):
 
     sf.gate_continue_button(btn, terminal, {"error": None, "report": {}})
 
-    assert sf.GREEN in btn.styleSheet()
+    assert btn.property("designRole") == "success"
     assert lines == []
     btn.click()          # no dialog to answer
     assert clicks == [1]

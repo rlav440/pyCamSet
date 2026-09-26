@@ -162,6 +162,10 @@ The implementation adds:
 - GUI run/cancel/retry status handling and quality-gate presentation.
 - non-linear loss handling that cannot silently fall through the custom Schur
   path; SciPy trust-region receives the requested loss and scale.
+  Superseded since: the Schur solver now honours SciPy's named robust losses
+  itself (`pyCamSet/optimisation/robust_loss.py`), so a robust Phase 4 stays
+  on it; the trust-region fallback remains for the cases `can_use_schur`
+  rejects, and its warning always gives the reason.
 
 The missing-image gate and initial-error fallback each have regression tests.
 
@@ -181,8 +185,9 @@ The missing-image gate and initial-error fallback each have regression tests.
   objects, uses `set_extrinsic`, and preserves the Phase 3 rig for comparison.
 - Saved GOOD-run drift recomputation: passed; both runs produce the same camera
   parameter arrays, while their serialised camset files have distinct hashes.
-- Robust-loss solver routing regression: passed; the custom Schur path is not
-  used when `loss` is non-linear.
+- Robust-loss solver routing regression: passed at the time; it asserted the
+  custom Schur path was not used for a non-linear loss. It now asserts the
+  opposite (`test_robust_loss_runs_on_the_schur_solver`), per the note above.
 - Real r_nebula runner: exit 0; quality disposition `incomplete` as reported above.
 - Real M_NEBULA telecentric runner: exit 0 at `max_nfev=100`; quality disposition
   `incomplete` because the final mean error increased despite objective-cost

@@ -357,18 +357,30 @@ def test_a_real_solve_fills_in_the_whole_contract(short_charuco_handler):
 
 
 @pytest.mark.data
-def test_robust_loss_does_not_silently_use_the_schur_solver(short_charuco_handler, monkeypatch):
-    """A non-linear loss must reach a solver that honours it."""
+def test_robust_loss_runs_on_the_schur_solver(short_charuco_handler, monkeypatch):
+    """A non-linear loss stays on the Schur solver, which honours it.
+
+    It used to fall back to scipy's trust region solver, which is far slower
+    on a real rig; the Schur path now minimises the same robust objective.
+    """
     short_charuco_handler.problem_opts.update({"loss": "soft_l1", "f_scale": 1.0})
+    seen = []
+    real = backend.run_schur_bundle_adjustment
 
-    def schur_must_not_run(*_args, **_kwargs):
-        pytest.fail("custom Schur solver cannot honour scipy robust loss")
+    def recording(*args, **kwargs):
+        seen.append(True)
+        return real(*args, **kwargs)
 
-    monkeypatch.setattr(backend, "run_schur_bundle_adjustment", schur_must_not_run)
-    _optimisation, _camset, stats = backend.run_bundle_adjustment_with_stats(
+    monkeypatch.setattr(backend, "run_schur_bundle_adjustment", recording)
+    optimisation, _camset, stats = backend.run_bundle_adjustment_with_stats(
         short_charuco_handler, threads=1)
 
+    assert seen, "the robust loss fell back to the trust region solver"
     assert np.isfinite(stats["final_euclid"])
+    # fun is the raw reprojection residual, and cost the robust objective,
+    # which is below the plain half sum of squares for soft_l1.
+    raw = 0.5 * float(optimisation.fun @ optimisation.fun)
+    assert optimisation.cost <= raw + 1e-9
 
 
 @pytest.mark.data

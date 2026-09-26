@@ -100,8 +100,10 @@ def _gauge_square_size(target) -> float:
         adjacent = adjacent[np.isfinite(adjacent) & (adjacent > 1e-12)]
         if adjacent.size:
             candidate = float(np.min(adjacent))
-            if not np.isfinite(declared) or not np.isclose(candidate, declared, rtol=0.1):
-                return candidate
+            if np.isfinite(declared) and np.isclose(candidate, declared, rtol=0.1):
+                # already in point_data's units: a target with no mismatch
+                return declared
+            return candidate
     if np.isfinite(declared) and declared > 1.0:
         return declared / 1000.0
     return declared
@@ -587,7 +589,12 @@ class SelfBundleHandler(TemplateBundleHandler):
             ref_map = cdist(ref_points[vm], ref_points[vm])[inds]
             # One square's edge only: every other distance is some multiple of
             # it, and a pair a whole board apart is the least well solved.
-            mask = np.isclose(ref_map, self.target.square_size)
+            #
+            # Several target classes keep their declared square size in
+            # millimetres while storing point_data in metres; using the
+            # declaration directly then leaves no valid pair and aborts the
+            # self calibration, so it is read back in point_data's own units.
+            mask = np.isclose(ref_map, _gauge_square_size(self.target))
             new_map, ref_map = new_map[mask], ref_map[mask]
             if len(ref_map) == 0:
                 raise ValueError(
@@ -654,6 +661,30 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         inv_update = np.linalg.inv(update_tform)
         new_points = gu.h_tform(new_points, update_tform)
+        # Only the points nothing observed are left where they are.
+        #
+        # This handler holds a few scalars at their model coordinates to pin the
+        # gauge, so those scalars carry no parameter and the solve never moves
+        # them.  Where such a point was also never seen, it has no residual row
+        # at all: the gauge can leave it exactly where the model put it -- which
+        # is where the gauge is putting everything else -- and no pixel cares,
+        # because nothing images it.
+        #
+        # Carrying it through the gauge anyway moves it by the whole size of the
+        # correction.  On a real seven-camera cube the 15 points no camera saw
+        # came back a mean 19.68 mm, and up to 26.41 mm, from the printed model
+        # whose largest point separation is 16.19 mm -- and it is those points,
+        # not the cube, that then set the cloud's bounding size: the same run's
+        # cloud measured 30.04 mm across.
+        #
+        # A point that WAS seen is a different matter.  Its pinned scalars are
+        # not free, but its pixel still ties it to the rest of the cloud, so it
+        # has to move with the world like every other imaged point -- a rig with
+        # one held component on a point several cameras see is the case that
+        # separates this rule from one keyed on the parameter mask.
+        # Leaving such a point behind moves its pixel.
+        unobserved = ~np.asarray(self.visible_feature_mask, dtype=bool)
+        new_points = np.where(unobserved[:, None], point_estimate, new_points)
         #proj matricies never change: scale invariance!
 
         # Which world frame the cameras end up in depends on what their pose

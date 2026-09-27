@@ -9,7 +9,7 @@
 numpy
 scipy
 matplotlib
-opencv-python>=4.8
+opencv-contrib-python>=4.8
 tqdm
 numba
 threadpoolctl

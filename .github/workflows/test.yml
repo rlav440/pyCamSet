@@ -28,7 +28,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.11", "3.12"]
-        # opencv-python carries no upper bound, so pip resolves it to 5.x
+        # opencv-contrib-python carries no upper bound, so pip resolves it to 5.x
         # everywhere.  Pin the major version per job instead of letting the
         # resolver decide: without the explicit 4.x entries below, the
         # supported floor would stop being exercised the day 5.x shipped.
@@ -61,7 +61,7 @@ jobs:
           pip install -e . --no-deps
           pip install -r requirements_core.txt
           pip install pytest>=7.0 pytest-timeout pytest-cov
-          pip install "opencv-python${{ matrix.opencv }}"
+          pip install "opencv-contrib-python${{ matrix.opencv }}"
 
       - name: Native graphics libraries
         # Three things want these, so every Linux job gets them, lean included:

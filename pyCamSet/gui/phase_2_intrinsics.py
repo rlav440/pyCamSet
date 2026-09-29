@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -36,8 +37,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.utils.paths import long_path
 from pyCamSet.gui.shared_functions import (
+    hold_run_button,
     CollapsibleSection,
     DETECTOR_INHERIT,
     MatplotlibFigureCard,
@@ -50,7 +53,7 @@ from pyCamSet.gui.shared_functions import (
     make_blue_button,
     gate_continue_button,
     make_continue_button,
-    make_orange_button,
+    make_warning_button,
     make_scrollable_tab,
     make_section_label,
     make_separator,
@@ -183,15 +186,26 @@ class Phase2Tab(QWidget):
 
         form_widget = QWidget()
         form_root = QVBoxLayout(form_widget)
+        # Pack sections at the top; spare height must not open gaps between them.
+        form_root.setAlignment(Qt.AlignmentFlag.AlignTop)
         form_root.setContentsMargins(0, 0, 0, 0)
         form_root.setSpacing(4)
-        top_row.addWidget(form_widget, stretch=1)
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        form_scroll.setWidget(form_widget)
+        top_row.addWidget(form_scroll, stretch=1)
 
-        side = QWidget()
+        side = self._side = QWidget()
         side.setFixedWidth(200)
         side_layout = QVBoxLayout(side)
         side_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         top_row.addWidget(side)
+        # The finished run's result, right of the controls; it takes the
+        # empty side column's place once there is something to show.
+        from pyCamSet.gui.run_results import RunResultPanel
+        self._result_panel = RunResultPanel("Intrinsics", self._open_diagnostics)
+        top_row.addWidget(self._result_panel, stretch=1)
 
         # ── Paths (collapsible) ────────────────────────────────────────
         paths_sect = CollapsibleSection("Paths", expanded=False)
@@ -206,7 +220,8 @@ class Phase2Tab(QWidget):
         )
         self._floc_edit.textChanged.connect(self._sync_workspace_from_floc)
         floc_btn = QPushButton("Browse…")
-        floc_btn.setFixedWidth(70)
+        floc_btn.setMinimumWidth(70)
+        floc_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         floc_btn.setToolTip("Choose the image root folder manually.")
         floc_btn.clicked.connect(self._browse_floc)
         floc_row.addWidget(self._floc_edit)
@@ -221,7 +236,8 @@ class Phase2Tab(QWidget):
         )
         self._phase1_run_combo.currentIndexChanged.connect(self._on_phase1_source_changed)
         src_refresh_btn = QPushButton("Refresh")
-        src_refresh_btn.setFixedWidth(70)
+        src_refresh_btn.setMinimumWidth(70)
+        src_refresh_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         src_refresh_btn.setToolTip("Reload available Phase 1 runs from workspace.")
         src_refresh_btn.clicked.connect(self._refresh_phase1_sources)
         src_row.addWidget(self._phase1_run_combo)
@@ -237,11 +253,13 @@ class Phase2Tab(QWidget):
         )
         self._det_pickle_edit.textChanged.connect(lambda _: self._update_detection_source_label())
         det_browse_btn = QPushButton("Browse…")
-        det_browse_btn.setFixedWidth(70)
+        det_browse_btn.setMinimumWidth(70)
+        det_browse_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         det_browse_btn.setToolTip("Select a specific detected_datapoints.pickle file.")
         det_browse_btn.clicked.connect(self._browse_detection_pickle)
         det_clear_btn = QPushButton("Clear")
-        det_clear_btn.setFixedWidth(55)
+        det_clear_btn.setMinimumWidth(55)
+        det_clear_btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         det_clear_btn.setToolTip("Clear manual override and return to auto source resolution.")
         det_clear_btn.clicked.connect(lambda: self._det_pickle_edit.setText(""))
         det_row.addWidget(self._det_pickle_edit)
@@ -250,7 +268,7 @@ class Phase2Tab(QWidget):
         paths_sect.addRow("Detection source path:", det_row)
 
         self._phase1_lbl = QLabel("Detection source: auto")
-        self._phase1_lbl.setStyleSheet("color: #666;")
+        set_text_role(self._phase1_lbl, "muted")
         self._phase1_lbl.setWordWrap(True)
         paths_sect.addRow("", self._phase1_lbl)
 
@@ -330,19 +348,17 @@ class Phase2Tab(QWidget):
         opts_form.addRow("Fixed params (JSON):", self._fp_edit)
 
         # ── Action buttons ─────────────────────────────────────────────
-        form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
-        run_btn = make_blue_button("▶  Run Phase 2", self._run_phase2)
+        run_btn = self._run_btn = make_blue_button("▶  Run Phase 2", self._run_phase2)
         run_btn.setToolTip("Run per-camera initial intrinsics calibration.")
         btn_row.addWidget(run_btn)
-        diag_btn = make_orange_button("Diagnostics ▼", self._open_diagnostics)
+        diag_btn = make_warning_button("Diagnostics ▼", self._open_diagnostics)
         diag_btn.setToolTip("Open Phase 2 diagnostics view.")
         btn_row.addWidget(diag_btn)
         self._continue_btn = make_continue_button(self._continue_to_next)
         btn_row.addWidget(self._continue_btn)
         btn_row.addStretch()
-        form_root.addLayout(btn_row)
-        form_root.addStretch()
+        root.addLayout(btn_row)
 
         side_layout.addStretch()
 
@@ -601,10 +617,15 @@ class Phase2Tab(QWidget):
         self._worker.finished.connect(self._on_run_finished)
         self._worker.error.connect(
             lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
+        hold_run_button(self._run_btn, self._worker)
         self._worker.start()
 
     def _on_run_finished(self, metadata: dict) -> None:
         gate_continue_button(self._continue_btn, self._terminal, metadata)
+        from pyCamSet.gui.run_results import show_run_result
+        show_run_result(self._result_panel, "phase2", metadata,
+                        self._workspace_mgr.workspace_path)
+        self._side.setVisible(not self._result_panel.isVisibleTo(self))
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
 
@@ -716,7 +737,7 @@ class Phase2DiagnosticsTab(QWidget):
         root.setContentsMargins(6, 6, 6, 6)
 
         top_btn_row = QHBoxLayout()
-        top_btn_row.addWidget(make_orange_button("▲ Intrinsics Settings", self._go_to_settings))
+        top_btn_row.addWidget(make_warning_button("▲ Intrinsics Settings", self._go_to_settings))
         top_btn_row.addStretch()
         root.addLayout(top_btn_row)
 
@@ -815,7 +836,7 @@ class Phase2DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select one or more runs to compare diagnostics.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._summary_layout.addWidget(lbl)
             return
@@ -823,7 +844,7 @@ class Phase2DiagnosticsTab(QWidget):
         for run in runs:
             d = run.get("diagnostics", {})
             hdr = QLabel(f"Run: {run.get('run_id', 'unknown')}")
-            hdr.setStyleSheet("font-weight: bold; margin-top: 8px;")
+            set_text_role(hdr, "subheading")
             self._summary_layout.addWidget(hdr)
 
             form = QFormLayout()
@@ -866,7 +887,7 @@ class Phase2DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select a run to view per-image reprojection errors.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._per_view_layout.addWidget(lbl)
             return
@@ -915,6 +936,10 @@ class Phase2DiagnosticsTab(QWidget):
         ax.grid(alpha=0.25)
         ax.legend(fontsize=8)
 
+        from pyCamSet.gui.theme import apply_matplotlib_theme
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        apply_matplotlib_theme(fig, app.property("pycamsetTheme") if app else "Light")
         canvas = FigureCanvasQTAgg(fig)
         canvas.setMinimumHeight(320)
 
@@ -1047,8 +1072,31 @@ class Phase2DiagnosticsTab(QWidget):
 
         create_btn.clicked.connect(_on_create)
 
+        csv_rows = []
+        for camera_name, camera_values in d26.items():
+            view_indices, view_errors, _, _, _ = _normalise_per_view_series(camera_values)
+            csv_rows.extend((camera_name, int(view_index), float(error))
+                            for view_index, error in zip(view_indices, view_errors)
+                            if not np.isnan(error))
         self._per_view_layout.addWidget(ctrl)
-        self._per_view_layout.addWidget(canvas)
+        self._per_view_layout.addWidget(MatplotlibFigureCard(
+            f"D2.6/D2.7 per-image reprojection error ({run.get('run_id', '?')})",
+            fig, FigureCanvasQTAgg, parent=self._per_view_widget, min_height=320,
+            canvas=canvas,
+            visual_id="diagnostic:phase2:d2.6-d2.7-per-image-reprojection",
+            csv_export={
+                "columns": ["camera", "view_index", "rms_reprojection_error_px"],
+                "rows": csv_rows,
+                "metadata": {
+                    "run_id": run.get("run_id"), "phase": "phase2",
+                    "diagnostic": "D2.6_per_view_reprojection",
+                    "data_kind": "observed diagnostic values from run diagnostics",
+                    "units": {"view_index": "index", "rms_reprojection_error_px": "px"},
+                    "x_axis": "view_index", "y_axis": "rms_reprojection_error_px",
+                    "threshold_line": "interactive display-only threshold; not included in exported source values",
+                },
+            },
+        ))
 
     def _create_phase2_run_from_threshold(
         self,
@@ -1116,6 +1164,8 @@ class Phase2DiagnosticsTab(QWidget):
             terminal = getattr(settings_tab, "_terminal", None)
             if terminal is not None:
                 worker.line_ready.connect(terminal.append_line)
+            # A rerun and a settings-tab run would write the same workspace.
+            hold_run_button(getattr(settings_tab, "_run_btn", None), worker)
             return
 
     def _load_camset_cached(self, camset_path: Path) -> tuple[Optional[object], Optional[str], Optional[str]]:
@@ -1155,7 +1205,7 @@ class Phase2DiagnosticsTab(QWidget):
 
         if not runs:
             lbl = QLabel("Select a run to view the distortion field.")
-            lbl.setStyleSheet("color: gray;")
+            set_text_role(lbl, "muted")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._distortion_layout.addWidget(lbl)
             return
@@ -1194,6 +1244,7 @@ class Phase2DiagnosticsTab(QWidget):
         n_cols = 2
         n_rows = int(math.ceil(n / n_cols))
         fig = Figure(figsize=(12.0, max(4.0, 4.2 * n_rows)), tight_layout=True)
+        distortion_csv_rows = []
         for i, cam in enumerate(cams, start=1):
             res = np.array(cam.res).astype(int).reshape(-1)
             w = int(res[0]) if res.size >= 2 else 1280
@@ -1241,6 +1292,10 @@ class Phase2DiagnosticsTab(QWidget):
             u = pts_distorted[:, 0] - pts_ideal[:, 0]
             v = pts_distorted[:, 1] - pts_ideal[:, 1]
             mag = np.hypot(u, v)
+            distortion_csv_rows.extend(
+                (cam.name, float(x), float(y), float(dx), float(dy), float(magnitude))
+                for x, y, dx, dy, magnitude in zip(pts_ideal[:, 0], pts_ideal[:, 1], u, v, mag)
+            )
 
             ax = fig.add_subplot(n_rows, n_cols, i)
             sc = ax.quiver(pts_ideal[:, 0], pts_ideal[:, 1], u, -v, mag,
@@ -1261,6 +1316,17 @@ class Phase2DiagnosticsTab(QWidget):
                 FigureCanvasQTAgg,
                 parent=self._distortion_widget,
                 min_height=460,
+                csv_export={
+                    "columns": ["camera", "ideal_x_px", "ideal_y_px", "distortion_dx_px", "distortion_dy_px", "displacement_magnitude_px"],
+                    "rows": distortion_csv_rows,
+                    "metadata": {
+                        "run_id": run.get("run_id"), "phase": "phase2",
+                        "diagnostic": "D2.8 forward distortion field",
+                        "data_kind": "derived model output computed from selected camset intrinsics/distortion; not observed detections",
+                        "units": {"coordinates": "px", "displacement": "px"},
+                        "x_axis": "ideal_x_px", "y_axis": "ideal_y_px",
+                    },
+                },
             )
         )
 

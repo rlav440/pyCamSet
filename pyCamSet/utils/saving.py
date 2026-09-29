@@ -153,8 +153,11 @@ def save_camset(
     # set of anything but pinholes reads back as pinholes.
     cam_config['cam_module'] = cams[0].__class__.__module__
     # Files written before this marker hold res in either order; see
-    # _res_is_transposed for how load_CameraSet tells them apart.
-    cam_config[RES_ORDER_KEY] = RES_ORDER
+    # _res_is_transposed for how load_CameraSet tells them apart.  A set loaded
+    # from such a file without its order being settled stays unmarked, so the
+    # marker never vouches for an order nothing established.
+    if not getattr(cams, 'res_order_unsettled', False):
+        cam_config[RES_ORDER_KEY] = RES_ORDER
 
     for cam in cams:
         temp_dict = {
@@ -251,8 +254,10 @@ def image_sizes_from_folder(folder: Path | str) -> dict[str, tuple[int, int]]:
         ims = sorted(glob_ims(cam_folder, recursive=False))
         if not ims:
             continue
-        # imdecode rather than imread, which cannot open a non-ASCII path on Windows
-        im = cv2.imdecode(np.fromfile(ims[0], dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        # imdecode rather than imread, which cannot open a non-ASCII path on
+        # Windows.  IMREAD_COLOR, as detection's imread, so that an EXIF
+        # orientation turns the image here just as it did for detection.
+        im = cv2.imdecode(np.fromfile(ims[0], dtype=np.uint8), cv2.IMREAD_COLOR)
         if im is not None:
             sizes[cam_folder.name] = (int(im.shape[1]), int(im.shape[0]))
     return sizes
@@ -337,9 +342,10 @@ def _res_order_from_principal_point(saved_structure, stored, cam_module):
     return votes.pop() if len(votes) == 1 else None
 
 
-def _res_is_transposed(saved_structure, cam_module, image_sizes, f_loc) -> bool:
+def _res_is_transposed(saved_structure, cam_module, image_sizes, f_loc) -> bool | None:
     """
-    Whether the file's ``res`` values are ``(height, width)``.
+    Whether the file's ``res`` values are ``(height, width)``; None for an
+    unmarked file whose order nothing settles, which is read as stored.
 
     In order: the images' own sizes, if the caller has them; else where the
     target was detected, which no calibrated file lacks; then the file's marker;
@@ -379,6 +385,7 @@ def _res_is_transposed(saved_structure, cam_module, image_sizes, f_loc) -> bool:
             "nothing in it settles which order its res is in; it is read as "
             "stored. Pass image_sizes= (see image_sizes_from_folder) to check "
             "it against the images.")
+        return None
     return False
 
 
@@ -416,7 +423,7 @@ def load_CameraSet(f_loc: Path|str,
 
     for cam_name, data in saved_structure['cams'].items():
         res = np.array(data['res'])
-        if transposed:
+        if transposed:  # None, unsettled, is read as stored
             res = res[::-1].copy()
         kwargs = dict(
             extrinsic=np.array(data['ext']), intrinsic=np.array(data['int']),
@@ -429,6 +436,8 @@ def load_CameraSet(f_loc: Path|str,
         camset_module,
         'CameraSet',
         camera_dict=cam_dict)
+    if transposed is None:
+        camset.res_order_unsettled = True
 
     try:
         optim = saved_structure['optim']

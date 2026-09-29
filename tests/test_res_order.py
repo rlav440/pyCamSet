@@ -3,9 +3,10 @@
 Until 2026-09-29 the calibration stored ``image.shape[:2]``, ``(height, width)``,
 while ``set_resolutions_from_file`` stored ``(width, height)``; COLMAP's
 cameras.txt, written from ``res``, then had WIDTH and HEIGHT swapped.  The
-repository's own fixtures hold both: ``calibration_charuco`` and
-``calibration_ccube``'s initial cameras are ``(height, width)``, the ccube
-self-calibration is ``(width, height)``.
+repository's own fixtures hold both: ``calibration_charuco``'s initial cameras
+are ``(height, width)``, the ccube self-calibration is ``(width, height)``.
+(``calibration_ccube``'s initial cameras are not a fixture: the ccube
+calibration test writes that file, in the current order.)
 """
 
 from __future__ import annotations
@@ -55,8 +56,7 @@ def _telecentric(res):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("folder,width,height", [("calibration_charuco", 1280, 1024),
-                                                 ("calibration_ccube", 1920, 1080)])
+@pytest.mark.parametrize("folder,width,height", [("calibration_charuco", 1280, 1024)])
 def test_a_legacy_height_width_file_loads_as_width_height(folder, width, height, caplog):
     """No marker, no detections: the pinhole principal points settle it."""
     with caplog.at_level(logging.INFO):
@@ -66,7 +66,7 @@ def test_a_legacy_height_width_file_loads_as_width_height(folder, width, height,
     assert "stored (height, width)" in caplog.text
 
 
-@pytest.mark.parametrize("folder", ["calibration_charuco", "calibration_ccube"])
+@pytest.mark.parametrize("folder", ["calibration_charuco"])
 def test_the_images_agree_with_the_order_chosen(folder):
     """The fixtures' own images are the ground truth the heuristics stand in for."""
     sizes = image_sizes_from_folder(DATA / folder)
@@ -130,6 +130,30 @@ def test_an_unsettled_legacy_file_warns_and_is_read_as_stored(tmp_path, caplog):
     assert tuple(back["cam"].res) == (448, 375)
     assert any(r.levelno == logging.WARNING and "nothing in it settles" in r.getMessage()
                for r in caplog.records)
+
+
+def test_an_unsettled_legacy_file_resaved_stays_unmarked(tmp_path):
+    """Saving it again must not vouch for an order nothing established."""
+    path = tmp_path / "tele.camset"
+    save_camset(CameraSet(camera_dict={"cam": _telecentric((448, 375))}), path)
+    _unmark(path)
+    resaved = tmp_path / "resaved.camset"
+    save_camset(load_CameraSet(path), resaved)
+    saved = json.loads(resaved.read_text(encoding="utf-8"))
+    assert RES_ORDER_KEY not in saved["cam_config"]
+    # so the images can still settle it later
+    assert tuple(load_CameraSet(resaved, image_sizes={"cam": (375, 448)})["cam"].res) == (375, 448)
+
+
+def test_image_sizes_follow_the_exif_orientation_detection_sees(tmp_path):
+    """cv2.imread, which detection uses, turns an image by its EXIF orientation."""
+    Image = pytest.importorskip("PIL.Image")
+    cam_folder = tmp_path / "cam"
+    cam_folder.mkdir()
+    exif = Image.Exif()
+    exif[0x0112] = 6  # stored 400 wide, 300 high; shown turned a quarter
+    Image.fromarray(np.zeros((300, 400, 3), dtype=np.uint8)).save(cam_folder / "im.jpg", exif=exif)
+    assert image_sizes_from_folder(tmp_path) == {"cam": (300, 400)}
 
 
 def test_image_sizes_settle_an_unsettled_file(tmp_path):

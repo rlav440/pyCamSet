@@ -241,6 +241,11 @@ class ExportCalibrationTab(QWidget):
                     camset_to_colmap(cams, out_dir)
                     success += 1
                     self._terminal.append_line(f"OK   {run_id}: wrote cameras.txt and rig_config.json to {out_dir}")
+                    if _is_telecentric(cams):
+                        self._terminal.append_line(
+                            "     -> telecentric rig: each camera written as its exact pinhole "
+                            "equivalent (PINHOLE model, centre 1/eps behind it); undistort the "
+                            "images with each camera's own model first.")
                 else:
                     depth_min, depth_max, depth_num = depth_params
                     ranges = camset_to_apde(cams, out_dir, depth_min=depth_min,

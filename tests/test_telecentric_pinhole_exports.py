@@ -1,4 +1,4 @@
-"""A telecentric rig exports to APDe-MVS through its exact pinhole equivalent."""
+"""A telecentric rig exports to APDe-MVS and COLMAP through its exact pinhole equivalent."""
 
 from __future__ import annotations
 
@@ -73,3 +73,50 @@ def test_a_calibrated_telecentric_rig_exports_to_apde(telecentric_problem, tmp_p
         # the typed 0.1-0.8 range is replaced by one around this camera's scene
         assert depth[0] == pytest.approx(ranges[name][0]) and depth[3] == pytest.approx(ranges[name][1])
         assert depth[0] < in_camera[2].min() and in_camera[2].max() < depth[3]
+
+
+def test_a_telecentric_rig_exports_to_colmap_as_pinholes(tmp_path):
+    """cameras.txt and rig_config.json together reproduce each lens exactly."""
+    import json
+
+    from scipy.spatial.transform import Rotation
+
+    from pyCamSet.utils.saving import camset_to_colmap
+
+    cams = CameraSet(camera_dict={
+        name: make_telecentric_camera(name, rotation=rot, eps=eps)
+        for name, rot, eps in (("cam_0", (0.0, 0.0, 0.0), 0.3),
+                               ("cam_1", (0.0, 0.5, 0.0), 0.45),
+                               ("cam_2", (-0.4, 0.0, 0.2), 0.2))
+    })
+    assert camset_to_colmap(cams, tmp_path) == "PINHOLE"
+
+    rows = [line.split() for line in (tmp_path / "cameras.txt").read_text(encoding="utf-8").splitlines()
+            if not line.startswith("#")]
+    rig = json.loads((tmp_path / "rig_config.json").read_text(encoding="utf-8"))[0]["cameras"]
+    names = cams.get_names()
+    reference = cams[names[0]].pinhole_equivalent().extrinsic
+    points = np.random.default_rng(4).uniform(-0.02, 0.02, (100, 3))
+    in_reference = reference @ np.c_[points, np.ones(len(points))].T
+    for name, row, entry in zip(names, rows, rig):
+        assert row[1] == "PINHOLE" and len(row) == 8
+        fx, fy, cx, cy = map(float, row[4:8])
+        magnification = cams[name].magnification
+        assert fx == pytest.approx(magnification[0] / cams[name].telecentricity)
+        cam_from_rig = np.eye(4)
+        if not entry.get("ref_sensor"):
+            w, x, y, z = entry["cam_from_rig_rotation"]
+            cam_from_rig[:3, :3] = Rotation.from_quat([x, y, z, w]).as_matrix()
+            cam_from_rig[:3, 3] = entry["cam_from_rig_translation"]
+        in_camera = (cam_from_rig @ in_reference)[:3]
+        intrinsic = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]])
+        uv = (intrinsic @ in_camera)[:2] / (intrinsic @ in_camera)[2]
+        np.testing.assert_allclose(uv.T, cams[name].project_points(points, distort=False), atol=1e-6)
+
+
+def test_colmap_refuses_a_lens_without_a_pinhole_equivalent(tmp_path):
+    from pyCamSet.utils.saving import camset_to_colmap
+
+    cams = CameraSet(camera_dict={"cam_0": make_telecentric_camera("cam_0", eps=0.0)})
+    with pytest.raises(ValueError, match="infinity"):
+        camset_to_colmap(cams, tmp_path)

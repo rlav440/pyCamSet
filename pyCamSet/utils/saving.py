@@ -432,7 +432,7 @@ def rotation_matrix_to_quaternion_wxyz(rot_mat: np.ndarray) -> np.ndarray:
     return np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
 
 
-def export_cameras_txt(cams, output_folder: Path):
+def export_cameras_txt(cams, output_folder: Path, model: str = "FULL_OPENCV"):
     """
     Write cameras.txt containing one entry per physical camera.
 
@@ -442,7 +442,12 @@ def export_cameras_txt(cams, output_folder: Path):
 
     :param cams: pyCamSet CameraSet object
     :param output_folder: directory to write cameras.txt into
+    :param model: ``"FULL_OPENCV"`` (focal lengths, principal point and the
+        Brown-Conrady distortion) or ``"PINHOLE"`` (fx, fy, cx, cy only, for
+        cameras without distortion or images already undistorted)
     """
+    if model not in ("FULL_OPENCV", "PINHOLE"):
+        raise ValueError(f"unsupported COLMAP camera model {model!r}")
     # COLMAP has no telecentric model, and FULL_OPENCV would silently reinterpret
     # a magnification as a focal length and a division coefficient as k1.
     telecentric = [cam.name for cam in cams
@@ -451,7 +456,8 @@ def export_cameras_txt(cams, output_folder: Path):
         raise ValueError(
             "COLMAP has no telecentric camera model, so "
             f"{', '.join(map(str, telecentric))} cannot be exported to it. "
-            "Every COLMAP model is perspective."
+            "Every COLMAP model is perspective. camset_to_colmap writes a "
+            "telecentric rig through its exact pinhole equivalent instead."
         )
 
     output_folder = Path(output_folder)               # normalise to Path
@@ -485,14 +491,16 @@ def export_cameras_txt(cams, output_folder: Path):
             padded = list(dist) + [0.0] * (5 - len(dist))
             k1, k2, p1, p2, k3 = padded
 
-        # FULL_OPENCV params: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
-        # k4, k5, k6 are not modelled by pyCamSet — set to zero
-        k4, k5, k6 = 0.0, 0.0, 0.0
-        model = "FULL_OPENCV"
-        params = (
-            f"{fx} {fy} {cx} {cy} "
-            f"{k1} {k2} {p1} {p2} {k3} {k4} {k5} {k6}"
-        )
+        if model == "PINHOLE":
+            params = f"{fx} {fy} {cx} {cy}"
+        else:
+            # FULL_OPENCV params: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
+            # k4, k5, k6 are not modelled by pyCamSet — set to zero
+            k4, k5, k6 = 0.0, 0.0, 0.0
+            params = (
+                f"{fx} {fy} {cx} {cy} "
+                f"{k1} {k2} {p1} {p2} {k3} {k4} {k5} {k6}"
+            )
         lines.append(f"{cam_id} {model} {width} {height} {params}")
 
     cameras_path = output_folder / "cameras.txt"      # target file path
@@ -610,6 +618,12 @@ def camset_to_colmap(
     """
     Export a pyCamSet CameraSet to COLMAP format in a single call.
 
+    A telecentric rig is written through each camera's exact pinhole
+    equivalent (:meth:`TelecentricCamera.pinhole_equivalent`), as COLMAP's
+    ``PINHOLE`` model: its images must be undistorted with each lens's own
+    division model first. A lens with telecentricity ``eps <= 0`` has no such
+    equivalent and is refused.
+
     Produces:
       - cameras.txt       (intrinsics for each physical camera)
       - rig_config.json   (inter-camera geometry for rig constraint)
@@ -620,13 +634,26 @@ def camset_to_colmap(
                          first camera in the set if not provided.
     """
     output_folder = Path(output_folder)               # normalise to Path
-
-    export_cameras_txt(cams, output_folder)           # write cameras.txt
+    model = "FULL_OPENCV"
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+    names = cams.get_names()
+    telecentric = [isinstance(cams[name], TelecentricCamera) for name in names]
+    if any(telecentric):
+        if not all(telecentric):
+            raise ValueError("camset_to_colmap: a rig mixes telecentric and pinhole cameras")
+        # COLMAP has no telecentric model, but a lens with eps > 0 is exactly
+        # a pinhole 1/eps behind it; that pinhole carries no distortion, so it
+        # is written as PINHOLE, for images undistorted with the lens's own
+        # division model first.
+        cams = _pinhole_camset({name: cams[name].pinhole_equivalent() for name in names})
+        model = "PINHOLE"
+    export_cameras_txt(cams, output_folder, model=model)  # write cameras.txt
     export_rig_config(                                # write rig_config.json
         cams,
         output_folder / "rig_config.json",
         ref_cam_name=ref_cam_name,
     )
+    return model
 
 
 # ---------------------------------------------------------------------------

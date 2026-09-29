@@ -218,15 +218,15 @@ tools. It is a wrapper around
 can call directly. It can also write APDe-MVS `cams/` files and `pair.txt`
 ([`camset_to_apde`][pyCamSet.utils.saving.camset_to_apde]).
 
-COLMAP has no telecentric camera model, so a telecentric rig cannot go there.
-APDe-MVS can take one: a telecentric lens with telecentricity ε > 0 projects
-exactly as a pinhole whose centre sits 1/ε behind it, with focal length
-(magnification)/ε, and that pinhole is what gets written. Its centre is metres
-behind a millimetre scene, so the depth range fields are not used; each
-camera's range is sized from the calibration's triangulated points and printed
-in the tab. As with any APDe-MVS export, images must be undistorted with each
-camera's own model first. A lens calibrated with ε = 0 has no finite pinhole
-equivalent and is refused.
+Neither format has a telecentric camera model, but both can take a
+telecentric rig: a lens with telecentricity ε > 0 projects exactly as a pinhole
+whose centre sits 1/ε behind it, with focal length (magnification)/ε, and that
+pinhole is what gets written — as COLMAP's `PINHOLE` model, or as APDe-MVS
+`cams/` files. Undistort the images with each camera's own model first. For
+APDe-MVS the pinhole's centre is metres behind a millimetre scene, so the depth
+range fields are not used; each camera's range is sized from the
+calibration's triangulated points and printed in the tab. A lens calibrated
+with ε = 0 has no finite pinhole equivalent and is refused.
 
 ## Optimisation
 

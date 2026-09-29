@@ -27,12 +27,14 @@ from pyCamSet.gui.assess_calibration import merge_phase3_phase4_runs, resolve_ru
 from pyCamSet.gui.shared_functions import RunSelectorWidget, TerminalWidget, WorkspaceManager, make_blue_button, make_green_button, make_section_label, make_separator
 
 try:
-    from pyCamSet.utils.saving import camset_to_apde, camset_to_colmap, load_CameraSet
+    from pyCamSet.utils.saving import (
+        camset_to_apde, camset_to_colmap, image_sizes_from_folder, load_CameraSet)
 
     _PYCAMSET_OK = True
 except ImportError:
     camset_to_apde = None
     camset_to_colmap = None
+    image_sizes_from_folder = None
     load_CameraSet = None
     _PYCAMSET_OK = False
 
@@ -215,6 +217,15 @@ class ExportCalibrationTab(QWidget):
             if depth_params is None:
                 return  # the validation error is already on screen
 
+        # The workspace sits inside the Phase 0 image folder, whose images are
+        # what a camset saved before res was marked (width, height) is checked
+        # against; without them load_CameraSet goes on the file alone.
+        try:
+            image_sizes = image_sizes_from_folder(Path(ws).parent) if image_sizes_from_folder else {}
+        except Exception as exc:
+            image_sizes = {}
+            self._terminal.append_line(f"WARN could not read the image sizes: {exc}")
+
         success = 0
         failures = 0
         for run in selected:
@@ -236,7 +247,7 @@ class ExportCalibrationTab(QWidget):
 
             try:
                 out_dir.mkdir(parents=True, exist_ok=True)
-                cams = load_CameraSet(camset_path)
+                cams = load_CameraSet(camset_path, image_sizes=image_sizes)
                 if export_format == "colmap":
                     camset_to_colmap(cams, out_dir)
                     success += 1

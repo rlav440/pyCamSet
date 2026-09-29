@@ -285,11 +285,16 @@ class TelecentricCamera(Camera):
         Brown-Conrady model.  The closed-form inverse lets this be a single
         remap with no iteration.
 
+        The pixel grid is the image's own, as ``cv2.undistort`` uses for the
+        pinhole camera, so the output always has the input's shape -- including
+        for camsets saved before ``res`` was written as ``(width, height)``.
+
         :param image: An input image
         :return: An undistorted image
         """
+        rows_n, cols_n = np.shape(image)[:2]
         cols, rows = np.meshgrid(
-            np.arange(self.res[0], dtype=float), np.arange(self.res[1], dtype=float))
+            np.arange(cols_n, dtype=float), np.arange(rows_n, dtype=float))
         c_x, c_y = self.principal_point
         # the map sends each output pixel to the source pixel it draws from, so
         # it is the forward distortion, not the inverse

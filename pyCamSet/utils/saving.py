@@ -119,6 +119,14 @@ def check_names_match_keys(cams: CameraSet) -> None:
         )
 
 
+#: ``Camera.res`` is ``(width, height)``, and a file records that it was
+#: written so.  Until 2026-09-29 the calibration stored ``image.shape[:2]``,
+#: ``(height, width)``, while ``set_resolutions_from_file`` stored
+#: ``(width, height)``, so an unmarked file may hold either.
+RES_ORDER_KEY = 'res_order'
+RES_ORDER = 'width_height'
+
+
 def save_camset(
         cams: CameraSet, f_name: Path = Path('cams.camset')
 ):
@@ -144,6 +152,9 @@ def save_camset(
     # The class alone cannot be imported from: written without its module, a
     # set of anything but pinholes reads back as pinholes.
     cam_config['cam_module'] = cams[0].__class__.__module__
+    # Files written before this marker hold res in either order; see
+    # _res_is_transposed for how load_CameraSet tells them apart.
+    cam_config[RES_ORDER_KEY] = RES_ORDER
 
     for cam in cams:
         temp_dict = {
@@ -225,11 +236,163 @@ CAMERA_MODULES = {
 }
 
 
-def load_CameraSet(f_loc: Path|str) -> CameraSet:
+def image_sizes_from_folder(folder: Path | str) -> dict[str, tuple[int, int]]:
+    """
+    The ``(width, height)`` of each camera's images, one image read per camera.
+
+    :param folder: an image folder holding one subfolder of images per camera
+    :return: size by camera (subfolder) name; empty if there is no such folder
+    """
+    import cv2
+    from pyCamSet.utils.general_utils import get_subfolder_names, glob_ims
+
+    sizes = {}
+    for cam_folder in get_subfolder_names(Path(folder), return_full_path=True):
+        ims = sorted(glob_ims(cam_folder, recursive=False))
+        if not ims:
+            continue
+        # imdecode rather than imread, which cannot open a non-ASCII path on Windows
+        im = cv2.imdecode(np.fromfile(ims[0], dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        if im is not None:
+            sizes[cam_folder.name] = (int(im.shape[1]), int(im.shape[0]))
+    return sizes
+
+
+def _res_order_from_images(stored, image_sizes):
+    """'wh', 'hw' or None: which order the images' own sizes say res is in."""
+    votes = set()
+    for name, (a, b) in stored.items():
+        size = image_sizes.get(name)
+        if size is None or a == b:
+            continue
+        size = tuple(int(v) for v in np.asarray(size).reshape(-1)[:2])
+        if size == (a, b):
+            votes.add('wh')
+        elif size == (b, a):
+            votes.add('hw')
+        # neither: the images are at another scale than the calibration, and
+        # say nothing about the order
+    return votes.pop() if len(votes) == 1 else None
+
+
+def _res_order_from_detections(saved_structure, stored):
+    """
+    'wh', 'hw' or None, from where the target was detected.
+
+    A detection is a pixel, ``(x, y)``, so it lies inside ``[0, width)`` by
+    ``[0, height)``: one past the shorter side along one axis rules out the
+    order that puts the shorter side there.
+    """
+    try:
+        dtct = saved_structure['optim']['dtct_config']
+        data = decompress(dtct['compressed_data'])
+        cam_names = dtct['cam_names']
+    except Exception:
+        return None
+    votes = set()
+    for index, name in enumerate(cam_names):
+        if name not in stored or stored[name][0] == stored[name][1]:
+            continue
+        seen = data[data[:, 0] == index]
+        if not len(seen):
+            continue
+        x_max, y_max = float(np.max(seen[:, -2])), float(np.max(seen[:, -1]))
+        a, b = stored[name]
+        # half a pixel of slack: a sub-pixel corner may sit on the last pixel's edge
+        as_wh = x_max < a + 0.5 and y_max < b + 0.5
+        as_hw = x_max < b + 0.5 and y_max < a + 0.5
+        if as_wh != as_hw:
+            votes.add('wh' if as_wh else 'hw')
+    return votes.pop() if len(votes) == 1 else None
+
+
+def _res_order_from_principal_point(saved_structure, stored, cam_module):
+    """
+    'wh', 'hw' or None, from where each pinhole's principal point sits.
+
+    A pinhole lens's principal point is near the centre of its sensor, and the
+    Zhang seed put it at the true centre whichever order res was stored in.
+    Only decisive when one order puts every point clearly nearer the centre.
+    A telecentric lens is left out: its principal point is barely constrained
+    by the solve, and its seed was ``res / 2`` in the stored order -- the very
+    thing in question.
+    """
+    if 'telecentric' in str(cam_module):
+        return None
+    votes = set()
+    for name, (a, b) in stored.items():
+        if a == b:
+            continue
+        intrinsic = np.asarray(saved_structure['cams'][name]['int'], dtype=float)
+        cx, cy = intrinsic[0, 2], intrinsic[1, 2]
+        # the larger of the two offsets from centre, each as a fraction of its side
+        off_wh = max(abs(cx - a / 2) / a, abs(cy - b / 2) / b)
+        off_hw = max(abs(cx - b / 2) / b, abs(cy - a / 2) / a)
+        if off_wh < 0.5 * off_hw and off_wh < 0.5:
+            votes.add('wh')
+        elif off_hw < 0.5 * off_wh and off_hw < 0.5:
+            votes.add('hw')
+        else:
+            return None
+    return votes.pop() if len(votes) == 1 else None
+
+
+def _res_is_transposed(saved_structure, cam_module, image_sizes, f_loc) -> bool:
+    """
+    Whether the file's ``res`` values are ``(height, width)``.
+
+    In order: the images' own sizes, if the caller has them; else where the
+    target was detected, which no calibrated file lacks; then the file's marker;
+    and for an unmarked file with neither, the pinhole principal point.  The
+    first two are physical facts and correct even a marked file, which can
+    carry a transposed res forward from an unmarked one it was loaded from.
+    An unmarked file none of these settle is left as stored, with a warning.
+    """
+    stored = {
+        name: tuple(int(v) for v in np.asarray(data['res']).reshape(-1)[:2])
+        for name, data in saved_structure['cams'].items()
+    }
+    if all(a == b for a, b in stored.values()):
+        return False  # square: the order cannot matter
+    marker = saved_structure['cam_config'].get(RES_ORDER_KEY)
+    if marker not in (None, RES_ORDER):
+        raise ValueError(f"{f_loc}: unknown {RES_ORDER_KEY} {marker!r}")
+
+    order = _res_order_from_images(stored, image_sizes) if image_sizes else None
+    source = "the images' own sizes"
+    if order is None:
+        order = _res_order_from_detections(saved_structure, stored)
+        source = "where the target was detected"
+    if order is None and marker is None:
+        order = _res_order_from_principal_point(saved_structure, stored, cam_module)
+        source = "where the principal points sit"
+
+    if order == 'hw':
+        # expected of an unmarked file; a marked one should never need it
+        log = logger.info if marker is None else logger.warning
+        log(f"{f_loc}: res is stored (height, width), going by {source}; "
+            f"reading it as (width, height), the order Camera.res takes.")
+        return True
+    if order is None and marker is None:
+        logger.warning(
+            f"{f_loc}: a file written before res was marked (width, height), and "
+            "nothing in it settles which order its res is in; it is read as "
+            "stored. Pass image_sizes= (see image_sizes_from_folder) to check "
+            "it against the images.")
+    return False
+
+
+def load_CameraSet(f_loc: Path|str,
+                   image_sizes: dict[str, tuple[int, int]] | None = None) -> CameraSet:
     """
     A function to load a CameraSet from a .json formatted file.
 
+    ``Camera.res`` comes back ``(width, height)`` whichever order the file
+    holds it in (see ``_res_is_transposed``).
+
     :param f_loc: The file to load
+    :param image_sizes: optionally, each camera's image ``(width, height)`` by
+        name, as :func:`image_sizes_from_folder` reads them, to check res against
     :return: A camera set object.
     """
 
@@ -249,11 +412,15 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
         cam_name_cls, 'pyCamSet.cameras.camera')
     camset_module = saved_structure['cam_config'].get(
         'camset_module', 'pyCamSet.cameras.camera_set')
+    transposed = _res_is_transposed(saved_structure, cam_module, image_sizes, f_loc)
 
     for cam_name, data in saved_structure['cams'].items():
+        res = np.array(data['res'])
+        if transposed:
+            res = res[::-1].copy()
         kwargs = dict(
             extrinsic=np.array(data['ext']), intrinsic=np.array(data['int']),
-            distortion_coefs=np.array(data['dst']), res=np.array(data['res']),
+            distortion_coefs=np.array(data['dst']), res=res,
             name=cam_name)
         if 'telecentricity' in data:
             kwargs['telecentricity'] = float(data['telecentricity'])
@@ -438,7 +605,9 @@ def export_cameras_txt(cams, output_folder: Path, model: str = "FULL_OPENCV"):
 
     Camera names, intrinsics, distortion, and resolution are all read
     directly from the CameraSet's internal dictionary — no user input
-    beyond the CameraSet object itself is required.
+    beyond the CameraSet object itself is required.  The principal point is
+    written half a pixel further on than ``cam.intrinsic`` holds it, since
+    COLMAP puts the centre of the top-left pixel at (0.5, 0.5), not (0, 0).
 
     :param cams: pyCamSet CameraSet object
     :param output_folder: directory to write cameras.txt into
@@ -478,9 +647,14 @@ def export_cameras_txt(cams, output_folder: Path, model: str = "FULL_OPENCV"):
         # --- intrinsics from the 3x3 K matrix ---
         K = cam.intrinsic                             # pyCamSet pinhole K
         fx, fy = K[0, 0], K[1, 1]                    # focal lengths in pixels
-        cx, cy = K[0, 2], K[1, 2]                    # principal point
+        # principal point, moved to COLMAP's pixel convention: OpenCV and
+        # pyCamSet put the centre of the top-left pixel at (0, 0), COLMAP at
+        # (0.5, 0.5) (colmap.github.io/cameras.html).  The MVSNet cams files
+        # keep OpenCV's, as APD-MVS samples pixel p at texel p + 0.5.
+        cx, cy = K[0, 2] + 0.5, K[1, 2] + 0.5
 
-        # --- resolution (pyCamSet stores [width, height]) ---
+        # --- resolution (Camera.res is [width, height]; load_CameraSet
+        # reads files that stored it the other way round into that order) ---
         width, height = int(cam.res[0]), int(cam.res[1])
 
         # --- distortion: pyCamSet [k1, k2, p1, p2, k3] ---

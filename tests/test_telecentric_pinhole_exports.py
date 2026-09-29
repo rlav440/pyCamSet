@@ -101,6 +101,8 @@ def test_a_telecentric_rig_exports_to_colmap_as_pinholes(tmp_path):
     for name, row, entry in zip(names, rows, rig):
         assert row[1] == "PINHOLE" and len(row) == 8
         fx, fy, cx, cy = map(float, row[4:8])
+        # back from COLMAP's pixel convention to OpenCV's, which project_points uses
+        cx, cy = cx - 0.5, cy - 0.5
         magnification = cams[name].magnification
         assert fx == pytest.approx(magnification[0] / cams[name].telecentricity)
         cam_from_rig = np.eye(4)

@@ -345,10 +345,18 @@ def _quality_gate(optimisation, handler, stats: dict,
     # ``max_ims`` is the highest global image index plus one, not the number
     # of observed images.  Treat holes as explicitly missing observations;
     # silently pretending the list is contiguous would hide them from the GUI.
-    missing_images = sorted(set(range(expected_images)) - set(observed_images))
+    # An image the solve itself excluded -- no usable target pose, marked in
+    # the handler's missing_poses and reported in its summary -- is not such
+    # a hole: it is listed as excluded, and only unexplained holes block.
+    marked = getattr(handler, "missing_poses", None)
+    marked = (np.asarray(marked, dtype=bool) if marked is not None
+              else np.zeros(0, dtype=bool))
+    excluded_images = (sorted(int(i) for i in np.flatnonzero(marked))
+                       if marked.size == expected_images else [])
+    missing_images = sorted(
+        set(range(expected_images)) - set(observed_images) - set(excluded_images))
     camera_coverage = observed_cameras == list(range(expected_cameras))
-    image_coverage = bool(
-        expected_images and set(observed_images) == set(range(expected_images)))
+    image_coverage = bool(expected_images and not missing_images)
     if not camera_coverage:
         blocking.append("camera observation graph does not cover every active camera")
     if expected_images and not image_coverage:
@@ -388,6 +396,7 @@ def _quality_gate(optimisation, handler, stats: dict,
         "expected_camera_count": expected_cameras,
         "observed_images": observed_images,
         "missing_images": missing_images,
+        "excluded_images": excluded_images,
         "expected_image_count": expected_images,
         "gauge": gauge,
         "camera_quality": camera_quality,

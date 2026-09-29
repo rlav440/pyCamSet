@@ -97,6 +97,39 @@ def test_phase4_quality_gate_blocks_unobserved_image_indices():
     assert "image observation graph has missing image indices" in gate["blocking_flags"]
 
 
+def test_phase4_quality_gate_lists_but_accepts_images_the_solve_excluded():
+    """An image with no usable pose is reported, not treated as a hole."""
+    class _SparseDetection(_Detection):
+        max_ims = 4
+
+    class _ExcludingHandler(_Handler):
+        detection = _SparseDetection()
+        missing_poses = np.array([False, False, True, False])
+
+    gate = phase4._quality_gate(
+        _optimisation(), _ExcludingHandler(),
+        {"success": True}, np.ones((4, 2)),
+        initial_euclid=10.0, final_euclid=2.0, observation_count=4,
+        phase3_status="complete", phase3_run_id="p3",
+    )
+
+    assert gate["excluded_images"] == [2]
+    # image 3 was neither observed nor excluded: that still blocks
+    assert gate["missing_images"] == [3]
+    assert "image observation graph has missing image indices" in gate["blocking_flags"]
+
+    _ExcludingHandler.missing_poses = np.array([False, False, True, True])
+    gate = phase4._quality_gate(
+        _optimisation(), _ExcludingHandler(),
+        {"success": True}, np.ones((4, 2)),
+        initial_euclid=10.0, final_euclid=2.0, observation_count=4,
+        phase3_status="complete", phase3_run_id="p3",
+    )
+    assert gate["image_coverage"] is True
+    assert gate["excluded_images"] == [2, 3]
+    assert gate["status"] == "complete"
+
+
 def test_phase4_initial_per_image_errors_fall_back_to_solver_stats():
     handler = SimpleNamespace(initial_per_im_error=np.array([], dtype=float))
     stats = {

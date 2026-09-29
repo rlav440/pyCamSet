@@ -200,6 +200,19 @@ class TemplateBundleHandler:
         self.param_len = None
         self.jac_mask = None
         self.missing_poses: list | None = missing_poses
+        if missing_poses is not None:
+            # A handler rebuilt from a saved camset is given the poses its
+            # solve could not use. Those poses are absent from the saved
+            # parameter vector, so they have to leave the layout now, as
+            # calc_initial_params takes them out during a solve; otherwise
+            # the saved vector reads back one block of six per pose short.
+            marked = np.asarray(missing_poses, dtype=bool)
+            if marked.shape != pose_unfixed.shape:
+                raise ValueError(
+                    f"missing_poses has {marked.size} entries for {n_poses} poses")
+            self.bundlePrimitive.poses_unfixed = (
+                self.bundlePrimitive.poses_unfixed & ~marked)
+            self.bundlePrimitive.calc_free_poses()
 
         # we define an abstract function block to handle the calibration
         self.op_fun: afb.optimisation_function = self._intr_block() + self._extr_block() + fb.template_points()

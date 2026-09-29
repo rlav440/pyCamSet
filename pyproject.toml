@@ -19,9 +19,10 @@ dependencies = [
     "numpy",
     "scipy",
     "matplotlib",
-    # The contrib wheel includes ArUco/ChArUco and satisfies Calibria's single
-    # OpenCV distribution contract.  Keep the GUI-capable build: debug views
-    # use cv2.imshow, which the headless wheel cannot provide.
+    # One OpenCV distribution, and a GUI-capable one: debug views use
+    # cv2.imshow, which the headless wheels cannot provide, and the contrib
+    # build is the one tools installed alongside pyCamSet (Calibria) expect.
+    # Two opencv-* wheels in one environment overwrite each other's cv2.
     # >=4.8: CharucoBoard.setLegacyPattern and the CharucoDetector API.
     # No upper bound: the 4.x/5.x differences are handled at the call sites
     # (detectBoard's squeezed returns, stereoRectify's column-vector T, and

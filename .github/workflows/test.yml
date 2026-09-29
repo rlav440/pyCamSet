@@ -164,7 +164,8 @@ jobs:
         #
         # --no-deps is load-bearing: upstream's requirements name a bare
         # `opencv-python`, which pip would happily resolve over the major
-        # version this job exists to pin.  Everything it actually needs
+        # version this job exists to pin -- and install beside
+        # opencv-contrib-python, both writing the same cv2 package.  Everything it actually needs
         # (opencv, numpy, scikit-learn, scikit-image) is already installed
         # above as a pyCamSet dependency.
         #

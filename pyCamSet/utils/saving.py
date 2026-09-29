@@ -653,9 +653,15 @@ def camset_to_apde(
     depth_max: float = 0.8,
     depth_num: int = 192,
     max_src_views: int = _APDE_MVS_MAX_SRC_VIEWS,
-) -> None:
+) -> dict[str, tuple[float, float]]:
     """
     Export a pyCamSet CameraSet to APDe-MVS format in a single call.
+
+    A telecentric rig is written through each camera's exact pinhole
+    equivalent (:meth:`TelecentricCamera.pinhole_equivalent`), whose centre
+    sits ``1/eps`` behind the camera; ``depth_min``/``depth_max`` then mean
+    nothing, so each camera's range is sized from the calibration's own
+    triangulated points instead (see :func:`_telecentric_depth_ranges`).
 
     Produces:
       - cams/%08d_cam.txt   (per-view extrinsic, intrinsic, depth range)
@@ -734,6 +740,7 @@ def camset_to_apde(
         per reference view in pair.txt (default 31, matching
         ``_APDE_MVS_MAX_SRC_VIEWS`` above). Should not be raised without also
         raising ``MAX_IMAGES`` in a matching build of APD-MVS/APDe-MVS.
+    :return: the depth range written for each camera, by name
     :raises ValueError: if ``max_src_views`` is not a non-negative integer --
         this parameter exists specifically to keep the export from crashing
         the downstream tool, so a caller's own bug computing it (e.g. a
@@ -766,11 +773,24 @@ def camset_to_apde(
     cams_dir.mkdir(parents=True, exist_ok=True)          # ensure cams/ exists; write_to_txt does not create it
 
     cam_names = cams.get_names()                         # deterministic, dict-insertion order
+    source_cams = cams  # as calibrated: the distortion check below reads these
+
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+    telecentric = [isinstance(cams[name], TelecentricCamera) for name in cam_names]
+    depth_ranges = {name: (float(depth_min), float(depth_max)) for name in cam_names}
+    if any(telecentric):
+        if not all(telecentric):
+            raise ValueError("camset_to_apde: a rig mixes telecentric and pinhole cameras")
+        # The pinhole a telecentric lens is: exact, but metres behind the
+        # scene, so the depths a user would type for a pinhole mean nothing.
+        telecentric_cams = cams
+        cams = _pinhole_camset({name: cams[name].pinhole_equivalent() for name in cam_names})
+        depth_ranges = _telecentric_depth_ranges(telecentric_cams, cams)
 
     # --- flag any camera whose distortion would silently invalidate the pinhole export ---
     distorted = [
         name for name in cam_names
-        if np.any(np.abs(np.asarray(cams[name].distortion_coefs)) > 1e-9)
+        if np.any(np.abs(np.asarray(source_cams[name].distortion_coefs)) > 1e-9)
     ]
     if distorted:
         logger.warning(
@@ -802,6 +822,11 @@ def camset_to_apde(
     cams.write_to_txt(                                   # writes cams/*_cam.txt and pair.txt
         cams_dir, r, pair_scores=scores, max_pair_candidates=max_src_views,
     )
+    if any(telecentric):
+        # write_to_txt takes one range for every view; these differ per camera
+        for idx, name in enumerate(cam_names):
+            cams[name].to_MVSnet_txt(cams_dir / f"{idx:08d}_cam.txt",
+                                     depth_ranges[name], depth_num)
 
     index_lines = [f"{idx:08d} {name}" for idx, name in enumerate(cam_names)]
     map_path = output_folder / "cam_index_map.txt"
@@ -813,3 +838,47 @@ def camset_to_apde(
         len(cam_names), cams_dir, map_path,
     )
     print(f"Wrote {len(cam_names)} cams file(s) to {cams_dir}")
+    return depth_ranges
+
+
+def _pinhole_camset(camera_dict: dict):
+    """A CameraSet of the given pinhole cameras, in the given order."""
+    from pyCamSet.cameras.camera_set import CameraSet
+
+    return CameraSet(camera_dict=camera_dict)
+
+
+def _telecentric_depth_ranges(telecentric_cams, pinhole_cams,
+                              ) -> dict[str, tuple[float, float]]:
+    """
+    Each pinhole equivalent's depth range, from the calibration's own points.
+
+    The equivalent centres sit metres behind a millimetre scene, so a range
+    has to come from the scene: the target features the calibration
+    triangulated, padded on each side by half their extent, so an object
+    about the size of the target and where the target was fits inside.
+
+    :raises ValueError: for a camset without the calibration results that
+        locate the scene
+    """
+    handler = getattr(telecentric_cams, "calibration_handler", None)
+    params = getattr(telecentric_cams, "calibration_params", None)
+    residuals = getattr(telecentric_cams, "calibration_result", None)
+    if handler is None or params is None or residuals is None:
+        raise ValueError(
+            "A telecentric rig's APDe-MVS depth range is sized from its "
+            "calibration's triangulated points, and this camset carries none.")
+    from pyCamSet.utils.visualisation import CalibrationDiagnostics
+
+    points = CalibrationDiagnostics.from_results(
+        {"x": np.asarray(params), "err": np.asarray(residuals)}, handler).scene_points
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    if not len(points):
+        raise ValueError("The calibration triangulated no points to size a depth range from.")
+    pad = 0.5 * float(np.max(np.ptp(points, axis=0)))
+    homogeneous = np.c_[points, np.ones(len(points))]
+    ranges = {}
+    for name in pinhole_cams.get_names():
+        depth = (homogeneous @ pinhole_cams[name].extrinsic.T)[:, 2]
+        ranges[name] = (float(depth.min() - pad), float(depth.max() + pad))
+    return ranges

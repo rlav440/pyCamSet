@@ -119,6 +119,14 @@ def check_names_match_keys(cams: CameraSet) -> None:
         )
 
 
+#: ``Camera.res`` is ``(width, height)``, and a file records that it was
+#: written so.  Until 2026-09-29 the calibration stored ``image.shape[:2]``,
+#: ``(height, width)``, while ``set_resolutions_from_file`` stored
+#: ``(width, height)``, so an unmarked file may hold either.
+RES_ORDER_KEY = 'res_order'
+RES_ORDER = 'width_height'
+
+
 def save_camset(
         cams: CameraSet, f_name: Path = Path('cams.camset')
 ):
@@ -144,6 +152,12 @@ def save_camset(
     # The class alone cannot be imported from: written without its module, a
     # set of anything but pinholes reads back as pinholes.
     cam_config['cam_module'] = cams[0].__class__.__module__
+    # Files written before this marker hold res in either order; see
+    # _res_is_transposed for how load_CameraSet tells them apart.  A set loaded
+    # from such a file without its order being settled stays unmarked, so the
+    # marker never vouches for an order nothing established.
+    if not getattr(cams, 'res_order_unsettled', False):
+        cam_config[RES_ORDER_KEY] = RES_ORDER
 
     for cam in cams:
         temp_dict = {
@@ -225,11 +239,167 @@ CAMERA_MODULES = {
 }
 
 
-def load_CameraSet(f_loc: Path|str) -> CameraSet:
+def image_sizes_from_folder(folder: Path | str) -> dict[str, tuple[int, int]]:
+    """
+    The ``(width, height)`` of each camera's images, one image read per camera.
+
+    :param folder: an image folder holding one subfolder of images per camera
+    :return: size by camera (subfolder) name; empty if there is no such folder
+    """
+    import cv2
+    from pyCamSet.utils.general_utils import get_subfolder_names, glob_ims
+
+    sizes = {}
+    for cam_folder in get_subfolder_names(Path(folder), return_full_path=True):
+        ims = sorted(glob_ims(cam_folder, recursive=False))
+        if not ims:
+            continue
+        # imdecode rather than imread, which cannot open a non-ASCII path on
+        # Windows.  IMREAD_COLOR, as detection's imread, so that an EXIF
+        # orientation turns the image here just as it did for detection.
+        im = cv2.imdecode(np.fromfile(ims[0], dtype=np.uint8), cv2.IMREAD_COLOR)
+        if im is not None:
+            sizes[cam_folder.name] = (int(im.shape[1]), int(im.shape[0]))
+    return sizes
+
+
+def _res_order_from_images(stored, image_sizes):
+    """'wh', 'hw' or None: which order the images' own sizes say res is in."""
+    votes = set()
+    for name, (a, b) in stored.items():
+        size = image_sizes.get(name)
+        if size is None or a == b:
+            continue
+        size = tuple(int(v) for v in np.asarray(size).reshape(-1)[:2])
+        if size == (a, b):
+            votes.add('wh')
+        elif size == (b, a):
+            votes.add('hw')
+        # neither: the images are at another scale than the calibration, and
+        # say nothing about the order
+    return votes.pop() if len(votes) == 1 else None
+
+
+def _res_order_from_detections(saved_structure, stored):
+    """
+    'wh', 'hw' or None, from where the target was detected.
+
+    A detection is a pixel, ``(x, y)``, so it lies inside ``[0, width)`` by
+    ``[0, height)``: one past the shorter side along one axis rules out the
+    order that puts the shorter side there.
+    """
+    try:
+        dtct = saved_structure['optim']['dtct_config']
+        data = decompress(dtct['compressed_data'])
+        cam_names = dtct['cam_names']
+    except Exception:
+        return None
+    votes = set()
+    for index, name in enumerate(cam_names):
+        if name not in stored or stored[name][0] == stored[name][1]:
+            continue
+        seen = data[data[:, 0] == index]
+        if not len(seen):
+            continue
+        x_max, y_max = float(np.max(seen[:, -2])), float(np.max(seen[:, -1]))
+        a, b = stored[name]
+        # half a pixel of slack: a sub-pixel corner may sit on the last pixel's edge
+        as_wh = x_max < a + 0.5 and y_max < b + 0.5
+        as_hw = x_max < b + 0.5 and y_max < a + 0.5
+        if as_wh != as_hw:
+            votes.add('wh' if as_wh else 'hw')
+    return votes.pop() if len(votes) == 1 else None
+
+
+def _res_order_from_principal_point(saved_structure, stored, cam_module):
+    """
+    'wh', 'hw' or None, from where each pinhole's principal point sits.
+
+    A pinhole lens's principal point is near the centre of its sensor, and the
+    Zhang seed put it at the true centre whichever order res was stored in.
+    Only decisive when one order puts every point clearly nearer the centre.
+    A telecentric lens is left out: its principal point is barely constrained
+    by the solve, and its seed was ``res / 2`` in the stored order -- the very
+    thing in question.
+    """
+    if 'telecentric' in str(cam_module):
+        return None
+    votes = set()
+    for name, (a, b) in stored.items():
+        if a == b:
+            continue
+        intrinsic = np.asarray(saved_structure['cams'][name]['int'], dtype=float)
+        cx, cy = intrinsic[0, 2], intrinsic[1, 2]
+        # the larger of the two offsets from centre, each as a fraction of its side
+        off_wh = max(abs(cx - a / 2) / a, abs(cy - b / 2) / b)
+        off_hw = max(abs(cx - b / 2) / b, abs(cy - a / 2) / a)
+        if off_wh < 0.5 * off_hw and off_wh < 0.5:
+            votes.add('wh')
+        elif off_hw < 0.5 * off_wh and off_hw < 0.5:
+            votes.add('hw')
+        else:
+            return None
+    return votes.pop() if len(votes) == 1 else None
+
+
+def _res_is_transposed(saved_structure, cam_module, image_sizes, f_loc) -> bool | None:
+    """
+    Whether the file's ``res`` values are ``(height, width)``; None for an
+    unmarked file whose order nothing settles, which is read as stored.
+
+    In order: the images' own sizes, if the caller has them; else where the
+    target was detected, which no calibrated file lacks; then the file's marker;
+    and for an unmarked file with neither, the pinhole principal point.  The
+    first two are physical facts and correct even a marked file, which can
+    carry a transposed res forward from an unmarked one it was loaded from.
+    An unmarked file none of these settle is left as stored, with a warning.
+    """
+    stored = {
+        name: tuple(int(v) for v in np.asarray(data['res']).reshape(-1)[:2])
+        for name, data in saved_structure['cams'].items()
+    }
+    if all(a == b for a, b in stored.values()):
+        return False  # square: the order cannot matter
+    marker = saved_structure['cam_config'].get(RES_ORDER_KEY)
+    if marker not in (None, RES_ORDER):
+        raise ValueError(f"{f_loc}: unknown {RES_ORDER_KEY} {marker!r}")
+
+    order = _res_order_from_images(stored, image_sizes) if image_sizes else None
+    source = "the images' own sizes"
+    if order is None:
+        order = _res_order_from_detections(saved_structure, stored)
+        source = "where the target was detected"
+    if order is None and marker is None:
+        order = _res_order_from_principal_point(saved_structure, stored, cam_module)
+        source = "where the principal points sit"
+
+    if order == 'hw':
+        # expected of an unmarked file; a marked one should never need it
+        log = logger.info if marker is None else logger.warning
+        log(f"{f_loc}: res is stored (height, width), going by {source}; "
+            f"reading it as (width, height), the order Camera.res takes.")
+        return True
+    if order is None and marker is None:
+        logger.warning(
+            f"{f_loc}: a file written before res was marked (width, height), and "
+            "nothing in it settles which order its res is in; it is read as "
+            "stored. Pass image_sizes= (see image_sizes_from_folder) to check "
+            "it against the images.")
+        return None
+    return False
+
+
+def load_CameraSet(f_loc: Path|str,
+                   image_sizes: dict[str, tuple[int, int]] | None = None) -> CameraSet:
     """
     A function to load a CameraSet from a .json formatted file.
 
+    ``Camera.res`` comes back ``(width, height)`` whichever order the file
+    holds it in (see ``_res_is_transposed``).
+
     :param f_loc: The file to load
+    :param image_sizes: optionally, each camera's image ``(width, height)`` by
+        name, as :func:`image_sizes_from_folder` reads them, to check res against
     :return: A camera set object.
     """
 
@@ -249,11 +419,15 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
         cam_name_cls, 'pyCamSet.cameras.camera')
     camset_module = saved_structure['cam_config'].get(
         'camset_module', 'pyCamSet.cameras.camera_set')
+    transposed = _res_is_transposed(saved_structure, cam_module, image_sizes, f_loc)
 
     for cam_name, data in saved_structure['cams'].items():
+        res = np.array(data['res'])
+        if transposed:  # None, unsettled, is read as stored
+            res = res[::-1].copy()
         kwargs = dict(
             extrinsic=np.array(data['ext']), intrinsic=np.array(data['int']),
-            distortion_coefs=np.array(data['dst']), res=np.array(data['res']),
+            distortion_coefs=np.array(data['dst']), res=res,
             name=cam_name)
         if 'telecentricity' in data:
             kwargs['telecentricity'] = float(data['telecentricity'])
@@ -262,6 +436,8 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
         camset_module,
         'CameraSet',
         camera_dict=cam_dict)
+    if transposed is None:
+        camset.res_order_unsettled = True
 
     try:
         optim = saved_structure['optim']
@@ -432,17 +608,24 @@ def rotation_matrix_to_quaternion_wxyz(rot_mat: np.ndarray) -> np.ndarray:
     return np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
 
 
-def export_cameras_txt(cams, output_folder: Path):
+def export_cameras_txt(cams, output_folder: Path, model: str = "FULL_OPENCV"):
     """
     Write cameras.txt containing one entry per physical camera.
 
     Camera names, intrinsics, distortion, and resolution are all read
     directly from the CameraSet's internal dictionary — no user input
-    beyond the CameraSet object itself is required.
+    beyond the CameraSet object itself is required.  The principal point is
+    written half a pixel further on than ``cam.intrinsic`` holds it, since
+    COLMAP puts the centre of the top-left pixel at (0.5, 0.5), not (0, 0).
 
     :param cams: pyCamSet CameraSet object
     :param output_folder: directory to write cameras.txt into
+    :param model: ``"FULL_OPENCV"`` (focal lengths, principal point and the
+        Brown-Conrady distortion) or ``"PINHOLE"`` (fx, fy, cx, cy only, for
+        cameras without distortion or images already undistorted)
     """
+    if model not in ("FULL_OPENCV", "PINHOLE"):
+        raise ValueError(f"unsupported COLMAP camera model {model!r}")
     # COLMAP has no telecentric model, and FULL_OPENCV would silently reinterpret
     # a magnification as a focal length and a division coefficient as k1.
     telecentric = [cam.name for cam in cams
@@ -451,7 +634,8 @@ def export_cameras_txt(cams, output_folder: Path):
         raise ValueError(
             "COLMAP has no telecentric camera model, so "
             f"{', '.join(map(str, telecentric))} cannot be exported to it. "
-            "Every COLMAP model is perspective."
+            "Every COLMAP model is perspective. camset_to_colmap writes a "
+            "telecentric rig through its exact pinhole equivalent instead."
         )
 
     output_folder = Path(output_folder)               # normalise to Path
@@ -472,9 +656,14 @@ def export_cameras_txt(cams, output_folder: Path):
         # --- intrinsics from the 3x3 K matrix ---
         K = cam.intrinsic                             # pyCamSet pinhole K
         fx, fy = K[0, 0], K[1, 1]                    # focal lengths in pixels
-        cx, cy = K[0, 2], K[1, 2]                    # principal point
+        # principal point, moved to COLMAP's pixel convention: OpenCV and
+        # pyCamSet put the centre of the top-left pixel at (0, 0), COLMAP at
+        # (0.5, 0.5) (colmap.github.io/cameras.html).  The MVSNet cams files
+        # keep OpenCV's, as APD-MVS samples pixel p at texel p + 0.5.
+        cx, cy = K[0, 2] + 0.5, K[1, 2] + 0.5
 
-        # --- resolution (pyCamSet stores [width, height]) ---
+        # --- resolution (Camera.res is [width, height]; load_CameraSet
+        # reads files that stored it the other way round into that order) ---
         width, height = int(cam.res[0]), int(cam.res[1])
 
         # --- distortion: pyCamSet [k1, k2, p1, p2, k3] ---
@@ -485,14 +674,16 @@ def export_cameras_txt(cams, output_folder: Path):
             padded = list(dist) + [0.0] * (5 - len(dist))
             k1, k2, p1, p2, k3 = padded
 
-        # FULL_OPENCV params: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
-        # k4, k5, k6 are not modelled by pyCamSet — set to zero
-        k4, k5, k6 = 0.0, 0.0, 0.0
-        model = "FULL_OPENCV"
-        params = (
-            f"{fx} {fy} {cx} {cy} "
-            f"{k1} {k2} {p1} {p2} {k3} {k4} {k5} {k6}"
-        )
+        if model == "PINHOLE":
+            params = f"{fx} {fy} {cx} {cy}"
+        else:
+            # FULL_OPENCV params: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
+            # k4, k5, k6 are not modelled by pyCamSet — set to zero
+            k4, k5, k6 = 0.0, 0.0, 0.0
+            params = (
+                f"{fx} {fy} {cx} {cy} "
+                f"{k1} {k2} {p1} {p2} {k3} {k4} {k5} {k6}"
+            )
         lines.append(f"{cam_id} {model} {width} {height} {params}")
 
     cameras_path = output_folder / "cameras.txt"      # target file path
@@ -610,6 +801,12 @@ def camset_to_colmap(
     """
     Export a pyCamSet CameraSet to COLMAP format in a single call.
 
+    A telecentric rig is written through each camera's exact pinhole
+    equivalent (:meth:`TelecentricCamera.pinhole_equivalent`), as COLMAP's
+    ``PINHOLE`` model: its images must be undistorted with each lens's own
+    division model first. A lens with telecentricity ``eps <= 0`` has no such
+    equivalent and is refused.
+
     Produces:
       - cameras.txt       (intrinsics for each physical camera)
       - rig_config.json   (inter-camera geometry for rig constraint)
@@ -620,13 +817,26 @@ def camset_to_colmap(
                          first camera in the set if not provided.
     """
     output_folder = Path(output_folder)               # normalise to Path
-
-    export_cameras_txt(cams, output_folder)           # write cameras.txt
+    model = "FULL_OPENCV"
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+    names = cams.get_names()
+    telecentric = [isinstance(cams[name], TelecentricCamera) for name in names]
+    if any(telecentric):
+        if not all(telecentric):
+            raise ValueError("camset_to_colmap: a rig mixes telecentric and pinhole cameras")
+        # COLMAP has no telecentric model, but a lens with eps > 0 is exactly
+        # a pinhole 1/eps behind it; that pinhole carries no distortion, so it
+        # is written as PINHOLE, for images undistorted with the lens's own
+        # division model first.
+        cams = _pinhole_camset({name: cams[name].pinhole_equivalent() for name in names})
+        model = "PINHOLE"
+    export_cameras_txt(cams, output_folder, model=model)  # write cameras.txt
     export_rig_config(                                # write rig_config.json
         cams,
         output_folder / "rig_config.json",
         ref_cam_name=ref_cam_name,
     )
+    return model
 
 
 # ---------------------------------------------------------------------------
@@ -653,9 +863,15 @@ def camset_to_apde(
     depth_max: float = 0.8,
     depth_num: int = 192,
     max_src_views: int = _APDE_MVS_MAX_SRC_VIEWS,
-) -> None:
+) -> dict[str, tuple[float, float]]:
     """
     Export a pyCamSet CameraSet to APDe-MVS format in a single call.
+
+    A telecentric rig is written through each camera's exact pinhole
+    equivalent (:meth:`TelecentricCamera.pinhole_equivalent`), whose centre
+    sits ``1/eps`` behind the camera; ``depth_min``/``depth_max`` then mean
+    nothing, so each camera's range is sized from the calibration's own
+    triangulated points instead (see :func:`_telecentric_depth_ranges`).
 
     Produces:
       - cams/%08d_cam.txt   (per-view extrinsic, intrinsic, depth range)
@@ -734,6 +950,7 @@ def camset_to_apde(
         per reference view in pair.txt (default 31, matching
         ``_APDE_MVS_MAX_SRC_VIEWS`` above). Should not be raised without also
         raising ``MAX_IMAGES`` in a matching build of APD-MVS/APDe-MVS.
+    :return: the depth range written for each camera, by name
     :raises ValueError: if ``max_src_views`` is not a non-negative integer --
         this parameter exists specifically to keep the export from crashing
         the downstream tool, so a caller's own bug computing it (e.g. a
@@ -766,11 +983,24 @@ def camset_to_apde(
     cams_dir.mkdir(parents=True, exist_ok=True)          # ensure cams/ exists; write_to_txt does not create it
 
     cam_names = cams.get_names()                         # deterministic, dict-insertion order
+    source_cams = cams  # as calibrated: the distortion check below reads these
+
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+    telecentric = [isinstance(cams[name], TelecentricCamera) for name in cam_names]
+    depth_ranges = {name: (float(depth_min), float(depth_max)) for name in cam_names}
+    if any(telecentric):
+        if not all(telecentric):
+            raise ValueError("camset_to_apde: a rig mixes telecentric and pinhole cameras")
+        # The pinhole a telecentric lens is: exact, but metres behind the
+        # scene, so the depths a user would type for a pinhole mean nothing.
+        telecentric_cams = cams
+        cams = _pinhole_camset({name: cams[name].pinhole_equivalent() for name in cam_names})
+        depth_ranges = _telecentric_depth_ranges(telecentric_cams, cams)
 
     # --- flag any camera whose distortion would silently invalidate the pinhole export ---
     distorted = [
         name for name in cam_names
-        if np.any(np.abs(np.asarray(cams[name].distortion_coefs)) > 1e-9)
+        if np.any(np.abs(np.asarray(source_cams[name].distortion_coefs)) > 1e-9)
     ]
     if distorted:
         logger.warning(
@@ -802,6 +1032,11 @@ def camset_to_apde(
     cams.write_to_txt(                                   # writes cams/*_cam.txt and pair.txt
         cams_dir, r, pair_scores=scores, max_pair_candidates=max_src_views,
     )
+    if any(telecentric):
+        # write_to_txt takes one range for every view; these differ per camera
+        for idx, name in enumerate(cam_names):
+            cams[name].to_MVSnet_txt(cams_dir / f"{idx:08d}_cam.txt",
+                                     depth_ranges[name], depth_num)
 
     index_lines = [f"{idx:08d} {name}" for idx, name in enumerate(cam_names)]
     map_path = output_folder / "cam_index_map.txt"
@@ -813,3 +1048,47 @@ def camset_to_apde(
         len(cam_names), cams_dir, map_path,
     )
     print(f"Wrote {len(cam_names)} cams file(s) to {cams_dir}")
+    return depth_ranges
+
+
+def _pinhole_camset(camera_dict: dict):
+    """A CameraSet of the given pinhole cameras, in the given order."""
+    from pyCamSet.cameras.camera_set import CameraSet
+
+    return CameraSet(camera_dict=camera_dict)
+
+
+def _telecentric_depth_ranges(telecentric_cams, pinhole_cams,
+                              ) -> dict[str, tuple[float, float]]:
+    """
+    Each pinhole equivalent's depth range, from the calibration's own points.
+
+    The equivalent centres sit metres behind a millimetre scene, so a range
+    has to come from the scene: the target features the calibration
+    triangulated, padded on each side by half their extent, so an object
+    about the size of the target and where the target was fits inside.
+
+    :raises ValueError: for a camset without the calibration results that
+        locate the scene
+    """
+    handler = getattr(telecentric_cams, "calibration_handler", None)
+    params = getattr(telecentric_cams, "calibration_params", None)
+    residuals = getattr(telecentric_cams, "calibration_result", None)
+    if handler is None or params is None or residuals is None:
+        raise ValueError(
+            "A telecentric rig's APDe-MVS depth range is sized from its "
+            "calibration's triangulated points, and this camset carries none.")
+    from pyCamSet.utils.visualisation import CalibrationDiagnostics
+
+    points = CalibrationDiagnostics.from_results(
+        {"x": np.asarray(params), "err": np.asarray(residuals)}, handler).scene_points
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    if not len(points):
+        raise ValueError("The calibration triangulated no points to size a depth range from.")
+    pad = 0.5 * float(np.max(np.ptp(points, axis=0)))
+    homogeneous = np.c_[points, np.ones(len(points))]
+    ranges = {}
+    for name in pinhole_cams.get_names():
+        depth = (homogeneous @ pinhole_cams[name].extrinsic.T)[:, 2]
+        ranges[name] = (float(depth.min() - pad), float(depth.max() + pad))
+    return ranges

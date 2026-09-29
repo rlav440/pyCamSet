@@ -355,6 +355,16 @@ arguments, say — loading logs a warning and returns the cameras alone rather
 than failing, so a set that loads quietly but has no diagnostics is a set whose
 warning you missed.
 
+`Camera.res` is `(width, height)`, and a file records that it was written so.
+Files from before 2026-09-29 do not, and hold it in either order: calibrations
+stored the image's `shape[:2]`, `(height, width)`. Loading such a file settles
+the order from the camera images' sizes if you pass them —
+`load_CameraSet(path, image_sizes=image_sizes_from_folder(image_dir))` — or
+else from where the target was detected, which a coordinate past the shorter
+side settles, and failing both from how near each pinhole's principal point
+sits to the centre. A file none of those settle loads as stored, with a warning
+saying so.
+
 ## Handing it to another tool
 
 External tools each want their own format. COLMAP, for photogrammetry and
@@ -369,7 +379,10 @@ camset_to_colmap(cams, "output/sparse/0")
 which writes `cameras.txt` and a `rig_config.json` carrying the inter-camera
 geometry, so COLMAP can hold the rig rigid. `ref_cam_name` chooses the reference
 camera; it defaults to the first in the set. `examples/convert_to_colmap.py` is
-this end to end.
+this end to end. COLMAP puts the centre of the top-left pixel at (0.5, 0.5)
+where pyCamSet and OpenCV put it at (0, 0), so the principal point in
+`cameras.txt` is half a pixel on from `cam.intrinsic`'s. The MVSNet files below
+keep OpenCV's convention, which APD-MVS reads.
 
 MVSNet and ACMMP, for dense multi-view stereo, want per-camera files plus a
 depth range and a view-pair list, which is

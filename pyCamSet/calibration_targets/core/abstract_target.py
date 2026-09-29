@@ -731,7 +731,9 @@ class AbstractTarget(ABC):
         :param cam_name: The name of the camera being calibrated
         :param detection: A TargetDetection of only the detections of the currently
             being calibrated camera
-        :param res: The resolution of the camera being calibrated.
+        :param res: The resolution of the camera being calibrated, as
+            ``(height, width)`` -- ``image.shape[:2]``, the way detection
+            reports it. The cameras built here carry it as ``(width, height)``.
         :param pose_im: The image in which the Target's pose sets the coordinate system
         :param fixed_params: A dict containing any fixed params of the camera to calibrate
             accepted options are "ext", "int", and "dst" respectively.
@@ -744,6 +746,9 @@ class AbstractTarget(ABC):
             offered = ", ".join(repr(m) for m in LENS_MODELS)
             raise ValueError(f"Unknown lens model {model!r}; expected {offered}")
         telecentric = model == "telecentric"
+        # Camera.res, and so everything that builds a pixel grid from it, is
+        # (width, height); detection hands over (height, width).
+        width_height = [int(res[1]), int(res[0])]
 
         detections_in_image = detection.get(cam=cam_name).get_image_list()
         object_points = []
@@ -756,7 +761,7 @@ class AbstractTarget(ABC):
             fixed_param = fixed_params.get(cam_name, {})
             if "int" in fixed_param and "dst" in fixed_param:
                 cam_class = TelecentricCamera if telecentric else Camera
-                init_cam = cam_class(intrinsic=fixed_param['int'], distortion_coefs=fixed_param['dst'], res=res, name=cam_name)
+                init_cam = cam_class(intrinsic=fixed_param['int'], distortion_coefs=fixed_param['dst'], res=width_height, name=cam_name)
                 logger.info(f'Camera {cam_name} was pre determined. Skipping opencv calibration')
                 return init_cam
 
@@ -866,7 +871,7 @@ class AbstractTarget(ABC):
             magnification, principal, tele_poses, tele_rms = calibrate_telecentric(
                 [o for o, _ in usable],
                 [i for _, i in usable],
-                res,
+                width_height,
             )
             logger.info(
                 f'{cam_name} seeded as telecentric at '
@@ -876,7 +881,7 @@ class AbstractTarget(ABC):
                 intrinsic=np.array([[magnification[0], 0, principal[0]],
                                     [0, magnification[1], principal[1]],
                                     [0, 0, 1.0]]),
-                res=res, distortion_coefs=np.array([0.0]),
+                res=width_height, distortion_coefs=np.array([0.0]),
                 telecentricity=0.0, name=cam_name)
             init_cam, ext_was_fixed = self._apply_fixed_params_to(
                 init_cam, fixed_params, fixed_param)
@@ -907,7 +912,7 @@ class AbstractTarget(ABC):
             ' with no distortion fit')
 
         init_cam = Camera(intrinsic=intrinsic, distortion_coefs=np.zeros(5),
-                          res=res, name=cam_name)
+                          res=width_height, name=cam_name)
         init_cam, ext_was_fixed = self._apply_fixed_params_to(
             init_cam, fixed_params, fixed_param)
         if ext_was_fixed or not return_poses:

@@ -28,6 +28,14 @@ def test_the_file_matches_pyproject():
     )
 
 
+def test_one_gui_capable_contrib_opencv_distribution():
+    """Keep metadata and the lean recipe on one GUI-capable cv2 wheel."""
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    expected = "opencv-contrib-python>=4.8"
+    assert [dep for dep in data["project"]["dependencies"] if dep.startswith("opencv-")] == [expected]
+    assert [dep for dep in core_requirements() if dep.startswith("opencv-")] == [expected]
+
+
 def test_it_leaves_out_the_gui_toolkit():
     """The whole point of the lean install: no Qt."""
     assert "PySide6" not in core_requirements()

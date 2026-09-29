@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from pyCamSet.gui.theme import set_text_role
 from pyCamSet.gui.shared_functions import (
+    make_solver_combo,
     CollapsibleSection,
     IMAGE_FOLDER_SCHEMATIC,
     PhaseWorker,
@@ -216,19 +217,22 @@ class Phase4Tab(QWidget):
         )
         opts_form.addRow("verbosity:", self._verbosity_spin)
 
+        self._solver_combo = make_solver_combo()
+        opts_form.addRow("solver:", self._solver_combo)
+
         self._loss_combo = QComboBox()
         self._loss_combo.addItems(["linear", "soft_l1", "huber", "cauchy", "arctan"])
-        self._loss_combo.setCurrentText("soft_l1")
+        self._loss_combo.setCurrentText("linear")
         self._loss_combo.setFixedWidth(110)
         self._loss_combo.setToolTip(
             "Concept: scipy least_squares robust loss function -- downweights large\n"
             "residuals (e.g. outlier target points/poses) instead of letting them\n"
             "dominate the sum-of-squares cost.\n\n"
-            "Default: soft_l1 (matches this project's validated D1 Phase 4 recipe;\n"
-            "see run_dataset1_phase1_to_phase4_headless.py P4_PROBLEM_OPTIONS)\n"
-            "Choices: linear (scipy default, no robustness), soft_l1, huber, cauchy, arctan\n"
-            "Guidance: soft_l1 is the validated choice for self-calibration.  cauchy/arctan\n"
-            "are more aggressive at suppressing outliers but can also suppress real signal."
+            "Default: linear (plain least squares, the library's own default)\n"
+            "Choices: linear, soft_l1, huber, cauchy, arctan\n"
+            "Guidance: soft_l1 tolerates a few bad detections and suited the pcube\n"
+            "telecentric self-calibration; cauchy/arctan suppress outliers harder but\n"
+            "can also suppress real signal."
         )
         opts_form.addRow("loss:", self._loss_combo)
 
@@ -244,7 +248,7 @@ class Phase4Tab(QWidget):
             "Concept: soft threshold (in px) separating inlier from outlier residuals\n"
             "for the soft_l1/huber/cauchy/arctan loss functions.  Has no effect when\n"
             "loss=linear.\n\n"
-            "Default: 1.0 (matches this project's validated D1 Phase 4 recipe)\n"
+            "Default: 1.0\n"
             "Range: > 0\n"
             "Guidance: leave at 1.0 unless residuals are known to be scaled differently."
         )
@@ -459,6 +463,7 @@ class Phase4Tab(QWidget):
                 "outliers": as_outlier_mode(self._outliers_combo.currentText()),
                 "max_nfev": int(self._max_nfev_spin.value()),
                 "loss": self._loss_combo.currentText(),
+                "solver": self._solver_combo.currentData(),
                 "f_scale": float(self._f_scale_spin.value()),
             },
         }

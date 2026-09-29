@@ -513,6 +513,34 @@ class MatplotlibFigureCard(QWidget):
         dlg.exec()
 
 
+#: The bundle adjustment solvers a phase can choose: shown label, option value.
+SOLVER_CHOICES = (("Schur", "schur"), ("Trust region", "trf"))
+
+
+def make_solver_combo() -> QComboBox:
+    """The Solver choice for a bundle adjustment, set to Schur.
+
+    Its value is the ``solver`` problem option the optimisation reads.
+    """
+    combo = QComboBox()
+    combo.setObjectName("solver_combo")
+    for label, value in SOLVER_CHOICES:
+        combo.addItem(label, value)
+    combo.setCurrentIndex(0)
+    combo.setFixedWidth(110)
+    combo.setAccessibleName("Bundle adjustment solver")
+    combo.setToolTip(
+        "Concept: how the least-squares problem is solved. Both choices\n"
+        "minimise the same objective; they differ in speed and reach.\n\n"
+        "Default: Schur\n"
+        "Choices: Schur (Levenberg-Marquardt on the Schur-reduced camera system;\n"
+        "fast on real rigs), Trust region (scipy least_squares, 'trf')\n"
+        "Guidance: keep Schur. Where a problem cannot use it (a lockbox prior,\n"
+        "for instance) the solve falls back to trust region and the log says why."
+    )
+    return combo
+
+
 def make_scrollable_tab() -> tuple[QWidget, QVBoxLayout, QScrollArea]:
     """Return (tab_widget, inner_layout, scroll_area) for vertically scrollable tab content."""
     tab = QWidget()

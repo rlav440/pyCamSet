@@ -54,6 +54,7 @@ from pyCamSet.workflow.params import (
     require_target_match,
 )
 from pyCamSet.gui.shared_functions import (
+    make_solver_combo,
     hold_run_button,
     CollapsibleSection,
     DETECTOR_INHERIT,
@@ -258,6 +259,9 @@ class Phase3Tab(QWidget):
             "automated / batch runs."
         )
         opts_form.addRow("verbosity:", self._verbosity_spin)
+
+        self._solver_combo = make_solver_combo()
+        opts_form.addRow("solver:", self._solver_combo)
 
         self._outliers_combo = QComboBox()
         self._outliers_combo.setObjectName("outliers_combo")
@@ -626,6 +630,7 @@ class Phase3Tab(QWidget):
                 "ref_pose": as_int(self._ref_pose_edit.text(), "ref_pose"),
                 "outliers": as_outlier_mode(self._outliers_combo.currentText()),
                 "max_nfev": int(self._max_nfev_spin.value()),
+                "solver": self._solver_combo.currentData(),
             },
         }
 

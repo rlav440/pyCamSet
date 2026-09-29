@@ -254,6 +254,14 @@ Its diagnostics say how far the target moved (D4.7), how flat it stayed (D4.9),
 and how the result compares against phase 3 (D4.4), which is the number that
 says whether letting the shape move helped.
 
+Phases 3 and 4 both show a **solver** choice: **Schur** (the default,
+Levenberg–Marquardt on the Schur-reduced camera system) or **Trust region**
+(scipy's `least_squares`). Where a problem cannot use Schur — a lockbox prior,
+for instance — the solve falls back to trust region and says why in the log.
+Phase 4 also offers a **loss**: `linear` (plain least squares, the default) or
+one of scipy's robust losses (`soft_l1`, `huber`, `cauchy`, `arctan`), which
+down-weight large residuals; **f_scale** sets where that begins, in pixels.
+
 ---
 
 ## Continue buttons, and when they turn red

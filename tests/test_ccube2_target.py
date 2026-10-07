@@ -5,7 +5,7 @@ Gates itself on the optional ``aruco2`` package, as
 it, so the module skips itself before its other imports.
 
 Each face is printed from the same vector layout as a ChArUco2 board
-(``charuco2/layout.py``), so a face texture is checked against aruco2's own
+(``markers/gridboard_layout.py``), so a face texture is checked against aruco2's own
 ``get_grid_board_image`` pixel for pixel at a scale where every cell and band
 edge lands on a whole pixel (see that module's docstring for which scales
 those are). The cube itself is Ccube's, so the end-to-end check here is

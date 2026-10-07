@@ -7,6 +7,7 @@ from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy import sparse
 from scipy.optimize import least_squares, approx_fprime, OptimizeResult
 
 from typing import TYPE_CHECKING
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING
 import pyCamSet.optimisation.template_handler as th
 from pyCamSet.optimisation.numba_schur import (
     SchurSolver, levenberg_marquardt, spec_from_groups)
+from pyCamSet.optimisation import robust_loss
 
 from pyCamSet.calibration_targets import TargetDetection
 from pyCamSet.utils.calibration_report import (
@@ -137,6 +139,9 @@ def can_use_schur(param_handler) -> tuple[bool, str]:
     """
     if param_handler.problem_opts.get("solver", "schur") != "schur":
         return False, f"solver option is {param_handler.problem_opts['solver']!r}"
+    loss = param_handler.problem_opts.get("loss", "linear")
+    if not robust_loss.is_supported(loss):
+        return False, f"the loss {loss!r} is not one the Schur solver implements"
     # The block solver is built from parameter_groups()/make_loss_blocks(),
     # which describe the reprojection residuals alone.  Prior rows appended
     # to the loss are invisible to it, so it would quietly optimise a
@@ -180,6 +185,13 @@ def run_schur_bundle_adjustment(param_handler, loss_fn, bundle_jac, init_params,
     spec = spec_from_groups(groups)
     solver = SchurSolver(spec)
     blocks = param_handler.make_loss_blocks(threads)
+    loss = param_handler.problem_opts.get("loss", "linear")
+    residuals, robust = loss_fn, None
+    if loss != "linear":
+        f_scale = float(param_handler.problem_opts.get("f_scale", 1.0))
+        robust = robust_loss.RobustProblem(loss_fn, blocks, loss, f_scale)
+        residuals, blocks = robust.residuals, robust.blocks
+        logger.info(f"Schur solver: {loss} loss, f_scale {f_scale:g}")
     logger.info(
         f"Schur solver: eliminating {spec.n_elim_blocks} blocks of "
         f"{spec.elim_size}x{spec.elim_size}, leaving a "
@@ -187,13 +199,26 @@ def run_schur_bundle_adjustment(param_handler, loss_fn, bundle_jac, init_params,
         f"(from {init_params.size})"
     )
     with OptimisationProgress() as progress:
-        return levenberg_marquardt(
-            loss_fn, blocks, init_params, solver,
+        callback = progress.update
+        if robust is not None:
+            # the last residuals evaluated are the raw ones at the point just
+            # accepted, so the readout stays in pixels
+            def callback(iteration, cost, _transformed):
+                progress.update(iteration, cost, robust.raw)
+        result = levenberg_marquardt(
+            residuals, blocks, init_params, solver,
             max_iter=param_handler.problem_opts["max_nfev"],
             jac_csr=bundle_jac,
             verbose=param_handler.problem_opts["verbosity"] > 1,
-            callback=progress.update,
+            callback=callback,
         )
+    if robust is not None:
+        # As scipy reports a robust solve: cost is the robust objective, fun
+        # the raw residuals, and jac the raw Jacobian with scipy's row scale.
+        result.fun = robust.raw_at(result.x)
+        if result.jac is not None:
+            result.jac = sparse.diags_array(robust.jacobian_scale(result.x)) @ result.jac
+    return result
 
 
 def get_bundle_adjustment_stats(
@@ -233,10 +258,15 @@ def get_bundle_adjustment_stats(
         optimisation.fun, param_handler)
     final_euclid = float(np.mean(np.linalg.norm(
         np.reshape(final_reprojection, (-1, 2)), axis=1)))
+    problem_opts = getattr(param_handler, "problem_opts", None) or {}
+    loss = problem_opts.get("loss", "linear")
+    f_scale = float(problem_opts.get("f_scale", 1.0))
 
     stats = {
         "initial_euclid": init_euclid,
         "final_euclid": final_euclid,
+        "initial_objective_cost": robust_loss.cost(init_reprojection, loss, f_scale),
+        "final_objective_cost": robust_loss.cost(final_reprojection, loss, f_scale),
         "param_count": int(np.size(init_params)),
         "observation_count": int(np.size(final_reprojection) // 2),
         "prior_residual_count": (
@@ -316,20 +346,27 @@ def _solve_bundle_adjustment(
 
     start = time.time()
     usable, reason = can_use_schur(param_handler)
+    requested_loss = param_handler.problem_opts.get("loss", "linear")
+    # The Schur path honours scipy's named robust losses itself (see
+    # robust_loss); anything else goes to scipy, and can_use_schur says why.
+    if usable and bundle_jac is None:
+        usable, reason = False, "the handler provides no analytic jacobian"
     # Held around the whole solve rather than around the linear algebra: what
     # the spinning pool costs is the kernels between the BLAS calls, not the
     # BLAS calls themselves.  See _BLAS_THREADS_DURING_SOLVE.  Both solvers
     # alternate the same way, so both are inside it.
     with _threadpool_limits(limits=_BLAS_THREADS_DURING_SOLVE, user_api="blas"):
-        if usable and bundle_jac is not None:
+        if usable:
             solver = "schur"
             optimisation = run_schur_bundle_adjustment(
                 param_handler, loss_fn, bundle_jac, init_params, threads)
         else:
             solver = "trf"
-            if bundle_jac is not None and param_handler.problem_opts.get(
-                    "solver", "schur") == "schur":
+            if param_handler.problem_opts.get("solver", "schur") == "schur":
                 logger.warning(f"Falling back to the trust region solver: {reason}")
+            # A lockbox constrains parameters by bounding them, so the bounds
+            # have to reach the solver: without them the priors pull, but
+            # nothing holds.
             bounds = (-np.inf, np.inf)
             if hasattr(param_handler, "get_lockbox_bounds"):
                 bounds = param_handler.get_lockbox_bounds(len(init_params))
@@ -341,6 +378,8 @@ def _solve_bundle_adjustment(
                 max_nfev=param_handler.problem_opts["max_nfev"],
                 x_scale='jac',
                 xtol=1e-4,
+                loss=requested_loss,
+                f_scale=float(param_handler.problem_opts.get("f_scale", 1.0)),
                 bounds=bounds,
             )
     end = time.time()

@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.gui.bounded_slider import BoundedSliderRow
 from pyCamSet.gui.shared_functions import (
     DETECTOR_CHOOSE,
@@ -417,7 +418,7 @@ class OptimisationTab(QWidget):
         # would run every trial with the same detection.
         self._nothing_to_sweep = QLabel()
         self._nothing_to_sweep.setWordWrap(True)
-        self._nothing_to_sweep.setStyleSheet("color: #8a4a00;")
+        set_text_role(self._nothing_to_sweep, "warning")
         v.addWidget(self._nothing_to_sweep)
         # The rows themselves belong to whichever detector is selected, and
         # are rebuilt when that changes.
@@ -586,10 +587,10 @@ class OptimisationTab(QWidget):
     def _update_optuna_status(self) -> None:
         if OPTUNA_AVAILABLE:
             self._optuna_status.setText("Optuna: available")
-            self._optuna_status.setStyleSheet("color: #2a7a2a;")
+            set_text_role(self._optuna_status, "success")
         else:
             self._optuna_status.setText("Optuna not installed — sampling disabled.")
-            self._optuna_status.setStyleSheet("color: #8a4a00;")
+            set_text_role(self._optuna_status, "warning")
             self._optuna_status.setToolTip(
                 "Install with `pip install optuna` to enable full Optimisation tab features."
             )

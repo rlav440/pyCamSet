@@ -439,7 +439,7 @@ Rules:
   of one of these makes the file uncollectable, not skippable — `tests/conftest.py` has
   to carry a `collect_ignore_glob` entry for `test_aruco2_backend.py` for exactly that
   reason.
-- **OpenCV floor and ceiling.** `opencv-python>=4.8` with no upper bound is deliberate;
+- **OpenCV floor and ceiling.** `opencv-contrib-python>=4.8` with no upper bound is deliberate;
   the 4.x/5.x differences are handled at the call sites. Do not add an upper bound to
   make a test pass — see §9.2.
 
@@ -667,9 +667,9 @@ and omits `pytest-timeout` and `pytest-cov`. Install from the ladder above or fr
 `pyproject.toml` extras, not from that file, and record the staleness rather than
 silently working around it.
 
-The CI matrix is 9 jobs — 3 platforms × Python 3.11/3.12 at `opencv-python>=5`, plus
-three explicit `<5` jobs (ubuntu, windows, macos-14 on 3.12), plus a lean ubuntu/3.11
-job. A local run covers one cell. Say which cell, and mark the rest `OPEN-GAP` relying
+The CI matrix is one job per axis — ubuntu and windows on Python 3.12 at
+`opencv-contrib-python>=5`, an ubuntu `<5` job, and a lean ubuntu/3.11 job; macOS joins
+only on master and release tags. A local run covers one cell. Say which cell, and mark the rest `OPEN-GAP` relying
 on upstream CI.
 
 ### 9.2 Traps that make a green run lie
@@ -689,7 +689,7 @@ Each of these is documented in the repository and has already cost a real failur
 - **OpenCV 4 vs 5 shifts detected ChArUco corners by about half a pixel.** Calibrations
   are not numerically comparable across the majors. A tolerance that passes on one major
   and fails on the other is a test whose tolerance needs justifying per major — not a
-  reason to add an upper bound to `opencv-python`.
+  reason to add an upper bound to `opencv-contrib-python`.
 - **A missing image corpus skips the whole calibration path silently.**
   `tests/test_data/` gates every `data`-marked test — the largest marker group in the
   suite — through the `data_dir` fixture. A shallow clone or an sdist install produces a

@@ -967,3 +967,59 @@ def test_the_per_image_initial_error_is_kept_not_just_consumed():
     per_im = np.asarray(getattr(handler, "initial_per_im_error", []), dtype=float)
     assert per_im.size == n_ims, "one error per image, not an empty array"
     assert np.all(np.isfinite(per_im)), "a finite error for every image"
+
+
+def _pinhole_pixels(proj, extr, poses, points):
+    """Every (camera, pose, point) pixel of an undistorted pinhole rig."""
+    from pyCamSet.utils.general_utils import h_tform
+
+    out = []
+    for cam_params, cam_pose in zip(proj, extr):
+        f_x, c_x, f_y, c_y = cam_params[:4]
+        cam_t = make_4x4h_tform(cam_pose[:3], cam_pose[3:6])
+        for pose in poses:
+            y = h_tform(h_tform(points, make_4x4h_tform(pose[:3], pose[3:6])), cam_t)
+            out.append(np.stack([f_x * y[:, 0] / y[:, 2] + c_x,
+                                 f_y * y[:, 1] / y[:, 2] + c_y], axis=-1))
+    return np.concatenate(out)
+
+
+def test_the_gauge_moves_a_pinhole_translation_and_no_pixel(synthetic_problem):
+    """A pinhole rig takes the gauge scale in its translations, not its lens."""
+    from scipy.spatial.transform import Rotation
+
+    from pyCamSet.utils.general_utils import ext_4x4_to_rod, h_tform
+
+    cams, target, detection, poses = synthetic_problem
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    assert handler._extr_block.params.n_params == 6
+
+    proj = np.array([cam.to_param_vector() for cam in cams], dtype=float)
+    extr = np.array([np.concatenate(ext_4x4_to_rod(cam.extrinsic)) for cam in cams])
+    pose_block = np.array([np.concatenate(ext_4x4_to_rod(p)) for p in poses])
+    drift = make_4x4h_tform(
+        Rotation.from_euler("xyz", [0.03, -0.02, 0.05]).as_rotvec(),
+        [0.004, -0.007, 0.011])
+    s0 = 1.37
+    points = h_tform(target.point_data.reshape(-1, 3) * s0, drift)
+    pose_block[:, 3:] *= s0
+    extr[:, 3:] *= s0
+
+    before = _pinhole_pixels(proj, extr, pose_block, points)
+    new_proj, new_extr, new_poses, new_points = handler.apply_gauge_transform(
+        proj.copy(), extr.copy(), pose_block.copy(), points.copy())
+    after = _pinhole_pixels(new_proj, new_extr, new_poses, new_points)
+
+    assert np.max(np.linalg.norm(after - before, axis=1)) < 1e-6
+    assert np.allclose(new_proj, proj)
+
+    def centres(block):
+        return np.array([np.linalg.inv(make_4x4h_tform(e[:3], e[3:6]))[:3, 3]
+                         for e in block])
+
+    def spread(c):
+        return np.linalg.norm(c[:, None] - c[None], axis=-1)
+
+    assert np.allclose(spread(centres(new_extr)), spread(centres(extr)) / s0)
+    assert np.allclose(new_points, target.point_data.reshape(-1, 3), atol=1e-9)

@@ -357,6 +357,31 @@ def test_a_real_solve_fills_in_the_whole_contract(short_charuco_handler):
 
 
 @pytest.mark.data
+def test_robust_loss_runs_on_the_schur_solver(short_charuco_handler, monkeypatch):
+    """A robust loss runs on the Schur solver, which minimises scipy's robust objective."""
+    short_charuco_handler.problem_opts.update({"loss": "soft_l1", "f_scale": 1.0})
+    seen = []
+    real = backend.run_schur_bundle_adjustment
+
+    def recording(*args, **kwargs):
+        seen.append(True)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(backend, "run_schur_bundle_adjustment", recording)
+    optimisation, _camset, stats = backend.run_bundle_adjustment_with_stats(
+        short_charuco_handler, threads=1)
+
+    assert seen, "the robust loss fell back to the trust region solver"
+    assert np.isfinite(stats["final_euclid"])
+    # fun is the raw reprojection residual, and cost the robust objective of it
+    from pyCamSet.optimisation import robust_loss
+    assert optimisation.cost == pytest.approx(
+        robust_loss.cost(optimisation.fun, "soft_l1", 1.0), rel=1e-9)
+    assert optimisation.cost < robust_loss.cost(optimisation.fun)
+    assert stats["final_objective_cost"] == pytest.approx(optimisation.cost, rel=1e-9)
+
+
+@pytest.mark.data
 def test_the_solve_improves_on_where_it_started(short_charuco_handler):
     """Two iterations is not convergence, but it must not be worse."""
     _optimisation, _camset, stats = backend.run_bundle_adjustment_with_stats(
@@ -984,14 +1009,13 @@ def test_a_marking_of_the_wrong_length_is_refused(charuco_problem):
     from pyCamSet.optimisation.template_handler import TemplateBundleHandler
 
     target, detections, cams = charuco_problem
-    handler = TemplateBundleHandler(
-        camset=cams, target=target, detection=detections,
-        options={"outliers": "n", "verbosity": 0},
-        missing_poses=[True, False],  # far too short
-    )
-
+    # Refused as the handler is built, since the marking shapes its layout.
     with pytest.raises(ValueError, match="missing_poses has 2 entries"):
-        handler.get_initial_params()
+        TemplateBundleHandler(
+            camset=cams, target=target, detection=detections,
+            options={"outliers": "n", "verbosity": 0},
+            missing_poses=[True, False],  # far too short
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -48,7 +48,7 @@ Note:      The submodule's source contains no OpenCV binaries. When the wrapper
            is built on Windows, third_party/aruco2/CMakeLists.txt copies the
            release opencv_world*.dll files it finds through OpenCV_DIR into the
            built aruco2 package; OPENCV_LICENSE.txt is installed into the
-           package on every platform. This is separate from the opencv-python
+           package on every platform. This is separate from the opencv-contrib-python
            package pyCamSet itself depends on (pyproject.toml, [project]
            dependencies).
 

@@ -1,5 +1,7 @@
 import importlib
+import importlib.metadata
 import logging
+import warnings
 from typing import TYPE_CHECKING, Any
 
 # Never true at runtime -- the point of the module is not to import these.
@@ -28,6 +30,39 @@ if TYPE_CHECKING:
 # it when nothing else has configured logging, and setup_logging is there for
 # anyone who wants to choose. See pyCamSet.utils.logs.
 logging.getLogger(__name__).addHandler(logging.NullHandler())
+
+_CV2_DISTRIBUTIONS = (
+    "opencv-python",
+    "opencv-python-headless",
+    "opencv-contrib-python",
+    "opencv-contrib-python-headless",
+)
+
+
+def _installed_cv2_distributions() -> list[str]:
+    """The opencv-* distributions installed here, each of which writes cv2."""
+    installed = []
+    for name in _CV2_DISTRIBUTIONS:
+        try:
+            installed.append(f"{name} {importlib.metadata.version(name)}")
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    return installed
+
+
+def _warn_on_duplicate_cv2() -> None:
+    installed = _installed_cv2_distributions()
+    if len(installed) > 1:
+        warnings.warn(
+            "More than one OpenCV distribution is installed, and they overwrite "
+            f"each other's cv2 package: {', '.join(installed)}. Keep only "
+            "opencv-contrib-python; see the OpenCV section of the "
+            "troubleshooting guide.",
+            stacklevel=2,
+        )
+
+
+_warn_on_duplicate_cv2()
 
 # The names this package promises, resolved lazily (PEP 562) below rather
 # than imported here. `pyCamSet.cameras`, `pyCamSet.calibration` and the
@@ -72,7 +107,7 @@ class _MissingPuzzleBoard:
         raise ImportError(
             "PuzzleBoard requires the optional 'puzzle_board' dependency, which is "
             "not installed. It is not on PyPI, so install it from source: "
-            "pip install 'puzzle_board @ "
+            "pip install --no-deps 'puzzle_board @ "
             "git+https://github.com/PStelldinger/PuzzleBoard.git'."
         )
 
@@ -84,7 +119,7 @@ class _MissingPuzzleBoardIco:
         raise ImportError(
             "PuzzleBoardIco requires the optional 'puzzle_board' dependency, which is "
             "not installed. It is not on PyPI, so install it from source: "
-            "pip install 'puzzle_board @ "
+            "pip install --no-deps 'puzzle_board @ "
             "git+https://github.com/PStelldinger/PuzzleBoard.git'."
         )
 
@@ -96,7 +131,7 @@ class _MissingPuzzleBoardCube:
         raise ImportError(
             "PuzzleBoardCube requires the optional 'puzzle_board' dependency, which is "
             "not installed. It is not on PyPI, so install it from source: "
-            "pip install 'puzzle_board @ "
+            "pip install --no-deps 'puzzle_board @ "
             "git+https://github.com/PStelldinger/PuzzleBoard.git'."
         )
 

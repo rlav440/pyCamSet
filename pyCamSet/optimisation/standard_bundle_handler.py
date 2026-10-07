@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - exercised in headless installs
     _PYVISTA_OK = False
 from typing import TYPE_CHECKING
 
+from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
 from pyCamSet.optimisation.template_handler import TemplateBundleHandler, DEFAULT_OPTIONS
 import pyCamSet.utils.general_utils as gu
@@ -85,26 +86,20 @@ def find_gauge_points(points, candidates=None):
 
 
 def _gauge_square_size(target) -> float:
-    """Return a target spacing in the same units as ``point_data``.
-
-    Several target classes keep their declared square size in millimetres
-    while storing point coordinates in metres.  The self-calibration gauge
-    compares distances from ``point_data``; using the declaration directly
-    therefore leaves no valid distance pairs and aborts Phase 4.
+    """The square spacing as it occurs in ``point_data``: the most common
+    distance from a point to its nearest neighbour, or the declared square size
+    when there are fewer than two points.
     """
-    declared = float(getattr(target, "square_size", float("nan")))
     points = np.asarray(getattr(target, "point_data", []), dtype=float).reshape(-1, 3)
-    sample = points[:10000]
-    if sample.shape[0] > 1:
-        adjacent = np.linalg.norm(np.diff(sample, axis=0), axis=1)
-        adjacent = adjacent[np.isfinite(adjacent) & (adjacent > 1e-12)]
-        if adjacent.size:
-            candidate = float(np.min(adjacent))
-            if not np.isfinite(declared) or not np.isclose(candidate, declared, rtol=0.1):
-                return candidate
-    if np.isfinite(declared) and declared > 1.0:
-        return declared / 1000.0
-    return declared
+    points = points[np.all(np.isfinite(points), axis=1)][:10000]
+    if points.shape[0] < 2:
+        return float(getattr(target, "square_size", float("nan")))
+    distances, _ = cKDTree(points).query(points, k=2)
+    nearest = np.sort(distances[:, 1][distances[:, 1] > 1e-12])
+    tol = 1e-6
+    support = (np.searchsorted(nearest, nearest * (1 + tol), side="right")
+               - np.searchsorted(nearest, nearest * (1 - tol), side="left"))
+    return float(nearest[np.argmax(support)])
 
 
 def _copy_camera_geometry(camera: Camera) -> Camera:
@@ -574,7 +569,7 @@ class SelfBundleHandler(TemplateBundleHandler):
             ref_map = cdist(ref_points[vm], ref_points[vm])[inds]
             # One square's edge only: every other distance is some multiple of
             # it, and a pair a whole board apart is the least well solved.
-            mask = np.isclose(ref_map, self.target.square_size)
+            mask = np.isclose(ref_map, _gauge_square_size(self.target))
             new_map, ref_map = new_map[mask], ref_map[mask]
             if len(ref_map) == 0:
                 raise ValueError(
@@ -641,6 +636,9 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         inv_update = np.linalg.inv(update_tform)
         new_points = gu.h_tform(new_points, update_tform)
+        # Nothing constrains an unobserved point, so it is returned at the model's coordinates.
+        unobserved = ~np.asarray(self.visible_feature_mask, dtype=bool)
+        new_points = np.where(unobserved[:, None], ref_points, new_points)
         #proj matricies never change: scale invariance!
 
         # Which world frame the cameras end up in depends on what their pose

@@ -19,6 +19,7 @@ from pyCamSet.optimisation.camera_models import blocks_for_camset
 from pyCamSet.optimisation.function_block_implementations import (
     telecentric_extrinsic, telecentric_intrinsic)
 from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment
+from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
 from pyCamSet.optimisation.template_handler import TemplateBundleHandler
 from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
@@ -651,15 +652,158 @@ def test_a_camera_that_only_ever_saw_one_face_says_what_to_photograph():
             pose_im=0, model="telecentric", min_detections_per_board=12)
 
 
-# ----------------------------------------------------------------------
-# the self-calibration gauge
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# reading a self calibration back out, and its gauge
+# --------------------------------------------------------------------------
+
+
+def _self_params(handler, cams, poses, target, point_scale=1.0):
+    """A full SelfBundleHandler parameter vector: cameras, poses, then free points.
+
+    :param point_scale: the multiple of the model the free points are carried at
+    """
+    head = ground_truth_params(handler, cams, poses)
+    assert len(head) == handler.bundlePrimitive.pose_end
+    free = np.asarray(handler.feat_unfixed, dtype=bool)
+    points = np.asarray(target.point_data, dtype=float).reshape(-1)[free]
+    return np.concatenate([head, points * point_scale])
+
+
+def test_gauge_transform_keeps_a_pose_with_no_translation(telecentric_problem):
+    """A telecentric extrinsic is rotation only, and stays three wide."""
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+    assert handler.bundlePrimitive.n_extr == 3
+
+    model = handler.bundlePrimitive.return_bundle_primitives(
+        _self_params(handler, cams, poses, target))
+    _, extr, _, _ = handler.apply_gauge_transform(*model)
+
+    assert extr.shape == (len(cams), 3)
+    assert np.all(np.isfinite(extr))
+
+
+def test_get_camset_returns_a_telecentric_camset(telecentric_problem):
+    """The solved rig reads back as telecentric cameras, and the input is untouched."""
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+    wanted = {name: np.array(cams[name].intrinsic, dtype=float)
+              for name in cams.get_names()}
+
+    out = handler.get_camset(_self_params(handler, cams, poses, target))
+
+    assert out.get_n_cams() == len(cams)
+    for name in cams.get_names():
+        assert isinstance(out[name], TelecentricCamera)
+        got = np.asarray(out[name].intrinsic, dtype=float)
+        assert got[0, 0] == pytest.approx(wanted[name][0, 0])
+        assert got[1, 1] == pytest.approx(wanted[name][1, 1])
+
+
+def test_get_updated_target_returns_the_recovered_shape(telecentric_problem):
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+
+    updated = handler.get_updated_target(_self_params(handler, cams, poses, target))
+
+    model = np.asarray(target.point_data, dtype=float).reshape(-1, 3)
+    assert np.asarray(updated).shape == model.shape
+    assert np.allclose(updated, model, atol=1e-9)
+
+
+def test_a_saved_telecentric_camset_reloads_with_its_handler(tmp_path, telecentric_problem):
+    from pyCamSet.utils.saving import load_CameraSet
+
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+    out = handler.get_camset(_self_params(handler, cams, poses, target))
+
+    written = tmp_path / "telecentric.camset"
+    out.save(written)
+    reloaded = load_CameraSet(written)
+
+    assert reloaded.get_n_cams() == len(cams)
+    assert all(isinstance(reloaded[n], TelecentricCamera) for n in cams.get_names())
+
+
+def test_the_gauge_rescales_the_lens_when_the_camera_has_no_translation(
+        telecentric_problem):
+    """Scaling the world by s is undone by m -> m/s and eps -> eps/s.
+
+    A telecentric pixel is ``u = m*x/(1 + eps*z) + c``, and its extrinsic has no
+    translation to carry the scale, so the gauge puts it in the lens.
+    """
+    s0 = 1.37
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+    handler.missing_poses = np.zeros(len(poses), dtype=bool)
+
+    before = handler.bundlePrimitive.return_bundle_primitives(
+        _self_params(handler, cams, poses, target, point_scale=s0))
+    proj_in, extr_in = (np.asarray(a, dtype=float).copy() for a in before[:2])
+
+    proj_out, extr_out, _, _ = handler.apply_gauge_transform(*before)
+    proj_out = np.asarray(proj_out, dtype=float)
+    extr_out = np.asarray(extr_out, dtype=float)
+
+    ratios = proj_in[:, 0] / proj_out[:, 0]
+    assert not np.allclose(ratios, 1.0)
+    assert np.allclose(ratios, ratios[0])
+    assert np.allclose(proj_out[:, 1], proj_in[:, 1])
+    assert np.allclose(proj_out[:, 3], proj_in[:, 3])
+    assert np.allclose(proj_out[:, 4], proj_in[:, 4])
+    assert np.allclose(proj_out[:, 2], proj_in[:, 2] / ratios)
+    assert np.allclose(proj_out[:, 5], proj_in[:, 5] / ratios)
+    # the points held for the gauge do not carry point_scale, so the rigid fit
+    # picks up a small rotation alongside the scale
+    assert np.allclose(extr_out, extr_in, atol=0.02)
+
+
+def test_the_gauge_returns_unobserved_points_at_the_model(telecentric_problem):
+    """A point no camera observes comes back at the model's coordinates,
+    whatever the solve left in it."""
+    cams, target, detection, poses = telecentric_problem
+    model = np.asarray(target.point_data, dtype=float).reshape(-1, 3)
+
+    probe = SelfBundleHandler(camset=cams, target=target, detection=detection)
+    pinned_points = np.logical_not(np.logical_or.reduce(
+        np.asarray(probe.feat_unfixed, dtype=bool).reshape(-1, 3), axis=1))
+    assert pinned_points.any()
+
+    # drop the pinned points from the detections, so they end up unobserved
+    keep = set(np.flatnonzero(np.logical_not(pinned_points)).tolist())
+    rows = detection.get_data()
+    trimmed = TargetDetection(
+        cam_names=cams.get_names(),
+        data=rows[[int(r[2]) in keep for r in rows]])
+
+    handler = SelfBundleHandler(camset=cams, target=target, detection=trimmed)
+    handler.missing_poses = np.zeros(len(poses), dtype=bool)
+    unobserved = np.logical_not(np.asarray(handler.visible_feature_mask, dtype=bool))
+    assert unobserved.any()
+    estimated = np.asarray(handler.feat_unfixed, dtype=bool)
+
+    base = handler.bundlePrimitive.return_bundle_primitives(
+        np.concatenate([ground_truth_params(handler, cams, poses),
+                        model.reshape(-1)[estimated]]))
+    proj, extr, target_poses, _ = (np.asarray(a, dtype=float).copy() for a in base)
+
+    s0 = 1.37
+    proj[:, [0, 2, 5]] /= s0
+    target_poses[:, 3:] *= s0
+    given = np.where(estimated, model.reshape(-1) * s0, model.reshape(-1))
+    held = np.flatnonzero(np.logical_not(estimated))
+    given[held] += 0.0011
+
+    after = np.asarray(handler.apply_gauge_transform(
+        proj, extr, target_poses, given.reshape(-1, 3))[3], dtype=float)
+
+    assert not np.allclose(after, given.reshape(-1, 3))
+    assert np.allclose(after[unobserved], model[unobserved], atol=1e-15)
 
 
 def _telecentric_pixels(proj, extr, poses, points):
     """Every (camera, pose, point) pixel, straight from the block's formula."""
-    from pyCamSet.utils.general_utils import make_4x4h_tform
-
     out = []
     for ci in range(len(proj)):
         m_x, c_x, m_y, c_y, k, eps = (float(v) for v in proj[ci][:6])
@@ -681,19 +825,11 @@ def _telecentric_pixels(proj, extr, poses, points):
 
 def test_the_gauge_transform_leaves_a_telecentric_projection_alone(
         telecentric_problem):
-    """The gauge transform re-expresses a solve in the reference frame. It is
-    allowed to move every parameter; it is not allowed to move a pixel.
+    """The gauge may move every parameter but no pixel.
 
-    A telecentric camera's extrinsic is rotation only, so it cannot absorb the
-    gauge the way a pinhole's translation does. The poses take the translation
-    and the magnification takes the scale. If any part of that bookkeeping is
-    wrong the calibration silently changes, which is worse than the crash this
-    replaced -- so the check is on the pixels, not on the parameters.
-
-    The points are pushed off the reference deliberately. Left where they are
-    the gauge is the identity and this would pass without testing anything.
+    The points are scaled, turned and moved off the model so the gauge has work
+    to do.
     """
-    from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
     from pyCamSet.utils.general_utils import ext_4x4_to_rod
 
     cams, target, detection, poses = telecentric_problem
@@ -703,12 +839,10 @@ def test_the_gauge_transform_leaves_a_telecentric_projection_alone(
     proj = np.array([cam.to_param_vector() for cam in cams], dtype=float)
     extr = np.array([np.asarray(ext_4x4_to_rod(cam.extrinsic)[0], dtype=float)
                      for cam in cams], dtype=float)
-    assert extr.shape[1] == 3, "a telecentric extrinsic is rotation only"
+    assert extr.shape[1] == 3
 
     pose_block = np.array(
         [np.concatenate(ext_4x4_to_rod(p)) for p in poses], dtype=float)
-
-    # A solve that has drifted: the points come back scaled, turned and moved.
     drift = make_4x4h_tform(
         Rotation.from_euler("xyz", [0.03, -0.02, 0.05]).as_rotvec(),
         [0.0004, -0.0007, 0.0011])
@@ -721,13 +855,37 @@ def test_the_gauge_transform_leaves_a_telecentric_projection_alone(
                                np.asarray(new_poses), np.asarray(new_points))
 
     assert np.isfinite(before).all() and np.isfinite(after).all()
-    moved = np.linalg.norm(after - before, axis=1)
-    assert np.nanmax(moved) < 1e-6, (
-        f"the gauge transform moved a pixel by {np.nanmax(moved):.3e} px")
+    assert np.max(np.linalg.norm(after - before, axis=1)) < 1e-6
+    assert not np.allclose(np.asarray(new_proj)[:, 0], proj[:, 0])
+    assert np.allclose(np.asarray(new_proj)[:, 1], proj[:, 1])
 
-    # and it did do something: the scale left the extrinsic, which has nowhere
-    # to put it, and landed in the magnification.
-    assert not np.allclose(np.asarray(new_proj)[:, 0], proj[:, 0]), \
-        "magnification should carry the gauge scale for a telecentric lens"
-    assert np.allclose(np.asarray(new_proj)[:, 1], proj[:, 1]), \
-        "there is no in-plane shift left for the principal point to absorb"
+
+@pytest.mark.parametrize("declared,spacing", [
+    (2.0, 2.0),
+    (0.02, 0.02),
+    (10.0, 0.01),
+    (0.020, 0.0195),
+])
+def test_the_gauge_reads_the_square_size_from_point_data(declared, spacing):
+    """The spacing is measured from the points, whatever the declaration says."""
+    from types import SimpleNamespace
+
+    from pyCamSet.optimisation.standard_bundle_handler import _gauge_square_size
+
+    grid = np.array([[x, y, 0.0] for y in range(4) for x in range(4)], dtype=float) * spacing
+    target = SimpleNamespace(square_size=declared, point_data=grid)
+    assert _gauge_square_size(target) == pytest.approx(spacing)
+
+
+def test_the_gauge_spacing_ignores_pairs_across_faces():
+    """Two faces whose nearest corners sit closer than a square still read one square."""
+    from types import SimpleNamespace
+
+    from pyCamSet.optimisation.standard_bundle_handler import _gauge_square_size
+
+    face = np.array([[x, y, 0.0] for y in range(5) for x in range(5)], dtype=float) * 0.01
+    # the second face starts beside the first one's last corner
+    other = np.array([[0.0405 + 0.01 * x, 0.04 - 0.01 * y, 0.002]
+                      for y in range(5) for x in range(5)])
+    target = SimpleNamespace(square_size=0.01, point_data=np.vstack([face, other]))
+    assert _gauge_square_size(target) == pytest.approx(0.01)

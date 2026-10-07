@@ -238,7 +238,7 @@ def test_assess_calibration_child_receives_selected_theme(monkeypatch, tmp_path)
     ]
 
 
-def test_assessment_figure_batch_formats_sizes_and_refuses_overwrite(tmp_path):
+def test_assessment_figure_batch_formats_sizes_and_overwrites(tmp_path):
     from pyCamSet.utils.visualisation import save_figure
 
     figure = Figure(figsize=(4, 2))
@@ -254,9 +254,10 @@ def test_assessment_figure_batch_formats_sizes_and_refuses_overwrite(tmp_path):
     assert (tmp_path / "assessment.svg").read_text(encoding="utf-8").startswith("<?xml")
     assert (tmp_path / "assessment.pdf").read_bytes().startswith(b"%PDF")
     assert figure.get_size_inches().tolist() == original_size.tolist()
-    with pytest.raises(FileExistsError, match="Refusing to overwrite"):
-        save_figure(figure, "assessment", tmp_path, width_mm=180, dpi=300,
-                    formats=("png", "svg", "pdf"))
+    save_figure(figure, "assessment", tmp_path, width_mm=180, dpi=300,
+                formats=("png", "svg", "pdf"))
+    with Image.open(tmp_path / "assessment.png") as image:
+        assert image.size == (2126, 1063)
     assert figure.get_size_inches().tolist() == original_size.tolist()
 
 
@@ -336,13 +337,24 @@ def test_assessment_csv_serialisation_preserves_metadata_rows(tmp_path):
     assert metadata["units"]["x_error_px"] == "px"
     assert list(csv.reader(lines[1:]))[1] == ["0", "3.0", "4.0", "5.0"]
 
-    blocked_dir = tmp_path / "blocked"
-    blocked_dir.mkdir()
-    existing = blocked_dir / "error_distribution.csv"
-    existing.write_text("preserve", encoding="utf-8")
-    with pytest.raises(FileExistsError, match="Refusing to overwrite"):
-        _write_assessment_csvs(diagnostic, blocked_dir, "run.camset")
-    assert not (blocked_dir / "per_camera_coverage.csv").exists()
+    paths[0].write_text("stale", encoding="utf-8")
+    _write_assessment_csvs(diagnostic, tmp_path, "run.camset")
+    assert paths[0].read_text(encoding="utf-8").splitlines()[1:] == lines[1:]
+
+
+def test_save_figure_defaults_keep_the_figure_size_and_overwrite(tmp_path):
+    from pyCamSet.utils.visualisation import save_figure
+
+    figure = Figure(figsize=(4, 2))
+    figure.add_subplot(111).plot([0, 1], [1, 4])
+    first = save_figure(figure, "plain", tmp_path)
+    first_bytes = first.read_bytes()
+    figure.axes[0].plot([0, 1], [4, 1])
+    assert save_figure(figure, "plain", tmp_path) == first
+    assert first.read_bytes() != first_bytes
+    with Image.open(first) as image:
+        # bbox_inches="tight" crops the 600x300 canvas at 150 dpi
+        assert image.size[0] <= 600 and image.size[1] <= 300
 
 
 def test_matplotlib_only_does_not_require_pyvista(monkeypatch, tmp_path):

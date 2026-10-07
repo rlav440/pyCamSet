@@ -545,6 +545,16 @@ class AssessCalibrationPanel(QWidget):
         directory = QFileDialog.getExistingDirectory(self, "Save the assessment figures")
         if not directory:
             return
+        existing = [path.name for key, _title in FIGURES
+                    for path in (Path(directory) / f"{key}.{suffix}"
+                                 for suffix in ("png", "svg", "pdf", "csv"))
+                    if path.exists()]
+        if existing and QMessageBox.question(
+                self, "Save figures",
+                "These files already exist and will be replaced:\n" + "\n".join(existing),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
         theme = _active_theme()
         width_mm, dpi = self.export_size.currentData()
         ok, message = assess.launch_save_assessment_pngs_for_run(

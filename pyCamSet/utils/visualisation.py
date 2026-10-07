@@ -147,9 +147,6 @@ def save_figure(figure, name: str,
     written = Path(save_dir) / f"{name}.png"
     written.parent.mkdir(parents=True, exist_ok=True)
     targets = [Path(save_dir) / f"{name}.{output_format}" for output_format in formats]
-    existing = [str(target) for target in targets if target.exists()]
-    if existing:
-        raise FileExistsError("Refusing to overwrite existing figure export(s): " + ", ".join(existing))
     original_size = figure.get_size_inches().copy()
     if width_mm is None:
         output_size = original_size
@@ -750,13 +747,10 @@ def _write_assessment_csvs(
         "per_camera_coverage": "No camera detection observations",
         "accuracy_precision": "No feature was observed in more than two images",
     }
-    targets = [output_dir / f"{name}.csv" for name in payloads]
-    existing = [str(path) for path in targets if path.exists()]
-    if existing:
-        raise FileExistsError("Refusing to overwrite existing assessment CSV(s): " + ", ".join(existing))
     written = []
-    for (name, (columns, rows)), path in zip(payloads.items(), targets):
-        with path.open("x", newline="", encoding="utf-8") as stream:
+    for name, (columns, rows) in payloads.items():
+        path = output_dir / f"{name}.csv"
+        with path.open("w", newline="", encoding="utf-8") as stream:
             stream.write("# " + json.dumps({
                 "source": "CalibrationDiagnostics.from_results source arrays",
                 "diagnostic": name, "units": units[name],
@@ -778,7 +772,7 @@ def visualise_calibration(
         show: bool = True,
         save_dir: Path | str | None = None,
         theme_name: str = "Light",
-        figure_width_mm: float = 160.0,
+        figure_width_mm: float | None = None,
         figure_dpi: int = 150,
         figure_formats: tuple[str, ...] = ("png",),
         matplotlib_only: bool = False,
@@ -804,7 +798,8 @@ def visualise_calibration(
     :param show: open the figures in windows
     :param save_dir: a directory to write the figures into
     :param theme_name: application theme for Matplotlib chrome only
-    :param figure_width_mm: output width for saved Matplotlib figures
+    :param figure_width_mm: output width for saved Matplotlib figures; None keeps
+        each figure's own size, cropped tight
     :param figure_dpi: raster DPI for PNG output
     :param figure_formats: Matplotlib output formats, e.g. PNG/SVG/PDF
     :param matplotlib_only: skip 3D scene generation for a 2D-only export request
@@ -820,18 +815,6 @@ def visualise_calibration(
             _os.environ["PYVISTA_OFF_SCREEN"] = "true"
 
     diagnostics = CalibrationDiagnostics.from_results(o_results, param_handler)
-
-    if save_dir is not None:
-        output_dir = Path(save_dir)
-        output_names = ("error_distribution", "per_camera_coverage", "accuracy_precision")
-        targets = [output_dir / f"{name}.{output_format}"
-                   for name in output_names for output_format in figure_formats]
-        if export_csv:
-            targets.extend(output_dir / f"{name}.csv" for name in output_names)
-        existing = [str(path) for path in targets if path.exists()]
-        if existing:
-            raise FileExistsError("Refusing to overwrite existing assessment export(s): "
-                                  + ", ".join(existing))
 
     written: list[Path | None] = []
     figures = [] if three_d_only else [

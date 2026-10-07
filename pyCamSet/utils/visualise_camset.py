@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-3d-axes", dest="three_d_axes", action="store_false")
     parser.add_argument("--3d-legend", dest="three_d_legend", action="store_true", default=True)
     parser.add_argument("--no-3d-legend", dest="three_d_legend", action="store_false")
-    parser.add_argument("--figure-width-mm", type=float, default=160.0)
+    parser.add_argument("--figure-width-mm", type=float, default=None)
     parser.add_argument("--figure-dpi", type=int, default=150)
     parser.add_argument("--figure-formats", nargs="+", choices=("png", "svg", "pdf"), default=("png",))
     parser.add_argument("--figure-themes", nargs=3, choices=("Light", "Dark", "Sepia"), default=None,

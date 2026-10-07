@@ -164,6 +164,19 @@ def test_charuco_board_geometry_is_what_the_images_show():
     assert np.allclose(spacing, 0.004, atol=1e-9)
 
 
+def test_the_legacy_flag_changes_the_board():
+    """The ``legacy`` keyword reaches ``board.getLegacyPattern()`` unchanged."""
+    from pyCamSet import ChArUco
+
+    from conftest import CHARUCO_ARGS
+
+    legacy = ChArUco(**dict(CHARUCO_ARGS, legacy=True))
+    modern = ChArUco(**dict(CHARUCO_ARGS, legacy=False))
+
+    assert legacy.board.getLegacyPattern() is True
+    assert modern.board.getLegacyPattern() is False
+
+
 # --------------------------------------------------------------------------
 # Ccube
 # --------------------------------------------------------------------------

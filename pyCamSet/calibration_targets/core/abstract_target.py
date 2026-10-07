@@ -746,8 +746,7 @@ class AbstractTarget(ABC):
             offered = ", ".join(repr(m) for m in LENS_MODELS)
             raise ValueError(f"Unknown lens model {model!r}; expected {offered}")
         telecentric = model == "telecentric"
-        # Camera.res, and so everything that builds a pixel grid from it, is
-        # (width, height); detection hands over (height, width).
+        # detection hands over (height, width); Camera.res is (width, height)
         width_height = [int(res[1]), int(res[0])]
 
         detections_in_image = detection.get(cam=cam_name).get_image_list()

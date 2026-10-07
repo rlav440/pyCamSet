@@ -5,6 +5,7 @@ Thin GUI wrapper around :func:`pyCamSet.utils.saving.camset_to_colmap` and
 """
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 from typing import Optional
 
@@ -46,13 +47,6 @@ _FORMAT_CHOICES = {
     "COLMAP": "colmap",
     "APDe-MVS": "apde",
 }
-
-
-def _is_telecentric(cams) -> bool:
-    """Whether a camset's cameras sit behind telecentric lenses."""
-    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
-
-    return any(isinstance(cams[name], TelecentricCamera) for name in cams.get_names())
 
 
 class ExportCalibrationTab(QWidget):
@@ -235,14 +229,15 @@ class ExportCalibrationTab(QWidget):
             if depth_params is None:
                 return  # the validation error is already on screen
 
-        # The workspace sits inside the Phase 0 image folder, whose images are
-        # what a camset saved before res was marked (width, height) is checked
-        # against; without them load_CameraSet goes on the file alone.
-        try:
-            image_sizes = image_sizes_from_folder(Path(ws).parent) if image_sizes_from_folder else {}
-        except Exception as exc:
-            image_sizes = {}
-            self._terminal.append_line(f"WARN could not read the image sizes: {exc}")
+        # The workspace sits inside the image folder; its images settle the res
+        # order of a camset without the order marker, read once and only then.
+        @functools.cache
+        def image_sizes() -> dict:
+            try:
+                return image_sizes_from_folder(Path(ws).parent)
+            except Exception as exc:
+                self._terminal.append_line(f"WARN could not read the image sizes: {exc}")
+                return {}
 
         success = 0
         failures = 0
@@ -272,10 +267,10 @@ class ExportCalibrationTab(QWidget):
                 out_dir.mkdir(parents=True, exist_ok=True)
                 cams = load_CameraSet(camset_path, image_sizes=image_sizes)
                 if export_format == "colmap":
-                    camset_to_colmap(cams, out_dir)
+                    model = camset_to_colmap(cams, out_dir)
                     success += 1
                     self._terminal.append_line(f"OK   {run_id}: wrote cameras.txt and rig_config.json to {out_dir}")
-                    if _is_telecentric(cams):
+                    if model == "PINHOLE":
                         self._terminal.append_line(
                             "     -> telecentric rig: each camera written as its exact pinhole "
                             "equivalent (PINHOLE model, centre 1/eps behind it); undistort the "
@@ -287,7 +282,7 @@ class ExportCalibrationTab(QWidget):
                     success += 1
                     self._terminal.append_line(
                         f"OK   {run_id}: wrote cams/, cam_index_map.txt and pair.txt to {out_dir}")
-                    if ranges and _is_telecentric(cams):
+                    if any(r != (depth_min, depth_max) for r in ranges.values()):
                         self._terminal.append_line(
                             "     -> telecentric rig: each camera written as its exact pinhole "
                             "equivalent (centre 1/eps behind it); the depth range fields were "

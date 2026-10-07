@@ -170,9 +170,9 @@ class TelecentricCamera(Camera):
         focal length ``m/eps`` and the same principal point: a lens with
         residual telecentricity ``eps > 0`` is a pinhole whose centre sits
         ``1/eps`` behind this camera's frame.  Nothing is approximated, so a
-        pinhole-only format (MVSNet, APDe-MVS) can carry it -- for images
-        undistorted with this camera's own division model first, since the
-        pinhole is returned without distortion.
+        pinhole-only format (MVSNet, APDe-MVS) can carry it, for images
+        undistorted with this camera's own division model first: the pinhole
+        is returned without distortion.
 
         :return: the equivalent pinhole camera, named as this one
         :raises ValueError: when ``eps <= 0``: a perfectly telecentric lens
@@ -286,8 +286,7 @@ class TelecentricCamera(Camera):
         remap with no iteration.
 
         The pixel grid is the image's own, as ``cv2.undistort`` uses for the
-        pinhole camera, so the output always has the input's shape -- including
-        for camsets saved before ``res`` was written as ``(width, height)``.
+        pinhole camera, so the output always has the input's shape.
 
         :param image: An input image
         :return: An undistorted image

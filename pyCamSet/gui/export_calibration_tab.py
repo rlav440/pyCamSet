@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.gui.assess_calibration import merge_phase3_phase4_runs, resolve_run_camset_artifact
 from pyCamSet.gui.shared_functions import RunSelectorWidget, TerminalWidget, WorkspaceManager, make_blue_button, make_green_button, make_section_label, make_separator
 
@@ -113,19 +114,36 @@ class ExportCalibrationTab(QWidget):
         refresh_btn = QPushButton("Refresh Runs")
         refresh_btn.clicked.connect(self.refresh)
         actions.addWidget(refresh_btn)
-        actions.addWidget(make_green_button("Export Selected Runs", self._export_selected))
+        self._export_btn = make_green_button("Export Selected Runs", self._export_selected)
+        actions.addWidget(self._export_btn)
+        # Enabled only with a selection, and the tooltip says why when not.
+        self._run_selector.selection_changed.connect(self._update_export_enabled)
         actions.addStretch()
         root.addLayout(actions)
 
         self._status_lbl = QLabel("")
-        self._status_lbl.setStyleSheet("color: #2e7d32;")
+        set_text_role(self._status_lbl, "success")
         root.addWidget(self._status_lbl)
+        # Spare height collects here, not in gaps between the rows above.
+        root.addStretch(1)
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
         root.addWidget(self._terminal)
 
         self._on_format_changed()
         self.refresh()
+        self._update_export_enabled()
+
+    def _update_export_enabled(self, *_args) -> None:
+        """Enable export only when at least one run is selected."""
+        has_selection = bool(self._run_selector.get_selected())
+        reason = ("Export the selected runs in the chosen format." if has_selection
+                  else "Select one or more Phase 3/4 runs above to export them.")
+        self._export_btn.setEnabled(has_selection)
+        # A disabled button leaves the tab order, so the reason is also given
+        # to assistive technology, not only as a hover tooltip.
+        self._export_btn.setToolTip(reason)
+        self._export_btn.setAccessibleDescription(reason)
 
     def _selected_format(self) -> str:
         """The internal key -- ``"colmap"`` or ``"apde"`` -- for the combo's current text."""
@@ -218,10 +236,15 @@ class ExportCalibrationTab(QWidget):
                 self._terminal.append_line(f"SKIP {run_id}: unsupported phase '{phase}'.")
                 continue
 
-            camset_path = resolve_run_camset_artifact(run)
+            camset_path = resolve_run_camset_artifact(run, accepted_only=True)
             if camset_path is None:
                 failures += 1
-                self._terminal.append_line(f"FAIL {run_id}: no camset artifact found.")
+                if phase == "phase4" and run.get("status") != "complete":
+                    self._terminal.append_line(
+                        f"FAIL {run_id}: Phase 4 status is not complete; "
+                        "incomplete results are diagnostic-only.")
+                else:
+                    self._terminal.append_line(f"FAIL {run_id}: no camset artifact found.")
                 continue
 
             run_dir = Path(ws) / f"{phase}_runs" / run_id

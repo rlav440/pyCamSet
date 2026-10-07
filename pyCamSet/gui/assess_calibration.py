@@ -50,20 +50,47 @@ def canonical_phase_tag(phase: Optional[str]) -> str:
     return str(phase).strip().lower()
 
 
-def resolve_run_camset_artifact(run: dict) -> Optional[Path]:
-    """Return the first existing camset path from a run's artifacts."""
+def resolve_run_camset_artifact(
+    run: dict, *, accepted_only: bool = False
+) -> Optional[Path]:
+    """Return a run camset, optionally requiring an accepted Phase 4 result.
+
+    Diagnostic views may inspect incomplete Phase 4 outputs; export/handoff
+    callers must request accepted-only resolution.
+    """
+    if (accepted_only and run.get("phase") == "phase4"
+            and run.get("status") != "complete"):
+        return None
     artifacts = run.get("artifacts") or {}
-    for key in (
+    # Accepted Phase 4 resolution must select a Phase 4 output, never its input.
+    artifact_keys = (
+        "self_calibrated_camset",
+        "optimised_camset",
+    ) if accepted_only and run.get("phase") == "phase4" else (
         "self_calibrated_camset",
         "optimised_camset",
         "initial_camset",
         "camset",
-    ):
+    )
+    for key in artifact_keys:
         p = artifacts.get(key)
         if p:
             pp = Path(p)
             if pp.exists():
                 return pp
+    # A workspace moved to another drive keeps its old absolute paths; the
+    # files are still beside the run's own record.
+    run_dir = run.get("_run_dir")
+    if run_dir:
+        from pyCamSet.workflow.workspace import resolve_artifact
+
+        phase = canonical_phase_tag(run.get("phase"))
+        if phase in ("phase3", "phase4"):
+            found = resolve_artifact(
+                {"run_id": Path(run_dir).name}, phase, Path(run_dir).parent.parent)
+            if found is not None and not (accepted_only and phase == "phase4"
+                                          and found.name == "initial_cameras.camset"):
+                return found
     return None
 
 
@@ -118,7 +145,11 @@ def _build_o_results(cam_set: Any) -> Optional[dict[str, np.ndarray]]:
     return {"err": err_arr, "x": x_arr}
 
 
-def launch_visualise_calibration_for_run(run: dict) -> tuple[bool, str]:
+def launch_visualise_calibration_for_run(
+    run: dict, theme_name: str = "Light",
+    figure_themes: tuple[str, str, str] | None = None,
+    three_d_arguments: list[str] | None = None,
+) -> tuple[bool, str]:
     """Launch native matplotlib/pyvista windows via visualise_calibration()."""
     if load_CameraSet is None or visualise_calibration is None:
         return False, "visualise_calibration dependencies are unavailable."
@@ -145,20 +176,33 @@ def launch_visualise_calibration_for_run(run: dict) -> tuple[bool, str]:
     # Everything above is checked here, in the GUI process, so the usual
     # failures still reach the user as a dialog.  The drawing itself is not:
     # see visualise_camset for why it cannot share a process with Qt.
-    ok, detail = spawn_calibration_viewer(camset_path)
+    ok, detail = spawn_calibration_viewer(
+        camset_path, theme_name=theme_name, figure_themes=figure_themes,
+        three_d_arguments=three_d_arguments)
     if not ok:
         return False, detail
     return True, f"Opened Assess Calibration for run {run_id} in a new window."
 
 
-def spawn_calibration_viewer(camset_path: Path) -> tuple[bool, str]:
+def spawn_calibration_viewer(
+    camset_path: Path, theme_name: str = "Light",
+    figure_themes: tuple[str, str, str] | None = None,
+    three_d_arguments: list[str] | None = None,
+) -> tuple[bool, str]:
     """
     Draw a calibration in a process of its own.
 
     :param camset_path: the ``.camset`` file to draw
     :return: whether the viewer was started, and what to say if it was not
     """
-    return spawn_viewer("pyCamSet.utils.visualise_camset", [str(camset_path)])
+    arguments = [str(camset_path), "--theme", theme_name]
+    if figure_themes is not None:
+        if len(figure_themes) != 3:
+            raise ValueError("figure_themes must contain one theme per assessment figure")
+        arguments.extend(["--figure-themes", *figure_themes])
+    if three_d_arguments:
+        arguments.extend(three_d_arguments)
+    return spawn_viewer("pyCamSet.utils.visualise_camset", arguments)
 
 
 def launch_visualise_calibration_open3d_for_run(
@@ -194,7 +238,10 @@ def launch_visualise_calibration_open3d_for_run(
     return visualise_calibration_open3d(o_results, handler, output_widget=output_widget)
 
 
-def launch_save_pyvista_png_for_run(run: dict, file_path: Path) -> tuple[bool, str]:
+def launch_save_pyvista_png_for_run(
+    run: dict, file_path: Path, width_mm: float = 160.0, dpi: int = 150,
+    theme_name: str = "Light", three_d_arguments: list[str] | None = None,
+) -> tuple[bool, str]:
     """Perform offscreen PyVista PNG export for a given run.
 
     :param run: Run metadata dict with an artifacts section containing a camset path.
@@ -227,8 +274,40 @@ def launch_save_pyvista_png_for_run(run: dict, file_path: Path) -> tuple[bool, s
     # because the caller wants the file, not a window.
     ok, detail = run_viewer(
         "pyCamSet.utils.visualise_camset",
-        [str(camset_path), "--png", str(file_path)],
+        [str(camset_path), "--png", str(file_path), "--theme", theme_name,
+         "--3d-width-mm", str(width_mm), "--3d-dpi", str(dpi),
+         *(three_d_arguments or [])],
     )
     if not ok:
         return False, detail
     return True, detail or f"Saved {file_path}."
+
+
+def launch_export_3d_for_run(run: dict, file_path: Path) -> tuple[bool, str]:
+    """Export reusable PyVista geometry in a viewer subprocess."""
+    camset_path = resolve_run_camset_artifact(run)
+    if camset_path is None:
+        return False, "Selected run has no readable camset artifact."
+    return run_viewer(
+        "pyCamSet.utils.visualise_camset",
+        [str(camset_path), "--3d-export", str(file_path)],
+    )
+
+
+def launch_save_assessment_pngs_for_run(
+    run: dict, directory: Path, theme_name: str = "Light",
+    width_mm: float = 160.0, dpi: int = 150,
+    figure_themes: tuple[str, str, str] | None = None,
+) -> tuple[bool, str]:
+    """Save the child viewer's three Matplotlib diagnostic figures and vectors."""
+    camset_path = resolve_run_camset_artifact(run)
+    if camset_path is None:
+        return False, "Selected run has no readable camset artifact."
+    arguments = [
+        str(camset_path), "--save-dir", str(directory), "--no-show", "--theme", theme_name,
+        "--figure-width-mm", str(width_mm), "--figure-dpi", str(dpi),
+        "--figure-formats", "png", "svg", "pdf", "--matplotlib-only", "--export-csv",
+    ]
+    if figure_themes is not None:
+        arguments.extend(["--figure-themes", *figure_themes])
+    return run_viewer("pyCamSet.utils.visualise_camset", arguments)

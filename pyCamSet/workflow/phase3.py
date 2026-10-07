@@ -362,7 +362,7 @@ def _diagnostics(optimisation, handler, stats: dict,
     observation_count = int(
         stats.get("observation_count", len(optimisation.fun) // 2))
 
-    quality_gate = _quality_gate(
+    quality_gate = solve_quality_gate(
         optimisation, handler, stats, residual_xy, initial_euclid,
         final_euclid, observation_count)
 
@@ -397,7 +397,7 @@ def _diagnostics(optimisation, handler, stats: dict,
     }
 
 
-def _quality_gate(optimisation, handler, stats: dict,
+def solve_quality_gate(optimisation, handler, stats: dict,
                   residual_xy: np.ndarray, initial_euclid: float,
                   final_euclid: float, observation_count: int) -> dict:
     """Return the fail-closed disposition for a Phase 3 result.

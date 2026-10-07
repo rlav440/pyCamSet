@@ -428,6 +428,25 @@ def test_phase_1_records_detection_exception_as_failed(tmp_path, monkeypatch):
     assert metadata["error"] == "detector exploded"
 
 
+def test_phase_1_records_an_unsaved_detection_file_as_failed(tmp_path, monkeypatch):
+    """A run whose detections could not be written has no usable output."""
+    monkeypatch.setattr(
+        phase1, "_detect",
+        lambda _params, _log: (object(), [], {}, {"blocking_flags": []}),
+    )
+
+    def refuse(*_args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(phase1, "save_detections", refuse)
+    workspace = WorkspaceManager(workspace_path_for(tmp_path))
+    metadata = phase1.run({"f_loc": str(tmp_path)}, workspace)
+
+    assert metadata["status"] == "failed"
+    assert "disk full" in metadata["error"]
+    assert workspace.find_run("phase1", metadata["run_id"])["status"] == "failed"
+
+
 def test_a_phases_output_carries_its_reports_not_only_its_warnings():
     """The blocks the library logs at INFO are the phase's results, so the
     capture has to let INFO through -- a default root logger does not."""

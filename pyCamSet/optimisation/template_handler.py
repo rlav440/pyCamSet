@@ -106,6 +106,12 @@ class TemplateBundlePrimitive:
         return self.intr, self.extr, self.poses
 
 
+def hold_poses_fixed(primitive, mask: np.ndarray) -> None:
+    """Removes the poses ``mask`` marks from the primitive's free poses."""
+    primitive.poses_unfixed = primitive.poses_unfixed & ~mask
+    primitive.calc_free_poses()
+
+
 class TemplateBundleHandler:
     """
     The standard bundle handler is a class that handles the optimisation of camera parameters.
@@ -199,20 +205,14 @@ class TemplateBundleHandler:
 
         self.param_len = None
         self.jac_mask = None
-        self.missing_poses: list | None = missing_poses
+        self.missing_poses: np.ndarray | None = None
         if missing_poses is not None:
-            # A handler rebuilt from a saved camset is given the poses its
-            # solve could not use. Those poses are absent from the saved
-            # parameter vector, so they have to leave the layout now, as
-            # calc_initial_params takes them out during a solve; otherwise
-            # the saved vector reads back one block of six per pose short.
-            marked = np.asarray(missing_poses, dtype=bool)
+            marked = np.array(missing_poses, dtype=bool)
             if marked.shape != pose_unfixed.shape:
                 raise ValueError(
                     f"missing_poses has {marked.size} entries for {n_poses} poses")
-            self.bundlePrimitive.poses_unfixed = (
-                self.bundlePrimitive.poses_unfixed & ~marked)
-            self.bundlePrimitive.calc_free_poses()
+            self.missing_poses = marked
+            hold_poses_fixed(self.bundlePrimitive, marked)
 
         # we define an abstract function block to handle the calibration
         self.op_fun: afb.optimisation_function = self._intr_block() + self._extr_block() + fb.template_points()
@@ -567,6 +567,11 @@ class TemplateBundleHandler:
         """
         self.initial_params = x
 
+    def _exclude_poses(self, mask) -> None:
+        """Records ``mask`` as the missing poses and holds those poses fixed."""
+        self.missing_poses = np.array(mask, dtype=bool)
+        hold_poses_fixed(self.bundlePrimitive, self.missing_poses)
+
     def get_initial_params(self) -> np.ndarray:
         """
         Returns initial parameters if they exist, or starts calculating them
@@ -609,16 +614,13 @@ class TemplateBundleHandler:
             marked = np.asarray(self.missing_poses, dtype=bool)
             if marked.shape != unposed.shape:
                 raise ValueError(
-                    f"missing_poses has {marked.size} entries for "
-                    f"{unposed.size} poses")
+                    f"missing_poses has {marked.size} entries, but pose "
+                    f"estimation returned {unposed.size} poses")
             self.missing_poses = marked | unposed
         self.find_and_exclude_transform_outliers(per_im_error)
 
         if np.any(self.missing_poses):
-            self.bundlePrimitive.poses_unfixed = (
-                self.bundlePrimitive.poses_unfixed
-                & ~np.asarray(self.missing_poses, dtype=bool))
-            self.bundlePrimitive.calc_free_poses()
+            self._exclude_poses(self.missing_poses)
         
         for idc, intr_unfixed in enumerate(self.bundlePrimitive.intr_unfixed):
             if intr_unfixed:

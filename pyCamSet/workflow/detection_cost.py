@@ -667,22 +667,29 @@ def module_hash() -> typing.Optional[str]:
     return hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest()
 
 
+def _parallel_speedup(timing: CameraTiming) -> typing.Optional[float]:
+    """Single-thread over multi-thread median detection time, on one camera's frames."""
+    if not timing.detect_ms or not timing.detect_single_thread_ms:
+        return None
+    multi_thread_ms = float(np.median(timing.detect_ms))
+    if multi_thread_ms <= 0:
+        return None
+    return float(np.median(timing.detect_single_thread_ms)) / multi_thread_ms
+
+
 def _thread_answer(per_frame_ms: float, options: MeasurementOptions,
-                   single_thread_ms: typing.Optional[float]) -> dict:
+                   speedup: typing.Optional[float]) -> dict:
     """How many worker threads the target rate needs, and whether it parallelises.
 
     ``per_frame_ms`` is the measured detection cost on the path that ships.
-    The answer is a count of workers for the requested rate, plus the speedup
-    between the multi-thread and single-thread runs -- the latter says whether
-    adding workers helps or merely spreads the same work.
+    The answer is a count of workers for the requested rate, plus OpenCV's
+    internal speedup from :func:`_parallel_speedup`, which says whether adding
+    workers helps or merely spreads the same work.
     """
     if not per_frame_ms or per_frame_ms <= 0:
         return {"workers_needed": None, "note": "no detection timings collected"}
     per_worker = 1000.0 / per_frame_ms          # frames one worker handles a second
     workers = int(np.ceil(options.expected_fps / per_worker)) if per_worker else None
-    speedup = None
-    if single_thread_ms and single_thread_ms > 0:
-        speedup = float(per_frame_ms / single_thread_ms)
     return {
         "expected_fps": options.expected_fps,
         "frames_per_second_per_worker": float(per_worker),
@@ -795,9 +802,11 @@ def _build_report(options, pre, spec, timings, threads_default,
 
     overall_detect = percentiles(all_detect)
     single_thread = None
+    speedup = None
     for timing in timings:
         if timing.detect_single_thread_ms:
             single_thread = percentiles(timing.detect_single_thread_ms)
+            speedup = _parallel_speedup(timing)
             break
 
     # Detection rate: what fraction of the frames the target was actually found
@@ -854,7 +863,7 @@ def _build_report(options, pre, spec, timings, threads_default,
         "thread_answer": _thread_answer(
             overall_detect.get("median_ms"),
             options,
-            (single_thread or {}).get("median_ms"),
+            speedup,
         ),
         "failures": failures,
     }

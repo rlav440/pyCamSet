@@ -367,3 +367,10 @@ class TestDetectionCostTab:
         tab = DetectionCostTab()
         with pytest.raises(ValueError):
             tab._options()
+
+
+def test_parallel_speedup_is_single_thread_time_over_multi_thread_time():
+    timing = dc.CameraTiming(camera="cam0", detect_ms=[5.0, 5.0, 5.0],
+                             detect_single_thread_ms=[10.0, 10.0, 10.0])
+    assert dc._parallel_speedup(timing) == pytest.approx(2.0)
+    assert dc._parallel_speedup(dc.CameraTiming(camera="cam1", detect_ms=[5.0])) is None

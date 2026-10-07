@@ -298,13 +298,16 @@ class Phase4Tab(QWidget):
         # ── Action buttons ─────────────────────────────────────────────
         form_root.addWidget(make_separator())
         btn_row = QHBoxLayout()
-        run_btn = make_blue_button("▶  Run Phase 4", self._run_phase4)
-        run_btn.setToolTip("Run self-calibration.")
-        btn_row.addWidget(run_btn)
+        self._run_btn = make_blue_button("▶  Run Phase 4", self._run_phase4)
+        self._run_btn.setToolTip("Run self-calibration.")
+        btn_row.addWidget(self._run_btn)
         btn_row.addWidget(make_orange_button("Diagnostics ▼", self._open_diagnostics))
         btn_row.addWidget(make_green_button("Assess Calibration", self._open_assess_calibration))
         btn_row.addStretch()
         form_root.addLayout(btn_row)
+        self._status_lbl = QLabel("Ready")
+        self._status_lbl.setStyleSheet("color: #666;")
+        form_root.addWidget(self._status_lbl)
         form_root.addStretch()
 
         self._terminal = TerminalWidget(terminal_cb, parent=self)
@@ -494,6 +497,8 @@ class Phase4Tab(QWidget):
         params["selected_cameras"] = list(
             ((phase3_run or {}).get("params") or {}).get("selected_cameras") or [])
 
+        self._run_btn.setEnabled(False)
+        self._status_lbl.setText("Running…")
         self._terminal.clear_terminal()
         self._terminal.append_line("=== Phase 4: Self-Calibration ===")
         self._terminal.append_line(f"Image folder : {params['f_loc']}")
@@ -519,7 +524,21 @@ class Phase4Tab(QWidget):
             lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
         self._worker.start()
 
-    def _on_run_finished(self, _metadata: dict) -> None:
+    def _on_run_finished(self, metadata: dict) -> None:
+        status = str(metadata.get("status", "failed"))
+        self._run_btn.setEnabled(True)
+        if status == "complete":
+            self._status_lbl.setText("Complete — quality gate passed")
+        elif status == "incomplete":
+            flags = ((metadata.get("diagnostics") or {}).get("quality_gate") or {}).get(
+                "blocking_flags", [])
+            detail = "; ".join(map(str, flags[:2]))
+            suffix = f": {detail}" if detail else ""
+            self._status_lbl.setText(
+                f"Incomplete — quality gate blocked hand-off{suffix}")
+        else:
+            self._status_lbl.setText(
+                f"Failed — {metadata.get('error', 'unknown error')}")
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
 
@@ -695,6 +714,26 @@ class Phase4DiagnosticsTab(QWidget):
                 form.addRow("Note:", QLabel("This run is from Phase 3; D4 metrics are not available."))
             else:
                 d = run.get("diagnostics", {})
+                gate = d.get("quality_gate") or {}
+                status = str(run.get("status", "unknown"))
+                status_label = QLabel(status)
+                status_label.setStyleSheet(
+                    "color: #2e7d32; font-weight: bold;" if status == "complete"
+                    else "color: #c62828; font-weight: bold;")
+                form.addRow("Disposition:", status_label)
+                flags = gate.get("blocking_flags", [])
+                form.addRow(
+                    "Quality gate:",
+                    QLabel("; ".join(map(str, flags)) if flags
+                           else "passed" if gate else "not evaluated"))
+                form.addRow(
+                    "Observation coverage:",
+                    QLabel(f"cameras={gate.get('observed_cameras', '—')} | "
+                           f"images={len(gate.get('observed_images', []))} observed, "
+                           f"{len(gate.get('missing_images', []))} explicitly missing"))
+                form.addRow(
+                    "Gauge accounting:",
+                    QLabel(str(gate.get("gauge", "—"))))
                 form.addRow("D4.1 free target points:", QLabel(str(d.get("D4.1_n_free_target_points", "—"))))
                 form.addRow("D4.2 gauge-fixed points:", QLabel(str(d.get("D4.2_gauge_fixed_points", "—"))))
                 form.addRow("D4.3 initial euclid (px):", QLabel(f"{float(d.get('D4.3_initial_euclid_px', float('nan'))):.5f}"))
@@ -726,6 +765,10 @@ class Phase4DiagnosticsTab(QWidget):
                         form.addRow("D4.12 per-camera reprojection:", QLabel("no valid cameras"))
                 else:
                     form.addRow("D4.12 per-camera reprojection:", QLabel("—"))
+                per_image = d.get("D4.13_per_image_mean_reprojection", {})
+                form.addRow(
+                    "D4.13 per-image reprojection:",
+                    QLabel(f"{len(per_image)} images" if isinstance(per_image, dict) else "—"))
             if run.get("error"):
                 form.addRow("Error:", QLabel(str(run["error"])))
             self._summary_layout.addLayout(form)

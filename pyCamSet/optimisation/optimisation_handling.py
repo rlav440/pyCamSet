@@ -258,14 +258,15 @@ def get_bundle_adjustment_stats(
         optimisation.fun, param_handler)
     final_euclid = float(np.mean(np.linalg.norm(
         np.reshape(final_reprojection, (-1, 2)), axis=1)))
-    initial_reprojection_cost = 0.5 * float(init_reprojection @ init_reprojection)
-    final_reprojection_cost = 0.5 * float(final_reprojection @ final_reprojection)
+    problem_opts = getattr(param_handler, "problem_opts", None) or {}
+    loss = problem_opts.get("loss", "linear")
+    f_scale = float(problem_opts.get("f_scale", 1.0))
 
     stats = {
         "initial_euclid": init_euclid,
         "final_euclid": final_euclid,
-        "initial_reprojection_cost": initial_reprojection_cost,
-        "final_reprojection_cost": final_reprojection_cost,
+        "initial_objective_cost": robust_loss.cost(init_reprojection, loss, f_scale),
+        "final_objective_cost": robust_loss.cost(final_reprojection, loss, f_scale),
         "param_count": int(np.size(init_params)),
         "observation_count": int(np.size(final_reprojection) // 2),
         "prior_residual_count": (

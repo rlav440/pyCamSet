@@ -160,7 +160,7 @@ def test_phase4_initial_per_image_errors_fall_back_to_solver_stats():
     assert result.tolist() == [3.5, 5.25]
 
 
-def test_solver_stats_record_reprojection_objective_costs():
+def test_solver_stats_record_the_linear_objective_costs():
     from pyCamSet.optimisation.optimisation_handling import get_bundle_adjustment_stats
 
     class _ResidualHandler:
@@ -176,8 +176,29 @@ def test_solver_stats_record_reprojection_objective_costs():
         param_handler=_ResidualHandler(),
     )
 
-    assert result["initial_reprojection_cost"] == 12.5
-    assert result["final_reprojection_cost"] == 0.0
+    assert result["initial_objective_cost"] == 12.5
+    assert result["final_objective_cost"] == 0.0
+
+
+def test_solver_stats_record_the_robust_objective_the_solve_minimised():
+    from pyCamSet.optimisation.optimisation_handling import get_bundle_adjustment_stats
+
+    class _RobustHandler:
+        problem_opts = {"loss": "soft_l1", "f_scale": 1.0}
+
+        def get_base_residual_count(self):
+            return 4
+
+    result = get_bundle_adjustment_stats(
+        SimpleNamespace(success=True, status=2, message="ok", nfev=3,
+                        fun=np.zeros(4)),
+        np.ones(2), np.array([3.0, 0.0, 0.0, 4.0]), 0.1,
+        param_handler=_RobustHandler(),
+    )
+
+    # soft_l1: 0.5 * sum(2 * (sqrt(1 + f^2) - 1)) over 3 and 4
+    expected = (np.sqrt(10.0) - 1.0) + (np.sqrt(17.0) - 1.0)
+    assert result["initial_objective_cost"] == pytest.approx(expected)
 
 
 def test_phase4_quality_gate_distinguishes_objective_from_mean_error():
@@ -185,8 +206,8 @@ def test_phase4_quality_gate_distinguishes_objective_from_mean_error():
         _optimisation(), _Handler(),
         {
             "success": True,
-            "initial_reprojection_cost": 10.0,
-            "final_reprojection_cost": 5.0,
+            "initial_objective_cost": 10.0,
+            "final_objective_cost": 5.0,
         }, np.ones((4, 2)),
         initial_euclid=2.0, final_euclid=3.0, observation_count=4,
     )

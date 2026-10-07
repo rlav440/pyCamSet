@@ -358,11 +358,7 @@ def test_a_real_solve_fills_in_the_whole_contract(short_charuco_handler):
 
 @pytest.mark.data
 def test_robust_loss_runs_on_the_schur_solver(short_charuco_handler, monkeypatch):
-    """A non-linear loss stays on the Schur solver, which honours it.
-
-    It used to fall back to scipy's trust region solver, which is far slower
-    on a real rig; the Schur path now minimises the same robust objective.
-    """
+    """A robust loss runs on the Schur solver, which minimises scipy's robust objective."""
     short_charuco_handler.problem_opts.update({"loss": "soft_l1", "f_scale": 1.0})
     seen = []
     real = backend.run_schur_bundle_adjustment
@@ -377,10 +373,12 @@ def test_robust_loss_runs_on_the_schur_solver(short_charuco_handler, monkeypatch
 
     assert seen, "the robust loss fell back to the trust region solver"
     assert np.isfinite(stats["final_euclid"])
-    # fun is the raw reprojection residual, and cost the robust objective,
-    # which is below the plain half sum of squares for soft_l1.
-    raw = 0.5 * float(optimisation.fun @ optimisation.fun)
-    assert optimisation.cost <= raw + 1e-9
+    # fun is the raw reprojection residual, and cost the robust objective of it
+    from pyCamSet.optimisation import robust_loss
+    assert optimisation.cost == pytest.approx(
+        robust_loss.cost(optimisation.fun, "soft_l1", 1.0), rel=1e-9)
+    assert optimisation.cost < robust_loss.cost(optimisation.fun)
+    assert stats["final_objective_cost"] == pytest.approx(optimisation.cost, rel=1e-9)
 
 
 @pytest.mark.data

@@ -47,7 +47,6 @@ from pyCamSet.gui.shared_functions import (
     WorkspaceManager,
     make_blue_button,
     make_green_button,
-    make_orange_button,
     make_warning_button,
     make_section_label,
     make_separator,
@@ -315,14 +314,6 @@ class Phase4Tab(QWidget):
         self._run_btn = make_blue_button("▶  Run Phase 4", self._run_phase4)
         self._run_btn.setToolTip("Run self-calibration.")
         btn_row.addWidget(self._run_btn)
-        self._cancel_btn = make_orange_button("Cancel", self._cancel_phase4)
-        self._cancel_btn.setToolTip(
-            "Request cancellation; the active SciPy solve finishes its current step.")
-        self._cancel_btn.setEnabled(False)
-        btn_row.addWidget(self._cancel_btn)
-        self._retry_btn = make_green_button("Retry", self._run_phase4)
-        self._retry_btn.setEnabled(False)
-        btn_row.addWidget(self._retry_btn)
         btn_row.addWidget(make_warning_button("Diagnostics ▼", self._open_diagnostics))
         btn_row.addWidget(make_green_button("Assess Calibration", self._open_assess_calibration))
         btn_row.addStretch()
@@ -520,8 +511,6 @@ class Phase4Tab(QWidget):
             ((phase3_run or {}).get("params") or {}).get("selected_cameras") or [])
 
         self._run_btn.setEnabled(False)
-        self._retry_btn.setEnabled(False)
-        self._cancel_btn.setEnabled(True)
         self._status_lbl.setText("Running…")
         self._terminal.clear_terminal()
         self._terminal.append_line("=== Phase 4: Self-Calibration ===")
@@ -548,22 +537,9 @@ class Phase4Tab(QWidget):
             lambda msg: self._terminal.append_line(f"ERROR: {msg}"))
         self._worker.start()
 
-    def _cancel_phase4(self) -> None:
-        """Request a cooperative stop without claiming the solver was killed."""
-        if self._worker is None or not self._worker.isRunning():
-            return
-        self._worker.requestInterruption()
-        self._cancel_btn.setEnabled(False)
-        self._status_lbl.setText(
-            "Cancellation requested; waiting for the active solver step…")
-        self._terminal.append_line(
-            "Cancellation requested; the active optimisation is not interrupted mid-step.")
-
     def _on_run_finished(self, metadata: dict) -> None:
         status = str(metadata.get("status", "failed"))
         self._run_btn.setEnabled(True)
-        self._cancel_btn.setEnabled(False)
-        self._retry_btn.setEnabled(status != "complete")
         if status == "complete":
             self._status_lbl.setText("Complete — quality gate passed")
         elif status == "incomplete":
@@ -723,7 +699,8 @@ class Phase4DiagnosticsTab(QWidget):
                 flags = gate.get("blocking_flags", [])
                 form.addRow(
                     "Quality gate:",
-                    QLabel("passed" if not flags else "; ".join(map(str, flags))))
+                    QLabel("; ".join(map(str, flags)) if flags
+                           else "passed" if gate else "not evaluated"))
                 form.addRow(
                     "Observation coverage:",
                     QLabel(f"cameras={gate.get('observed_cameras', '—')} | "

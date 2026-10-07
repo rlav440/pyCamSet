@@ -130,6 +130,22 @@ def test_phase4_quality_gate_lists_but_accepts_images_the_solve_excluded():
     assert gate["status"] == "complete"
 
 
+def test_phase4_per_image_error_is_skipped_when_residuals_do_not_line_up(monkeypatch):
+    monkeypatch.setattr(phase4, "_target_shape_change", lambda *_: (1.0, 0.0))
+    monkeypatch.setattr(
+        phase4, "per_camera_mean_reprojection",
+        lambda *_: ({}, np.ones((3, 2))))
+    logged = []
+
+    diagnostics = phase4._diagnostics(
+        _optimisation(), _Handler(),
+        {"success": True, "initial_euclid": 2.0, "final_euclid": 1.0},
+        None, logged.append)
+
+    assert diagnostics["D4.13_per_image_mean_reprojection"] == {}
+    assert any("D4.13 skipped" in line for line in logged)
+
+
 def test_phase4_initial_per_image_errors_fall_back_to_solver_stats():
     handler = SimpleNamespace(initial_per_im_error=np.array([], dtype=float))
     stats = {
@@ -355,7 +371,9 @@ def test_fixed_camera_warm_start_keeps_only_free_parameters():
             self.extr_unfixed = np.asarray(extr_unfixed, dtype=bool)
             self.poses_unfixed = np.array([True])
             self.bdpt_unfixed = np.array([True])
-            self.pose_end = 3 * int(self.extr_unfixed.sum()) + 6
+            self.intr_end = 0
+            self.extr_end = 3 * int(self.extr_unfixed.sum())
+            self.pose_end = self.extr_end + 6
             self.bdpt_end = self.pose_end + 3
 
         def return_bundle_primitives(self, _params):
@@ -370,11 +388,12 @@ def test_fixed_camera_warm_start_keeps_only_free_parameters():
         calibration_params=np.arange(12.0),
     )
 
-    current_handler = TemplateBundleHandler.__new__(TemplateBundleHandler)
+    current_handler = SelfBundleHandler.__new__(SelfBundleHandler)
     current_handler.bundlePrimitive = _Primitive(extr_unfixed=[False, True])
+    current_handler.flat_point_data = np.array([1.0, 2.0, 3.0])
     current_handler.feat_unfixed = np.array([True, True, True])
 
-    SelfBundleHandler.set_from_templated_camset(current_handler, previous_cams)
+    current_handler.set_from_templated_camset(previous_cams)
 
     assert current_handler.initial_params.shape == (12,)
     assert current_handler.initial_params[:9].tolist() == [40.0, 41.0, 42.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0]

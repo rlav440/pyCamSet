@@ -999,14 +999,13 @@ def test_a_marking_of_the_wrong_length_is_refused(charuco_problem):
     from pyCamSet.optimisation.template_handler import TemplateBundleHandler
 
     target, detections, cams = charuco_problem
-    handler = TemplateBundleHandler(
-        camset=cams, target=target, detection=detections,
-        options={"outliers": "n", "verbosity": 0},
-        missing_poses=[True, False],  # far too short
-    )
-
+    # Refused as the handler is built, since the marking shapes its layout.
     with pytest.raises(ValueError, match="missing_poses has 2 entries"):
-        handler.get_initial_params()
+        TemplateBundleHandler(
+            camset=cams, target=target, detection=detections,
+            options={"outliers": "n", "verbosity": 0},
+            missing_poses=[True, False],  # far too short
+        )
 
 
 # ---------------------------------------------------------------------------

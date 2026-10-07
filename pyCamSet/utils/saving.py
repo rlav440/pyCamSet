@@ -289,6 +289,14 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
         logger.warning(f"Failed to load calibration target with reason {e}, returning just the CameraSet")
         return camset
 
+    handler_config = optim.get('handler_config') or {}
+    if "missing_poses" in handler_config:
+        missing_poses = np.array(handler_config["missing_poses"]).astype(bool)
+        if missing_poses.size != detection.max_ims:
+            raise ValueError(
+                f"{f_loc} marks {missing_poses.size} poses missing, but its "
+                f"detections hold {detection.max_ims} images.")
+
     try:
         handler_config = optim['handler_config']
 
@@ -298,7 +306,7 @@ def load_CameraSet(f_loc: Path|str) -> CameraSet:
             options=handler_config['options']
         )
         if "missing_poses" in handler_config:
-            input_args["missing_poses"] = np.array(handler_config["missing_poses"]).astype(bool)
+            input_args["missing_poses"] = missing_poses
 
         handler = instance_obj(
             handler_config['handler_module'], handler_config['handler_name'], **input_args

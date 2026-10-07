@@ -21,7 +21,8 @@ from typing import TYPE_CHECKING
 
 from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
-from pyCamSet.optimisation.template_handler import TemplateBundleHandler, DEFAULT_OPTIONS
+from pyCamSet.optimisation.template_handler import (
+    TemplateBundleHandler, DEFAULT_OPTIONS, hold_poses_fixed)
 import pyCamSet.utils.general_utils as gu
 import pyCamSet.optimisation.compiled_helpers as ch
 import pyCamSet.optimisation.function_block_implementations as fb
@@ -217,7 +218,6 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         self.param_len = None
         self.jac_mask = None
-        self.missing_poses: list | None = missing_poses
         self._setup_free_points()
         self.op_fun: fb.optimisation_function = self._intr_block() + self._extr_block() + fb.rigidTform3d() +  fb.free_point()
 
@@ -446,20 +446,8 @@ class SelfBundleHandler(TemplateBundleHandler):
 
     def _adopt_missing_poses(self, missing_poses):
         """
-        Takes on the poses a previous solve gave up on.
-
-        A pose it could not estimate -- unposed by the initial estimate, or
-        thrown out as an outlier -- is absent from its parameter vector,
-        because ``calc_initial_params`` holds such poses fixed.  Its value in
-        that solve is therefore the identity it was initialised to, not an
-        estimate of anything.  Carrying that identity over while still fitting
-        the detections it came from asks this solve to reproject a target
-        sitting in the camera's centre, which is where the enormous initial
-        error comes from.  So the pose is held fixed here too and its
-        detections are dropped, exactly as the previous solve had them.
-
-        Rebuilding the free points afterwards matters as much: without it the
-        gauge could be fixed on a feature only those discarded poses saw.
+        Holds fixed, and drops the detections of, the poses a previous solve
+        could not estimate, in addition to any already missing here.
 
         :param missing_poses: the previous solve's mask, or None
         """
@@ -472,20 +460,24 @@ class SelfBundleHandler(TemplateBundleHandler):
             raise ValueError(
                 f"The previous calibration marks {missing.size} poses missing, "
                 f"and this problem has {n_poses} poses.")
-        self.missing_poses = missing
-
-        if not np.any(missing):
+        current = (self.missing_poses if self.missing_poses is not None
+                   else np.zeros(n_poses, dtype=bool))
+        combined = current | missing
+        if np.array_equal(combined, current):
             return
         logger.info(
             f"{int(missing.sum())} poses the previous calibration could not "
             "estimate are held fixed, and their detections excluded")
-        self.super_primitive.poses_unfixed = (
-            self.super_primitive.poses_unfixed & ~missing)
-        self.super_primitive.calc_free_poses()
-        # which features are solvable, and which may take the gauge, both
-        # follow from the detections that are left
-        self._setup_free_points()
+        self._exclude_poses(combined)
 
+    def _exclude_poses(self, mask) -> None:
+        """
+        Records ``mask`` as the missing poses, holds those poses fixed, and
+        rebuilds the free points from the detections that remain.
+        """
+        self.missing_poses = np.array(mask, dtype=bool)
+        hold_poses_fixed(self.super_primitive, self.missing_poses)
+        self._setup_free_points()
 
     def get_initial_params(self) -> np.ndarray:
         """

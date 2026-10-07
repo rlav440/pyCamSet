@@ -259,8 +259,8 @@ def _diagnostics(optimisation, handler, stats: dict,
         "D4.3_per_image_initial_reprojection": per_image_initial.tolist(),
         "D4.3_initial_euclid_px": initial_euclid,
         "D4.3_final_euclid_px": final_euclid,
-        "D4.3_initial_reprojection_cost": stats.get("initial_reprojection_cost"),
-        "D4.3_final_reprojection_cost": stats.get("final_reprojection_cost"),
+        "D4.3_initial_objective_cost": stats.get("initial_objective_cost"),
+        "D4.3_final_objective_cost": stats.get("final_objective_cost"),
         "D4.4_vs_phase3_delta_px": improvement,
         "D4.5_gauge_scale_factor": scale,
         "D4.7_mean_target_displacement_mm": displacement_mm,
@@ -309,8 +309,8 @@ def _quality_gate(optimisation, handler, stats: dict,
         optimisation, handler, stats, residual_xy, initial_euclid,
         final_euclid, observation_count)
     blocking: list[str] = list(base["blocking_flags"])
-    initial_cost = float(stats.get("initial_reprojection_cost", float("nan")))
-    final_cost = float(stats.get("final_reprojection_cost", float("nan")))
+    initial_cost = float(stats.get("initial_objective_cost", float("nan")))
+    final_cost = float(stats.get("final_objective_cost", float("nan")))
     objective_cost_reduced = bool(
         np.isfinite(initial_cost) and np.isfinite(final_cost)
         and final_cost < initial_cost)

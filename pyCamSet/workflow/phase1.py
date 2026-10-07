@@ -129,6 +129,7 @@ def run(params: dict,
         except OSError as exc:
             metadata["error"] = (
                 f"Could not save run-local detected_datapoints.pickle: {exc}")
+            metadata["status"] = "failed"
             workspace.save_run("phase1", run_id, metadata)
             log(f"ERROR: {metadata['error']}")
             return metadata
@@ -138,7 +139,9 @@ def run(params: dict,
         log(f"Artifact saved: {saved}")
         workspace.save_run("phase1", run_id, metadata)
 
-    if blocking_flags:
+    if error:
+        log(f"Phase 1 failed: {error}")
+    elif blocking_flags:
         log("Phase 1 incomplete: " + "; ".join(map(str, blocking_flags)))
     else:
         log("Phase 1 complete.")
@@ -414,10 +417,6 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
         detections, target, image_counts=cam_img_counts, n_lim=params["n_lim"])
 
     diagnostics = _diagnostics(report, detections, cam_res, log)
-    if getattr(report, "blocking_flags", None):
-        log("Phase 1 detection finished with blocking flags.")
-    else:
-        log("Phase 1 complete.")
     return detections, cam_res, diagnostics, report.to_dict()
 
 

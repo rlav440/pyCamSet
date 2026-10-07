@@ -214,6 +214,50 @@ def isolated_user_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     return config
 
 
+@pytest.fixture(autouse=True)
+def isolated_qt_state():
+    """Leave the Qt application as the test found it.
+
+    A test that builds a main window and never closes it leaves the window,
+    its application-wide event filters and its widgets alive for the rest of
+    the session.  Each later theme change then re-polishes all of them, so a
+    single-process run slows with every GUI test until CI runners are killed.
+    A theme applied by one test also leaked into the next, whose assertions
+    about palette colours then depended on test order.
+
+    Only windows created during the test are removed: module- and
+    session-scoped fixtures are set up before this snapshot, so their windows
+    survive.  Nothing here imports Qt, so a lean install is unaffected.
+    """
+    widgets = sys.modules.get("PySide6.QtWidgets")
+    app = widgets.QApplication.instance() if widgets else None
+    # A test may create the first QApplication itself; then everything that
+    # exists afterwards is the test's, and the unthemed state is the baseline.
+    before = set(app.topLevelWidgets()) if app is not None else set()
+    style_sheet = app.styleSheet() if app is not None else ""
+    palette = app.palette() if app is not None else None
+    theme = app.property("pycamsetTheme") if app is not None else None
+    yield
+    widgets = sys.modules.get("PySide6.QtWidgets")
+    app = widgets.QApplication.instance() if widgets else None
+    if app is None:
+        return
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    for widget in app.topLevelWidgets():
+        if widget not in before:
+            # hide + deleteLater, not close(): closing runs closeEvent, which
+            # saves settings and could open a modal warning mid-teardown.
+            widget.hide()
+            widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    if app.styleSheet() != style_sheet:
+        app.setStyleSheet(style_sheet)
+    if palette is not None and app.palette() != palette:
+        app.setPalette(palette)
+    app.setProperty("pycamsetTheme", theme)
+
+
 # ---------------------------------------------------------------------------
 # Synthetic cameras
 #

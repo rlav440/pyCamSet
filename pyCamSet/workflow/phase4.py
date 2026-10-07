@@ -16,6 +16,7 @@ import numpy as np
 from pyCamSet.utils.paths import long_path
 from pyCamSet.workflow.diagnostics import per_camera_mean_reprojection
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
+from pyCamSet.workflow.phase3 import solve_quality_gate
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
     make_run_id,
@@ -201,7 +202,7 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     diagnostics = _diagnostics(
         optimisation, handler, stats, phase3_run, log,
         out_cams=out_cams, previous_cams=previous_cams,
-        params=params, phase3_status=(phase3_run or {}).get("status"))
+        params=params)
     report = getattr(out_cams, "calibration_report", None)
     return camset_out, diagnostics, (
         report.to_dict() if report is not None else None)
@@ -210,8 +211,7 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
 def _diagnostics(optimisation, handler, stats: dict,
                  phase3_run: Optional[dict], log: LogFn,
                  *, out_cams=None, previous_cams=None,
-                 params: Optional[dict] = None,
-                 phase3_status: Optional[str] = None) -> dict:
+                 params: Optional[dict] = None) -> dict:
     """The D4 series: how far the target moved, and whether it paid off."""
     # The errors and the solver's own account of the run are the calibration
     # summary's, printed by the solve itself.  What follows is what only this
@@ -233,22 +233,24 @@ def _diagnostics(optimisation, handler, stats: dict,
 
     per_image_initial = _initial_per_image_errors(handler, stats)
 
-    per_camera, _ = per_camera_mean_reprojection(
+    per_camera, residual_xy = per_camera_mean_reprojection(
         optimisation, handler, log, "D4.12")
     detection_data = np.asarray(handler.get_detection_data(flatten=True))
-    residual_norm = np.linalg.norm(
-        np.asarray(optimisation.fun[:2 * len(detection_data)], dtype=float).reshape(-1, 2),
-        axis=1)
-    per_image = {
-        str(index): float(np.mean(residual_norm[detection_data[:, 1].astype(int) == index]))
-        for index in sorted(set(detection_data[:, 1].astype(int).tolist()))
-    }
+    per_image: dict[str, float] = {}
+    if detection_data.ndim == 2 and len(detection_data) == len(residual_xy):
+        residual_norm = np.linalg.norm(residual_xy, axis=1)
+        image_index = detection_data[:, 1].astype(int)
+        per_image = {
+            str(index): float(np.mean(residual_norm[image_index == index]))
+            for index in np.unique(image_index).tolist()
+        }
+    else:
+        log("Warning: D4.13 skipped (detections do not line up with residuals).")
     quality_gate = _quality_gate(
-        optimisation, handler, stats, residual_norm.reshape(-1, 1),
+        optimisation, handler, stats, residual_xy,
         initial_euclid, final_euclid, int(len(detection_data)),
         out_cams=out_cams, previous_cams=previous_cams,
-        params=params, phase3_status=phase3_status,
-        phase3_run_id=(phase3_run or {}).get("run_id"))
+        params=params, phase3_run=phase3_run)
 
     diagnostics = {
         "D4.1_n_free_target_points": int(np.sum(visible)),
@@ -296,51 +298,39 @@ def _quality_gate(optimisation, handler, stats: dict,
                   final_euclid: float, observation_count: int, *,
                   out_cams=None, previous_cams=None,
                   params: Optional[dict] = None,
-                  phase3_status: Optional[str] = None,
-                  phase3_run_id: Optional[str] = None) -> dict:
-    """Fail closed when Phase 4 produced no scientifically usable result."""
-    blocking: list[str] = []
-    values = np.asarray(residual_xy, dtype=float)
-    finite_parameters = bool(np.all(np.isfinite(np.asarray(
-        getattr(optimisation, "x", []), dtype=float))))
-    finite_residuals = bool(values.size and np.all(np.isfinite(values)))
-    solver_success = bool(stats.get("success", getattr(optimisation, "success", False)))
-    error_reduced = bool(
-        np.isfinite(initial_euclid) and np.isfinite(final_euclid)
-        and final_euclid < initial_euclid)
+                  phase3_run: Optional[dict] = None) -> dict:
+    """Fail closed when Phase 4 produced no scientifically usable result.
+
+    ``phase3_run`` is the run the starting camset came from, or None when the
+    caller started from a camset alone; only a given run is checked for a
+    complete status and a run id.
+    """
+    base = solve_quality_gate(
+        optimisation, handler, stats, residual_xy, initial_euclid,
+        final_euclid, observation_count)
+    blocking: list[str] = list(base["blocking_flags"])
     initial_cost = float(stats.get("initial_reprojection_cost", float("nan")))
     final_cost = float(stats.get("final_reprojection_cost", float("nan")))
     objective_cost_reduced = bool(
         np.isfinite(initial_cost) and np.isfinite(final_cost)
         and final_cost < initial_cost)
-
-    if not finite_parameters:
-        blocking.append("optimiser parameters are non-finite")
-    if not finite_residuals:
-        blocking.append("reprojection residuals are missing or non-finite")
-    if not solver_success:
-        blocking.append("solver did not report successful termination")
-    if observation_count <= 0:
-        blocking.append("no reprojection observations entered the solve")
-    if not error_reduced:
-        blocking.append("final reprojection error did not improve finitely")
-    if phase3_status not in (None, "complete"):
-        blocking.append(
-            f"Phase 3 input disposition was {phase3_status}; re-run it before hand-off")
-    if phase3_status != "complete" or not str(phase3_run_id or "").strip():
-        blocking.append(
-            "Phase 3 input lacks an identified run with complete status")
+    phase3_provenance_complete = None
+    if phase3_run is not None:
+        phase3_status = phase3_run.get("status")
+        phase3_provenance_complete = False
+        if phase3_status != "complete":
+            blocking.append(
+                f"Phase 3 input disposition was {phase3_status}; re-run it before hand-off")
+        elif not str(phase3_run.get("run_id") or "").strip():
+            blocking.append("Phase 3 input run has no run id")
+        else:
+            phase3_provenance_complete = True
 
     detection_data = np.asarray(handler.get_detection_data(flatten=True))
-    cam_indices = (detection_data[:, 0].astype(int)
-                   if detection_data.ndim == 2 and detection_data.shape[1] > 0
-                   else np.array([], dtype=int))
     image_indices = (detection_data[:, 1].astype(int)
                      if detection_data.ndim == 2 and detection_data.shape[1] > 1
                      else np.array([], dtype=int))
-    expected_cameras = len(getattr(handler, "cam_names", []))
     expected_images = int(getattr(getattr(handler, "detection", None), "max_ims", 0))
-    observed_cameras = sorted(set(cam_indices.tolist()))
     observed_images = sorted(set(image_indices.tolist()))
     # ``max_ims`` is the highest global image index plus one, not the number
     # of observed images.  Treat holes as explicitly missing observations;
@@ -355,10 +345,7 @@ def _quality_gate(optimisation, handler, stats: dict,
                        if marked.size == expected_images else [])
     missing_images = sorted(
         set(range(expected_images)) - set(observed_images) - set(excluded_images))
-    camera_coverage = observed_cameras == list(range(expected_cameras))
     image_coverage = bool(expected_images and not missing_images)
-    if not camera_coverage:
-        blocking.append("camera observation graph does not cover every active camera")
     if expected_images and not image_coverage:
         blocking.append("image observation graph has missing image indices")
 
@@ -380,20 +367,12 @@ def _quality_gate(optimisation, handler, stats: dict,
         blocking.append("camera intrinsics, distortion, or extrinsics are implausible")
 
     return {
+        **base,
         "status": "complete" if not blocking else "incomplete",
         "blocking_flags": blocking,
-        "finite_parameters": finite_parameters,
-        "finite_residuals": finite_residuals,
-        "solver_success": solver_success,
-        "phase3_provenance_complete": (
-            phase3_status == "complete"
-            and bool(str(phase3_run_id or "").strip())),
-        "error_reduced": error_reduced,
+        "phase3_provenance_complete": phase3_provenance_complete,
         "objective_cost_reduced": objective_cost_reduced,
-        "camera_coverage": camera_coverage,
         "image_coverage": image_coverage,
-        "observed_cameras": observed_cameras,
-        "expected_camera_count": expected_cameras,
         "observed_images": observed_images,
         "missing_images": missing_images,
         "excluded_images": excluded_images,

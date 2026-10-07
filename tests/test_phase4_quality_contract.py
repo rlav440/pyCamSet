@@ -53,7 +53,7 @@ def test_phase4_quality_gate_records_gauge_and_coverage_contract():
         _optimisation(), _Handler(),
         {"success": True}, np.ones((4, 2)),
         initial_euclid=10.0, final_euclid=2.0, observation_count=4,
-        phase3_status="complete", phase3_run_id="p3",
+        phase3_run={"status": "complete", "run_id": "p3"},
     )
 
     assert gate["status"] == "complete"
@@ -110,7 +110,7 @@ def test_phase4_quality_gate_lists_but_accepts_images_the_solve_excluded():
         _optimisation(), _ExcludingHandler(),
         {"success": True}, np.ones((4, 2)),
         initial_euclid=10.0, final_euclid=2.0, observation_count=4,
-        phase3_status="complete", phase3_run_id="p3",
+        phase3_run={"status": "complete", "run_id": "p3"},
     )
 
     assert gate["excluded_images"] == [2]
@@ -123,11 +123,27 @@ def test_phase4_quality_gate_lists_but_accepts_images_the_solve_excluded():
         _optimisation(), _ExcludingHandler(),
         {"success": True}, np.ones((4, 2)),
         initial_euclid=10.0, final_euclid=2.0, observation_count=4,
-        phase3_status="complete", phase3_run_id="p3",
+        phase3_run={"status": "complete", "run_id": "p3"},
     )
     assert gate["image_coverage"] is True
     assert gate["excluded_images"] == [2, 3]
     assert gate["status"] == "complete"
+
+
+def test_phase4_per_image_error_is_skipped_when_residuals_do_not_line_up(monkeypatch):
+    monkeypatch.setattr(phase4, "_target_shape_change", lambda *_: (1.0, 0.0))
+    monkeypatch.setattr(
+        phase4, "per_camera_mean_reprojection",
+        lambda *_: ({}, np.ones((3, 2))))
+    logged = []
+
+    diagnostics = phase4._diagnostics(
+        _optimisation(), _Handler(),
+        {"success": True, "initial_euclid": 2.0, "final_euclid": 1.0},
+        None, logged.append)
+
+    assert diagnostics["D4.13_per_image_mean_reprojection"] == {}
+    assert any("D4.13 skipped" in line for line in logged)
 
 
 def test_phase4_initial_per_image_errors_fall_back_to_solver_stats():
@@ -355,7 +371,9 @@ def test_fixed_camera_warm_start_keeps_only_free_parameters():
             self.extr_unfixed = np.asarray(extr_unfixed, dtype=bool)
             self.poses_unfixed = np.array([True])
             self.bdpt_unfixed = np.array([True])
-            self.pose_end = 3 * int(self.extr_unfixed.sum()) + 6
+            self.intr_end = 0
+            self.extr_end = 3 * int(self.extr_unfixed.sum())
+            self.pose_end = self.extr_end + 6
             self.bdpt_end = self.pose_end + 3
 
         def return_bundle_primitives(self, _params):
@@ -370,11 +388,12 @@ def test_fixed_camera_warm_start_keeps_only_free_parameters():
         calibration_params=np.arange(12.0),
     )
 
-    current_handler = TemplateBundleHandler.__new__(TemplateBundleHandler)
+    current_handler = SelfBundleHandler.__new__(SelfBundleHandler)
     current_handler.bundlePrimitive = _Primitive(extr_unfixed=[False, True])
+    current_handler.flat_point_data = np.array([1.0, 2.0, 3.0])
     current_handler.feat_unfixed = np.array([True, True, True])
 
-    SelfBundleHandler.set_from_templated_camset(current_handler, previous_cams)
+    current_handler.set_from_templated_camset(previous_cams)
 
     assert current_handler.initial_params.shape == (12,)
     assert current_handler.initial_params[:9].tolist() == [40.0, 41.0, 42.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0]
@@ -423,28 +442,39 @@ def test_self_calibration_output_does_not_mutate_input_camera_set(monkeypatch):
     assert drift["cameras"]["cam0"]["extrinsic"] > 0.0
 
 
-@pytest.mark.parametrize(
-    "phase3_status,phase3_run_id",
-    [(None, None), (None, "p3"), ("complete", None), ("failed", "p3")],
-)
-def test_phase4_provenance_must_be_identified_and_complete(
-    phase3_status, phase3_run_id
-):
+@pytest.mark.parametrize("phase3_run,reason", [
+    ({"status": "complete"}, "Phase 3 input run has no run id"),
+    ({"status": "failed", "run_id": "p3"},
+     "Phase 3 input disposition was failed; re-run it before hand-off"),
+    ({"run_id": "p3"},
+     "Phase 3 input disposition was None; re-run it before hand-off"),
+])
+def test_phase4_provenance_must_be_identified_and_complete(phase3_run, reason):
     gate = phase4._quality_gate(
         _optimisation(), _Handler(), {"success": True}, np.ones((4, 2)),
         initial_euclid=10.0, final_euclid=2.0, observation_count=4,
-        phase3_status=phase3_status, phase3_run_id=phase3_run_id,
+        phase3_run=phase3_run,
     )
     assert gate["status"] == "incomplete"
-    assert not gate["phase3_provenance_complete"]
-    assert "Phase 3 input lacks an identified run with complete status" in gate["blocking_flags"]
+    assert gate["phase3_provenance_complete"] is False
+    assert [flag for flag in gate["blocking_flags"] if flag.startswith("Phase 3")] == [reason]
+
+
+def test_phase4_without_a_phase3_run_is_not_blocked_on_provenance():
+    """A headless caller that passes only a camset has no Phase 3 run to check."""
+    gate = phase4._quality_gate(
+        _optimisation(), _Handler(), {"success": True}, np.ones((4, 2)),
+        initial_euclid=10.0, final_euclid=2.0, observation_count=4,
+    )
+    assert gate["status"] == "complete"
+    assert gate["phase3_provenance_complete"] is None
 
 
 def test_phase4_provenance_accepts_identified_complete_run():
     gate = phase4._quality_gate(
         _optimisation(), _Handler(), {"success": True}, np.ones((4, 2)),
         initial_euclid=10.0, final_euclid=2.0, observation_count=4,
-        phase3_status="complete", phase3_run_id="p3",
+        phase3_run={"status": "complete", "run_id": "p3"},
     )
     assert gate["status"] == "complete"
     assert gate["phase3_provenance_complete"]

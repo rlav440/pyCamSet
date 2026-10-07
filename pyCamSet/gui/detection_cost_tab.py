@@ -251,6 +251,8 @@ class DetectionCostTab(QWidget):
 
         def done(result: dict) -> None:
             self._run_button.setEnabled(True)
+            if "error" in (result or {}):
+                return  # failed() has already shown the reason
             report = (result or {}).get("report")
             if report is None:
                 self._status.setText("The measurement produced no report.")

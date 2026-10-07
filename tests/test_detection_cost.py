@@ -368,6 +368,25 @@ class TestDetectionCostTab:
         with pytest.raises(ValueError):
             tab._options()
 
+    def test_a_refused_measurement_keeps_its_reason(self, qapp, monkeypatch):
+        from types import SimpleNamespace
+
+        from pyCamSet.gui.detection_cost_tab import DetectionCostTab
+
+        def refuse(_options):
+            raise dc.DetectionCostError("the folder declares a different target")
+
+        monkeypatch.setattr(dc, "describe_target", lambda _spec: "a target")
+        monkeypatch.setattr(dc, "measure_folder", refuse)
+        tab = DetectionCostTab()
+        monkeypatch.setattr(tab, "_options",
+                            lambda: SimpleNamespace(spec=lambda: {}, folder="images"))
+        tab._run()
+        tab._worker.wait(10_000)
+        for _ in range(50):
+            qapp.processEvents()
+        assert "declares a different target" in tab._status.text()
+
 
 def test_parallel_speedup_is_single_thread_time_over_multi_thread_time():
     timing = dc.CameraTiming(camera="cam0", detect_ms=[5.0, 5.0, 5.0],

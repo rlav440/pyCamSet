@@ -38,7 +38,7 @@ jobs:
         opencv: [">=5"]
         include:
           - {os: ubuntu-latest, python: "3.11", opencv: ">=5", lean: true}
-          # opencv-python carries no upper bound, so pip resolves it to 5.x;
+          # opencv-contrib-python carries no upper bound, so pip resolves it to 5.x;
           # this job keeps the supported 4.x floor exercised.
           - {os: ubuntu-latest, python: "3.12", opencv: "<5"}
 
@@ -59,7 +59,7 @@ jobs:
           pip install -e . --no-deps
           pip install -r requirements_core.txt
           pip install pytest>=7.0 pytest-timeout pytest-cov
-          pip install "opencv-python${{ matrix.opencv }}"
+          pip install "opencv-contrib-python${{ matrix.opencv }}"
 
       - name: Native graphics libraries
         # Three things want these, so every Linux job gets them, lean included:
@@ -162,7 +162,8 @@ jobs:
         #
         # --no-deps is load-bearing: upstream's requirements name a bare
         # `opencv-python`, which pip would happily resolve over the major
-        # version this job exists to pin.  Everything it actually needs
+        # version this job exists to pin -- and install beside
+        # opencv-contrib-python, both writing the same cv2 package.  Everything it actually needs
         # (opencv, numpy, scikit-learn, scikit-image) is already installed
         # above as a pyCamSet dependency.
         #

@@ -731,23 +731,18 @@ def clear_default_style(app_config_dir: Path) -> None:
     default_style_path(app_config_dir).unlink(missing_ok=True)
 
 
-def load_style_for_visual(app_config_dir: Path, visual_id: str,
-                          legacy_path: Path | None = None) -> tuple[VisualStyle, str]:
+def load_style_for_visual(app_config_dir: Path, visual_id: str) -> tuple[VisualStyle, str]:
     """Resolve a figure's style: its own, else the saved default, else the theme.
 
     Returns the style and where it came from: ``"visual"``, ``"default"`` or
     ``"theme"``.  A malformed per-figure file falls back rather than failing.
     """
     own = style_path_for_visual(app_config_dir, visual_id)
-    candidates = [(own, visual_id)]
-    if legacy_path is not None and not own.exists():
-        candidates.append((legacy_path, None))
-    for path, expected in candidates:
-        if path.exists():
-            try:
-                return style_from_json(path.read_text(encoding="utf-8"), expected), "visual"
-            except (OSError, ValueError):
-                break
+    if own.exists():
+        try:
+            return style_from_json(own.read_text(encoding="utf-8"), visual_id), "visual"
+        except (OSError, ValueError):
+            pass
     default = load_default_style(app_config_dir)
     if default is not None:
         return default, "default"

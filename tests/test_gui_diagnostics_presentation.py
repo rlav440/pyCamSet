@@ -99,36 +99,6 @@ def test_diagnostic_cards_reuse_stable_style_and_isolate_diagnostics(tmp_path, m
 
 
 @pytest.mark.gui
-def test_stable_diagnostic_style_reads_legacy_title_path_without_rewriting(tmp_path, monkeypatch):
-    from PySide6.QtWidgets import QApplication
-    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-    from matplotlib.figure import Figure
-
-    from pyCamSet.gui import preferences
-    from pyCamSet.gui.shared_functions import MatplotlibFigureCard
-    from pyCamSet.gui.visual_style import VisualStyle, style_path_for_visual, style_to_json
-
-    QApplication.instance() or QApplication([])
-    monkeypatch.setattr(preferences, "config_directory", lambda: tmp_path)
-    old_title = "D2.6/D2.7 per-image reprojection error (run-A)"
-    old_id = "figure:d2-6-d2-7-per-image-reprojection-error-run-a"
-    old_path = style_path_for_visual(tmp_path, old_id)
-    old_path.parent.mkdir(parents=True)
-    old_text = style_to_json(VisualStyle(font_size=17), old_id)
-    old_path.write_text(old_text, encoding="utf-8")
-    stable_id = "diagnostic:phase2:d2.6-d2.7-per-image-reprojection"
-
-    card = MatplotlibFigureCard(old_title, Figure(), FigureCanvasQTAgg, visual_id=stable_id)
-    try:
-        assert card._style.font_size == 17
-        assert card._style_path != old_path
-        assert old_path.read_text(encoding="utf-8") == old_text
-        assert not card._style_path.exists()
-    finally:
-        card.deleteLater()
-
-
-@pytest.mark.gui
 def test_diagnostic_style_save_failure_restores_rendered_and_saved_style(tmp_path, monkeypatch):
     from PySide6.QtWidgets import QApplication, QDialog
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg

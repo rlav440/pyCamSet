@@ -74,31 +74,6 @@ def test_visiting_phase4_does_not_invalidate_saved_parameters(tmp_path, monkeypa
 
 
 @pytest.mark.gui
-def test_legacy_outlier_spellings_still_load(tmp_path, monkeypatch):
-    """Files saved before start-up normalisation hold n/y; they must still load."""
-    from PySide6.QtWidgets import QApplication
-    from pyCamSet.gui.main_window import PyCamSetApp
-
-    monkeypatch.setenv("PYCAMSET_CONFIG_DIR", str(tmp_path))
-    app = QApplication.instance() or QApplication([])
-    first = PyCamSetApp()
-    first.phase3_tab._max_nfev_spin.setValue(321)
-    first.close()
-    path = tmp_path / "parameters.json"
-    document = json.loads(path.read_text(encoding="utf-8"))
-    document["pages"]["phase4"]["_outliers_combo"] = "y"
-    path.write_text(json.dumps(document), encoding="utf-8")
-
-    second = PyCamSetApp()
-    try:
-        assert second._parameter_preferences.load_error is None
-        assert second.phase4_tab._outliers_combo.currentText() == "Yes"
-        assert second.phase3_tab._max_nfev_spin.value() == 321
-    finally:
-        second.close()
-
-
-@pytest.mark.gui
 def test_other_parameter_tabs_and_target_round_trip(tmp_path, monkeypatch):
     from PySide6.QtWidgets import QApplication
     from pyCamSet.gui.main_window import PyCamSetApp

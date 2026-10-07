@@ -251,38 +251,22 @@ class MatplotlibFigureCard(QWidget):
         self._csv_export = csv_export
         from pyCamSet.gui.theme import apply_matplotlib_theme
         from pyCamSet.gui.visual_style import (
-            VisualStyle, apply_visual_style, load_default_style, style_from_json,
-            style_path_for_visual,
+            VisualStyle, apply_visual_style, load_style_for_visual, style_path_for_visual,
         )
-        legacy_visual_id = "figure:" + re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")
-        self._visual_id = visual_id or legacy_visual_id
+        title_slug = re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")
+        self._visual_id = visual_id or f"figure:{title_slug or 'untitled'}"
         from pyCamSet.gui.preferences import config_directory
         self._style_path = style_path_for_visual(config_directory(), self._visual_id)
-        self._style = VisualStyle()
         application = QApplication.instance()
         theme_name = (application.property("pycamsetTheme") if application else None) or "Light"
         apply_matplotlib_theme(fig, theme_name)
-        style_source = self._style_path
-        legacy_style_path = style_path_for_visual(config_directory(), legacy_visual_id)
-        if not style_source.exists() and self._visual_id != legacy_visual_id and legacy_style_path.exists():
-            # Read the old run-specific sidecar in place; migrate only on explicit save.
-            style_source = legacy_style_path
-        if style_source.exists():
+        self._style, source = load_style_for_visual(config_directory(), self._visual_id)
+        if source != "theme":
             try:
-                self._style = style_from_json(
-                    style_source.read_text(encoding="utf-8"),
-                    legacy_visual_id if style_source == legacy_style_path else self._visual_id)
-                apply_visual_style(
-                    fig, self._style, theme_name)
-            except (OSError, ValueError):
-                # Invalid preference files are ignored, never partially applied.
+                apply_visual_style(fig, self._style, theme_name)
+            except ValueError:
+                # A style that cannot be applied is ignored, never partially applied.
                 self._style = VisualStyle()
-        else:
-            # No style of its own: use the saved default for all figures, if any.
-            default = load_default_style(config_directory())
-            if default is not None:
-                self._style = default
-                apply_visual_style(fig, default, theme_name)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 8)

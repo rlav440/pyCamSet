@@ -82,22 +82,6 @@ def _apply(widget, value) -> None:
         raise ValueError("Saved parameter has invalid type or is outside its current choices/range")
 
 
-#: Spellings an outliers combo held before it was normalised to No/Yes at
-#: start-up; files saved then still carry them.  "ask" was treated as Yes by
-#: the normaliser, so it is here too.
-_LEGACY_OUTLIER_CHOICES = {"n": "No", "no": "No", "y": "Yes", "yes": "Yes", "ask": "Yes"}
-
-
-def _upgrade_saved_choice(widget, value):
-    """Map a legacy saved outliers spelling onto the combo's current items."""
-    if (isinstance(widget, QComboBox) and widget.objectName() == "outliers_combo"
-            and isinstance(value, str) and widget.findText(value) < 0):
-        upgraded = _LEGACY_OUTLIER_CHOICES.get(value.strip().lower())
-        if upgraded is not None and widget.findText(upgraded) >= 0:
-            return upgraded
-    return value
-
-
 class ParameterPreferences:
     """One validated snapshot for each parameter tab; reset uses startup defaults."""
 
@@ -123,8 +107,6 @@ class ParameterPreferences:
                 for name, values in document["pages"].items():
                     if not isinstance(values, dict) or set(values) - set(self.defaults[name]):
                         raise ValueError("Unknown saved parameter")
-                    for key in values.keys() & set(_FIELDS[name]):
-                        values[key] = _upgrade_saved_choice(getattr(self.pages[name], key), values[key])
                     # Validate every value against its actual widget before applying any.
                     for key, value in values.items():
                         if key in _FIELDS[name]:

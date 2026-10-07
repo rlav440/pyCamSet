@@ -44,19 +44,9 @@ def test_apde_export_needs_the_calibration_to_size_the_depth(tmp_path):
 
 def test_a_calibrated_telecentric_rig_exports_to_apde(telecentric_problem, tmp_path):
     """The written cams files reproduce the lens, each with a depth range of its own."""
-    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
     from pyCamSet.utils.saving import camset_to_apde
-    from test_telecentric_model import ground_truth_params
 
-    cams, target, detection, poses = telecentric_problem
-    # The exact calibration of this synthetic rig, attached as a solve would.
-    handler = TemplateBundleHandler(camset=cams, target=target, detection=detection,
-                                    options={"outliers": "n", "verbosity": 0})
-    params = ground_truth_params(handler, cams, poses)
-    solved = cams
-    solved.calibration_handler = handler
-    solved.calibration_params = params
-    solved.calibration_result = np.zeros(2 * len(handler.get_detection_data()))
+    solved, target = _calibrated(telecentric_problem)
 
     ranges = camset_to_apde(solved, tmp_path, depth_min=0.1, depth_max=0.8)
 
@@ -116,9 +106,68 @@ def test_a_telecentric_rig_exports_to_colmap_as_pinholes(tmp_path):
         np.testing.assert_allclose(uv.T, cams[name].project_points(points, distort=False), atol=1e-6)
 
 
-def test_colmap_refuses_a_lens_without_a_pinhole_equivalent(tmp_path):
-    from pyCamSet.utils.saving import camset_to_colmap
+@pytest.mark.parametrize("exporter", ["camset_to_colmap", "camset_to_apde"])
+def test_a_rig_with_lenses_without_a_pinhole_equivalent_names_each_one(exporter, tmp_path):
+    from pyCamSet.utils import saving
 
-    cams = CameraSet(camera_dict={"cam_0": make_telecentric_camera("cam_0", eps=0.0)})
-    with pytest.raises(ValueError, match="infinity"):
-        camset_to_colmap(cams, tmp_path)
+    cams = CameraSet(camera_dict={
+        "cam_0": make_telecentric_camera("cam_0", eps=0.0),
+        "cam_1": make_telecentric_camera("cam_1", rotation=(0.0, 0.4, 0.0), eps=0.3),
+        "cam_2": make_telecentric_camera("cam_2", rotation=(0.0, -0.4, 0.0), eps=-0.1),
+    })
+    with pytest.raises(ValueError, match="infinity") as refused:
+        getattr(saving, exporter)(cams, tmp_path)
+    message = str(refused.value)
+    assert "cam_0 (eps 0)" in message and "cam_2 (eps -0.1)" in message
+    assert "cam_1" not in message
+
+
+def _calibrated(telecentric_problem):
+    """The synthetic rig with its exact calibration attached, as a solve would."""
+    from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+    from test_telecentric_model import ground_truth_params
+
+    cams, target, detection, poses = telecentric_problem
+    handler = TemplateBundleHandler(camset=cams, target=target, detection=detection,
+                                    options={"outliers": "n", "verbosity": 0})
+    cams.calibration_handler = handler
+    cams.calibration_params = ground_truth_params(handler, cams, poses)
+    cams.calibration_result = np.zeros(2 * len(handler.get_detection_data()))
+    return cams, target
+
+
+def test_apde_depth_ranges_follow_a_rig_moved_after_the_solve(telecentric_problem, tmp_path):
+    """Moving the rig moves its world, not the scene's depth along each camera."""
+    from scipy.spatial.transform import Rotation
+
+    from pyCamSet.utils.saving import camset_to_apde
+
+    cams, target = _calibrated(telecentric_problem)
+    before = cams[cams.get_names()[0]].extrinsic.copy()
+    move = np.eye(4)
+    move[:3, :3] = Rotation.from_rotvec([0.3, -0.2, 0.5]).as_matrix()
+    move[:3, 3] = [0.05, -0.02, 0.4]
+    cams.transform(move)
+    # the target's points in the moved rig's world
+    to_moved = np.linalg.inv(cams[cams.get_names()[0]].extrinsic) @ before
+    points = np.asarray(target.point_data, dtype=float).reshape(-1, 3)
+    moved_points = (to_moved @ np.c_[points, np.ones(len(points))].T).T
+
+    camset_to_apde(cams, tmp_path)
+
+    for index, _ in enumerate(cams.get_names()):
+        extrinsic, _, depth = _read_cam_file(tmp_path / "cams" / f"{index:08d}_cam.txt")
+        in_camera = (extrinsic @ moved_points.T)[2]
+        assert depth[0] < in_camera.min() and in_camera.max() < depth[3]
+
+
+def test_apde_refuses_depth_steps_below_float32_precision(telecentric_problem, tmp_path):
+    """A nearly perfect lens puts its pinhole so far back that float32 cannot step the scene."""
+    from pyCamSet.utils.saving import camset_to_apde
+
+    cams, _ = _calibrated(telecentric_problem)
+    for name in cams.get_names():
+        cams[name].telecentricity = 1e-7
+    with pytest.raises(ValueError, match="float32") as refused:
+        camset_to_apde(cams, tmp_path, depth_num=192)
+    assert all(name in str(refused.value) for name in cams.get_names())

@@ -1,12 +1,8 @@
 """``Camera.res`` loads as ``(width, height)`` whichever order a file holds it in.
 
-Until 2026-09-29 the calibration stored ``image.shape[:2]``, ``(height, width)``,
-while ``set_resolutions_from_file`` stored ``(width, height)``; COLMAP's
-cameras.txt, written from ``res``, then had WIDTH and HEIGHT swapped.  The
-repository's own fixtures hold both: ``calibration_charuco``'s initial cameras
-are ``(height, width)``, the ccube self-calibration is ``(width, height)``.
-(``calibration_ccube``'s initial cameras are not a fixture: the ccube
-calibration test writes that file, in the current order.)
+The repository's own fixtures hold both: ``calibration_charuco``'s initial
+cameras are ``(height, width)``, the ccube self-calibration is
+``(width, height)``.
 """
 
 from __future__ import annotations
@@ -187,6 +183,42 @@ def test_detections_correct_a_marked_file_that_carried_the_error_forward(tmp_pat
     # a marked file should never need correcting, so this one says so loudly
     assert any(r.levelno == logging.WARNING and "where the target was detected" in r.getMessage()
                for r in caplog.records)
+
+
+def test_each_camera_of_a_mixed_order_rig_is_settled_on_its_own(tmp_path):
+    """One camera's detections show (height, width), the other's (width, height)."""
+    cams = CameraSet(camera_dict={
+        "tall": TelecentricCamera(
+            intrinsic=np.array([[80.0, 0, 224.0], [0, 80.0, 187.5], [0, 0, 1.0]]),
+            res=[448, 375], distortion_coefs=np.array([0.0]), telecentricity=0.01, name="tall"),
+        "wide": TelecentricCamera(
+            intrinsic=np.array([[80.0, 0, 224.0], [0, 80.0, 187.5], [0, 0, 1.0]]),
+            res=[448, 375], distortion_coefs=np.array([0.0]), telecentricity=0.01, name="wide"),
+    })
+    path = tmp_path / "mixed.camset"
+    save_camset(cams, path)
+    # | cam | image | key | x | y |
+    _unmark(path, detections=[[0, 0, 0, 360.0, 438.0], [1, 0, 0, 440.0, 360.0]],
+            cam_names=["tall", "wide"])
+
+    back = load_CameraSet(path)
+
+    assert tuple(back["tall"].res) == (375, 448)
+    assert tuple(back["wide"].res) == (448, 375)
+    assert not getattr(back, "res_order_unsettled", False)
+
+
+def test_image_sizes_are_only_read_for_a_file_without_the_marker(tmp_path):
+    path = tmp_path / "new.camset"
+    save_camset(CameraSet(camera_dict={"cam": make_camera("cam", res=(640, 480))}), path)
+    calls = []
+
+    load_CameraSet(path, image_sizes=lambda: calls.append(1) or {})
+    assert calls == []
+
+    _unmark(path)
+    load_CameraSet(path, image_sizes=lambda: calls.append(1) or {"cam": (640, 480)})
+    assert calls == [1]
 
 
 def test_an_unknown_marker_is_refused(tmp_path):

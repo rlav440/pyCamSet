@@ -164,13 +164,8 @@ def test_charuco_board_geometry_is_what_the_images_show():
     assert np.allclose(spacing, 0.004, atol=1e-9)
 
 
-@pytest.mark.data
 def test_the_legacy_flag_changes_the_board():
-    """``legacy`` must still do something -- CHARUCO_ARGS's own value
-    (legacy=False, matching how the checked-in corpus was actually printed;
-    see its comment in conftest.py) is not itself under test here, just
-    that the constructor keyword reaches ``board.getLegacyPattern()``
-    unchanged in either direction."""
+    """The ``legacy`` keyword reaches ``board.getLegacyPattern()`` unchanged."""
     from pyCamSet import ChArUco
 
     from conftest import CHARUCO_ARGS

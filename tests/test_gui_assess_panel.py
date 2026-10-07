@@ -151,6 +151,43 @@ def test_no_run_says_so(qapp, panel_env):
     assert panel.figure_grid.widgets() == []
 
 
+def test_embedded_view_of_a_run_without_a_camset_starts_no_worker(qapp, panel_env):
+    from pyCamSet.gui import assess_panel
+
+    panel, _run_, record = panel_env
+    if panel.backend.findData(assess_panel.BACKEND_EMBEDDED) < 0:
+        # the guard runs before anything embedded is built
+        panel.backend.addItem("Embedded", assess_panel.BACKEND_EMBEDDED)
+    panel.set_run({"run_id": "bare", "phase": "phase3", "artifacts": {}})
+    panel.show()
+    panel.backend.setCurrentIndex(panel.backend.findData(assess_panel.BACKEND_EMBEDDED))
+    panel.visualise_3d()
+    _settle(qapp, panel)
+    assert panel._worker is None and record["computed"] == 0
+    assert "no readable camset" in panel.figure_status.text()
+    assert "no readable camset" in panel.three_d_status.text()
+
+
+def test_a_failed_assessment_is_not_recomputed_on_every_show(qapp, panel_env, monkeypatch):
+    from pyCamSet.gui import assess_panel
+
+    panel, run, record = panel_env
+
+    def failing_run(worker):
+        record["computed"] += 1
+        worker.failed.emit(worker._key, "unreadable")
+
+    monkeypatch.setattr(assess_panel._DiagnosticsWorker, "run", failing_run)
+    panel.set_run(run)
+    panel.show()
+    _settle(qapp, panel)
+    panel.hide()
+    panel.show()
+    _settle(qapp, panel)
+    assert record["computed"] == 1
+    assert "unreadable" in panel.figure_status.text()
+
+
 def test_grid_columns_follow_the_width(qapp):
     from PySide6.QtWidgets import QLabel
 

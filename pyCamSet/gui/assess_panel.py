@@ -181,6 +181,7 @@ class AssessCalibrationPanel(QWidget):
         self._key: Optional[tuple] = None
         self._diagnostics = None
         self._diagnostics_key: Optional[tuple] = None
+        self._failed_key: Optional[tuple] = None
         self._worker: Optional[_DiagnosticsWorker] = None
         self._want_3d = False
         self._interactors: list = []
@@ -310,7 +311,7 @@ class AssessCalibrationPanel(QWidget):
     def set_run(self, run: Optional[dict]) -> None:
         """Show *run*; the figures load now if the page is visible, else when it is."""
         key = _run_key(run)
-        if key == self._key and run is not None:
+        if key is not None and key == self._key:
             return
         self._run, self._key = run, key
         self._clear_3d()
@@ -337,10 +338,16 @@ class AssessCalibrationPanel(QWidget):
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
-        if self._key is not None and self._diagnostics_key != self._key:
-            self._load()
+        self._load_if_needed()
+
+    def _needs_load(self) -> bool:
+        """A readable run whose assessment is neither loaded nor known to fail."""
+        return self._key is not None and self._key not in (self._diagnostics_key,
+                                                          self._failed_key)
 
     def _load(self) -> None:
+        if self._key is None:
+            return
         if self._diagnostics_key == self._key:
             self._draw_figures()
             return
@@ -366,7 +373,7 @@ class AssessCalibrationPanel(QWidget):
         worker.start()
 
     def _load_if_needed(self) -> None:
-        if self._key is not None and self._diagnostics_key != self._key and self.isVisible():
+        if self._needs_load() and self.isVisible():
             self._load()
 
     def _on_ready(self, key: tuple, diagnostics) -> None:
@@ -380,6 +387,7 @@ class AssessCalibrationPanel(QWidget):
     def _on_failed(self, key: tuple, message: str) -> None:
         if key != self._key or not shiboken6.isValid(self):
             return
+        self._failed_key = key
         self.figure_status.setText(f"Could not assess this run: {message}")
         set_text_role(self.figure_status, "danger")
         if self._want_3d:
@@ -452,6 +460,9 @@ class AssessCalibrationPanel(QWidget):
             self.set_run(run)
         backend = self.backend.currentData()
         if backend == BACKEND_EMBEDDED:
+            if self._key is None:
+                self.three_d_status.setText("This run has no readable camset to assess.")
+                return
             self._want_3d = True
             if self._diagnostics_key == self._key and self._diagnostics is not None:
                 self._build_3d()

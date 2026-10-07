@@ -56,6 +56,7 @@ from pyCamSet.workflow.params import (
 from pyCamSet.gui.shared_functions import (
     make_solver_combo,
     hold_run_button,
+    run_button_held,
     CollapsibleSection,
     DETECTOR_INHERIT,
     IMAGE_FOLDER_SCHEMATIC,
@@ -1450,6 +1451,12 @@ class Phase3DiagnosticsTab(QWidget):
             QMessageBox.critical(self, "Workspace", "No active workspace.")
             on_done_cb()
             return
+        if run_button_held(getattr(self._settings_tab(), "_run_btn", None)):
+            QMessageBox.information(
+                self, "Run in progress",
+                "A run is already writing this workspace; try again when it finishes.")
+            on_done_cb()
+            return
 
         inputs = source_run.get("inputs") or {}
         prune = DetectionFilter(
@@ -1498,16 +1505,21 @@ class Phase3DiagnosticsTab(QWidget):
         The run is started from the diagnostics tab, which has no terminal of
         its own, so its output would otherwise go nowhere someone can read it.
         """
-        for index in range(self._notebook.count()):
-            if self._notebook.tabText(index) != TAB_PHASE3:
-                continue
-            settings_tab = self._notebook.widget(index)
-            terminal = getattr(settings_tab, "_terminal", None)
-            if terminal is not None:
-                worker.line_ready.connect(terminal.append_line)
-            # A rerun and a settings-tab run would write the same workspace.
-            hold_run_button(getattr(settings_tab, "_run_btn", None), worker)
+        settings_tab = self._settings_tab()
+        if settings_tab is None:
             return
+        terminal = getattr(settings_tab, "_terminal", None)
+        if terminal is not None:
+            worker.line_ready.connect(terminal.append_line)
+        # A rerun and a settings-tab run would write the same workspace.
+        hold_run_button(getattr(settings_tab, "_run_btn", None), worker)
+
+    def _settings_tab(self) -> Optional[QWidget]:
+        """The settings tab this diagnostics tab belongs to, if it is open."""
+        for index in range(self._notebook.count()):
+            if self._notebook.tabText(index) == TAB_PHASE3:
+                return self._notebook.widget(index)
+        return None
 
     def _render_residuals(self, runs: list[dict]) -> None:
         while self._residual_layout.count():

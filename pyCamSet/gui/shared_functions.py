@@ -1639,7 +1639,7 @@ class PhaseWorker(QThread):
 
 
 def hold_run_button(button: Optional[QPushButton], worker: "PhaseWorker") -> None:
-    """Disable *button* and say so until *worker* finishes or is cancelled.
+    """Disable *button* and say so until every worker holding it finishes.
 
     A second click while a run is going would start a second run into the
     same workspace.  PhaseWorker emits ``finished`` on success, on error and
@@ -1647,21 +1647,31 @@ def hold_run_button(button: Optional[QPushButton], worker: "PhaseWorker") -> Non
     """
     if button is None:
         return
-    if button.property("heldText") is None:
+    if not run_button_held(button):
         button.setProperty("heldText", button.text())
         # Keep the width, so the row does not jump while the label is shorter.
         button.setMinimumWidth(button.sizeHint().width())
+    button.setProperty("heldCount", (button.property("heldCount") or 0) + 1)
     button.setEnabled(False)
     button.setText("Running…")
 
     def release(*_args) -> None:
         if not shiboken6.isValid(button):
             return
+        remaining = button.property("heldCount") - 1
+        button.setProperty("heldCount", remaining)
+        if remaining:
+            return
         button.setText(button.property("heldText"))
         button.setProperty("heldText", None)
         button.setEnabled(True)
 
-    worker.finished.connect(release)
+    worker.finished.connect(release, Qt.ConnectionType.SingleShotConnection)
+
+
+def run_button_held(button: Optional[QPushButton]) -> bool:
+    """Whether a worker started through :func:`hold_run_button` still holds *button*."""
+    return button is not None and bool(button.property("heldCount"))
 
 
 # ---------------------------------------------------------------------------

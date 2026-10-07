@@ -140,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
         print(detail)
         return 0
 
+    if cams.calibration_params is None:
+        print("That camset carries no calibration results, so there is "
+              "nothing to draw.", file=sys.stderr)
+        return 1
     try:
         from pyCamSet.utils.visualisation import visualise_calibration
         results = {"x": cams.calibration_params, "err": cams.calibration_result}

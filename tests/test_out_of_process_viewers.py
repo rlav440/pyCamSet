@@ -30,6 +30,7 @@ import pathlib
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
 from pyCamSet.calibration_targets.core.target_registry import TARGET_NAMES
@@ -138,6 +139,7 @@ def test_the_viewer_draws_a_real_calibration(charuco_problem, tmp_path):
     from copy import deepcopy
 
     from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+    from pyCamSet.utils.saving import load_CameraSet
 
     target, detections, cams = charuco_problem
     _optimisation, solved = backend.run_bundle_adjustment(
@@ -149,6 +151,9 @@ def test_the_viewer_draws_a_real_calibration(charuco_problem, tmp_path):
     )
     camset_path = tmp_path / "solved.camset"
     solved.save(str(camset_path))
+    extrinsics_before = {cam.name: np.array(cam.extrinsic, copy=True) for cam in solved}
+    params_before = np.array(solved.calibration_params, copy=True)
+    errors_before = np.array(solved.calibration_result, copy=True)
 
     figures = tmp_path / "figures"
     assert visualise_camset.main(
@@ -156,6 +161,34 @@ def test_the_viewer_draws_a_real_calibration(charuco_problem, tmp_path):
 
     written = sorted(p.name for p in figures.glob("*.png"))
     assert written, "the viewer drew nothing"
+    reloaded = load_CameraSet(camset_path)
+    for cam in reloaded:
+        np.testing.assert_array_equal(cam.extrinsic, extrinsics_before[cam.name])
+    np.testing.assert_array_equal(reloaded.calibration_params, params_before)
+    np.testing.assert_array_equal(reloaded.calibration_result, errors_before)
+
+
+def test_three_d_cli_options_reach_visualisation_with_valid_destinations(tmp_path, monkeypatch):
+    """Hyphenated 3D options must populate the names consumed by the renderer."""
+    from types import SimpleNamespace
+
+    from pyCamSet.utils import saving, visualisation
+
+    camset_path = tmp_path / "calibration.camset"
+    camset_path.write_text("fixture", encoding="utf-8")
+    cams = SimpleNamespace(
+        calibration_handler=object(), calibration_params={}, calibration_result={})
+    received = {}
+    monkeypatch.setattr(saving, "load_CameraSet", lambda _path: cams)
+    monkeypatch.setattr(visualisation, "visualise_calibration",
+                        lambda *_args, **kwargs: received.update(kwargs))
+
+    assert visualise_camset.main([
+        str(camset_path), "--no-show", "--3d-background", "white",
+        "--3d-point-size", "7.5", "--3d-view", "top"]) == 0
+    assert received["three_d_background"] == "white"
+    assert received["three_d_point_size"] == 7.5
+    assert received["three_d_view"] == "top"
 
 
 @pytest.mark.data

@@ -65,6 +65,11 @@ FACE_WINDOW_GAP = 0  # Tile adjacent windows directly; their half-open ranges do
 MAX_FACE_SQUARES = (
     _CODE_SIZE - (FACE_GRID_COLUMNS - 1) * FACE_WINDOW_GAP
 ) // FACE_GRID_COLUMNS
+# The face number's text baseline origin and height, as fractions of the face side, and its
+# outline width as a fraction of the text height.
+_LABEL_INSERT = (0.02, 0.985)
+_LABEL_SIZE = 0.045
+_LABEL_OUTLINE = 0.10
 
 
 class PuzzleBoardCubeDetection(DetectorParameterisation):
@@ -460,6 +465,31 @@ class PuzzleBoardCube(AbstractTarget):
         affine[:2, 2] *= self.face_length
         return affine
 
+    def _add_face_label(
+        self,
+        drawing: svgwrite.Drawing,
+        face_index: int,
+        insert_mm: tuple[float, float],
+        angle_deg: float = 0.0,
+    ) -> None:
+        """Draw the face number in white over a black outline, readable on either square colour."""
+        size_mm = self.face_length * 1000.0 * _LABEL_SIZE
+        for paint in (
+            {"fill": "black", "stroke": "black", "stroke_linejoin": "round",
+             "stroke_width": f"{size_mm * _LABEL_OUTLINE:.6f}"},
+            {"fill": "white", "class_": "face-label"},
+        ):
+            text = drawing.text(
+                str(face_index + 1),
+                insert=insert_mm,
+                font_size=f"{size_mm:.6f}",  # viewBox millimetres; a unit suffix would rescale the text
+                font_family="Arial",
+                font_weight="bold",
+                **paint,
+            )
+            text.rotate(angle_deg, center=insert_mm)
+            drawing.add(text)
+
     def _face_rectangles(self, face_index: int) -> list[np.ndarray]:
         """Return black checkerboard polygons for one face in local metres."""
         size = self.n_points
@@ -564,20 +594,10 @@ class PuzzleBoardCube(AbstractTarget):
                 points_mm = self._apply_affine(outline, affine) * 1000.0 + offset_m * 1000.0
                 drawing.add(drawing.polygon(points=[tuple(point) for point in points_mm], fill="none", stroke="black", stroke_width=0.2))
             if draw_face_ids:
-                label = np.array([[0.02 * self.face_length, 0.985 * self.face_length]])
+                label = np.array([[_LABEL_INSERT[0] * self.face_length, _LABEL_INSERT[1] * self.face_length]])
                 label_mm = self._apply_affine(label, affine)[0] * 1000.0 + offset_m * 1000.0
-                label_size_mm = self.face_length * 1000.0 * 0.045
                 label_angle_deg = float(np.degrees(np.arctan2(affine[1, 0], affine[0, 0])))
-                label_text = drawing.text(  # Use viewBox millimetres directly; an additional mm suffix would rescale the text.
-                    str(face_index + 1),
-                    insert=tuple(label_mm),
-                    fill="white",
-                    font_size=f"{label_size_mm:.6f}",
-                    font_family="Arial",
-                    font_weight="bold",
-                )
-                label_text.rotate(label_angle_deg, center=tuple(label_mm))
-                drawing.add(label_text)
+                self._add_face_label(drawing, face_index, tuple(float(v) for v in label_mm), label_angle_deg)
         return drawing, canvas_w_mm, canvas_h_mm
 
     def _face_svg(self, face_index: int) -> str:
@@ -589,14 +609,8 @@ class PuzzleBoardCube(AbstractTarget):
         )
         drawing.add(drawing.rect(insert=(0.0, 0.0), size=(side_mm, side_mm), fill="white"))
         self._add_face_geometry(drawing, face_index, np.eye(3), np.zeros(2))
-        drawing.add(drawing.text(
-            str(face_index + 1),
-            insert=(float(side_mm * 0.02), float(side_mm * 0.985)),
-            fill="white",
-            font_size=f"{side_mm * 0.045:.6f}",
-            font_family="Arial",
-            font_weight="bold",
-        ))
+        self._add_face_label(
+            drawing, face_index, (float(side_mm * _LABEL_INSERT[0]), float(side_mm * _LABEL_INSERT[1])))
         return drawing.tostring()
 
     def save_to_svg(

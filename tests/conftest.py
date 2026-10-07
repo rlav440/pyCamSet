@@ -24,6 +24,7 @@ shell for:
 from __future__ import annotations
 
 import functools
+import io
 import os
 import subprocess
 import sys
@@ -292,6 +293,28 @@ def make_camera(name="cam", translation=(0.0, 0.0, 0.0), distortion=None, res=No
         distortion_coefs=np.zeros(5) if distortion is None else np.asarray(distortion),
         name=name,
     )
+
+
+def rasterise_svg(svg: str, width_mm: float, height_mm: float, scale: float) -> np.ndarray:
+    """Render an SVG at `scale` pixels per millimetre, skipping without cairo.
+
+    The scale has to be the same in both axes or the squares stop being square
+    and nothing below means anything.  cairosvg raises OSError, not ImportError,
+    when the native library it binds to is absent, so importorskip misses it.
+    """
+    try:
+        import cairosvg
+    except (ImportError, OSError) as err:
+        pytest.skip(f"native cairo is unavailable: {err}")
+    from PIL import Image
+
+    png = cairosvg.svg2png(
+        bytestring=svg.encode("utf-8"),
+        output_width=int(width_mm * scale),
+        output_height=int(height_mm * scale),
+    )
+    with Image.open(io.BytesIO(png)) as image:
+        return np.asarray(image.convert("L")).astype(float)
 
 
 @pytest.fixture

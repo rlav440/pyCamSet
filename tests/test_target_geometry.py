@@ -19,32 +19,10 @@ only way for them to disagree with the code they check.
 
 from __future__ import annotations
 
-from io import BytesIO
-
 import numpy as np
 import pytest
 
-
-def _rasterise(svg: str, width_mm: float, height_mm: float, scale: float) -> np.ndarray:
-    """Render an SVG at `scale` pixels per millimetre, skipping without cairo.
-
-    The scale has to be the same in both axes or the squares stop being square
-    and nothing below means anything.  cairosvg raises OSError, not ImportError,
-    when the native library it binds to is absent, so importorskip misses it.
-    """
-    try:
-        import cairosvg
-    except (ImportError, OSError) as err:
-        pytest.skip(f"native cairo is unavailable: {err}")
-    from PIL import Image
-
-    png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
-        output_width=int(width_mm * scale),
-        output_height=int(height_mm * scale),
-    )
-    with Image.open(BytesIO(png)) as image:
-        return np.asarray(image.convert("L")).astype(float)
+from conftest import rasterise_svg
 
 
 def _is_a_four_square_corner(pattern: np.ndarray, x: float, y: float, probe: int) -> bool:
@@ -62,7 +40,7 @@ def test_a_cube_face_carries_its_points_on_the_printed_corners():
     target = PuzzleBoardCube(n_points=10, length=200.0)
     side_mm = target.face_length * 1000.0
     scale = 2000 / side_mm  # pixels per millimetre
-    pattern = _rasterise(target._face_svg(0), side_mm, side_mm, scale)
+    pattern = rasterise_svg(target._face_svg(0), side_mm, side_mm, scale)
     resolution = pattern.shape[0]
     probe = int(target.square_size * scale * 0.25)  # a quarter square out, inside one quadrant
 
@@ -99,7 +77,7 @@ def test_a_flat_board_carries_its_points_on_the_printed_corners():
 
     target = PuzzleBoard(num_squares_x=10, num_squares_y=10, square_size=2.0)
     scale = 10.0  # pixels per millimetre, so one 2 mm square is 20 px across
-    pattern = _rasterise(
+    pattern = rasterise_svg(
         target._svg_document().tostring(), target.paper_width, target.paper_height, scale)
     off_x, off_y = target._board_offsets()
     probe = int(target.square_size * scale * 0.25)

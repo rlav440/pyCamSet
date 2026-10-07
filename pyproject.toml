@@ -20,9 +20,8 @@ dependencies = [
     "scipy",
     "matplotlib",
     # One OpenCV distribution, and a GUI-capable one: debug views use
-    # cv2.imshow, which the headless wheels cannot provide, and the contrib
-    # build is the one tools installed alongside pyCamSet (Calibria) expect.
-    # Two opencv-* wheels in one environment overwrite each other's cv2.
+    # cv2.imshow, which the headless wheels cannot provide.  Two opencv-*
+    # wheels in one environment overwrite each other's cv2.
     # >=4.8: CharucoBoard.setLegacyPattern and the CharucoDetector API.
     # No upper bound: the 4.x/5.x differences are handled at the call sites
     # (detectBoard's squeezed returns, stereoRectify's column-vector T, and
@@ -111,7 +110,7 @@ viz = ["open3d"]
 # installed by URL instead, as the install docs and .github/workflows/test.yml
 # both spell out:
 #
-#   pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
+#   pip install --no-deps "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
 #
 # No ``aruco2`` extra either, and for the same reason: aruco2 is not on PyPI,
 # so there is nothing to pin. Build it from the third_party/aruco2 submodule

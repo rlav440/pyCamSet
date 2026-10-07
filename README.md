@@ -93,7 +93,7 @@ The PuzzleBoard calibration target is provided by [PuzzleBoard repository](https
 To use the PuzzleBoard target, install the optional dependency:
 
 ```
-pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
+pip install --no-deps "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
 ```
 
 ### Troubleshooting

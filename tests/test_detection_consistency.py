@@ -7,7 +7,7 @@ other test looks at directly: if OpenCV changes what it returns, the
 calibration tests notice only as a drifting reprojection error, which reads
 like a solver regression rather than a detection one.
 
-opencv-python is deliberately unpinned within ``>=4.8,<5``, and the CI matrix
+opencv-contrib-python is deliberately unpinned within ``>=4.8,<5``, and the CI matrix
 resolves it differently per platform and per Python version, so this is the
 test that says which layer moved.
 
@@ -23,7 +23,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-# Reference values measured on the checked-in corpus with opencv-python 4.13.0,
+# Reference values measured on the checked-in corpus with OpenCV 4.13.0,
 # macOS/arm64, Python 3.12.  Regenerate deliberately, never to make a red test
 # green: a change here means the detected geometry moved.
 CHARUCO_REFERENCE = {
@@ -104,7 +104,7 @@ def _check_counts(detections, reference):
     assert low <= len(data) <= high, (
         f"detected {len(data)} points, expected about {expected}. A change this "
         f"large usually means the detector's behaviour moved: check the "
-        f"installed opencv-python version before adjusting this reference."
+        f"installed opencv-contrib-python version before adjusting this reference."
     )
 
     for name, count, want in zip(

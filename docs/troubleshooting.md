@@ -82,7 +82,7 @@ published on PyPI, so it is optional, and constructing the target without it
 raises an `ImportError` naming the fix:
 
 ```bash
-pip install "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
+pip install --no-deps "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
 ```
 
 The PuzzleBoard source is released under CC0 upstream. Retain the upstream
@@ -118,10 +118,11 @@ across the major versions.
 
 pyCamSet depends on `opencv-contrib-python`. Every `opencv-*` wheel installs
 the same `cv2` package, so an environment that already has `opencv-python`
-(an older pyCamSet did) holds two copies of one package, and uninstalling
-either breaks `import cv2`. Keep one:
+holds two copies of one package, and uninstalling either breaks `import cv2`.
+pyCamSet warns on import when it finds more than one. Keep one, reinstalling
+the OpenCV major version you were on:
 
 ```bash
 pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python-headless
-pip install --force-reinstall --no-deps opencv-contrib-python
+pip install --force-reinstall --no-deps "opencv-contrib-python>=4.8,<5"   # or ">=5"
 ```

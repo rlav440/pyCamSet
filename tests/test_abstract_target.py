@@ -348,6 +348,20 @@ def test_initial_calibration_returns_a_camera(charuco_target, charuco_detections
 
 
 @pytest.mark.data
+def test_initial_calibration_gives_the_camera_width_then_height(charuco_target, charuco_detections):
+    """Detection reports ``image.shape[:2]``; ``Camera.res`` is ``(width, height)``."""
+    detections, camera_res = charuco_detections
+    name = detections.cam_names[0]
+    height, width = camera_res[0]
+
+    cam = charuco_target.initial_calibration(
+        cam_name=name, detection=detections, res=camera_res[0]
+    )
+
+    assert list(cam.res) == [width, height]
+
+
+@pytest.mark.data
 def test_initial_calibration_can_return_poses(charuco_target, charuco_detections):
     detections, camera_res = charuco_detections
     name = detections.cam_names[0]

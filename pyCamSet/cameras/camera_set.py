@@ -261,7 +261,8 @@ class CameraSet:
                      use_closest_cams=True, only_crop_cams=False,
                      pair_scores: np.ndarray | None = None,
                      max_pair_candidates: int | None = None,
-                     pair_scoring: str = 'auto'):
+                     pair_scoring: str = 'auto',
+                     depth_ranges: dict[str, tuple[float, float]] | None = None):
         """
         Writes an entire camera set to some form of defined camera structure.
         Currently only MVSnet is defined.
@@ -281,6 +282,8 @@ class CameraSet:
             from APD-MVS's MAX_IMAGES. Separate from ``r.max_n_view``, which
             asks how many are useful rather than how many fit; the smaller
             wins.
+        :param depth_ranges: ``(near, far)`` by camera name, in place of
+            ``r.mindist``/``r.maxdist`` for the cameras it names
         :raises ValueError: for a *max_pair_candidates* that is not a
             non-negative integer, since a negative one would slice as "drop
             the last few" rather than raising.
@@ -301,7 +304,8 @@ class CameraSet:
 
         for cam_n, cam in enumerate(self):
             cam_loc = loc/f"{cam_n:08}_cam.txt"
-            cam.to_MVSnet_txt(cam_loc, (r.mindist, r.maxdist), r.steps, crop.get(cam.name, None))
+            depth_range = (depth_ranges or {}).get(cam.name, (r.mindist, r.maxdist))
+            cam.to_MVSnet_txt(cam_loc, depth_range, r.steps, crop.get(cam.name, None))
 
 
         if ims is not None:

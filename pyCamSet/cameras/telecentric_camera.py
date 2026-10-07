@@ -161,6 +161,42 @@ class TelecentricCamera(Camera):
         ])
         return projective @ self.extrinsic
 
+    def pinhole_equivalent(self) -> Camera:
+        """
+        The pinhole camera that projects exactly as this lens does, undistorted.
+
+        The projection matrix above, divided by ``eps``, is
+        ``K' [I | (0, 0, 1/eps)] extrinsic`` with ``K'`` a pinhole matrix of
+        focal length ``m/eps`` and the same principal point: a lens with
+        residual telecentricity ``eps > 0`` is a pinhole whose centre sits
+        ``1/eps`` behind this camera's frame.  Nothing is approximated, so a
+        pinhole-only format (MVSNet, APDe-MVS) can carry it, for images
+        undistorted with this camera's own division model first: the pinhole
+        is returned without distortion.
+
+        :return: the equivalent pinhole camera, named as this one
+        :raises ValueError: when ``eps <= 0``: a perfectly telecentric lens
+            has no finite centre, and a negative ``eps`` puts it in front of
+            the scene, where no pinhole-only reader can place it
+        """
+        eps = float(self.telecentricity)
+        if eps <= 0.0:
+            raise ValueError(
+                f"{self.name}: telecentricity {eps:g} has no pinhole equivalent -- "
+                + ("a perfectly telecentric lens has its centre at infinity"
+                   if eps == 0.0 else
+                   "a negative value puts the lens centre in front of the scene"))
+        m_x, m_y = self.magnification
+        c_x, c_y = self.principal_point
+        intrinsic = np.array([[m_x / eps, 0.0, c_x],
+                              [0.0, m_y / eps, c_y],
+                              [0.0, 0.0, 1.0]])
+        back = np.eye(4)
+        back[2, 3] = 1.0 / eps  # the centre, 1/eps behind this camera's frame
+        return Camera(extrinsic=back @ self.extrinsic, intrinsic=intrinsic,
+                      res=np.array(self.res), distortion_coefs=np.zeros(5),
+                      name=self.name)
+
     def _distort(self, xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Applies the division model to pixel offsets from the principal point."""
         k = float(np.reshape(self.distortion_coefs, -1)[0])
@@ -249,11 +285,15 @@ class TelecentricCamera(Camera):
         Brown-Conrady model.  The closed-form inverse lets this be a single
         remap with no iteration.
 
+        The pixel grid is the image's own, as ``cv2.undistort`` uses for the
+        pinhole camera, so the output always has the input's shape.
+
         :param image: An input image
         :return: An undistorted image
         """
+        rows_n, cols_n = np.shape(image)[:2]
         cols, rows = np.meshgrid(
-            np.arange(self.res[0], dtype=float), np.arange(self.res[1], dtype=float))
+            np.arange(cols_n, dtype=float), np.arange(rows_n, dtype=float))
         c_x, c_y = self.principal_point
         # the map sends each output pixel to the source pixel it draws from, so
         # it is the forward distortion, not the inverse
@@ -465,7 +505,10 @@ class TelecentricCamera(Camera):
     def to_MVSnet_txt(self, *args, **kwargs):
         raise NotImplementedError(
             "The MVSNet camera format describes a pinhole camera, and a "
-            "telecentric projection has no representation in it."
+            "telecentric projection has no representation in it as such. "
+            "Write pinhole_equivalent() instead -- exact for a lens with "
+            "telecentricity > 0 -- with a depth range around that pinhole's "
+            "scene; camset_to_apde does both."
         )
 
     # parameter packing

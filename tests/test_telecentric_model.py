@@ -5,6 +5,7 @@ A new lens model can drive reprojection error to near zero while recovering the
 wrong magnification, so the accuracy tests here assert the parameters against
 ground truth rather than only the residuals.
 """
+import cv2
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
@@ -457,6 +458,38 @@ def test_triangulation_reconstructs_through_affine_cameras(telecentric_problem):
                   for name in cams.get_names()} for p in points]
     reconstructed = cams.multi_cam_triangulate(projected)
     assert np.allclose(reconstructed, points, atol=1e-6)
+
+
+def _division_remap(image, cam):
+    """The undistortion written out by hand: each output pixel reads the source pixel it came from."""
+    rows, cols = image.shape[:2]
+    u, v = np.meshgrid(np.arange(cols, dtype=float), np.arange(rows, dtype=float))
+    c_x, c_y = cam.principal_point
+    den = 1.0 / (1.0 + cam.distortion_coefs[0] * ((u - c_x) ** 2 + (v - c_y) ** 2) * 1e-6)
+    return cv2.remap(image, ((u - c_x) * den + c_x).astype(np.float32),
+                     ((v - c_y) * den + c_y).astype(np.float32), cv2.INTER_LINEAR)
+
+
+def test_undistort_keeps_a_non_square_image_shape():
+    """A 960 x 1280 (rows x cols) image comes back 960 x 1280, undistorted by the division model."""
+    cam = make_telecentric_camera("cam", k=0.23)
+    image = np.random.default_rng(0).random((REF_RES[1], REF_RES[0])).astype(np.float32)
+
+    out = cam.undistort(image)
+
+    assert out.shape == image.shape
+    assert np.array_equal(out, _division_remap(image, cam))
+
+
+def test_undistort_ignores_a_res_saved_height_first():
+    """Camsets written before the fix carry ``res`` as ``(height, width)``; the image decides the grid."""
+    cam = make_telecentric_camera("cam", k=0.23)
+    image = np.random.default_rng(1).random((REF_RES[1], REF_RES[0])).astype(np.float32)
+    swapped = TelecentricCamera(
+        extrinsic=cam.extrinsic, intrinsic=cam.intrinsic, res=[REF_RES[1], REF_RES[0]],
+        distortion_coefs=cam.distortion_coefs, telecentricity=cam.telecentricity, name="cam")
+
+    assert np.array_equal(swapped.undistort(image), cam.undistort(image))
 
 
 # ----------------------------------------------------------------------

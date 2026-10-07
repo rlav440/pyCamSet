@@ -5,6 +5,7 @@ Thin GUI wrapper around :func:`pyCamSet.utils.saving.camset_to_colmap` and
 """
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 from typing import Optional
 
@@ -28,12 +29,14 @@ from pyCamSet.gui.assess_calibration import merge_phase3_phase4_runs, resolve_ru
 from pyCamSet.gui.shared_functions import RunSelectorWidget, TerminalWidget, WorkspaceManager, make_blue_button, make_green_button, make_section_label, make_separator
 
 try:
-    from pyCamSet.utils.saving import camset_to_apde, camset_to_colmap, load_CameraSet
+    from pyCamSet.utils.saving import (
+        camset_to_apde, camset_to_colmap, image_sizes_from_folder, load_CameraSet)
 
     _PYCAMSET_OK = True
 except ImportError:
     camset_to_apde = None
     camset_to_colmap = None
+    image_sizes_from_folder = None
     load_CameraSet = None
     _PYCAMSET_OK = False
 
@@ -226,6 +229,16 @@ class ExportCalibrationTab(QWidget):
             if depth_params is None:
                 return  # the validation error is already on screen
 
+        # The workspace sits inside the image folder; its images settle the res
+        # order of a camset without the order marker, read once and only then.
+        @functools.cache
+        def image_sizes() -> dict:
+            try:
+                return image_sizes_from_folder(Path(ws).parent)
+            except Exception as exc:
+                self._terminal.append_line(f"WARN could not read the image sizes: {exc}")
+                return {}
+
         success = 0
         failures = 0
         for run in selected:
@@ -252,17 +265,30 @@ class ExportCalibrationTab(QWidget):
 
             try:
                 out_dir.mkdir(parents=True, exist_ok=True)
-                cams = load_CameraSet(camset_path)
+                cams = load_CameraSet(camset_path, image_sizes=image_sizes)
                 if export_format == "colmap":
-                    camset_to_colmap(cams, out_dir)
+                    model = camset_to_colmap(cams, out_dir)
                     success += 1
                     self._terminal.append_line(f"OK   {run_id}: wrote cameras.txt and rig_config.json to {out_dir}")
+                    if model == "PINHOLE":
+                        self._terminal.append_line(
+                            "     -> telecentric rig: each camera written as its exact pinhole "
+                            "equivalent (PINHOLE model, centre 1/eps behind it); undistort the "
+                            "images with each camera's own model first.")
                 else:
                     depth_min, depth_max, depth_num = depth_params
-                    camset_to_apde(cams, out_dir, depth_min=depth_min, depth_max=depth_max, depth_num=depth_num)
+                    ranges = camset_to_apde(cams, out_dir, depth_min=depth_min,
+                                            depth_max=depth_max, depth_num=depth_num)
                     success += 1
                     self._terminal.append_line(
                         f"OK   {run_id}: wrote cams/, cam_index_map.txt and pair.txt to {out_dir}")
+                    if any(r != (depth_min, depth_max) for r in ranges.values()):
+                        self._terminal.append_line(
+                            "     -> telecentric rig: each camera written as its exact pinhole "
+                            "equivalent (centre 1/eps behind it); the depth range fields were "
+                            "not used, each camera's range comes from the calibration's points:")
+                        for name, (near, far) in ranges.items():
+                            self._terminal.append_line(f"        {name}: {near:.6g} to {far:.6g}")
                     # ACMMP/APDe-MVS also needs an images/ folder next to cams/, with
                     # files indexed identically to cam_index_map.txt -- this exporter
                     # does not write one, so the terminal has to say so explicitly

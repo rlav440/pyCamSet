@@ -413,16 +413,12 @@ class SelfBundleHandler(TemplateBundleHandler):
                 "a self calibration carries a target geometry block as well, "
                 "and cannot be read as a templated one.")
 
-        if hasattr(self, "_adopt_missing_poses"):
-            self._adopt_missing_poses(prev_handler.missing_poses)
-        else:  # keeps the parameter-packing seam usable in isolation
-            self.missing_poses = prev_handler.missing_poses
+        self._adopt_missing_poses(prev_handler.missing_poses)
 
         # Expanding through the previous solve's masks fills in whatever it
         # held fixed from the arrays it fixed them in, so every camera and
         # pose comes back whole however that solve was parameterised.
-        previous_model = prev_primitive.return_bundle_primitives(
-            prev_params[:prev_primitive.pose_end])
+        previous_model = prev_primitive.return_bundle_primitives(prev_params)
         prev_intr, prev_extr, prev_poses = (
             np.copy(a) for a in previous_model[:3])
 
@@ -441,28 +437,19 @@ class SelfBundleHandler(TemplateBundleHandler):
             vals[unfixed] = prev_vals[unfixed]
 
         prev_points = prev_handler.target.point_data.copy().flatten()
-        current_points = getattr(self, "flat_point_data", prev_points)
-        if prev_points.shape != current_points.shape:
+        if prev_points.shape != self.flat_point_data.shape:
             raise ValueError(
                 f"The previous calibration's target has "
                 f"{prev_points.shape[0] // 3} features, and this one's has "
-                f"{current_points.shape[0] // 3}.")
+                f"{self.flat_point_data.shape[0] // 3}.")
 
-        intr_end = getattr(
-            bundle, "intr_end", bundle.intr[bundle.intr_unfixed].size)
-        extr_end = getattr(
-            bundle, "extr_end", intr_end + bundle.extr[bundle.extr_unfixed].size)
-        pose_end = getattr(
-            bundle, "pose_end", extr_end + bundle.poses[bundle.poses_unfixed].size)
-        total_params = getattr(
-            bundle, "bdpt_end", pose_end + prev_points[self.feat_unfixed].size)
-        self.initial_params = np.empty(total_params)
-        self.initial_params[:intr_end] = bundle.intr[bundle.intr_unfixed].flatten()
-        self.initial_params[intr_end:extr_end] = (
+        self.initial_params = np.empty(bundle.bdpt_end)
+        self.initial_params[:bundle.intr_end] = bundle.intr[bundle.intr_unfixed].flatten()
+        self.initial_params[bundle.intr_end:bundle.extr_end] = (
             bundle.extr[bundle.extr_unfixed].flatten())
-        self.initial_params[extr_end:pose_end] = (
+        self.initial_params[bundle.extr_end:bundle.pose_end] = (
             bundle.poses[bundle.poses_unfixed].flatten())
-        self.initial_params[pose_end:] = prev_points[self.feat_unfixed]
+        self.initial_params[bundle.pose_end:] = prev_points[self.feat_unfixed]
 
     def _adopt_missing_poses(self, missing_poses):
         """

@@ -118,6 +118,30 @@ def test_only_phase_1_chooses_a_detector(qt_app_for_tabs):
 
 
 @pytest.mark.gui
+def test_the_dead_cross_tab_sync_names_never_come_back(qt_app_for_tabs):
+    """A cross-tab sync used to wire the phases' target forms together
+    directly, and was removed once :meth:`TargetSettingsForm.apply_spec`
+    took over adopting a saved run's target. This pins the names that wiring
+    used, so the same phantom sync cannot silently reappear under them."""
+    app = qt_app_for_tabs
+    dead_names = ("_propagate_target", "_syncing_target",
+                  "_marker_backend_combo", "_npts_spin", "_length_edit")
+
+    # None of the phase tabs ever had these attributes; the block's own
+    # hasattr guards were checking for names that were never there.
+    for tab_attr in ("phase1_tab", "phase2_tab", "phase3_tab", "phase4_tab"):
+        tab = getattr(app, tab_attr)
+        for name in dead_names:
+            assert not hasattr(tab, name), f"{tab_attr}.{name} should not exist"
+
+    # Nor on the window itself -- _syncing_target was a guard flag on
+    # PyCamSetApp; _propagate_target was a nested function, never an
+    # attribute, but is asserted absent here too for symmetry.
+    assert not hasattr(app, "_propagate_target")
+    assert not hasattr(app, "_syncing_target")
+
+
+@pytest.mark.gui
 def test_no_tab_is_ever_current_while_hidden(qt_app_for_tabs):
     """Every route in: setCurrentIndex, setCurrentWidget, the keyboard."""
     window = qt_app_for_tabs
@@ -156,6 +180,38 @@ def test_leaving_a_diagnostics_tab_puts_it_away(qt_app_for_tabs, show_tab):
 
     assert not bar.isTabVisible(revealed)
     assert bar.isTabVisible(notebook.currentIndex())
+
+
+@pytest.mark.gui
+def test_opening_a_diagnostics_tab_reveals_it(qt_app_for_tabs, show_tab):
+    window = qt_app_for_tabs
+    notebook = window._notebook
+    bar = notebook.tabBar()
+
+    show_tab(notebook, window.phase4_diag_tab)
+
+    current = notebook.currentIndex()
+    assert notebook.currentWidget() is window.phase4_diag_tab
+    assert bar.isTabVisible(current)
+
+
+@pytest.mark.gui
+def test_a_tab_made_current_by_index_is_revealed(qt_app_for_tabs):
+    """The choke point is currentChanged, so even a raw index works.
+
+    This is the exact call that segmentation faulted: nothing routes it
+    through show_tab, so the invariant cannot live at the call sites.
+    """
+    window = qt_app_for_tabs
+    notebook = window._notebook
+    bar = notebook.tabBar()
+    hidden = window._diagnostics_indices[0]
+    assert not bar.isTabVisible(hidden)
+
+    notebook.setCurrentIndex(hidden)
+
+    assert notebook.currentIndex() == hidden
+    assert bar.isTabVisible(hidden)
 
 
 # --------------------------------------------------------------------------
@@ -875,6 +931,23 @@ def test_flipping_target_type_keeps_a_shared_value_and_restores_it_on_return():
 
 
 @pytest.mark.gui
+def test_flipping_the_detector_backend_keeps_a_typed_value():
+    """A typed value survives a detector flip: the detector says what reads
+    the board, not what the board is."""
+
+    from pyCamSet.gui.shared_functions import read_parameter_widget, set_parameter_widget
+
+    form = _target_form("ChArUco")
+    set_parameter_widget(form._widgets["square_size"], 17.0)
+
+    form._backend_combo.setCurrentIndex(form._backend_combo.findData("aruco2"))
+    assert read_parameter_widget(form._widgets["square_size"]) == "17.0"
+
+    form._backend_combo.setCurrentIndex(form._backend_combo.findData("aruco1"))
+    assert read_parameter_widget(form._widgets["square_size"]) == "17.0"
+
+
+@pytest.mark.gui
 def test_choosing_a_detector_keeps_the_target_a_spec_loaded():
     """A remembered or adopted target is loaded with apply_spec, which marks
     nothing as edited; choosing the detector afterwards must not put the
@@ -1095,14 +1168,13 @@ def _runs(n):
 
 
 @pytest.mark.gui
-def test_run_selector_default_preselect_is_still_three():
-    """Every existing caller relies on the default -- changing it would be
-    a silent behaviour change for phases that never asked for one."""
+def test_run_selector_default_preselects_only_latest():
+    """All diagnostics open with the latest run selected by default."""
 
     from pyCamSet.gui.shared_functions import RunSelectorWidget
 
     widget = RunSelectorWidget(_runs(5))
-    assert len(widget.get_selected()) == 3
+    assert [run["run_id"] for run in widget.get_selected()] == ["r4"]
 
 
 @pytest.mark.gui
@@ -1355,6 +1427,275 @@ def test_drawing_a_run_without_an_artifact_reads_its_own_detectors_cache(tmp_pat
     assert resolve(run(type="ChArUco2")) == charuco2
     # ...and no longer for ChArUco(aruco2), which just lost the slot.
     assert resolve(run(type="ChArUco", marker_backend="aruco2")) is None
+
+
+@pytest.mark.gui
+def test_phase1_overlay_style_roundtrip_keeps_producer_frame_mapping_and_png(tmp_path, monkeypatch):
+    """Editing the detection-overlay style must not disturb which producer
+    frame each montage index shows, nor the detections themselves -- and the
+    edited style must be what a re-export actually draws."""
+    import cv2
+    from PIL import Image
+    from PySide6.QtWidgets import QCheckBox, QDialog, QTabWidget
+
+    from pyCamSet.calibration_targets.core.target_detections import ImageDetection, TargetDetection
+    from pyCamSet.gui import phase_1_detection, visual_style
+    from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.workflow.detections import save_detections
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    cam_names = ["camA", "camB"]
+    # The nested m/frame2 path sorts between root a1 and z10 producer frames.
+    frame_sets = {"camA": ("a1.png", "m/frame2.png", "z10.png"),
+                  "camB": ("a1.png", "m/frame2.png", "z10.png")}
+    image_values = {}
+    for cam_idx, cam in enumerate(cam_names):
+        folder = tmp_path / cam
+        folder.mkdir()
+        for image_idx, name in enumerate(frame_sets[cam]):
+            value = 35 + cam_idx * 70 + image_idx * 20
+            image_values[(cam, name)] = value
+            image_path = folder / name
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            assert cv2.imwrite(str(image_path), np.full((18, 18, 3), value, dtype=np.uint8))
+
+    points = {
+        "camA": np.array([[0, 0, 2, 3], [0, 1, 4, 5], [0, 2, 6, 7]], dtype=float),
+        "camB": np.array([[1, 0, 8, 9], [1, 1, 10, 11], [1, 2, 12, 13]], dtype=float),
+    }
+    detections = TargetDetection(cam_names)
+    for cam in cam_names:
+        for row in points[cam]:
+            detections.add_detection(
+                cam, int(row[1]),
+                ImageDetection(keys=np.array([int(row[1])]),
+                               image_points=row[-2:].reshape(1, 2)),
+            )
+    original_detection_rows = detections.get_data().copy()
+    artifact = tmp_path / "run-detections.pickle"
+    save_detections(artifact, detections)
+
+    tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))
+    tab._draw_detections_for_run({"run_id": "style-integration", "params": {
+        "f_loc": str(tmp_path)}, "artifacts": {"detected_datapoints_pickle": str(artifact)}},
+        show_errors=False)
+    assert tab._draw_state
+    tab._sub_tabs.setCurrentIndex(2)
+    for index in range(3):
+        tab._draw_index = index
+        tab._update_draw_frame()
+        for cam in cam_names:
+            im_idx = index % len(frame_sets[cam])
+            expected_name = frame_sets[cam][im_idx]
+            assert np.allclose(tab._draw_state["im_art"][cam].get_array(),
+                               image_values[(cam, expected_name)] / 255)
+            assert tab._draw_state["sc_art"][cam].get_offsets().tolist() == [
+                points[cam][im_idx, -2:].tolist()]
+
+    tab._draw_index = 0
+    tab._update_draw_frame()
+    tab._step_draw_image(1)
+    assert tab._draw_index == 1
+    assert np.allclose(tab._draw_state["im_art"]["camA"].get_array(),
+                       image_values[("camA", frame_sets["camA"][1])] / 255)
+    tab._step_draw_image(-1)
+    assert tab._draw_index == 0
+
+    monkeypatch.setattr("pyCamSet.gui.preferences.config_directory", lambda: tmp_path)
+    loaded_sizes = []
+    make_dialog = visual_style.VisualStyleDialog
+
+    def accept_style(*args, update=False, **kwargs):
+        dialog = make_dialog(*args, **kwargs)
+        loaded_sizes.append(dialog.overlay_size.value())
+        if update:
+            dialog.overlay_size.setValue(14)
+            dialog.overlay_colour.setText("#ff00ff")
+
+        def accept():
+            dialog._preview()
+            return QDialog.DialogCode.Accepted
+
+        dialog.exec = accept
+        return dialog
+
+    monkeypatch.setattr(visual_style, "VisualStyleDialog",
+                        lambda *args, **kwargs: accept_style(*args, update=True, **kwargs))
+    original_points = {cam: points[cam].copy() for cam in cam_names}
+    tab._edit_detection_style()
+    style_path = visual_style.style_path_for_visual(tmp_path, "phase1:detection-overlay")
+    saved_style = visual_style.style_from_json(
+        style_path.read_text(encoding="utf-8"), "phase1:detection-overlay")
+    assert saved_style.overlay_size == 14 and saved_style.overlay_colour == "#ff00ff"
+
+    monkeypatch.setattr(visual_style, "VisualStyleDialog",
+                        lambda *args, **kwargs: accept_style(*args, update=False, **kwargs))
+    tab._edit_detection_style()
+    assert loaded_sizes == [10, 14]
+    assert tab._draw_state["style"] == saved_style
+    tab._draw_index = 1
+    tab._update_draw_frame()
+    for cam in cam_names:
+        im_idx = 1 % len(frame_sets[cam])
+        expected_name = frame_sets[cam][im_idx]
+        assert tab._draw_state["sc_art"][cam].get_sizes().tolist() == [196]
+        assert tab._draw_state["sc_art"][cam].get_offsets().tolist() == [
+            original_points[cam][im_idx, -2:].tolist()]
+        assert np.allclose(tab._draw_state["im_art"][cam].get_array(),
+                           image_values[(cam, expected_name)] / 255)
+        assert np.array_equal(points[cam], original_points[cam])
+
+    output = tmp_path / "styled-montage.png"
+    monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName",
+                        lambda *args: (str(output), "PNG"))
+    tab._montage_export_preset.setCurrentIndex(0)
+    tab._save_detection_montage_png()
+    with Image.open(output) as exported:
+        pixels = np.asarray(exported.convert("RGB"))
+        assert exported.width > 0 and exported.height > 0
+        assert np.count_nonzero(np.all(pixels == [255, 0, 255], axis=2)) > 0
+    assert np.array_equal(detections.get_data(), original_detection_rows)
+
+
+@pytest.mark.gui
+def test_phase1_montage_keeps_corrupt_producer_indices_navigable(tmp_path, monkeypatch):
+    """Unreadable producer frames stay indexed without hiding valid frames."""
+    import csv
+    import hashlib
+    import json
+
+    import cv2
+    from PIL import Image
+    from PySide6.QtWidgets import QApplication, QCheckBox, QTabWidget
+
+    from pyCamSet.calibration_targets.core.target_detections import ImageDetection, TargetDetection
+    from pyCamSet.gui import phase_1_detection
+    from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab
+    from pyCamSet.gui.theme import THEME_TOKENS, apply_theme, contrast_ratio, refresh_matplotlib_theme
+    from pyCamSet.workflow.detections import save_detections
+    from pyCamSet.workflow.workspace import WorkspaceManager
+
+    cam_names = ["camA", "camB"]
+    frame_names = ("a1.png", "nested/frame2.png", "z10.png")
+    image_bytes = {}
+    frame_values = {}
+    for cam_index, camera in enumerate(cam_names):
+        folder = tmp_path / camera
+        folder.mkdir()
+        for image_index, name in enumerate(frame_names):
+            image_path = folder / name
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            if image_index in (0, 2):
+                payload = b"not a decodable PNG; producer still indexes this suffix"
+                image_path.write_bytes(payload)
+            else:
+                value = 45 + cam_index * 70
+                assert cv2.imwrite(str(image_path), np.full((18, 18, 3), value, dtype=np.uint8))
+                payload = image_path.read_bytes()
+                frame_values[camera] = value
+            image_bytes[(camera, name)] = hashlib.sha256(payload).hexdigest()
+
+    detections = TargetDetection(cam_names)
+    for cam_index, camera in enumerate(cam_names):
+        detections.add_detection(
+            camera, 1,
+            ImageDetection(keys=np.array([1]), image_points=np.array([[4 + cam_index, 6 + cam_index]])),
+        )
+    original_rows = detections.get_data().copy()
+    artifact = tmp_path / "detections.pickle"
+    save_detections(artifact, detections)
+    artifact_digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+
+    application = QApplication.instance() or QApplication([])
+    apply_theme(application, "Dark")
+    tab = Phase1DiagnosticsTab(QTabWidget(), QCheckBox(), WorkspaceManager(None))
+    # Baseline fails here if the corrupt first producer image aborts montage construction.
+    tab._draw_detections_for_run({"run_id": "corrupt-frames", "params": {
+        "f_loc": str(tmp_path)}, "artifacts": {"detected_datapoints_pickle": str(artifact)}},
+        show_errors=False)
+    assert tab._draw_state is not None
+    state = tab._draw_state
+    assert [path.relative_to(tmp_path / "camA").as_posix()
+            for path in state["cam_images"]["camA"]] == list(frame_names)
+    assert state["cam_points"]["camA"].keys() == {1}
+    assert state["cam_points"]["camB"].keys() == {1}
+    tab._sub_tabs.setCurrentIndex(2)
+
+    tab._draw_index = 0
+    tab._update_draw_frame()
+    assert "unreadable" in state["axes"]["camA"].get_title().lower()
+    assert "a1.png" in state["unreadable_art"]["camA"].get_text()
+    assert len(state["sc_art"]["camA"].get_offsets()) == 0
+    placeholder = state["unreadable_art"]["camA"]
+    assert placeholder.get_gid() == "phase1:unreadable-placeholder"
+    assert placeholder.get_visible()
+    assert placeholder.get_color() == THEME_TOKENS["Dark"]["text"]
+    assert contrast_ratio(placeholder.get_color(), THEME_TOKENS["Dark"]["surface"]) >= 4.5
+
+    # Theme refresh follows the tagged chrome text but leaves ordinary Axes.text alone.
+    annotation = state["axes"]["camA"].text(0.1, 0.1, "scientific annotation", color="#7a2e8e")
+    for theme_name in ("Light", "Dark", "Sepia"):
+        apply_theme(application, theme_name)
+        refresh_matplotlib_theme(theme_name)
+        assert placeholder.get_color() == THEME_TOKENS[theme_name]["text"]
+        assert contrast_ratio(placeholder.get_color(), THEME_TOKENS[theme_name]["surface"]) >= 4.5
+        assert annotation.get_color() == "#7a2e8e"
+        assert placeholder.get_visible()
+
+    tab._step_draw_image(1)
+    assert tab._draw_index == 1
+    assert np.allclose(state["im_art"]["camA"].get_array(), frame_values["camA"] / 255)
+    assert state["sc_art"]["camA"].get_offsets().tolist() == [[4.0, 6.0]]
+    assert "1 pts" in state["axes"]["camA"].get_title()
+
+    tab._step_draw_image(1)
+    assert tab._draw_index == 2
+    assert "unreadable" in state["axes"]["camA"].get_title().lower()
+    assert "z10.png" in state["unreadable_art"]["camA"].get_text()
+    tab._step_draw_image(1)
+    assert tab._draw_index == 0
+    assert "unreadable" in state["axes"]["camB"].get_title().lower()
+
+    # Export at a valid frame: PNG remains renderable and CSV retains its producer-local index.
+    tab._draw_index = 1
+    tab._update_draw_frame()
+    png_path = tmp_path / "montage.png"
+    csv_path = tmp_path / "coordinates.csv"
+    monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName",
+                        lambda *args: (str(png_path), "PNG"))
+    tab._save_detection_montage_png()
+    with Image.open(png_path) as exported:
+        assert exported.width > 0 and exported.height > 0
+    # Also export a corrupt frame and verify themed foreground pixels render.
+    apply_theme(application, "Dark")
+    refresh_matplotlib_theme("Dark")
+    tab._draw_index = 0
+    tab._update_draw_frame()
+    corrupt_png = tmp_path / "corrupt-montage.png"
+    monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName",
+                        lambda *args: (str(corrupt_png), "PNG"))
+    tab._save_detection_montage_png()
+    with Image.open(corrupt_png) as exported:
+        pixels = np.asarray(exported.convert("RGB"))
+        foreground = tuple(int(THEME_TOKENS["Dark"]["text"][i:i + 2], 16) for i in (1, 3, 5))
+        assert np.count_nonzero(np.all(pixels == foreground, axis=2)) > 0
+    tab._draw_index = 1
+    tab._update_draw_frame()
+    monkeypatch.setattr(phase_1_detection.QFileDialog, "getSaveFileName",
+                        lambda *args: (str(csv_path), "CSV"))
+    tab._save_detection_coordinates_csv()
+    lines = csv_path.read_text(encoding="utf-8").splitlines()
+    assert json.loads(lines[0][2:])["montage_frame_index"] == 1
+    with csv_path.open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(line for line in stream if not line.startswith("#")))
+    assert [(row["camera"], row["image_index"], row["image_name"])
+            for row in rows] == [("camA", "1", "frame2.png"),
+                                 ("camB", "1", "frame2.png")]
+
+    assert np.array_equal(detections.get_data(), original_rows)
+    assert hashlib.sha256(artifact.read_bytes()).hexdigest() == artifact_digest
+    for (camera, name), digest in image_bytes.items():
+        assert hashlib.sha256((tmp_path / camera / name).read_bytes()).hexdigest() == digest
 
 
 class _FakeCamDet:

@@ -202,7 +202,7 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     diagnostics = _diagnostics(
         optimisation, handler, stats, phase3_run, log,
         out_cams=out_cams, previous_cams=previous_cams,
-        params=params, phase3_status=(phase3_run or {}).get("status"))
+        params=params)
     report = getattr(out_cams, "calibration_report", None)
     return camset_out, diagnostics, (
         report.to_dict() if report is not None else None)
@@ -211,8 +211,7 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
 def _diagnostics(optimisation, handler, stats: dict,
                  phase3_run: Optional[dict], log: LogFn,
                  *, out_cams=None, previous_cams=None,
-                 params: Optional[dict] = None,
-                 phase3_status: Optional[str] = None) -> dict:
+                 params: Optional[dict] = None) -> dict:
     """The D4 series: how far the target moved, and whether it paid off."""
     # The errors and the solver's own account of the run are the calibration
     # summary's, printed by the solve itself.  What follows is what only this
@@ -251,7 +250,7 @@ def _diagnostics(optimisation, handler, stats: dict,
         optimisation, handler, stats, residual_xy,
         initial_euclid, final_euclid, int(len(detection_data)),
         out_cams=out_cams, previous_cams=previous_cams,
-        params=params, phase3_status=phase3_status)
+        params=params, phase3_run=phase3_run)
 
     diagnostics = {
         "D4.1_n_free_target_points": int(np.sum(visible)),
@@ -299,8 +298,13 @@ def _quality_gate(optimisation, handler, stats: dict,
                   final_euclid: float, observation_count: int, *,
                   out_cams=None, previous_cams=None,
                   params: Optional[dict] = None,
-                  phase3_status: Optional[str] = None) -> dict:
-    """Fail closed when Phase 4 produced no scientifically usable result."""
+                  phase3_run: Optional[dict] = None) -> dict:
+    """Fail closed when Phase 4 produced no scientifically usable result.
+
+    ``phase3_run`` is the run the starting camset came from, or None when the
+    caller started from a camset alone; only a given run is checked for a
+    complete status and a run id.
+    """
     base = solve_quality_gate(
         optimisation, handler, stats, residual_xy, initial_euclid,
         final_euclid, observation_count)
@@ -310,9 +314,17 @@ def _quality_gate(optimisation, handler, stats: dict,
     objective_cost_reduced = bool(
         np.isfinite(initial_cost) and np.isfinite(final_cost)
         and final_cost < initial_cost)
-    if phase3_status not in (None, "complete"):
-        blocking.append(
-            f"Phase 3 input disposition was {phase3_status}; re-run it before hand-off")
+    phase3_provenance_complete = None
+    if phase3_run is not None:
+        phase3_status = phase3_run.get("status")
+        phase3_provenance_complete = False
+        if phase3_status != "complete":
+            blocking.append(
+                f"Phase 3 input disposition was {phase3_status}; re-run it before hand-off")
+        elif not str(phase3_run.get("run_id") or "").strip():
+            blocking.append("Phase 3 input run has no run id")
+        else:
+            phase3_provenance_complete = True
 
     detection_data = np.asarray(handler.get_detection_data(flatten=True))
     image_indices = (detection_data[:, 1].astype(int)
@@ -323,9 +335,17 @@ def _quality_gate(optimisation, handler, stats: dict,
     # ``max_ims`` is the highest global image index plus one, not the number
     # of observed images.  Treat holes as explicitly missing observations;
     # silently pretending the list is contiguous would hide them from the GUI.
-    missing_images = sorted(set(range(expected_images)) - set(observed_images))
-    image_coverage = bool(
-        expected_images and set(observed_images) == set(range(expected_images)))
+    # An image the solve itself excluded -- no usable target pose, marked in
+    # the handler's missing_poses and reported in its summary -- is not such
+    # a hole: it is listed as excluded, and only unexplained holes block.
+    marked = getattr(handler, "missing_poses", None)
+    marked = (np.asarray(marked, dtype=bool) if marked is not None
+              else np.zeros(0, dtype=bool))
+    excluded_images = (sorted(int(i) for i in np.flatnonzero(marked))
+                       if marked.size == expected_images else [])
+    missing_images = sorted(
+        set(range(expected_images)) - set(observed_images) - set(excluded_images))
+    image_coverage = bool(expected_images and not missing_images)
     if expected_images and not image_coverage:
         blocking.append("image observation graph has missing image indices")
 
@@ -350,10 +370,12 @@ def _quality_gate(optimisation, handler, stats: dict,
         **base,
         "status": "complete" if not blocking else "incomplete",
         "blocking_flags": blocking,
+        "phase3_provenance_complete": phase3_provenance_complete,
         "objective_cost_reduced": objective_cost_reduced,
         "image_coverage": image_coverage,
         "observed_images": observed_images,
         "missing_images": missing_images,
+        "excluded_images": excluded_images,
         "expected_image_count": expected_images,
         "gauge": gauge,
         "camera_quality": camera_quality,

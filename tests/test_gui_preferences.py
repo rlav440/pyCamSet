@@ -88,31 +88,6 @@ def test_failed_atomic_write_keeps_old_file_and_memory(tmp_path, monkeypatch):
     assert loaded.values["terminal_visible"] is True
 
 
-def test_application_identity_migrates_legacy_styles_without_deleting_source(tmp_path, monkeypatch):
-    """Existing generic-config visual styles are copied, not moved or overwritten."""
-    from PySide6.QtCore import QStandardPaths
-    from PySide6.QtWidgets import QApplication
-
-    monkeypatch.delenv("PYCAMSET_CONFIG_DIR", raising=False)
-    app = QApplication.instance() or QApplication([])
-    app.setOrganizationName("")
-    app.setApplicationName("python")
-    old_root = tmp_path / "legacy"
-    new_root = tmp_path / "pyCamSet"
-    legacy_style = old_root / "visual-styles" / "style.json"
-    legacy_style.parent.mkdir(parents=True)
-    legacy_style.write_text("legacy-style", encoding="utf-8")
-
-    def resolved_location(_location):
-        return str(new_root if app.organizationName() == "pyCamSet" else old_root)
-
-    monkeypatch.setattr(QStandardPaths, "writableLocation", resolved_location)
-    preferences.initialise_application_identity(app)
-    migrated = new_root / "visual-styles" / "style.json"
-    assert migrated.read_text(encoding="utf-8") == "legacy-style"
-    assert legacy_style.read_text(encoding="utf-8") == "legacy-style"
-
-
 def test_fresh_gui_process_persists_preferences_outside_repository(tmp_path):
     """A second real GUI process reads the first process's external config."""
     repo = Path(__file__).resolve().parents[1]
@@ -201,3 +176,39 @@ print(json.dumps({'config': str(config_directory()), 'application': app.applicat
     assert any(part.casefold() == "pycamset" for part in resolved.parts)
     assert data["application"] == "pyCamSet"
     assert data["organisation"] == "pyCamSet"
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("visual_id", [
+    "assessment:error_distribution",
+    "diagnostic:phase2:d2.6-d2.7-per-image-reprojection",
+    "create-target:pyvista",
+])
+def test_figure_card_export_size_persists_for_its_visual_id(tmp_path, monkeypatch, visual_id):
+    """Every visual id a card is built with can store its export size."""
+    from PySide6.QtWidgets import QApplication
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+    from matplotlib.figure import Figure
+
+    from pyCamSet.gui.shared_functions import MatplotlibFigureCard
+
+    monkeypatch.setenv("PYCAMSET_CONFIG_DIR", str(tmp_path))
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.delattr(app, "_pycamset_preferences", raising=False)
+    card = MatplotlibFigureCard("A figure", Figure(), FigureCanvasQTAgg, visual_id=visual_id)
+    try:
+        card._preset.setCurrentIndex(2)
+        assert preferences.Preferences().values["export_presets"] == {visual_id: 2}
+    finally:
+        card.deleteLater()
+        monkeypatch.delattr(app, "_pycamset_preferences", raising=False)
+
+
+def test_export_preset_rejects_a_key_that_is_not_a_visual_id(tmp_path, monkeypatch):
+    path = tmp_path / "preferences.json"
+    monkeypatch.setattr(preferences, "preferences_path", lambda: path)
+    loaded = preferences.Preferences()
+    with pytest.raises(ValueError, match="visual id"):
+        loaded.set("export_preset:C:/private/input", 1)
+    assert loaded.values["export_presets"] == {}
+    assert not path.exists()

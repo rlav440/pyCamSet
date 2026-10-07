@@ -16,9 +16,9 @@ from PySide6.QtCore import QStandardPaths
 
 _SCHEMA = "pycamset.gui-preferences"
 _VERSION = 1
-_PRESET_KEY = re.compile(
-    r"(?:figure:[a-z0-9]+(?:-[a-z0-9]+)*|phase[1-4]:(?:detection-montage|3d-export|assessment-export))\Z"
-)
+#: A visual id: two or more lower-case ``:``-separated segments, such as
+#: ``phase1:detection-montage`` or ``diagnostic:phase2:d2.6-per-image-reprojection``.
+_PRESET_KEY = re.compile(r"[a-z0-9][a-z0-9._-]*(?::[a-z0-9][a-z0-9._-]*)+\Z")
 _DEFAULTS: dict[str, Any] = {
     "info_enabled": True,
     "terminal_visible": True,
@@ -27,30 +27,9 @@ _DEFAULTS: dict[str, Any] = {
 
 
 def initialise_application_identity(application) -> None:
-    """Set stable Qt identity and migrate old generic per-visual style files."""
-    old_location = QStandardPaths.writableLocation(
-        QStandardPaths.StandardLocation.AppConfigLocation)
+    """Set the Qt identity that names the per-user config directory."""
     application.setOrganizationName("pyCamSet")
     application.setApplicationName("pyCamSet")
-    if os.environ.get("PYCAMSET_CONFIG_DIR"):
-        # The established override is used by tests and explicit portable setups.
-        return
-    new_location = QStandardPaths.writableLocation(
-        QStandardPaths.StandardLocation.AppConfigLocation)
-    if not old_location or not new_location or Path(old_location) == Path(new_location):
-        return
-    old_styles = Path(old_location) / "visual-styles"
-    new_styles = Path(new_location) / "visual-styles"
-    if old_styles.is_dir():
-        for source in old_styles.glob("*.json"):
-            destination = new_styles / source.name
-            if not destination.exists():
-                try:
-                    new_styles.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source, destination)
-                except OSError:
-                    # Keep the legacy file intact; callers continue with defaults.
-                    continue
 
 
 def config_directory() -> Path:
@@ -117,6 +96,8 @@ class Preferences:
         elif key.startswith("export_preset:"):
             if type(value) is not int or value not in range(3):
                 raise ValueError("Export preset index must be 0, 1 or 2")
+            if not _PRESET_KEY.fullmatch(key.removeprefix("export_preset:")):
+                raise ValueError(f"Invalid visual id for an export preset: {key}")
             self.values["export_presets"][key.removeprefix("export_preset:")] = value
         else:
             raise ValueError(f"Unknown presentation preference: {key}")
@@ -171,14 +152,18 @@ def preference_index(preferences: Preferences, key: str) -> int:
 
 def bind_export_preset(combo, key: str) -> None:
     """Restore a fixed three-option presentation preset and persist changes."""
+    if not _PRESET_KEY.fullmatch(key):
+        raise ValueError(f"Invalid visual id for an export preset: {key}")
     preferences = get_preferences()
     combo.setCurrentIndex(preference_index(preferences, key))
     def persist(index: int) -> None:
         try:
             preferences.set(f"export_preset:{key}", index)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(combo, "Preference not saved", str(exc))
+            blocked = combo.blockSignals(True)
             combo.setCurrentIndex(preference_index(preferences, key))
+            combo.blockSignals(blocked)
 
     combo.currentIndexChanged.connect(persist)

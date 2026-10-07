@@ -1173,6 +1173,13 @@ class Phase3DiagnosticsTab(QWidget):
             if phase != "phase3":
                 form.addRow("Note:", QLabel("This run is from Phase 4; D3 metrics are not available."))
             else:
+                status = str(run.get("status", "unknown"))
+                status_label = QLabel(status)
+                status_label.setStyleSheet(
+                    "font-weight: bold; color: "
+                    + ("#228b22" if status == "complete" else "#b22222")
+                )
+                form.addRow("Disposition:", status_label)
                 form.addRow("D3.1 missing poses:", QLabel(str(d.get("D3.1_n_missing_poses", "—"))))
                 form.addRow("D3.2 outlier-removed poses:", QLabel(str(d.get("D3.2_n_outlier_removed", "—"))))
                 form.addRow("D3.5 initial euclid (px):", QLabel(f"{float(d.get('D3.5_initial_euclid_px', float('nan'))):.5f}"))
@@ -1194,6 +1201,13 @@ class Phase3DiagnosticsTab(QWidget):
                         f" (ratio={float(ratio.get('ratio', float('nan'))):.6f})"
                     ),
                 )
+                gate = d.get("quality_gate") or {}
+                flags = gate.get("blocking_flags") or []
+                if flags:
+                    gate_label = QLabel("\n".join(str(flag) for flag in flags))
+                    gate_label.setWordWrap(True)
+                    gate_label.setStyleSheet("color: #b22222;")
+                    form.addRow("Quality gate:", gate_label)
 
             if run.get("error"):
                 form.addRow("Error:", QLabel(str(run["error"])))

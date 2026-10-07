@@ -137,7 +137,7 @@ class FreePointBundleHandler(TemplateBundleHandler):
                  options: dict | None = None,
                  missing_poses: list | None =None
                  ):
-        super().__init__(camset, target, detection, fixed_params, options, missing_poses) 
+        super().__init__(camset, target, detection, fixed_params, options)
 
         self.flat_point_data = np.copy(self.point_data.reshape((-1)))
         self.feat_unfixed = np.ones(self.flat_point_data.shape[0], dtype=bool)

@@ -8,7 +8,7 @@ only prerequisite is an optional package skips itself with
 from collection, so a missing dependency shows up as one reported skip
 instead of thirty tests silently never running.
 
-The board is printed from a vector layout (``charuco2/layout.py``), not from
+The board is printed from a vector layout (``markers/gridboard_layout.py``), not from
 aruco2's raster, so the layout is checked here against aruco2's own
 ``get_grid_board_image`` pixel for pixel. That comparison is exact only at
 scales where every cell and band edge lands on a whole pixel: aruco2 draws a

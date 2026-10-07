@@ -14,7 +14,7 @@ edge a face carries 93 corners, **1860 points in total**.
 !!! note "PuzzleBoardIco is an optional dependency"
 
     It is read with the `puzzle_board` package, which is not published on PyPI:
-    `pip install 'puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git'`.
+    `pip install --no-deps 'puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git'`.
     Constructing the target without it raises an `ImportError` naming the fix.
 
 !!! warning "Not yet validated on a real printed target"

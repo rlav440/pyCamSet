@@ -7,7 +7,7 @@ other test looks at directly: if OpenCV changes what it returns, the
 calibration tests notice only as a drifting reprojection error, which reads
 like a solver regression rather than a detection one.
 
-opencv-python is deliberately unpinned within ``>=4.8,<5``, and the CI matrix
+opencv-contrib-python is deliberately unpinned within ``>=4.8,<5``, and the CI matrix
 resolves it differently per platform and per Python version, so this is the
 test that says which layer moved.
 
@@ -23,7 +23,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-# Reference values measured on the checked-in corpus with opencv-python 4.13.0,
+# Reference values measured on the checked-in corpus with OpenCV 4.13.0,
 # macOS/arm64, Python 3.12.  Regenerate deliberately, never to make a red test
 # green: a change here means the detected geometry moved.
 CHARUCO_REFERENCE = {
@@ -104,7 +104,7 @@ def _check_counts(detections, reference):
     assert low <= len(data) <= high, (
         f"detected {len(data)} points, expected about {expected}. A change this "
         f"large usually means the detector's behaviour moved: check the "
-        f"installed opencv-python version before adjusting this reference."
+        f"installed opencv-contrib-python version before adjusting this reference."
     )
 
     for name, count, want in zip(
@@ -162,6 +162,19 @@ def test_charuco_board_geometry_is_what_the_images_show():
     # 4mm squares, given to the target in mm and held in metres
     spacing = np.diff(np.unique(np.round(corners[:, 0], 6)))
     assert np.allclose(spacing, 0.004, atol=1e-9)
+
+
+def test_the_legacy_flag_changes_the_board():
+    """The ``legacy`` keyword reaches ``board.getLegacyPattern()`` unchanged."""
+    from pyCamSet import ChArUco
+
+    from conftest import CHARUCO_ARGS
+
+    legacy = ChArUco(**dict(CHARUCO_ARGS, legacy=True))
+    modern = ChArUco(**dict(CHARUCO_ARGS, legacy=False))
+
+    assert legacy.board.getLegacyPattern() is True
+    assert modern.board.getLegacyPattern() is False
 
 
 # --------------------------------------------------------------------------

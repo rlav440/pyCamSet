@@ -9,7 +9,7 @@
 numpy
 scipy
 matplotlib
-opencv-python>=4.8
+opencv-contrib-python>=4.8
 tqdm
 numba
 threadpoolctl
@@ -25,3 +25,4 @@ svgwrite
 pillow
 docstring_parser
 pyvista
+pyvistaqt

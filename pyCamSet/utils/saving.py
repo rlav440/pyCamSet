@@ -11,7 +11,10 @@ import dill
 
 from pathlib import Path
 
+import functools
 import importlib
+import inspect
+import pkgutil
 from copy import copy
 
 from pyCamSet.utils.calibration_report import CalibrationReport
@@ -51,21 +54,76 @@ def load_pickle(filename):
     """
 
     with open(long_path(filename), 'rb') as f:
-        object_n = dill.load(f)
+        object_n = _Unpickler(f).load()
     return object_n
+
+
+class _Unpickler(dill.Unpickler):
+    """Finds a pyCamSet class by name when the module a pickle names is gone."""
+
+    def find_class(self, module, name):
+        try:
+            return super().find_class(module, name)
+        except (ImportError, AttributeError):
+            if not (module == "pyCamSet" or module.startswith("pyCamSet.")):
+                raise
+        head, *rest = name.split(".")
+        found = resolve_class(module, head)
+        for attribute in rest:
+            found = getattr(found, attribute)
+        return found
+
+
+@functools.cache
+def _classes_by_name() -> dict[str, list[type]]:
+    """Every class pyCamSet defines, by name; modules that cannot import are skipped."""
+    import pyCamSet
+
+    found: dict[str, list[type]] = {}
+    for info in pkgutil.walk_packages(pyCamSet.__path__, "pyCamSet."):
+        try:
+            module = importlib.import_module(info.name)
+        except Exception:
+            continue
+        for name, cls in inspect.getmembers(module, inspect.isclass):
+            if cls.__module__ == module.__name__:
+                found.setdefault(name, []).append(cls)
+    return found
+
+
+def resolve_class(class_module: str | None, class_name: str) -> type:
+    """
+    The class a saved file records, found by name if its module no longer has it.
+
+    :param class_module: the module the file records, or None if it records none
+    :param class_name: the class name the file records
+    :return: the class
+    :raises ImportError: no pyCamSet class, or more than one, has that name
+    """
+    if class_module:
+        try:
+            return getattr(importlib.import_module(class_module), class_name)
+        except (ImportError, AttributeError):
+            pass
+    candidates = _classes_by_name().get(class_name, [])
+    if len(candidates) != 1:
+        found = ", ".join(f"{c.__module__}.{c.__name__}" for c in candidates) or "none"
+        raise ImportError(
+            f"Cannot find the saved class {class_name!r} (recorded in "
+            f"{class_module!r}); pyCamSet classes with that name: {found}.")
+    return candidates[0]
 
 
 def instance_obj(class_module, class_name, **kwargs):
     """
-    A function to instantiate an object from a module and class name
+    Instantiates a saved class from its recorded module and class name.
 
-    :param class_module: The module name
+    :param class_module: The recorded module name, or None
     :param class_name: The class name
     :param kwargs: The keyword arguments to pass to the class
-    :return:
+    :return: the new object
     """
-    class_var = getattr(importlib.import_module(class_module), class_name)
-    return class_var(**kwargs)
+    return resolve_class(class_module, class_name)(**kwargs)
 
 
 def numpy_dict_to_list(d):
@@ -228,15 +286,6 @@ def save_camset(
         json.dump(save_dict, fp=f, indent=4)
 
     return
-
-
-#: which module each camera class lives in, for reading a file that names the
-#: class but not its module. A class absent here is read from the pinhole
-#: module, which is where every camera lived when those files were written.
-CAMERA_MODULES = {
-    "Camera": "pyCamSet.cameras.camera",
-    "TelecentricCamera": "pyCamSet.cameras.telecentric_camera",
-}
 
 
 def image_sizes_from_folder(folder: Path | str) -> dict[str, tuple[int, int]]:
@@ -410,16 +459,15 @@ def load_CameraSet(f_loc: Path|str,
     cam_dict = {}
     cam_config = saved_structure['cam_config']
 
-    # Files written before the camera's module was recorded still name the
-    # class, so the module is looked up from the name rather than assumed:
-    # those files are readable, and a telecentric set saved by one of them
-    # comes back telecentric instead of silently becoming a pinhole.
     cam_name_cls = cam_config.get('cam_name', 'Camera')
-    cam_module = cam_config.get('cam_module') or CAMERA_MODULES.get(
-        cam_name_cls, 'pyCamSet.cameras.camera')
+    cam_module = cam_config.get('cam_module')
     camset_module = saved_structure['cam_config'].get(
         'camset_module', 'pyCamSet.cameras.camera_set')
-    transposed = _res_is_transposed(saved_structure, cam_module, image_sizes, f_loc)
+    # the module the class resolves to, not the one recorded: a file from
+    # before cam_module was written records none
+    transposed = _res_is_transposed(
+        saved_structure, resolve_class(cam_module, cam_name_cls).__module__,
+        image_sizes, f_loc)
 
     for cam_name, data in saved_structure['cams'].items():
         res = np.array(data['res'])
@@ -451,6 +499,8 @@ def load_CameraSet(f_loc: Path|str,
         detection = instance_obj(
             dtct['dtct_module'], dtct['dtct_name'], **input_args
         )
+    except ImportError:
+        raise
     except Exception as e:
         logger.warning(f"Failed to load detections with reason {e} \n returning just the CameraSet")
         return camset
@@ -461,9 +511,19 @@ def load_CameraSet(f_loc: Path|str,
             target_config['target_module'], target_config['target_name'],
             **target_config['input']
         )
+    except ImportError:
+        raise
     except Exception as e:
         logger.warning(f"Failed to load calibration target with reason {e}, returning just the CameraSet")
         return camset
+
+    handler_config = optim.get('handler_config') or {}
+    if "missing_poses" in handler_config:
+        missing_poses = np.array(handler_config["missing_poses"]).astype(bool)
+        if missing_poses.size != detection.max_ims:
+            raise ValueError(
+                f"{f_loc} marks {missing_poses.size} poses missing, but its "
+                f"detections hold {detection.max_ims} images.")
 
     try:
         handler_config = optim['handler_config']
@@ -474,11 +534,13 @@ def load_CameraSet(f_loc: Path|str,
             options=handler_config['options']
         )
         if "missing_poses" in handler_config:
-            input_args["missing_poses"] = np.array(handler_config["missing_poses"]).astype(bool)
+            input_args["missing_poses"] = missing_poses
 
         handler = instance_obj(
             handler_config['handler_module'], handler_config['handler_name'], **input_args
         )
+    except ImportError:
+        raise
     except Exception as e:
         logger.warning(f"Failed to intialise the Parameterhandler with reason {e}, returning just the CameraSet")
         return camset

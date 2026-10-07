@@ -28,6 +28,37 @@ def test_the_file_matches_pyproject():
     )
 
 
+def test_one_gui_capable_contrib_opencv_distribution():
+    """Every install, extras included, names one GUI-capable cv2 wheel."""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    deps = list(project["dependencies"])
+    for extra in project.get("optional-dependencies", {}).values():
+        deps.extend(extra)
+
+    assert [dep for dep in deps if dep.startswith("opencv-")] == ["opencv-contrib-python>=4.8"]
+
+
+def test_a_second_cv2_distribution_is_warned_about(monkeypatch):
+    import pyCamSet
+
+    monkeypatch.setattr(
+        pyCamSet, "_installed_cv2_distributions",
+        lambda: ["opencv-python 4.13.0", "opencv-contrib-python 5.0.0"])
+    with pytest.warns(UserWarning, match="opencv-python 4.13.0"):
+        pyCamSet._warn_on_duplicate_cv2()
+
+
+def test_one_cv2_distribution_is_not_warned_about(monkeypatch, recwarn):
+    import pyCamSet
+
+    monkeypatch.setattr(
+        pyCamSet, "_installed_cv2_distributions",
+        lambda: ["opencv-contrib-python 5.0.0"])
+    pyCamSet._warn_on_duplicate_cv2()
+
+    assert not recwarn.list
+
+
 def test_it_leaves_out_the_gui_toolkit():
     """The whole point of the lean install: no Qt."""
     assert "PySide6" not in core_requirements()

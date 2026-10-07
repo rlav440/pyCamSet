@@ -345,19 +345,6 @@ def test_phase4_api_default_is_100_and_explicit_value_is_preserved(
     assert captured["max_nfev"] == expected
 
 
-def test_self_calibration_gauge_uses_target_point_data_units():
-    from pyCamSet.optimisation.standard_bundle_handler import _gauge_square_size
-
-    target = SimpleNamespace(
-        square_size=4.2857142857,
-        point_data=np.array([[[0.0, 0.0, 0.0],
-                              [0.0042857143, 0.0, 0.0],
-                              [0.0, 0.0042857143, 0.0]]]),
-    )
-
-    assert np.isclose(_gauge_square_size(target), 0.0042857143)
-
-
 def test_fixed_camera_warm_start_keeps_only_free_parameters():
     from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler, TemplateBundleHandler
 

@@ -146,27 +146,40 @@ def save_figure(figure, name: str,
         return None
     written = Path(save_dir) / f"{name}.png"
     written.parent.mkdir(parents=True, exist_ok=True)
-    targets = [Path(save_dir) / f"{name}.{output_format}" for output_format in formats]
+    for output_format in formats:
+        target = Path(save_dir) / f"{name}.{output_format}"
+        if width_mm is None:
+            figure.savefig(target, dpi=int(dpi), format=output_format, bbox_inches="tight")
+        else:
+            save_figure_at_width(figure, target, width_mm, dpi, output_format)
+    return written
+
+
+def save_figure_at_width(figure, path: Path | str, width_mm: float, dpi: int,
+                         output_format: str = "png") -> None:
+    """
+    Write *figure* at a physical width, keeping its aspect, and restore its size.
+
+    A PNG is snapped to whole pixels at *dpi*; a vector format keeps the exact
+    width.
+
+    :param figure: the figure to write
+    :param path: the file to write
+    :param width_mm: the output width in millimetres
+    :param dpi: the raster density, and the density recorded in a vector file
+    :param output_format: a Matplotlib format name, such as ``png`` or ``svg``
+    """
     original_size = figure.get_size_inches().copy()
-    if width_mm is None:
-        output_size = original_size
-    else:
-        width_inches = float(width_mm) / 25.4
-        height_inches = width_inches * float(original_size[1]) / float(original_size[0])
-        output_size = (width_inches, height_inches)
-    if width_mm is not None and "png" in formats:
-        pixel_size = (round(width_inches * dpi) / dpi,
-                      round(height_inches * dpi) / dpi)
-        output_size = pixel_size
-    if width_mm is not None:
-        figure.set_size_inches(*output_size, forward=False)
+    width_inches = float(width_mm) / 25.4
+    height_inches = width_inches * float(original_size[1]) / float(original_size[0])
+    if output_format.lower() == "png":
+        width_inches = round(width_inches * dpi) / dpi
+        height_inches = round(height_inches * dpi) / dpi
+    figure.set_size_inches(width_inches, height_inches, forward=False)
     try:
-        for output_format, target in zip(formats, targets):
-            figure.savefig(target, dpi=int(dpi), format=output_format,
-                           bbox_inches=(None if width_mm is not None else "tight"))
+        figure.savefig(path, dpi=int(dpi), format=output_format.lower())
     finally:
         figure.set_size_inches(original_size, forward=False)
-    return written
 
 
 def _bind_screenshot_key(plotter, save_dir: Path | str | None = None) -> None:

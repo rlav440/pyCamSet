@@ -711,19 +711,37 @@ def load_default_style(app_config_dir: Path) -> VisualStyle | None:
         return None
 
 
-def save_default_style(app_config_dir: Path, style: VisualStyle) -> Path:
-    """Atomically store *style* as the default for all figures."""
+def _write_atomically(path: Path, text: str) -> Path:
+    """Stage *text* beside *path* and move it into place, leaving no stray file."""
     import tempfile
 
-    path = default_style_path(app_config_dir)
-    text = style_to_json(as_default_style(style), DEFAULT_VISUAL_ID)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
-                                     prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
-        temporary = Path(handle.name)
-        handle.write(text)
-    temporary.replace(path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=f".{path.name}.", suffix=".tmp",
+                                         delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(text)
+        temporary.replace(path)
+    except OSError:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise
     return path
+
+
+def save_default_style(app_config_dir: Path, style: VisualStyle) -> Path:
+    """Atomically store *style* as the default for all figures."""
+    return _write_atomically(default_style_path(app_config_dir),
+                             style_to_json(as_default_style(style), DEFAULT_VISUAL_ID))
+
+
+def save_style_for_visual(app_config_dir: Path, visual_id: str, style: VisualStyle) -> Path:
+    """Validate *style* and atomically store it as *visual_id*'s own style."""
+    style.validate()
+    return _write_atomically(style_path_for_visual(app_config_dir, visual_id),
+                             style_to_json(style, visual_id))
 
 
 def clear_default_style(app_config_dir: Path) -> None:

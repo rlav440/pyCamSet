@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-import tempfile
 from typing import Any, Callable, Optional
 import pickle
 
@@ -1484,7 +1483,7 @@ class Phase1DiagnosticsTab(QWidget):
         from pyCamSet.gui.preferences import config_directory
         from pyCamSet.gui.visual_style import (
             VisualStyle, VisualStyleDialog, apply_visual_style, load_default_style,
-            load_style_for_visual, style_path_for_visual, style_to_json,
+            load_style_for_visual, save_style_for_visual, style_path_for_visual,
         )
 
         visual_id = "phase1:detection-overlay"
@@ -1512,24 +1511,9 @@ class Phase1DiagnosticsTab(QWidget):
             apply_visual_style(figure, fallback, theme)
             self._draw_state["canvas"].draw_idle()
             return
-        temporary_path = None
         try:
-            dialog.current.validate()
-            style_path.parent.mkdir(parents=True, exist_ok=True)
-            # Stage beside the sidecar so replacement is atomic on the same filesystem.
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=style_path.parent,
-                prefix=f".{style_path.name}.", suffix=".tmp", delete=False,
-            ) as temporary_file:
-                temporary_path = Path(temporary_file.name)
-                temporary_file.write(style_to_json(dialog.current, visual_id))
-            temporary_path.replace(style_path)
+            save_style_for_visual(config_dir, visual_id, dialog.current)
         except (OSError, ValueError) as exc:
-            if temporary_path is not None:
-                try:
-                    temporary_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
             # A failed save must restore the durable style, not leave an accepted preview visible.
             self._draw_state["style"] = current
             apply_visual_style(figure, current, theme)
@@ -1632,18 +1616,9 @@ class Phase1DiagnosticsTab(QWidget):
         try:
             from pyCamSet.gui.visual_style import _validate_user_style_filename
             _validate_user_style_filename(Path(path).name)
-            figure = self._draw_state["fig"]
+            from pyCamSet.utils.visualisation import save_figure_at_width
             width_mm, dpi = self._montage_export_preset.currentData()
-            original_size = figure.get_size_inches().copy()
-            try:
-                width_inches = width_mm / 25.4
-                height_inches = original_size[1] * width_inches / original_size[0]
-                figure.set_size_inches(round(width_inches * dpi) / dpi,
-                                       round(height_inches * dpi) / dpi,
-                                       forward=False)
-                figure.savefig(path, dpi=dpi, format="png")
-            finally:
-                figure.set_size_inches(original_size, forward=False)
+            save_figure_at_width(self._draw_state["fig"], path, width_mm, dpi, "png")
         except Exception as exc:
             QMessageBox.warning(self, "PNG export failed", f"The montage could not be saved.\n\nTechnical detail: {exc}")
 

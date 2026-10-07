@@ -19,7 +19,6 @@ from __future__ import annotations
 import re
 import csv
 import json
-import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -367,17 +366,9 @@ class MatplotlibFigureCard(QWidget):
         try:
             from pyCamSet.gui.visual_style import _validate_user_style_filename
             _validate_user_style_filename(Path(path).name)
+            from pyCamSet.utils.visualisation import save_figure_at_width
             width_mm, dpi = self._preset.currentData()
-            original_size = self._fig.get_size_inches().copy()
-            width_inches = width_mm / 25.4
-            height_inches = width_inches * float(original_size[1]) / float(original_size[0])
-            pixel_width = round(width_inches * dpi)
-            pixel_height = round(height_inches * dpi)
-            self._fig.set_size_inches(pixel_width / dpi, pixel_height / dpi, forward=False)
-            try:
-                self._fig.savefig(path, dpi=int(dpi), format="png")
-            finally:
-                self._fig.set_size_inches(original_size, forward=False)
+            save_figure_at_width(self._fig, path, width_mm, dpi, "png")
         except Exception as exc:
             QMessageBox.warning(self, "PNG export failed", f"The figure could not be saved.\n\nTechnical detail: {exc}")
 
@@ -390,15 +381,9 @@ class MatplotlibFigureCard(QWidget):
         try:
             from pyCamSet.gui.visual_style import _validate_user_style_filename
             _validate_user_style_filename(Path(path).name)
+            from pyCamSet.utils.visualisation import save_figure_at_width
             width_mm, dpi = self._preset.currentData()
-            original_size = self._fig.get_size_inches().copy()
-            width_inches = width_mm / 25.4
-            height_inches = width_inches * float(original_size[1]) / float(original_size[0])
-            self._fig.set_size_inches(width_inches, height_inches, forward=False)
-            try:
-                self._fig.savefig(path, format=output_format.lower(), dpi=int(dpi))
-            finally:
-                self._fig.set_size_inches(original_size, forward=False)
+            save_figure_at_width(self._fig, path, width_mm, dpi, output_format)
         except Exception as exc:
             QMessageBox.warning(self, f"{output_format} export failed",
                                 f"The figure could not be saved.\n\nTechnical detail: {exc}")
@@ -426,7 +411,7 @@ class MatplotlibFigureCard(QWidget):
         from PySide6.QtWidgets import QMessageBox
         from pyCamSet.gui.visual_style import (
             VisualStyle, VisualStyleDialog, _VISUAL_OVERRIDES,
-            _restore_presentation_state, apply_visual_style, style_to_json,
+            _restore_presentation_state, apply_visual_style, save_style_for_visual,
         )
 
         application = QApplication.instance()
@@ -453,24 +438,10 @@ class MatplotlibFigureCard(QWidget):
             apply_visual_style(self._fig, self._style, theme_name)
             self._canvas.draw_idle()
             return
-        temporary_path = None
         try:
-            candidate.validate()
-            self._style_path.parent.mkdir(parents=True, exist_ok=True)
-            # Stage beside the sidecar so promotion is atomic on the same filesystem.
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=self._style_path.parent,
-                prefix=f".{self._style_path.name}.", suffix=".tmp", delete=False,
-            ) as temporary_file:
-                temporary_path = Path(temporary_file.name)
-                temporary_file.write(style_to_json(candidate, self._visual_id))
-            temporary_path.replace(self._style_path)
+            from pyCamSet.gui.preferences import config_directory
+            save_style_for_visual(config_directory(), self._visual_id, candidate)
         except (OSError, ValueError) as exc:
-            if temporary_path is not None:
-                try:
-                    temporary_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
             # Restore the exact pre-dialog artist and override states after a failed save.
             self._style = dialog.original
             _restore_presentation_state(self._fig, dialog.original_artist_state)

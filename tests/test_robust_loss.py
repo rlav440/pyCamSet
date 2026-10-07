@@ -67,12 +67,10 @@ def test_schur_reaches_scipys_robust_minimum(loss):
         ParamGroup("line", np.zeros((1, 2)), np.ones(1, bool), np.zeros(n_det, int)),
         ParamGroup("none", np.zeros((1, 0)), np.ones(1, bool), np.zeros(n_det, int)),
     ]
-    try:
-        solver = SchurSolver(spec_from_groups(groups))
-    except Exception as exc:  # the solver may reject an empty eliminated block
-        pytest.skip(f"synthetic structure not accepted: {exc}")
-    wrapped, wrapped_blocks = robust_loss.robustify(residuals, blocks, loss, 0.2)
-    ours = levenberg_marquardt(wrapped, wrapped_blocks, np.zeros(2), solver, max_iter=200)
+    solver = SchurSolver(spec_from_groups(groups))
+    problem = robust_loss.RobustProblem(residuals, blocks, loss, 0.2)
+    ours = levenberg_marquardt(problem.residuals, problem.blocks, np.zeros(2),
+                               solver, max_iter=200)
     theirs = least_squares(residuals, np.zeros(2), loss=loss, f_scale=0.2,
                            xtol=1e-12, ftol=1e-12, gtol=1e-12)
     assert ours.cost == pytest.approx(theirs.cost, rel=1e-6)
@@ -83,22 +81,69 @@ def test_schur_reaches_scipys_robust_minimum(loss):
 
 
 @pytest.mark.parametrize("loss", LOSSES)
-def test_an_overflowing_residual_scales_its_row_to_zero(loss):
-    """A residual far past any real pixel error must not put NaN in the Jacobian."""
-    r, scale = robust_loss._transform(np.array([1e200, -np.inf, 3.0]), loss, 1.0)
-    assert np.all(np.isfinite(scale))
-    assert scale[0] == 0.0 and scale[1] == 0.0 and scale[2] > 0.0
-    if loss == "arctan":
-        # bounded: rho never exceeds pi/2, so even an infinite residual costs little
-        assert abs(r[1]) <= np.sqrt(np.pi / 2) + 1e-12
-    else:
-        assert not np.isfinite(r[1])  # the step that produced it is still rejected
+def test_an_overflowing_finite_residual_scales_its_row_to_zero(loss):
+    _, scale = robust_loss._transform(np.array([1e200, 3.0]), loss, 1.0)
+    assert scale[0] == 0.0 and scale[1] > 0.0
+
+
+@pytest.mark.parametrize("loss", LOSSES)
+def test_a_non_finite_residual_stays_non_finite(loss):
+    """So the step that produced it is rejected, bounded losses included."""
+    r, scale = robust_loss._transform(np.array([-np.inf, np.nan, 3.0]), loss, 1.0)
+    assert not np.any(np.isfinite(r[:2])) and not np.any(np.isfinite(scale[:2]))
+    assert np.isfinite(r[2]) and np.isfinite(scale[2])
+
+
+@pytest.mark.parametrize("loss", LOSSES)
+@pytest.mark.parametrize("f_scale", [0.5, 2.0])
+def test_cost_is_scipys_robust_cost(loss, f_scale):
+    f = np.array([0.0, -0.3, 0.9, -2.5, 7.0, -40.0])
+    assert robust_loss.cost(f, loss, f_scale) == pytest.approx(
+        _scipy_cost(f, loss, f_scale), rel=1e-10)
+
+
+@pytest.mark.parametrize("loss", LOSSES)
+def test_the_jacobian_scale_is_the_one_scipy_returns(loss):
+    """scipy returns its loss-scaled Jacobian at the solution; ours matches it."""
+    rng = np.random.default_rng(3)
+    t = np.linspace(-1, 1, 40)
+    y = 2.0 * t + 0.5 + rng.normal(scale=0.05, size=t.size)
+    y[::9] += 6.0
+
+    def residuals(x):
+        return x[0] * t + x[1] - y
+
+    jac = np.stack([t, np.ones_like(t)], axis=1)
+    # scipy scales the Jacobian it is handed in place, so hand it a copy
+    result = least_squares(residuals, np.zeros(2), jac=lambda _x: jac.copy(),
+                           loss=loss, f_scale=0.2, xtol=1e-12, ftol=1e-12, gtol=1e-12)
+    problem = robust_loss.RobustProblem(residuals, None, loss, 0.2)
+    scaled = problem.jacobian_scale(result.x)[:, None] * jac
+    np.testing.assert_allclose(scaled, result.jac, rtol=1e-9, atol=1e-12)
+
+
+def test_the_blocks_at_an_evaluated_point_reuse_its_residuals():
+    calls = []
+
+    def residuals(x):
+        calls.append(np.copy(x))
+        return np.array([x[0] - 1.0, 3.0 * x[0]])
+
+    problem = robust_loss.RobustProblem(
+        residuals, lambda x: np.ones((1, 2, 1)), "cauchy", 1.0)
+    x = np.array([2.0])
+    problem.residuals(x)
+    problem.blocks(x)
+    assert len(calls) == 1
+    problem.blocks(np.array([2.5]))
+    assert len(calls) == 2
+    np.testing.assert_array_equal(problem.raw, [1.5, 7.5])
 
 
 def test_unknown_losses_are_refused():
     assert robust_loss.is_supported("linear") and robust_loss.is_supported("soft_l1")
     assert not robust_loss.is_supported("tukey")
     with pytest.raises(ValueError):
-        robust_loss.robustify(lambda x: x, lambda x: x, "tukey")
+        robust_loss.RobustProblem(lambda x: x, lambda x: x, "tukey")
     with pytest.raises(ValueError):
-        robust_loss.robustify(lambda x: x, lambda x: x, "huber", f_scale=0.0)
+        robust_loss.RobustProblem(lambda x: x, lambda x: x, "huber", f_scale=0.0)

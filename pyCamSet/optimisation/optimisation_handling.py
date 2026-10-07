@@ -7,6 +7,7 @@ from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy import sparse
 from scipy.optimize import least_squares, approx_fprime, OptimizeResult
 
 from typing import TYPE_CHECKING
@@ -185,10 +186,11 @@ def run_schur_bundle_adjustment(param_handler, loss_fn, bundle_jac, init_params,
     solver = SchurSolver(spec)
     blocks = param_handler.make_loss_blocks(threads)
     loss = param_handler.problem_opts.get("loss", "linear")
-    residuals = loss_fn
+    residuals, robust = loss_fn, None
     if loss != "linear":
         f_scale = float(param_handler.problem_opts.get("f_scale", 1.0))
-        residuals, blocks = robust_loss.robustify(loss_fn, blocks, loss, f_scale)
+        robust = robust_loss.RobustProblem(loss_fn, blocks, loss, f_scale)
+        residuals, blocks = robust.residuals, robust.blocks
         logger.info(f"Schur solver: {loss} loss, f_scale {f_scale:g}")
     logger.info(
         f"Schur solver: eliminating {spec.n_elim_blocks} blocks of "
@@ -197,17 +199,25 @@ def run_schur_bundle_adjustment(param_handler, loss_fn, bundle_jac, init_params,
         f"(from {init_params.size})"
     )
     with OptimisationProgress() as progress:
+        callback = progress.update
+        if robust is not None:
+            # the last residuals evaluated are the raw ones at the point just
+            # accepted, so the readout stays in pixels
+            def callback(iteration, cost, _transformed):
+                progress.update(iteration, cost, robust.raw)
         result = levenberg_marquardt(
             residuals, blocks, init_params, solver,
             max_iter=param_handler.problem_opts["max_nfev"],
             jac_csr=bundle_jac,
             verbose=param_handler.problem_opts["verbosity"] > 1,
-            callback=progress.update,
+            callback=callback,
         )
-    if residuals is not loss_fn:
-        # As scipy reports it: cost is the robust objective, fun the raw
-        # residuals every error statistic is computed from.
-        result.fun = loss_fn(result.x)
+    if robust is not None:
+        # As scipy reports a robust solve: cost is the robust objective, fun
+        # the raw residuals, and jac the raw Jacobian with scipy's row scale.
+        result.fun = robust.raw_at(result.x)
+        if result.jac is not None:
+            result.jac = sparse.diags_array(robust.jacobian_scale(result.x)) @ result.jac
     return result
 
 

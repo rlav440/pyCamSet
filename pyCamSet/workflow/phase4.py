@@ -16,6 +16,7 @@ import numpy as np
 from pyCamSet.utils.paths import long_path
 from pyCamSet.workflow.diagnostics import per_camera_mean_reprojection
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
+from pyCamSet.workflow.phase3 import solve_quality_gate
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
     make_run_id,
@@ -84,9 +85,14 @@ def run(params: dict,
         # produced it.
         artifacts["optimised_camset"] = str(camset_out)
 
+    quality_gate = (diagnostics.get("quality_gate") or {}) if error is None else {}
     metadata = {
         "run_id": run_id,
         "phase": "phase4",
+        "status": (
+            "failed" if error else
+            quality_gate.get("status", "incomplete")
+        ),
         "params": params,
         "diagnostics": diagnostics,
         "report": report,
@@ -145,6 +151,10 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
         raise RuntimeError("pyCamSet optimisation modules are not importable.")
 
     previous_cams = load_CameraSet(long_path(phase3_camset))
+    if phase3_run is not None and phase3_run.get("status") == "failed":
+        raise RuntimeError(
+            "The selected Phase 3 run failed; refusing to start Phase 4. "
+            "Re-run Phase 3 first.")
     selected = list(params.get("selected_cameras") or [])
     if selected and set(previous_cams.get_names()) != set(selected):
         raise RuntimeError(
@@ -155,12 +165,24 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     if previous_handler is None:
         raise RuntimeError(
             "Selected Phase 3 camset has no calibration handler metadata.")
+    previous_detection = getattr(previous_handler, "detection", None)
+    detection_names = set(getattr(previous_detection, "cam_names", []) or [])
+    if detection_names != set(previous_cams.get_names()):
+        raise RuntimeError(
+            "Selected Phase 3 observations do not cover the saved camera set; "
+            "refusing to run Phase 4 with silent camera loss.")
 
+    options = dict(params.get("problem_options") or {})
+    options.setdefault("fixed_pose", 0)
+    options.setdefault("ref_cam", 0)
+    options.setdefault("ref_pose", 0)
+    options.setdefault("outliers", "n")
+    options.setdefault("max_nfev", 100)
     handler, optimisation, out_cams, stats = solve(
         previous_cams, previous_handler.target, previous_handler.detection,
-        fixed_params=params["fixed_params"],
-        options=params["problem_options"],
-        threads=params["threads"],
+        fixed_params=params.get("fixed_params"),
+        options=options,
+        threads=int(params.get("threads", 1)),
     )
 
     # A fixed short filename, so a long source folder does not push the run
@@ -168,15 +190,28 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     camset_out = run_dir / "self_calibrated_cameras.camset"
     out_cams.save(camset_out)
 
+    # A Phase 4 result is not accepted merely because the solver returned.
+    # Reload the exact bytes written to disk and verify the camera identity
+    # before recording a quality disposition.
+    reloaded = load_CameraSet(long_path(camset_out))
+    if set(reloaded.get_names()) != set(previous_cams.get_names()):
+        raise RuntimeError(
+            "Phase 4 save/reload changed the active camera set; refusing "
+            "to publish a result with silent camera loss.")
+
     diagnostics = _diagnostics(
-        optimisation, handler, stats, phase3_run, log)
+        optimisation, handler, stats, phase3_run, log,
+        out_cams=out_cams, previous_cams=previous_cams,
+        params=params)
     report = getattr(out_cams, "calibration_report", None)
     return camset_out, diagnostics, (
         report.to_dict() if report is not None else None)
 
 
 def _diagnostics(optimisation, handler, stats: dict,
-                 phase3_run: Optional[dict], log: LogFn) -> dict:
+                 phase3_run: Optional[dict], log: LogFn,
+                 *, out_cams=None, previous_cams=None,
+                 params: Optional[dict] = None) -> dict:
     """The D4 series: how far the target moved, and whether it paid off."""
     # The errors and the solver's own account of the run are the calibration
     # summary's, printed by the solve itself.  What follows is what only this
@@ -196,12 +231,26 @@ def _diagnostics(optimisation, handler, stats: dict,
     fixed_indices = [int(i) for i in getattr(handler, "fixed_inds", [])]
     scale, displacement_mm = _target_shape_change(handler, optimisation, visible)
 
-    raw_initial = getattr(handler, "initial_per_im_error", None)
-    per_image_initial = (np.asarray(raw_initial, dtype=float)
-                         if raw_initial is not None else np.array([]))
+    per_image_initial = _initial_per_image_errors(handler, stats)
 
-    per_camera, _ = per_camera_mean_reprojection(
+    per_camera, residual_xy = per_camera_mean_reprojection(
         optimisation, handler, log, "D4.12")
+    detection_data = np.asarray(handler.get_detection_data(flatten=True))
+    per_image: dict[str, float] = {}
+    if detection_data.ndim == 2 and len(detection_data) == len(residual_xy):
+        residual_norm = np.linalg.norm(residual_xy, axis=1)
+        image_index = detection_data[:, 1].astype(int)
+        per_image = {
+            str(index): float(np.mean(residual_norm[image_index == index]))
+            for index in np.unique(image_index).tolist()
+        }
+    else:
+        log("Warning: D4.13 skipped (detections do not line up with residuals).")
+    quality_gate = _quality_gate(
+        optimisation, handler, stats, residual_xy,
+        initial_euclid, final_euclid, int(len(detection_data)),
+        out_cams=out_cams, previous_cams=previous_cams,
+        params=params, phase3_run=phase3_run)
 
     diagnostics = {
         "D4.1_n_free_target_points": int(np.sum(visible)),
@@ -210,6 +259,8 @@ def _diagnostics(optimisation, handler, stats: dict,
         "D4.3_per_image_initial_reprojection": per_image_initial.tolist(),
         "D4.3_initial_euclid_px": initial_euclid,
         "D4.3_final_euclid_px": final_euclid,
+        "D4.3_initial_reprojection_cost": stats.get("initial_reprojection_cost"),
+        "D4.3_final_reprojection_cost": stats.get("final_reprojection_cost"),
         "D4.4_vs_phase3_delta_px": improvement,
         "D4.5_gauge_scale_factor": scale,
         "D4.7_mean_target_displacement_mm": displacement_mm,
@@ -217,6 +268,8 @@ def _diagnostics(optimisation, handler, stats: dict,
         "D4.9_planarity_rms_mm": "available in backend special_plots",
         "D4.10_accuracy_precision": "available in Assess Calibration",
         "D4.12_per_camera_mean_reprojection": per_camera,
+        "D4.13_per_image_mean_reprojection": per_image,
+        "quality_gate": quality_gate,
     }
 
     log(f"D4.1  Free target points: {diagnostics['D4.1_n_free_target_points']}")
@@ -225,6 +278,159 @@ def _diagnostics(optimisation, handler, stats: dict,
     log(f"D4.5  Gauge scale factor: {scale:.6f}")
     log(f"D4.7  Mean target displacement: {displacement_mm:.5f} mm")
     return diagnostics
+
+
+def _initial_per_image_errors(handler, stats: dict) -> np.ndarray:
+    """Return initial pose errors even when a handler exposes an empty cache."""
+    raw_initial = getattr(handler, "initial_per_im_error", None)
+    if raw_initial is not None:
+        values = np.asarray(raw_initial, dtype=float)
+        if values.size:
+            return values
+    return np.asarray([
+        row.get("initial_error_px", float("nan"))
+        for row in stats.get("per_pose_initial_error_px", [])
+    ], dtype=float)
+
+
+def _quality_gate(optimisation, handler, stats: dict,
+                  residual_xy: np.ndarray, initial_euclid: float,
+                  final_euclid: float, observation_count: int, *,
+                  out_cams=None, previous_cams=None,
+                  params: Optional[dict] = None,
+                  phase3_run: Optional[dict] = None) -> dict:
+    """Fail closed when Phase 4 produced no scientifically usable result.
+
+    ``phase3_run`` is the run the starting camset came from, or None when the
+    caller started from a camset alone; only a given run is checked for a
+    complete status and a run id.
+    """
+    base = solve_quality_gate(
+        optimisation, handler, stats, residual_xy, initial_euclid,
+        final_euclid, observation_count)
+    blocking: list[str] = list(base["blocking_flags"])
+    initial_cost = float(stats.get("initial_reprojection_cost", float("nan")))
+    final_cost = float(stats.get("final_reprojection_cost", float("nan")))
+    objective_cost_reduced = bool(
+        np.isfinite(initial_cost) and np.isfinite(final_cost)
+        and final_cost < initial_cost)
+    phase3_provenance_complete = None
+    if phase3_run is not None:
+        phase3_status = phase3_run.get("status")
+        phase3_provenance_complete = False
+        if phase3_status != "complete":
+            blocking.append(
+                f"Phase 3 input disposition was {phase3_status}; re-run it before hand-off")
+        elif not str(phase3_run.get("run_id") or "").strip():
+            blocking.append("Phase 3 input run has no run id")
+        else:
+            phase3_provenance_complete = True
+
+    detection_data = np.asarray(handler.get_detection_data(flatten=True))
+    image_indices = (detection_data[:, 1].astype(int)
+                     if detection_data.ndim == 2 and detection_data.shape[1] > 1
+                     else np.array([], dtype=int))
+    expected_images = int(getattr(getattr(handler, "detection", None), "max_ims", 0))
+    observed_images = sorted(set(image_indices.tolist()))
+    # ``max_ims`` is the highest global image index plus one, not the number
+    # of observed images.  Treat holes as explicitly missing observations;
+    # silently pretending the list is contiguous would hide them from the GUI.
+    # An image the solve itself excluded -- no usable target pose, marked in
+    # the handler's missing_poses and reported in its summary -- is not such
+    # a hole: it is listed as excluded, and only unexplained holes block.
+    marked = getattr(handler, "missing_poses", None)
+    marked = (np.asarray(marked, dtype=bool) if marked is not None
+              else np.zeros(0, dtype=bool))
+    excluded_images = (sorted(int(i) for i in np.flatnonzero(marked))
+                       if marked.size == expected_images else [])
+    missing_images = sorted(
+        set(range(expected_images)) - set(observed_images) - set(excluded_images))
+    image_coverage = bool(expected_images and not missing_images)
+    if expected_images and not image_coverage:
+        blocking.append("image observation graph has missing image indices")
+
+    gauge = {
+        "fixed_target_point_count": len(getattr(handler, "fixed_inds", [])),
+        "fixed_target_point_indices": [int(i) for i in getattr(handler, "fixed_inds", [])],
+        "fixed_pose": (getattr(handler, "problem_opts", {}) or {}).get("fixed_pose"),
+        "ref_cam": (getattr(handler, "problem_opts", {}) or {}).get("ref_cam"),
+        "ref_pose": (getattr(handler, "problem_opts", {}) or {}).get("ref_pose"),
+    }
+    if gauge["fixed_target_point_count"] < 3:
+        blocking.append("target gauge does not fix three non-collinear points")
+    if gauge["fixed_pose"] is None:
+        blocking.append("pose gauge has no fixed reference pose")
+
+    camera_quality = (_camera_quality(out_cams) if out_cams is not None else {
+        "physically_plausible": True, "available": False, "cameras": {}})
+    if not camera_quality["physically_plausible"]:
+        blocking.append("camera intrinsics, distortion, or extrinsics are implausible")
+
+    return {
+        **base,
+        "status": "complete" if not blocking else "incomplete",
+        "blocking_flags": blocking,
+        "phase3_provenance_complete": phase3_provenance_complete,
+        "objective_cost_reduced": objective_cost_reduced,
+        "image_coverage": image_coverage,
+        "observed_images": observed_images,
+        "missing_images": missing_images,
+        "excluded_images": excluded_images,
+        "expected_image_count": expected_images,
+        "gauge": gauge,
+        "camera_quality": camera_quality,
+        "parameter_drift": _camera_drift(previous_cams, out_cams),
+        "fixed_params": sorted((params or {}).get("fixed_params") or {}),
+        "lockbox": {"enabled": False, "reason": "Phase 4 self-calibration does not apply Phase 3 lockboxes"},
+    }
+
+
+def _camera_quality(cams) -> dict:
+    """Check saved camera parameters without assuming a particular lens model."""
+    if cams is None:
+        return {"physically_plausible": False, "cameras": {}}
+    details: dict[str, dict] = {}
+    plausible = True
+    for cam in cams:
+        intrinsic = np.asarray(getattr(cam, "intrinsic", []), dtype=float)
+        distortion = np.asarray(getattr(cam, "distortion_coefs", []), dtype=float)
+        extrinsic = np.asarray(getattr(cam, "extrinsic", []), dtype=float)
+        finite = bool(np.all(np.isfinite(intrinsic)) and np.all(np.isfinite(distortion))
+                      and np.all(np.isfinite(extrinsic)))
+        shape_ok = intrinsic.shape == (3, 3) and extrinsic.shape == (4, 4)
+        focal_ok = bool(shape_ok and intrinsic[0, 0] > 0 and intrinsic[1, 1] > 0)
+        rotation = extrinsic[:3, :3] if shape_ok else np.zeros((3, 3))
+        rotation_ok = bool(shape_ok and np.isclose(np.linalg.det(rotation), 1.0, atol=0.25)
+                           and np.linalg.norm(rotation.T @ rotation - np.eye(3)) < 0.25)
+        camera_ok = finite and shape_ok and focal_ok and rotation_ok
+        plausible &= camera_ok
+        details[str(getattr(cam, "name", len(details)))] = {
+            "finite": finite,
+            "intrinsic_shape": list(intrinsic.shape),
+            "extrinsic_shape": list(extrinsic.shape),
+            "positive_focal_lengths": focal_ok,
+            "proper_rotation": rotation_ok,
+        }
+    return {"physically_plausible": plausible, "cameras": details}
+
+
+def _camera_drift(previous_cams, out_cams) -> dict:
+    """Report relative parameter movement between Phase 3 and Phase 4."""
+    if previous_cams is None or out_cams is None:
+        return {"available": False, "cameras": {}}
+    old_names = set(previous_cams.get_names())
+    new_names = set(out_cams.get_names())
+    values: dict[str, dict[str, float]] = {}
+    for name in sorted(old_names & new_names):
+        old = previous_cams[name]
+        new = out_cams[name]
+        values[name] = {}
+        for label in ("intrinsic", "distortion_coefs", "extrinsic"):
+            before = np.asarray(getattr(old, label), dtype=float)
+            after = np.asarray(getattr(new, label), dtype=float)
+            denominator = max(float(np.linalg.norm(before)), 1e-12)
+            values[name][label] = float(np.linalg.norm(after - before) / denominator)
+    return {"available": True, "cameras": values}
 
 
 def _target_shape_change(handler, optimisation, visible) -> tuple[float, float]:

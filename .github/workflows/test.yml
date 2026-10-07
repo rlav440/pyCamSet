@@ -1,10 +1,12 @@
 name: tests
 
 on:
-  # Branches only: a tag runs this matrix once, through the release
-  # workflow, which will not publish what the matrix has not passed.
+  # The long-lived branches only: any other branch is tested through its pull
+  # request, so a push there does not run the matrix twice.  A tag runs it
+  # once, through the release workflow, which will not publish what the matrix
+  # has not passed.
   push:
-    branches: ["**"]
+    branches: [master, development]
   pull_request:
   workflow_call:
 
@@ -25,24 +27,20 @@ jobs:
     strategy:
       # Report every platform's result, not just the first failure.
       fail-fast: false
+      # One job per axis rather than the full product: Linux carries both
+      # Python versions, both OpenCV majors and the lean install, while
+      # Windows and macOS each run once on the newest combination.  macOS
+      # bills at ten times the Linux rate, so it runs only on master and on
+      # release tags.
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.11", "3.12"]
-        # opencv-python carries no upper bound, so pip resolves it to 5.x
-        # everywhere.  Pin the major version per job instead of letting the
-        # resolver decide: without the explicit 4.x entries below, the
-        # supported floor would stop being exercised the day 5.x shipped.
+        os: ${{ fromJSON((github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')) && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
+        python: ["3.12"]
         opencv: [">=5"]
         include:
-          - {os: ubuntu-latest, python: "3.12", opencv: "<5"}
-          - {os: windows-latest, python: "3.12", opencv: "<5"}
-          - {os: macos-14, python: "3.12", opencv: "<5"}
-          # One job keeps the lean install of requirements_core.txt honest.
-          # It adds a key to the ubuntu/3.11 combination above rather than
-          # making a tenth job.  Lean is orthogonal to the OpenCV major, so
-          # it is not attached to the 4.x entries: the GUI is worth testing
-          # against both majors, and the no-Qt path only needs one job.
           - {os: ubuntu-latest, python: "3.11", opencv: ">=5", lean: true}
+          # opencv-python carries no upper bound, so pip resolves it to 5.x;
+          # this job keeps the supported 4.x floor exercised.
+          - {os: ubuntu-latest, python: "3.12", opencv: "<5"}
 
     steps:
       - uses: actions/checkout@v7

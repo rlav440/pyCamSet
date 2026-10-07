@@ -13,7 +13,8 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-#: Base dependencies the lean install leaves out.
+#: Base dependencies the lean install leaves out.  pyvistaqt stays in: it is
+#: small, and imports only when the GUI embeds a 3D view.
 EXCLUDED = {"PySide6"}
 
 HEADER = """\

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.theme import set_text_role
 from pyCamSet.workflow.lockbox_geometry import (
     CameraEditRecord,
     PlaneGroup,
@@ -213,6 +215,7 @@ class Phase3LockboxEditor(QDialog):
         self._o3d_label_ids: list[object] = []
         self._o3d_box_targets: dict[str, dict[str, np.ndarray]] = {}
         self._o3d_apply_requested = False
+        self._o3d_syncing_style_controls = False
         self._o3d_visual_settings = {
             'view_mode': 'Planetary',
             'box_picking': False,  # left-click = S (select), right-click = R (reference)
@@ -224,6 +227,7 @@ class Phase3LockboxEditor(QDialog):
             'lighting': 'Medium shadows',
             'show_lockbox': False,
         }
+        self._o3d_visual_settings = self._load_saved_open3d_style()
 
         self._initialise_states()
         self._build_ui()
@@ -357,7 +361,7 @@ class Phase3LockboxEditor(QDialog):
         """Build the three-panel editor layout."""
         root = QVBoxLayout(self)
         banner = QLabel("Editing lockbox prior centres only. Original source camset will not be modified.")
-        banner.setStyleSheet("font-weight: bold; color: #9a5b00;")
+        set_text_role(banner, "warning")
         root.addWidget(banner)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -402,6 +406,26 @@ class Phase3LockboxEditor(QDialog):
             self._view_3d_btn.setText("View in 3D (Open3D not available)")
         self._view_3d_btn.clicked.connect(self._open_open3d_view)
         view_3d_row.addWidget(self._view_3d_btn)
+        self._export_csv_btn = QPushButton("Export centres CSV")
+        self._export_csv_btn.setToolTip(
+            "Export original and edited camera centres and object centre. "
+            "Values use source target-frame units; physical units are not inferred."
+        )
+        self._export_csv_btn.clicked.connect(self._export_centres_csv_dialog)
+        view_3d_row.addWidget(self._export_csv_btn)
+        self._export_png_btn = QPushButton("Save preview PNG")
+        self._export_png_btn.setEnabled(bool(_MATPLOTLIB_OK and not _OPEN3D_OK))
+        self._export_png_btn.setToolTip(
+            "Save the Matplotlib preview as PNG. Open3D native-window capture is not supported here."
+        )
+        self._export_png_btn.clicked.connect(self._export_preview_png_dialog)
+        view_3d_row.addWidget(self._export_png_btn)
+        self._export_ply_btn = QPushButton("Export points PLY")
+        self._export_ply_btn.setToolTip(
+            "Export camera and object-centre points only; camera wireframes, axes and labels are not included."
+        )
+        self._export_ply_btn.clicked.connect(self._export_centres_ply_dialog)
+        view_3d_row.addWidget(self._export_ply_btn)
         view_3d_row.addStretch()
         centre_layout.addLayout(view_3d_row)
 
@@ -666,6 +690,144 @@ class Phase3LockboxEditor(QDialog):
         self.canvas.draw_idle()
         if self._o3d_scene_widget is not None:
             self._refresh_open3d_native_view()
+
+    def _export_centres_csv_dialog(self) -> None:
+        """Export source-backed camera centres without modifying the solve."""
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export lockbox centres", str(self.workspace_path / "lockbox_centres.csv"),
+            "CSV files (*.csv)",
+        )
+        if not path:  # A cancelled dialog is a no-op.
+            return
+        try:
+            self._write_centres_csv(Path(path))
+        except Exception as exc:
+            QMessageBox.critical(self, "CSV export failed", str(exc))
+
+    def _write_centres_csv(self, path: Path) -> None:
+        """Write camera centre provenance and coordinates in target-frame units."""
+        import csv
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["source_camset", str(self.source_camset_path)])
+            writer.writerow(["coordinate_units", "source target-frame units; physical unit unspecified"])
+            writer.writerow(["kind", "name", "x", "y", "z"])
+            writer.writerow(["object_centre", self.centre_definition["label"], *self.object_centre.tolist()])
+            for name, state in self.states.items():
+                writer.writerow(["original_camera_centre", name, *state.original_center.tolist()])
+                writer.writerow(["edited_camera_centre", name, *state.edited_center.tolist()])
+
+    def _export_centres_ply_dialog(self) -> None:
+        """Export the source-backed point geometry, not the full Open3D presentation scene."""
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export lockbox centre points", str(self.workspace_path / "lockbox_centres.ply"),
+            "PLY point cloud (*.ply)",
+        )
+        if not path:  # A cancelled dialog is a no-op.
+            return
+        try:
+            self._write_centres_ply(Path(path))
+        except Exception as exc:
+            QMessageBox.critical(self, "PLY export failed", str(exc))
+
+    def _write_centres_ply(self, path: Path) -> None:
+        """Write camera/object centres as actual PLY vertices with unit provenance."""
+        vertices = [self.object_centre]
+        for state in self.states.values():
+            vertices.extend((state.original_center, state.edited_center))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="ascii", newline="\n") as stream:
+            stream.write("ply\nformat ascii 1.0\n")
+            stream.write(f"comment source_json {json.dumps(str(self.source_camset_path), ensure_ascii=True)}\n")
+            stream.write("comment coordinates use source target-frame units; physical unit unspecified\n")
+            stream.write(f"element vertex {len(vertices)}\n")
+            stream.write("property double x\nproperty double y\nproperty double z\nend_header\n")
+            for point in vertices:
+                stream.write("{:.17g} {:.17g} {:.17g}\n".format(*point))
+
+    def _export_preview_png_dialog(self) -> None:
+        """Save the actual Matplotlib preview; never claim an Open3D capture."""
+        from PySide6.QtWidgets import QFileDialog
+
+        if self.figure is None:
+            QMessageBox.information(self, "PNG export unavailable", "No Matplotlib preview is realised; Open3D native-window capture is not supported.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save lockbox preview", str(self.workspace_path / "lockbox_preview.png"),
+            "PNG image (*.png)",
+        )
+        if not path:  # A cancelled dialog is a no-op.
+            return
+        try:
+            self.figure.savefig(Path(path), format="png", dpi=160)
+        except Exception as exc:
+            QMessageBox.critical(self, "PNG export failed", str(exc))
+
+    def _open_open3d_png_dialog(self) -> None:
+        """Choose a new PNG path in Open3D's native event loop; cancellation is a no-op.
+
+        Open3D 0.19's FileDialog.set_path() pre-fills the filename but does not
+        reliably refresh the Save button state on every backend. Start in the
+        workspace directory instead and ask the user to enter a new filename.
+        """
+        dialog = _o3d_gui.FileDialog(
+            _o3d_gui.FileDialog.SAVE,
+            "Save Open3D scene PNG (enter a new filename)",
+            self._o3d_window.theme,
+        )
+        dialog.add_filter(".png", "PNG image")
+        dialog.set_path(str(self.workspace_path))
+        dialog.set_on_cancel(lambda: self._o3d_window.close_dialog())
+        dialog.set_on_done(self._save_open3d_scene_png)
+        self._o3d_window.show_dialog(dialog)
+
+    def _save_open3d_scene_png(self, selected_path: str) -> None:
+        """Capture the currently displayed Open3D scene, refusing silent replacement."""
+        self._o3d_window.close_dialog()
+        output_path = Path(selected_path)
+        if output_path.suffix.lower() != ".png":
+            output_path = output_path.with_suffix(".png")
+        if output_path.exists():
+            message = (
+                f"PNG not saved: {output_path.name} already exists; "
+                "choose a new filename.")
+            self._set_open3d_export_status(message)
+            self._o3d_window.show_message_box(
+                "PNG not saved",
+                f"{message}\n\nThis export will not overwrite existing files. "
+                "Choose a different filename and try again.",
+            )
+            return
+        try:
+            scene = self._o3d_scene_widget.scene.scene
+
+            def capture_complete(image) -> None:
+                try:
+                    if not _o3d.io.write_image(str(output_path), image):
+                        raise OSError("Open3D could not write the rendered PNG.")
+                    message = f"Saved Open3D scene PNG: {output_path}"
+                except Exception as exc:
+                    message = f"PNG export failed: {exc}"
+                _o3d_gui.Application.instance.post_to_main_thread(
+                    self._o3d_window, lambda: self._set_open3d_export_status(message))
+
+            self._set_open3d_export_status("Rendering the current Open3D scene to PNG…")
+            scene.render_to_image(capture_complete)
+        except Exception as exc:
+            self._set_open3d_export_status(f"PNG export failed: {exc}")
+
+    def _set_open3d_export_status(self, message: str) -> None:
+        """Show export status in the native editor window and request a redraw."""
+        if self._o3d_status_label is not None:
+            self._o3d_status_label.text = message
+        if self._o3d_window is not None:
+            self._o3d_window.post_redraw()
 
     def _pv_polydata_to_o3d_lineset(self, pv_mesh) -> object:
         """Convert a PyVista PolyData triangle mesh to an Open3D LineSet (wireframe).
@@ -949,9 +1111,29 @@ class Phase3LockboxEditor(QDialog):
         hist_sect.add_child(apply_discard_row)
         self._o3d_panel.add_child(hist_sect)
 
+        # The native scene exposes a GUI-only render_to_image callback. This
+        # captures the actual SceneWidget camera, unlike a reconstructed plot.
+        save_view_button = _o3d_gui.Button("Save 3D view PNG")
+        save_view_button.tooltip = "Capture the current Open3D scene view as a PNG (UI controls are not included)."
+        save_view_button.set_on_clicked(self._open_open3d_png_dialog)
+        self._o3d_panel.add_child(save_view_button)
+
+        style_row = _o3d_gui.Horiz(0.3 * em, tight)
+        save_style_button = _o3d_gui.Button("Save view style")
+        save_style_button.set_on_clicked(self._save_open3d_style)
+        load_style_button = _o3d_gui.Button("Load saved style")
+        load_style_button.set_on_clicked(self._load_open3d_style_from_ui)
+        style_row.add_child(save_style_button)
+        style_row.add_child(load_style_button)
+        self._o3d_panel.add_child(style_row)
+
         # ── View Settings (collapsed by default — saves vertical space) ─
         vis_sect = _o3d_gui.CollapsableVert("View Settings", 0.15 * em, margins)
         vis_sect.set_is_open(False)
+        vis_sect.add_child(_o3d_gui.Label(
+            "Native Open3D supports background, ground, axes, lighting and mouse mode here. "
+            "Managed point/line size, scalar legend and camera presets are unavailable."
+        ))
 
         self._o3d_view_mode_combo = _o3d_gui.Combobox()
         for item in ["Planetary", "Arcball", "Fly", "Model", "Sun", "Environment"]:
@@ -1157,15 +1339,22 @@ class Phase3LockboxEditor(QDialog):
             label_id = self._o3d_scene_widget.add_3d_label((center + offset).tolist(), face_text)
             self._o3d_label_ids.append(label_id)
 
+    _O3D_BACKGROUNDS = {
+        'Dark calibration': [0.08, 0.10, 0.16, 1.0],
+        'Neutral grey': [0.22, 0.22, 0.24, 1.0],
+        'Light studio': [0.82, 0.84, 0.88, 1.0],
+    }
+
+    def _o3d_background_rgb(self) -> list[float]:
+        """The chosen Open3D background as 0-1 RGB."""
+        name = (getattr(self, "_o3d_visual_settings", None) or {}).get("background")
+        return self._O3D_BACKGROUNDS.get(name, self._O3D_BACKGROUNDS['Dark calibration'])[:3]
+
     def _apply_open3d_visual_settings(self) -> None:
         if self._o3d_scene_widget is None:
             return
         scene = self._o3d_scene_widget.scene
-        bg_map = {
-            'Dark calibration': [0.08, 0.10, 0.16, 1.0],
-            'Neutral grey': [0.22, 0.22, 0.24, 1.0],
-            'Light studio': [0.82, 0.84, 0.88, 1.0],
-        }
+        bg_map = self._O3D_BACKGROUNDS
         plane_map = {
             'XZ floor': _o3d_rendering.Scene.GroundPlane.XZ,
             'XY backplane': _o3d_rendering.Scene.GroundPlane.XY,
@@ -1192,6 +1381,85 @@ class Phase3LockboxEditor(QDialog):
         scene.show_axes(bool(self._o3d_visual_settings['show_axes']))
         scene.set_lighting(lighting_map[self._o3d_visual_settings['lighting']], np.asarray([0.577, -0.577, -0.577], dtype=np.float32))
         self._o3d_scene_widget.set_view_controls(view_map[self._o3d_visual_settings['view_mode']])
+
+    def _open3d_style_path(self) -> Path:
+        """Return the per-visual style location outside the source workspace."""
+        from pyCamSet.gui.preferences import config_directory
+
+        visual_id = "phase3:lockbox-open3d"
+        digest = hashlib.sha256(visual_id.encode("utf-8")).hexdigest()[:16]
+        return config_directory() / "visual-styles" / f"open3d-{digest}.json"
+
+    def _load_saved_open3d_style(self) -> dict:
+        """Load only native Open3D options; reject PyVista-only fields explicitly."""
+        path = self._open3d_style_path()
+        if not path.is_file():
+            return self._o3d_visual_settings
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+            if (not isinstance(document, dict)
+                    or set(document) != {"schema", "version", "visual_id", "style"}
+                    or document["schema"] != "pycamset.open3d-view-style"
+                    or isinstance(document["version"], bool)
+                    or document["version"] != 1
+                    or document["visual_id"] != "phase3:lockbox-open3d"):
+                raise ValueError("Unsupported Open3D style document")
+            style = document["style"]
+            allowed = {"view_mode", "show_skybox", "show_ground", "ground_plane",
+                       "show_axes", "background", "lighting", "show_lockbox"}
+            if not isinstance(style, dict) or set(style) != allowed:
+                raise ValueError("Open3D style has unsupported or missing settings")
+            if (style["view_mode"] not in {"Planetary", "Arcball", "Fly", "Model", "Sun", "Environment"}
+                    or style["ground_plane"] not in {"XZ floor", "XY backplane", "YZ sideplane"}
+                    or style["background"] not in {"Dark calibration", "Neutral grey", "Light studio"}
+                    or style["lighting"] not in {"Medium shadows", "Soft shadows", "Hard shadows", "Dark shadows", "No shadows"}
+                    or any(not isinstance(style[key], bool) for key in
+                           ("show_skybox", "show_ground", "show_axes", "show_lockbox"))):
+                raise ValueError("Open3D style contains an unsupported value")
+            return {**self._o3d_visual_settings, **style}
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return self._o3d_visual_settings
+
+    def _save_open3d_style(self) -> None:
+        """Persist only the native renderer's supported presentation settings."""
+        from pyCamSet.gui.preferences import config_directory
+
+        style = {key: self._o3d_visual_settings[key] for key in (
+            "view_mode", "show_skybox", "show_ground", "ground_plane",
+            "show_axes", "background", "lighting", "show_lockbox")}
+        path = self._open3d_style_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            document = {"schema": "pycamset.open3d-view-style", "version": 1,
+                        "visual_id": "phase3:lockbox-open3d", "style": style}
+            path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n",
+                            encoding="utf-8")
+            self._set_open3d_export_status("Saved Open3D view style.")
+        except OSError as exc:
+            self._set_open3d_export_status(f"Open3D style not saved: {exc}")
+
+    def _load_open3d_style_from_ui(self) -> None:
+        """Reload the per-visual style and refresh the same scene used by PNG capture."""
+        self._o3d_visual_settings = self._load_saved_open3d_style()
+        self._sync_open3d_style_controls()
+        self._apply_open3d_visual_settings()
+        self._refresh_open3d_native_view(reset_camera=False)
+
+    def _sync_open3d_style_controls(self) -> None:
+        """Reflect persisted style values in the controls without firing edits."""
+        self._o3d_syncing_style_controls = True
+        try:
+            settings = self._o3d_visual_settings
+            self._o3d_view_mode_combo.selected_text = settings['view_mode']
+            self._o3d_ground_cb.checked = bool(settings['show_ground'])
+            self._o3d_ground_combo.selected_text = settings['ground_plane']
+            self._o3d_skybox_cb.checked = bool(settings['show_skybox'])
+            self._o3d_axes_cb.checked = bool(settings['show_axes'])
+            self._o3d_lockbox_cb.checked = bool(settings['show_lockbox'])
+            self._o3d_background_combo.selected_text = settings['background']
+            self._o3d_lighting_combo.selected_text = settings['lighting']
+        finally:
+            self._o3d_syncing_style_controls = False
 
     def _refresh_open3d_native_view(self, reset_camera: bool = False) -> None:
         if self._o3d_scene_widget is None:
@@ -1224,9 +1492,11 @@ class Phase3LockboxEditor(QDialog):
             pass
         try:
             cam_meshes, view_cones = self.working_camset.get_camera_meshes(viewcone=0.15, scale=cam_scale)
+            from pyCamSet.utils.visualisation import contrast_colours
+            frustum_colour = list(contrast_colours(self._o3d_background_rgb())[0])
             for i, mesh in enumerate(cam_meshes):
                 ls = self._pv_polydata_to_o3d_lineset(mesh)
-                ls.paint_uniform_color([0.0, 0.0, 0.0])
+                ls.paint_uniform_color(frustum_colour)
                 scene.add_geometry(f"edited_{i}", ls, line_mat)
             for i, vc in enumerate(view_cones):
                 ls = self._pv_polydata_to_o3d_lineset(vc)
@@ -1299,6 +1569,8 @@ class Phase3LockboxEditor(QDialog):
         self.plane_edit.setText(self._o3d_plane_edit.text_value)
 
     def _on_o3d_view_mode_changed(self, text: str, index: int) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         del index
         self._o3d_visual_settings['view_mode'] = text
         self._apply_open3d_visual_settings()
@@ -1308,37 +1580,52 @@ class Phase3LockboxEditor(QDialog):
         self._o3d_visual_settings['box_picking'] = bool(checked)
 
     def _on_o3d_show_ground_changed(self, checked: bool) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         self._o3d_visual_settings['show_ground'] = bool(checked)
         self._apply_open3d_visual_settings()
         self._o3d_window.post_redraw()
 
     def _on_o3d_ground_plane_changed(self, text: str, index: int) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         del index
         self._o3d_visual_settings['ground_plane'] = text
         self._apply_open3d_visual_settings()
         self._o3d_window.post_redraw()
 
     def _on_o3d_show_skybox_changed(self, checked: bool) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         self._o3d_visual_settings['show_skybox'] = bool(checked)
         self._apply_open3d_visual_settings()
         self._o3d_window.post_redraw()
 
     def _on_o3d_show_axes_changed(self, checked: bool) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         self._o3d_visual_settings['show_axes'] = bool(checked)
         self._apply_open3d_visual_settings()
         self._o3d_window.post_redraw()
 
     def _on_o3d_show_lockbox_changed(self, checked: bool) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         self._o3d_visual_settings['show_lockbox'] = bool(checked)
         self._refresh_open3d_native_view()
 
     def _on_o3d_background_changed(self, text: str, index: int) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         del index
         self._o3d_visual_settings['background'] = text
-        self._apply_open3d_visual_settings()
+        # Rebuild, not just repaint: the frustum colour follows the background.
+        self._refresh_open3d_native_view()
         self._o3d_window.post_redraw()
 
     def _on_o3d_lighting_changed(self, text: str, index: int) -> None:
+        if self._o3d_syncing_style_controls:
+            return
         del index
         self._o3d_visual_settings['lighting'] = text
         self._apply_open3d_visual_settings()

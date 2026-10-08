@@ -5,13 +5,12 @@ import threading
 
 logger = logging.getLogger(__name__)
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 import numpy as np
 from cv2 import aruco
 import cv2
 from PIL import Image
 import svgwrite
-from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 from pyCamSet.calibration_targets.core import (
@@ -37,8 +36,19 @@ from pyCamSet.calibration_targets.markers.aruco2 import (
 )
 from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
 from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
-from pyCamSet.cameras import Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
 from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform, downsample_valid
+
+# The cameras and matplotlib are imported where they are used, not here:
+# importing a target must not import pyvista, numba and matplotlib with it
+# (see core.abstract_target).  The names stay attributes of this module.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import Camera
+
+__getattr__ = lazy_attributes(__name__, {
+    "Camera": ("pyCamSet.cameras", "Camera"),
+    "plt": ("matplotlib.pyplot", None),
+})
 
 #: The smallest face a cube can have.  Two is where OpenCV stops building a
 #: board at all -- below it OpenCV does not raise a catchable error, it

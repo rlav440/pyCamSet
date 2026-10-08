@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 import logging
 from pathlib import Path
 
@@ -39,7 +40,17 @@ from pyCamSet.calibration_targets.markers.gridboard_layout import (
     rasterise_rectangles,
     rectangles_svg_path,
 )
-from pyCamSet.cameras import Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
+
+# The cameras are imported where they are used, not here: importing a
+# target must not import pyvista, numba and matplotlib with it (see
+# core.abstract_target).  The names stay attributes of this module.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import Camera
+
+__getattr__ = lazy_attributes(__name__, {
+    "Camera": ("pyCamSet.cameras", "Camera"),
+})
 
 #: The smallest board aruco2's own layout maths tolerates -- a 1x1 grid board
 #: has no ambiguity in its corner ids, but "at least 2 markers each way" is

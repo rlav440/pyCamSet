@@ -4,19 +4,34 @@ from pyCamSet.utils.gui_safety import refuse_window_inside_qt
 from PIL import Image, ImageDraw
 import cv2
 from pyCamSet.utils.general_utils import h_tform
-try:
-    import pyvista as pv
-    _PYVISTA_OK = True
-except ImportError:
-    pv = None
-    _PYVISTA_OK = False
-from pyCamSet.optimisation.compiled_helpers import n_htform_broadcast_prealloc, n_estimate_rigid_transform
+from pyCamSet.utils.lazy_imports import lazy_attributes
 
-from matplotlib import pyplot as plt
+# pyvista (with VTK), numba and matplotlib are imported where they are used.
+# Every target is built from this module, and a target that is only ever
+# asked to find itself in an image -- or folded from transforms already
+# worked out, as every shipped one is -- needs none of them.  The names this
+# module used to import stay its attributes.
+__getattr__ = lazy_attributes(__name__, {
+    "pv": ("pyvista", None),
+    "plt": ("matplotlib.pyplot", None),
+    "n_htform_broadcast_prealloc": (
+        "pyCamSet.optimisation.compiled_helpers", "n_htform_broadcast_prealloc"),
+    "n_estimate_rigid_transform": (
+        "pyCamSet.optimisation.compiled_helpers", "n_estimate_rigid_transform"),
+})
+
+
+def _pyvista():
+    """pyvista, which drawing or generating a shape needs."""
+    try:
+        import pyvista
+    except ImportError as exc:
+        raise ImportError("pyvista is required for shape generation.") from exc
+    return pyvista
+
 
 def make_shape(shape_name, size=None):
-    if not _PYVISTA_OK:
-        raise ImportError("pyvista is required for shape generation.")
+    pv = _pyvista()
     if shape_name == "cube":
         return pv.Cube(x_length=size, y_length=size, z_length=size)
     elif shape_name == "Icosahedron":
@@ -46,6 +61,8 @@ def make_tforms(base_face, shape):
     """
     #take the face corners and add them 
     #try assume the face is the right shape: push the  
+    from pyCamSet.optimisation.compiled_helpers import n_estimate_rigid_transform
+
     size = np.max(base_face[:, 1]) -  np.min(base_face[:, 1])
     polyhedra: pv.PolyData = make_shape(shape, size)
     poly_points = polyhedra.points
@@ -115,6 +132,7 @@ class FaceToShape:
         if isinstance(face_corners, list):
             face_corners = np.array(face_corners)
 
+        pv = _pyvista()
         if face_corners.ndim == 2: # support a single face input for easy use 
             nfaces = self.ur_ftform.shape[0]
             face_corners = np.tile(face_corners[None, ...], [nfaces, 1, 1])

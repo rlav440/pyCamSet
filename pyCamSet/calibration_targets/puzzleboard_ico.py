@@ -27,6 +27,7 @@ the many patches a face shows at once, not in the margin of any one of them.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 import logging
 from pathlib import Path
 
@@ -58,7 +59,17 @@ from pyCamSet.calibration_targets.polyhedra import (
     make_icosahedral,
 )
 from pyCamSet.calibration_targets.puzzleboard import _CODE_FIELD, _CODE_SIZE
-from pyCamSet.cameras import Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
+
+# The cameras are imported where they are used, not here: importing a
+# target must not import pyvista, numba and matplotlib with it (see
+# core.abstract_target).  The names stay attributes of this module.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import Camera
+
+__getattr__ = lazy_attributes(__name__, {
+    "Camera": ("pyCamSet.cameras", "Camera"),
+})
 
 logger = logging.getLogger(__name__)
 

@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from pyCamSet.utils.gui_safety import refuse_window_inside_qt
@@ -10,15 +12,25 @@ from pyCamSet.utils.lazy_imports import lazy_attributes
 # Every target is built from this module, and a target that is only ever
 # asked to find itself in an image -- or folded from transforms already
 # worked out, as every shipped one is -- needs none of them.  The names this
-# module used to import stay its attributes.
-__getattr__ = lazy_attributes(__name__, {
+# module used to import stay its attributes, ``pv`` still ``None`` without
+# pyvista and ``_PYVISTA_OK`` still saying which.
+if TYPE_CHECKING:
+    import pyvista as pv
+
+_lazy_attribute = lazy_attributes(__name__, {
     "pv": ("pyvista", None),
     "plt": ("matplotlib.pyplot", None),
     "n_htform_broadcast_prealloc": (
         "pyCamSet.optimisation.compiled_helpers", "n_htform_broadcast_prealloc"),
     "n_estimate_rigid_transform": (
         "pyCamSet.optimisation.compiled_helpers", "n_estimate_rigid_transform"),
-})
+}, optional={"pv"})
+
+
+def __getattr__(name):
+    if name == "_PYVISTA_OK":
+        return _lazy_attribute("pv") is not None
+    return _lazy_attribute(name)
 
 
 def _pyvista():
@@ -64,7 +76,7 @@ def make_tforms(base_face, shape):
     from pyCamSet.optimisation.compiled_helpers import n_estimate_rigid_transform
 
     size = np.max(base_face[:, 1]) -  np.min(base_face[:, 1])
-    polyhedra: pv.PolyData = make_shape(shape, size)
+    polyhedra: "pv.PolyData" = make_shape(shape, size)
     poly_points = polyhedra.points
  
     tforms = []

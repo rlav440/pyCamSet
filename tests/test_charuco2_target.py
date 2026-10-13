@@ -77,13 +77,12 @@ def _expected_pixels(target: ChArUco2, px_per_mm: float,
     """Where each corner is in a raster whose pixel (0, 0) starts at the
     band's outer corner, less ``border_mm``.
 
-    ``detect_grid_board_corners`` reports image points in the pixel-*corner*
-    convention (see its docstring): a corner on the boundary between pixels
-    n-1 and n is at exactly n -- 0.5 px from aruco2's own raw pixel-*centre*
-    convention, where that same corner is at n - 0.5.
+    ``detect_grid_board_corners`` reports image points in OpenCV's
+    pixel-*centre* convention (see its docstring): a corner on the boundary
+    between pixels n-1 and n is at n - 0.5.
     """
     band_mm = target.square_size * 1000.0 / 4
-    return (_corner_positions_mm(target) + band_mm + border_mm) * px_per_mm
+    return (_corner_positions_mm(target) + band_mm + border_mm) * px_per_mm - 0.5
 
 
 def _svg_size_mm(text: str) -> tuple[float, float]:

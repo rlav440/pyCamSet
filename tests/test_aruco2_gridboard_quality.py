@@ -105,17 +105,12 @@ def _render_and_degrade(
 
 
 def _analytic_corners(corner_ids: np.ndarray, grid_w: int, square_px: float, band_px: float) -> np.ndarray:
-    """Where a corner truly sits, in the same pixel-*corner* convention
-    ``detect_grid_board_corners`` returns -- i.e. this is already the full
-    truth to compare its output against directly, with no further shift.
-    (Two tests here used to disagree on this, one adding a stray manual
-    ``+ 0.5`` on top; that shift is aruco2's own raw pixel-*centre* output's
-    difference from this truth, already applied once, internally, by
-    ``detect_grid_board_corners`` itself -- adding it again here double
-    counts it. Confirmed to match ``detect_grid_board_corners``' output to
-    0.00 px on an exact, noiseless raster.)"""
+    """Where a corner truly sits, in the pixel-*centre* convention
+    ``detect_grid_board_corners`` returns: a corner on the boundary between
+    pixels n-1 and n is at n - 0.5. Compare its output against this
+    directly, with no further shift."""
     lattice = np.stack([corner_ids % (grid_w + 1), corner_ids // (grid_w + 1)], axis=-1)
-    return band_px + lattice * square_px
+    return band_px + lattice * square_px - 0.5
 
 
 # -- 1. ghost regression --------------------------------------------------------
@@ -262,7 +257,7 @@ def test_refinement_at_least_halves_rms_on_a_blurred_gamma_render() -> None:
     assert raw_ids is not None and ref_ids is not None
 
     def rms(ids, points):
-        truth = _analytic_corners(ids, 15, square_px, band_px) + 0.5
+        truth = _analytic_corners(ids, 15, square_px, band_px)
         error = np.minimum(np.linalg.norm(points - truth, axis=1), 3.0)
         return float(np.sqrt(np.mean(error ** 2)))
 
@@ -279,7 +274,7 @@ def test_refinement_does_not_worsen_a_sharp_render() -> None:
         image, (15, 15), _DICT_4X4, 1.0, refine=True, validate=False)
 
     def rms(ids, points):
-        truth = _analytic_corners(ids, 15, square_px, band_px) + 0.5
+        truth = _analytic_corners(ids, 15, square_px, band_px)
         error = np.linalg.norm(points - truth, axis=1)
         return float(np.sqrt(np.mean(error ** 2)))
 
@@ -356,7 +351,7 @@ def test_an_occluder_bar_does_not_move_a_corner_more_than_1px() -> None:
     lattice_cr = np.stack([corner_ids % 13, corner_ids // 13], axis=-1)
     index = _index_by_cr(lattice_cr)
     assert target_cr in index
-    truth = np.array([cx, cy]) + 0.5
+    truth = np.array([cx, cy]) - 0.5  # pixel-centre convention
     error = float(np.linalg.norm(points[index[target_cr]] - truth))
     assert error < 1.0, f"occluded corner moved {error:.3f} px"
 
@@ -378,7 +373,11 @@ def test_pixel_convention_matches_opencv_charuco() -> None:
     ch_points, ch_ids, _, _ = detector.detectBoard(charuco_image)
     ch_points, ch_ids = ch_points.reshape(-1, 2), ch_ids.reshape(-1)
     chess_mm = np.asarray(board.getChessboardCorners()).reshape(-1, 3)[:, :2]
-    charuco_truth = chess_mm / (square_px / 1000.0) * square_px
+    # OpenCV 5's CharucoDetector reports the pixel-centre convention (corner
+    # on the boundary of pixels n-1 and n at n - 0.5); OpenCV 4.x's reported
+    # n, i.e. 0.5 px on (measured on 4.12 and 4.13).
+    opencv_offset = -0.5 if int(cv2.__version__.split(".")[0]) >= 5 else 0.0
+    charuco_truth = chess_mm / (square_px / 1000.0) * square_px + opencv_offset
     charuco_error = np.linalg.norm(ch_points - charuco_truth[ch_ids], axis=1)
 
     bit_size = square_px // 4  # DICT_4X4: marker_bits == 4

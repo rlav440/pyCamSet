@@ -760,13 +760,14 @@ def detect_grid_board_corners(
         board aruco2 fails on (which is logged as a warning), so a board cut
         by the image edge costs its edge corners, not the image.
 
-        **Pixel convention:** points are returned in OpenCV's pixel-*corner*
-        convention, 0.5 px from aruco2's own pixel-*centre* one on both
-        axes. ChArUco and Ccube inherit it by going through
-        ``CharucoDetector``; ChArUco2 and Ccube2 never do, so the +0.5 below
-        puts them on it explicitly, last, after refinement and validation.
-        Every ArUco-based target then shares one convention, so a
-        calibration does not depend on which read the image.
+        **Pixel convention:** points are returned in OpenCV's pixel-*centre*
+        convention (pixel ``(i, j)``'s centre is at ``(i, j)``; a corner on
+        the boundary between pixels n-1 and n is at n - 0.5), which is
+        aruco2's own, ``cv2.cornerSubPix``'s and ``cv2.projectPoints``'. No
+        offset is applied. OpenCV 5's ``CharucoDetector`` (ChArUco, Ccube)
+        reports the same convention; OpenCV 4.x's reported corners 0.5 px
+        further on, so on OpenCV < 5 ChArUco/Ccube and ChArUco2/Ccube2 differ
+        by 0.5 px on both axes.
     :raises ValueError: when ``ids`` is given and is not one distinct
         marker of the dictionary per square.
     """
@@ -868,9 +869,8 @@ def detect_grid_board_corners(
     if corner_ids.shape[0] == 0:
         return None, None
 
-    # See the docstring's "Pixel convention" note: applied last, so it moves
-    # the position refinement/validation actually settled on.
-    img_points = img_points + 0.5
+    # Pixel-centre convention, as aruco2 and the refinement return it: see the
+    # docstring's "Pixel convention" note.
     return corner_ids, img_points
 
 

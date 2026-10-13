@@ -65,11 +65,9 @@ def _texture_pixels(cube: Ccube2, local_xy: np.ndarray) -> np.ndarray:
     own pixel-*centre* convention (``layout.rasterise_rectangles``: pixel
     j's centre sits at ``(j + 0.5) / px_per_unit``), so a point on the
     boundary between pixels n-1 and n is at n - 0.5. This describes how the
-    texture is drawn, not what a detector reports -- ``detect_grid_board_
-    corners`` reports the pixel-*corner* convention instead (its docstring),
-    0.5 px on from this. Used unmodified to build homography control points
-    for warping a texture (a rasterisation fact); callers comparing this
-    against a detection add the 0.5 px back themselves.
+    texture is drawn; ``detect_grid_board_corners`` reports the same
+    pixel-*centre* convention (its docstring), so a detection compares
+    against this directly.
     """
     return local_xy * (cube.draw_res[0] / cube.length) - 0.5
 
@@ -310,9 +308,9 @@ def test_every_face_is_detected_as_itself(n_points, border_fraction) -> None:
     lattice puts it -- including at the smallest border the band fits in,
     where a tab meets the face's edge line."""
     cube = Ccube2(length=40.0, n_points=n_points, border_fraction=border_fraction)
-    # detect_grid_board_corners reports the pixel-*corner* convention (see
-    # its docstring), 0.5 px from _texture_pixels' pixel-*centre* one.
-    expected = _texture_pixels(cube, _lattice(cube)) + 0.5
+    # detect_grid_board_corners reports the same pixel-*centre* convention
+    # as _texture_pixels (see its docstring).
+    expected = _texture_pixels(cube, _lattice(cube))
     for k, texture in enumerate(cube.textures):
         detection = cube.find_in_image(texture)
         assert detection.data_len == (n_points + 1) ** 2, f"face {k}"
@@ -614,9 +612,9 @@ def test_a_printed_net_is_detected_face_by_face_with_its_numbers_on(tmp_path: Pa
     expected = np.array([
         cube.apply_affine_xy(lattice[[gid]], cube.net_affine_for_face(face))[0]
         for face, gid in keys])
-    # detect_grid_board_corners' pixel-*corner* convention, not the raster's
-    # own pixel-*centre* one (see _texture_pixels) -- so +0.5, not -0.5.
-    expected = (expected - net_min + border_mm / 1000) * 1000 * px_per_mm + 0.5
+    # detect_grid_board_corners' pixel-*centre* convention (see
+    # _texture_pixels): a boundary between pixels n-1 and n is at n - 0.5.
+    expected = (expected - net_min + border_mm / 1000) * 1000 * px_per_mm - 0.5
     assert np.abs(detection.image_points - expected).max() < 1.0
 
 

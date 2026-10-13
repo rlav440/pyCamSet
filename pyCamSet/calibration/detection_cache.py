@@ -24,6 +24,7 @@ from typing import Any
 import numpy as np
 
 from pyCamSet.calibration_targets import TargetDetection
+from pyCamSet.calibration_targets.core.abstract_target import COORDINATE_MAPPING
 from pyCamSet.calibration_targets.core.target_registry import spec_of
 from pyCamSet.utils.paths import long_path
 
@@ -89,6 +90,9 @@ def _target_identity(calibration_target, cam_names: list[str],
     identity = {"target_spec": spec, "cam_names": sorted(cam_names), "n_lim": n_lim}
     if preprocessing is not None:
         identity["preprocessing"] = dict(preprocessing)
+        # Version of the detector-to-native coordinate mapping: caches written
+        # by the earlier divide-by-scale mapping (no tag) are now a miss.
+        identity["preprocessing"].setdefault("coordinate_mapping", COORDINATE_MAPPING)
     return identity
 
 

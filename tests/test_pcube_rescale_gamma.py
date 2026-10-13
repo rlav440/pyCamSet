@@ -142,7 +142,7 @@ def test_find_in_imfolder_runs_one_detector_pass_and_inverse_maps_points(tmp_pat
     assert target.calls == 1
     assert target.seen_shapes == [(4, 6)]
     data = detections.get_data()
-    np.testing.assert_allclose(data[:, -2:], [[8.0, 12.0]])
+    np.testing.assert_allclose(data[:, -2:], [[9.5, 13.5]])
     assert int(data[0, 2]) == 7
 
 
@@ -167,7 +167,7 @@ def test_production_detection_entry_threads_preparation_to_target_once(tmp_path)
     assert target.calls == 1
     assert target.seen_shapes == [(4, 6)]
     assert cam_res == [(16, 24)]
-    np.testing.assert_allclose(detections.get_data()[:, -2:], [[8.0, 12.0]])
+    np.testing.assert_allclose(detections.get_data()[:, -2:], [[9.5, 13.5]])
 
 
 def test_pcube_cache_identity_includes_preprocessing_settings(tmp_path):
@@ -191,3 +191,23 @@ def test_pcube_cache_identity_includes_preprocessing_settings(tmp_path):
     assert not cache_matches(
         cache, target, ["cam0"], None,
         preprocessing={"rescale_and_gamma": True, "scale": 0.5, "gamma": 0.5})
+
+
+@pytest.mark.parametrize("scale", [0.25, 0.5])
+def test_restore_native_coordinates_is_pixel_centre_exact(scale):
+    """A bright block's centroid found after the area resize maps back onto its native centroid."""
+    from pyCamSet.calibration_targets.core.abstract_target import _restore_native_coordinates
+    from pyCamSet.calibration_targets.core.target_detections import ImageDetection
+
+    step = int(round(1 / scale))
+    native = np.zeros((64, 96), dtype=np.float32)
+    native[8 * step:9 * step, 5 * step:6 * step] = 1.0  # one detector pixel's worth of native pixels
+    small = cv2.resize(native, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    ys, xs = np.nonzero(small)
+    detected = np.asarray([[np.average(xs, weights=small[ys, xs]),
+                            np.average(ys, weights=small[ys, xs])]])
+    ys, xs = np.nonzero(native)
+    truth = np.asarray([[xs.mean(), ys.mean()]])
+    restored = _restore_native_coordinates(
+        ImageDetection(keys=np.asarray([0]), image_points=detected), scale)
+    np.testing.assert_allclose(restored.image_points, truth, atol=1e-9)

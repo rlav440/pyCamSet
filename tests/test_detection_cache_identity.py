@@ -864,11 +864,17 @@ def test_a_cache_hit_opens_the_file_once_and_never_calls_cache_matches(
 
     monkeypatch.setattr(detection_cache, "cache_matches", failing_cache_matches)
 
+    from pyCamSet.utils.paths import long_path
+
     real_open = open
     open_counts: dict[str, int] = {}
+    # The cache is opened through long_path(), which on Windows is the
+    # extended-length (\\?\) spelling of the same file, so compare both sides
+    # in that one normalised form rather than as raw strings.
+    wanted = str(long_path(cache_path))
 
     def counting_open(file, *args, **kwargs):
-        if str(file) == str(cache_path):
+        if isinstance(file, (str, os.PathLike)) and str(long_path(file)) == wanted:
             open_counts["n"] = open_counts.get("n", 0) + 1
         return real_open(file, *args, **kwargs)
 

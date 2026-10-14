@@ -44,6 +44,21 @@ def _count(det):
     return len(det.keys)
 
 
+def _gt_corner_map(gt_c, gt_ids):
+    """``{corner_id: (2,) float xy}`` from a raw ``detectBoard`` return.
+
+    OpenCV 4.x returns ``(N, 1, 2)`` corners and ``(N, 1)`` ids; OpenCV 5
+    squeezes the singleton axis to ``(N, 2)`` / ``(N,)``. Indexing ``[:, 0]``
+    on the 5.x shape silently takes the x column alone, so flatten both to
+    the same shape before pairing them.
+    """
+    if gt_c is None or gt_ids is None:
+        return {}
+    return {int(i): pt for i, pt in zip(
+        np.asarray(gt_ids).reshape(-1),
+        np.asarray(gt_c, dtype=float).reshape(-1, 2))}
+
+
 def _true_markers_for_board(board, img):
     """Ground-truth ``(marker_id, (4, 2) float32 corners)`` for every ArUco
     marker OpenCV's own (unmodified) aruco1 detector finds in *img* -- a
@@ -1137,8 +1152,7 @@ def test_accuracy_vs_charuco_detector():
         det = b.find_in_image(warped)
         assert _count(det) > 0, "aruco2 returned no corners on the warped image"
         assert gt_ids is not None and len(gt_ids) > 0
-        gt_map = {int(i): np.asarray(pt, float).reshape(-1)
-                  for i, pt in zip(np.asarray(gt_ids).reshape(-1), gt_c[:, 0])}
+        gt_map = _gt_corner_map(gt_c, gt_ids)
         det_ids = np.asarray(det.keys).reshape(-1).astype(int)
         # FIX 3: strict sub-check on the matching domain.
         assert set(det_ids.tolist()) == set(gt_map.keys()), (
@@ -1197,8 +1211,7 @@ def test_charuco_aruco2_agrees_tightly_with_aruco1_on_clean_render():
     gt_c, gt_ids, _, _ = gt_det.detectBoard(img)
     det = b2.find_in_image(img)
     assert _count(det) > 0
-    gt_map = {int(i): np.asarray(pt, float).reshape(-1)
-              for i, pt in zip(np.asarray(gt_ids).reshape(-1), gt_c[:, 0])}
+    gt_map = _gt_corner_map(gt_c, gt_ids)
     det_ids = np.asarray(det.keys).reshape(-1).astype(int)
     errs = [float(np.linalg.norm(np.asarray(p, float) - gt_map[int(c)]))
             for c, p in zip(det_ids, np.asarray(det.image_points))
@@ -1218,8 +1231,7 @@ def test_ccube_aruco2_agrees_tightly_with_aruco1_on_clean_render():
     gt_c, gt_ids, _, _ = gt_det.detectBoard(tex)
     det = c2.find_in_image(tex)
     assert _count(det) > 0
-    gt_map = {int(i): np.asarray(pt, float).reshape(-1)
-              for i, pt in zip(np.asarray(gt_ids).reshape(-1), gt_c[:, 0])}
+    gt_map = _gt_corner_map(gt_c, gt_ids)
     keys = np.asarray(det.keys)
     face_mask = keys[:, 0] == 0
     det_ids = keys[face_mask, 1].astype(int)
@@ -1253,8 +1265,7 @@ def test_charuco_aruco2_matches_aruco1_under_blur_noise_and_tilt():
     det = b2.find_in_image(img)
     assert _count(det) > 0
     assert gt_ids is not None and len(gt_ids) > 0
-    gt_map = {int(i): np.asarray(pt, float).reshape(-1)
-              for i, pt in zip(np.asarray(gt_ids).reshape(-1), gt_c[:, 0])}
+    gt_map = _gt_corner_map(gt_c, gt_ids)
     det_ids = np.asarray(det.keys).reshape(-1).astype(int)
     errs = [float(np.linalg.norm(np.asarray(p, float) - gt_map[int(c)]))
             for c, p in zip(det_ids, np.asarray(det.image_points))
@@ -1275,8 +1286,7 @@ def test_legacy_even_row_position_level_both_backends():
         gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
             board.board, ARUCO_OPENCV_DETECTOR.resolve(None))
         gt_c, gt_ids, _, _ = gt_det.detectBoard(img)
-        gt_map = {int(i): np.asarray(pt, float).reshape(-1)
-                  for i, pt in zip(np.asarray(gt_ids).reshape(-1), gt_c[:, 0])}
+        gt_map = _gt_corner_map(gt_c, gt_ids)
         errs = [float(np.linalg.norm(np.asarray(p, float) - gt_map[int(c)]))
                 for c, p in zip(np.asarray(det.keys).reshape(-1),
                                 np.asarray(det.image_points)) if int(c) in gt_map]

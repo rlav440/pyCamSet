@@ -479,6 +479,15 @@ def outer_l_corners(grid_w: int, grid_h: int) -> np.ndarray:
     return np.array(out, dtype=np.int64).reshape(-1, 2)
 
 
+#: Revision of the corners :func:`detect_grid_board_corners` returns. Part of
+#: a detection cache's identity for a target read through it (ChArUco2,
+#: Ccube2, CIco2), so a cache written by an earlier revision is a miss rather
+#: than reused. Bump it whenever the corners a given image yields can change.
+#: 1: corners returned in the pixel-centre frame on every OpenCV version.
+#: 2: :func:`reseed_refused_corners` re-seeds refused corners and places the
+#: outer L-junction corners.
+GRID_BOARD_CORNER_REVISION = 2
+
 #: How far (Chebyshev, in lattice steps) the neighbours a refused corner is
 #: re-seeded from may lie, and how many of them are needed.
 _RESEED_RADIUS = 2
@@ -966,14 +975,6 @@ def validate_grid_board_corners(
         "%d dropped for having fewer than %d non-collinear neighbours; %d kept.",
         removed_log, readmitted, dropped_unsupported, min_neighbours, int(alive.sum()))
     return alive
-
-
-#: Revision of the corners :func:`detect_grid_board_corners` returns. Part of
-#: a detection cache's identity for a target read through it (ChArUco2,
-#: Ccube2, CIco2), so a cache written by an earlier revision is a miss rather
-#: than reused. Bump it whenever the corners a given image yields can change.
-#: 1: corners returned in the pixel-centre frame on every OpenCV version.
-GRID_BOARD_CORNER_REVISION = 1
 
 
 def detect_grid_board_corners(

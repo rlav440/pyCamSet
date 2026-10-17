@@ -733,3 +733,15 @@ def test_a_grid_board_cache_from_an_earlier_corner_revision_is_a_miss(tmp_path, 
     assert cache_matches(path, target, ["cam0"], None) is False
     target, path = _grid_board_cache(tmp_path, {"type": type_})
     assert cache_matches(path, target, ["cam0"], None) is True
+
+
+@pytest.mark.parametrize("spec", [
+    {"type": "ChArUco", "marker_backend": "aruco1"},
+    {"type": "ChArUco", "marker_backend": "aruco2"},
+    {"type": "Ccube", "marker_backend": "aruco2"},
+], ids=["ChArUco-aruco1", "ChArUco-aruco2", "Ccube-aruco2"])
+def test_classic_targets_caches_do_not_depend_on_the_grid_board_revision(tmp_path, spec):
+    from pyCamSet.calibration.detection_cache import cache_matches
+    target, path = _grid_board_cache(
+        tmp_path, spec, revision=aruco2_gridboard.GRID_BOARD_CORNER_REVISION + 7)
+    assert cache_matches(path, target, ["cam0"], None) is True

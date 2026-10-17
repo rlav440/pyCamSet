@@ -29,6 +29,7 @@ from pyCamSet.calibration_targets.charuco import ChArUco  # noqa: E402
 from pyCamSet.calibration_targets.cico import CIco  # noqa: E402
 from pyCamSet.calibration_targets.core.target_registry import build_target  # noqa: E402
 from pyCamSet.calibration_targets.markers import aruco2 as a2  # noqa: E402
+from pyCamSet.calibration_targets.markers.aruco_opencv import charuco_corners_to_pixel_centre  # noqa: E402
 
 #: Oversampling of the rendered board before it is area-averaged down.
 _OVERSAMPLE = 10
@@ -83,7 +84,8 @@ def _unseeded(image, board, markers):
         markerIds=np.asarray([mid for mid, _q in markers], dtype=np.int32).reshape(-1, 1))
     if ids is None:
         return np.zeros(0, dtype=int), np.zeros((0, 2))
-    return np.asarray(ids).reshape(-1), np.asarray(corners).reshape(-1, 2)
+    # In the pixel-centre frame the adapter returns (OpenCV 4.x is half a pixel off it).
+    return np.asarray(ids).reshape(-1), np.asarray(charuco_corners_to_pixel_centre(corners)).reshape(-1, 2)
 
 
 def _views():

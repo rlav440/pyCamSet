@@ -35,6 +35,7 @@ from pyCamSet.calibration_targets.charuco import ChArUco
 from pyCamSet.calibration_targets.ccube import Ccube
 from pyCamSet.calibration_targets.markers.aruco_opencv import (
     ARUCO_OPENCV_DETECTOR,
+    charuco_corners_to_pixel_centre,
 )
 
 
@@ -45,7 +46,9 @@ def _count(det):
 
 
 def _gt_corner_map(gt_c, gt_ids):
-    """``{corner_id: (2,) float xy}`` from a raw ``detectBoard`` return.
+    """``{corner_id: (2,) float xy}`` from a raw ``detectBoard`` return,
+    in the pixel-centre frame the targets return (OpenCV 4.x reports it
+    half a pixel off; see ``charuco_corners_to_pixel_centre``).
 
     OpenCV 4.x returns ``(N, 1, 2)`` corners and ``(N, 1)`` ids; OpenCV 5
     squeezes the singleton axis to ``(N, 2)`` / ``(N,)``. Indexing ``[:, 0]``
@@ -56,7 +59,7 @@ def _gt_corner_map(gt_c, gt_ids):
         return {}
     return {int(i): pt for i, pt in zip(
         np.asarray(gt_ids).reshape(-1),
-        np.asarray(gt_c, dtype=float).reshape(-1, 2))}
+        np.asarray(charuco_corners_to_pixel_centre(gt_c), dtype=float).reshape(-1, 2))}
 
 
 def _true_markers_for_board(board, img):

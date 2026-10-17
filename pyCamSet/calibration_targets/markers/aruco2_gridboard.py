@@ -290,6 +290,13 @@ def _newton_to_saddle(
     Newton-iterate each point to the nearest saddle point of the smoothed
     image its derivatives come from.
 
+    Each step is the closed-form Taylor step to the saddle of Chen & Zhang
+    (D. Chen, G. Zhang, "A New Sub-Pixel Detector for X-Corners in Camera
+    Calibration Targets", WSCG 2005 Short Papers, pp. 97-100), iterated here
+    rather than taken once. Fitting a saddle to the smoothed image goes back
+    to Lucchese & Mitra (APCCAS 2002, vol. 2, pp. 191-195,
+    doi:10.1109/APCCAS.2002.1115151).
+
     A saddle of the image's light is a saddle of any monotone tone curve
     applied to it -- unlike ``cv2.cornerSubPix``, which chases the image's
     own second moments and so drifts with gamma -- which is why this, not a

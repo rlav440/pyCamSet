@@ -265,7 +265,7 @@ def _charuco_detector_for(board) -> cv2.aruco.CharucoDetector:
 #: (ChArUco, Ccube, CIco) target read with aruco2, so a cache written by an
 #: earlier revision is a miss rather than reused. Bump it whenever the
 #: quads, and so the corners, a given image yields can change.
-CHARUCO_SEED_REVISION = 1
+CHARUCO_SEED_REVISION = 2
 
 #: Slack, in pixels, added to aruco2's sub-pixel half-window when deciding
 #: whether that window could have reached the neighbouring chessboard
@@ -481,35 +481,43 @@ def _seed_quads(image: np.ndarray, board, markers: list) -> list:
     sizes) cannot undo the resulting error in the interpolated seed, so the
     ChArUco corner comes back biased by a pixel or more.
 
-    What, per marker, ids and order unchanged:
+    What, per marker, ids and order unchanged. Only a marker whose corners
+    aruco2's window could have pulled onto the chessboard corner
+    (:func:`_saddle_reachable`) is touched at all:
 
     1. where OpenCV's unrefined ``detectMarkers`` (the board's dictionary,
-       read near these markers) reads the same id, once, with every corner
+       read near those markers) reads the same id, once, with every corner
        within ``_SEED_MAX_SHIFT_FRACTION`` of a side of aruco2's, OpenCV's
        quad is used;
-    2. otherwise, where aruco2's window could have reached the chessboard
-       corner (:func:`_saddle_reachable`), the quad is refitted from its
-       own edges (:func:`_edge_refit`);
-    3. otherwise aruco2's quad is kept.
+    2. otherwise the quad is refitted from its own edges
+       (:func:`_edge_refit`).
+
+    Every other marker keeps aruco2's quad: out of the window's reach it is
+    not biased this way, and swapping it for OpenCV's coarser contour corners
+    made larger-square real data (M_Nebula, ~57 px squares) measurably worse.
 
     Deterministic: no randomness, and the result depends only on the image,
     the board and the marker list.
     """
-    gray = _gray_of(image)
     quads = [corners for _mid, corners in markers]
     sides = [_mean_side(q) for q in quads]
-    opencv = _opencv_quads(gray, board.getDictionary(), quads)
-
-    seeded = list(quads)
-    to_refit = []
     halfwin = _aruco2_subpix_halfwin(sides)
     marker_fraction = float(board.getMarkerLength()) / float(board.getSquareLength())
-    for k, (mid, quad) in enumerate(markers):
-        other = opencv.get(mid)
-        if other is not None and (np.max(np.linalg.norm(other - quad, axis=1))
+    reachable = [k for k in range(len(quads))
+                 if _saddle_reachable(sides[k], marker_fraction, halfwin)]
+    if not reachable:
+        return markers
+
+    gray = _gray_of(image)
+    opencv = _opencv_quads(gray, board.getDictionary(), [quads[k] for k in reachable])
+    seeded = list(quads)
+    to_refit = []
+    for k in reachable:
+        other = opencv.get(markers[k][0])
+        if other is not None and (np.max(np.linalg.norm(other - quads[k], axis=1))
                                   <= _SEED_MAX_SHIFT_FRACTION * sides[k]):
             seeded[k] = other
-        elif _saddle_reachable(sides[k], marker_fraction, halfwin):
+        else:
             to_refit.append(k)
     if to_refit:
         refitted = _refit_quads(gray, [quads[k] for k in to_refit], marker_fraction)

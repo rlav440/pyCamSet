@@ -185,18 +185,37 @@ def test_a_targets_corner_refinement_setting_does_not_change_its_aruco2_reading(
 
 def test_a_far_away_opencv_reading_of_the_same_id_is_not_used():
     """OpenCV's quad replaces aruco2's only when both read the same marker:
-    a quad displaced by more than a fraction of its side is left alone (and
-    not refitted, being out of the saddle's reach on this board)."""
-    board = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0).board
-    image = np.ascontiguousarray(board.generateImage((700, 700)), dtype=np.uint8)
-    corners, ids, _ = cv2.aruco.ArucoDetector(
-        board.getDictionary(), cv2.aruco.DetectorParameters()).detectMarkers(image)
-    markers = [(int(i), np.asarray(c, dtype=np.float32).reshape(4, 2))
-               for c, i in zip(corners, np.asarray(ids).reshape(-1))]
-    garbage = np.array([[5, 5], [25, 5], [25, 25], [5, 25]], dtype=np.float32)
-    moved = [(markers[0][0], garbage)] + markers[1:]
-    seeded = a2._seed_quads(image, board, moved)
-    assert np.array_equal(seeded[0][1], garbage)
+    a quad displaced by a whole side, though within the window's reach,
+    never takes OpenCV's quad of the real marker."""
+    target, image, _truth, markers = next(_views())
+    mid, quad = markers[0]
+    side = a2._mean_side(quad)
+    moved = [(mid, quad + np.float32(side))] + markers[1:]
+    opencv = a2._opencv_quads(image, target.board.getDictionary(), [quad])
+    assert mid in opencv, "setup: OpenCV no longer reads the marker"
+    seeded = a2._seed_quads(image, target.board, moved)
+    assert np.max(np.linalg.norm(seeded[0][1] - opencv[mid], axis=1)) > 0.5 * side
+
+
+def test_markers_out_of_the_windows_reach_are_left_exactly_as_aruco2_read_them(monkeypatch):
+    """Large squares: no marker corner is within reach of aruco2's window, so
+    nothing is swapped or refitted, and OpenCV's marker detection never runs."""
+    target = _target()
+    image = np.ascontiguousarray(target.board.generateImage((9 * 80, 6 * 80)), dtype=np.uint8)
+    markers = a2.detect_markers(image, target._aruco_dict_int)
+    assert len(markers) >= 20
+    calls = []
+    make_detector = cv2.aruco.ArucoDetector
+
+    def spy(*args):
+        calls.append(args)
+        return make_detector(*args)
+
+    monkeypatch.setattr(cv2.aruco, "ArucoDetector", spy)
+    seeded = a2._seed_quads(image, target.board, markers)
+    assert calls == []
+    for (m1, q1), (m2, q2) in zip(markers, seeded):
+        assert m1 == m2 and np.array_equal(q1, q2)
 
 
 @pytest.mark.parametrize("make", [

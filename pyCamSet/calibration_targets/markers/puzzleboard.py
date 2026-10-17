@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 import cv2
 import numpy as np
@@ -78,17 +79,33 @@ def prepare_puzzleboard_image(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 
+#: Serialises every call into the upstream detector within one process.
+#: ``puzzle_board`` keeps detection state at module and class level -- the
+#: Hessian and corner-checker objects with their reused, size-dependent
+#: filter buffers (``puzzle_board_detector.h_d`` / ``corner_checker``) and
+#: the union-find root ring ``Grid.first_root`` -- so two threads detecting
+#: at once corrupt each other: measured, 87-95 of 128 concurrent calls on
+#: same-size images returned wrong results (many with no points at all),
+#: different sizes raised a broadcasting ``ValueError``, and one run hung.
+_DETECT_LOCK = threading.Lock()
+
+
 def detect_puzzleboard_image(
     image: np.ndarray,
     min_width: int = 4,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    """Detect PuzzleBoard grid points from a pyCamSet/OpenCV image."""
+    """Detect PuzzleBoard grid points from a pyCamSet/OpenCV image.
+
+    Thread-safe: concurrent calls in one process run the upstream detector
+    one at a time (see ``_DETECT_LOCK``); separate processes are unaffected.
+    """
     # puzzle_board is an optional extra: a module-level import would make
     # it a hard requirement of everything that reaches this file.
     from puzzle_board.puzzle_board_detector import detect_puzzleboard
 
     detector_image = prepare_puzzleboard_image(image)
-    return detect_puzzleboard(detector_image, min_width=int(min_width))
+    with _DETECT_LOCK:
+        return detect_puzzleboard(detector_image, min_width=int(min_width))
 
 
 def drop_duplicate_keys(keys, image_points, target_name: str = "PuzzleBoard"):

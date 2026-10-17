@@ -30,6 +30,10 @@ from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     CHARUCO2_DETECTOR,
     GRID_BOARD_CORNER_REVISION,
 )
+from pyCamSet.calibration_targets.markers.puzzleboard import (
+    PUZZLEBOARD_DETECTOR,
+    PUZZLEBOARD_KEY_REVISION,
+)
 from pyCamSet.utils.paths import long_path
 
 logger = logging.getLogger(__name__)
@@ -102,6 +106,11 @@ def _target_identity(calibration_target, cam_names: list[str],
         # refused ones are re-seeded, so a cache written before the current
         # revision (no key, or an older one) is a miss.
         identity["aruco2_grid_board_corners"] = GRID_BOARD_CORNER_REVISION
+    if PUZZLEBOARD_DETECTOR in (getattr(type(calibration_target), "DETECTOR_BACKENDS", None) or {}).values():
+        # A PuzzleBoard, PuzzleBoardCube or PuzzleBoardIco: which decoded keys
+        # it keeps has changed (duplicates, the planar printed window), so a
+        # cache written before the current revision is a miss.
+        identity["puzzleboard_keys"] = PUZZLEBOARD_KEY_REVISION
     if preprocessing is not None:
         identity["preprocessing"] = dict(preprocessing)
     return identity

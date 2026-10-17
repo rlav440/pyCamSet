@@ -201,3 +201,13 @@ class PuzzleBoardDetector(DetectorParameterisation):
 
 #: Shared rather than built per target: it describes nothing per instance.
 PUZZLEBOARD_DETECTOR = PuzzleBoardDetector()
+
+#: Revision of the keys the PuzzleBoard targets' ``find_in_image`` keeps.
+#: Part of a detection cache's identity for a target read with
+#: :data:`PUZZLEBOARD_DETECTOR`, so a cache written by an earlier revision is
+#: a miss rather than reused. Bump it whenever the keys or points a given
+#: image yields can change.
+#: 2: every copy of a key decoded at more than one place is dropped (all
+#: three targets), and the planar board keeps only keys inside its printed
+#: window.
+PUZZLEBOARD_KEY_REVISION = 2

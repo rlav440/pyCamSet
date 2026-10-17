@@ -34,7 +34,7 @@
       "cornerRefinementMaxIterations": 60,
       "cornerRefinementMinAccuracy": 0.2,
       "errorCorrectionRate": 0.8,
-      "minMarkers": 3
+      "minMarkers": 2
     },
     "recommended_keys": [
       "adaptiveThreshWinSizeMax",
@@ -81,7 +81,7 @@
       "cornerRefinementMaxIterations": 120,
       "cornerRefinementMinAccuracy": 0.1,
       "errorCorrectionRate": 1.0,
-      "minMarkers": 3
+      "minMarkers": 2
     },
     "recommended_keys": [
       "adaptiveThreshWinSizeMax",
@@ -174,7 +174,7 @@
       "cornerRefinementMaxIterations": 60,
       "cornerRefinementMinAccuracy": 0.15,
       "errorCorrectionRate": 0.8,
-      "minMarkers": 4
+      "minMarkers": 2
     },
     "recommended_keys": [
       "minMarkerPerimeterRate",
@@ -220,7 +220,7 @@
       "cornerRefinementMaxIterations": 200,
       "cornerRefinementMinAccuracy": 0.4,
       "errorCorrectionRate": 1.0,
-      "minMarkers": 4
+      "minMarkers": 2
     },
     "recommended_keys": [
       "adaptiveThreshWinSizeMin",

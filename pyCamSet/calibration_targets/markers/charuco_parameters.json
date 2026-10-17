@@ -102,13 +102,13 @@
     "tunable": true,
     "settable": true,
     "minimum": 0,
-    "maximum": 4,
+    "maximum": 2,
     "step": 1,
     "search_order": 15,
     "priority": "A",
     "concept": "required local marker support for accepting an interpolated ChArUco corner. Detection: filters out corners that do not have enough adjacent detected markers. Calibration: lower values increase point count but may lower point reliability; this is a count-versus-quality trade-off.",
-    "range_text": "0–2 (reported in earlier investigation; not independently verified here)",
-    "range_source": "Estimated by us",
+    "range_text": "0–2; OpenCV asserts minMarkers <= 2 in CharucoDetector::detectBoard and raises for 3 or more",
+    "range_source": "OpenCV charuco_detector.cpp (assertion; reproduced on OpenCV 5.0.0)",
     "suggested": "1"
   },
   {

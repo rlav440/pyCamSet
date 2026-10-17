@@ -25,6 +25,7 @@ import numpy as np
 
 from pyCamSet.calibration_targets import TargetDetection
 from pyCamSet.calibration_targets.core.target_registry import spec_of
+from pyCamSet.calibration_targets.markers.aruco2 import CHARUCO_SEED_REVISION
 from pyCamSet.utils.paths import long_path
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,11 @@ def _target_identity(calibration_target, cam_names: list[str],
     except ValueError:
         return None
     identity = {"target_spec": spec, "cam_names": sorted(cam_names), "n_lim": n_lim}
+    if getattr(calibration_target, "marker_backend", None) == "aruco2":
+        # A classic ChArUco/Ccube/CIco read with aruco2: its corners depend
+        # on how the marker quads are seeded, so a cache written before the
+        # current revision (no key, or an older one) is a miss.
+        identity["aruco2_charuco_seed"] = CHARUCO_SEED_REVISION
     if preprocessing is not None:
         identity["preprocessing"] = dict(preprocessing)
     return identity

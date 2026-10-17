@@ -84,6 +84,10 @@ class Parameter:
     odd: bool = False
     search_order: int = 0
     choices: tuple[Choice, ...] = ()
+    #: The choice values a study may sample; empty means every choice.  A
+    #: choice left out stays settable as a fixed value -- a study just never
+    #: picks it (bounds cannot do this: a categorical row ignores them).
+    searchable_choices: tuple[Any, ...] = ()
     priority: str = ""
     concept: str = ""
     range_text: str = ""
@@ -99,6 +103,21 @@ class Parameter:
             raise ValueError(
                 f"{self.key}: a study samples between bounds, so a tunable "
                 f"parameter needs both a minimum and a maximum.")
+        if self.searchable_choices:
+            values = [choice.value for choice in self.choices]
+            unknown = [v for v in self.searchable_choices if v not in values]
+            if unknown:
+                raise ValueError(
+                    f"{self.key}: searchable_choices {unknown} are not among "
+                    f"its choices {values}.")
+
+    @property
+    def search_choices(self) -> list[Any]:
+        """The choice values a study samples from, in the choices' order."""
+        if not self.searchable_choices:
+            return [choice.value for choice in self.choices]
+        return [choice.value for choice in self.choices
+                if choice.value in self.searchable_choices]
 
     # -- reading a value -------------------------------------------------
 
@@ -317,6 +336,7 @@ class Parameter:
         fields["choices"] = tuple(
             Choice(str(choice["label"]), choice["value"])
             for choice in row.get("choices", ()))
+        fields["searchable_choices"] = tuple(row.get("searchable_choices", ()))
         return cls(**fields)
 
 

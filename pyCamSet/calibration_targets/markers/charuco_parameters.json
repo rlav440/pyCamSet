@@ -141,9 +141,14 @@
         "value": 3
       }
     ],
+    "searchable_choices": [
+      0,
+      1,
+      2
+    ],
     "priority": "B",
     "concept": "method for refining detected ArUco marker corners. Detection: improves marker-corner localisation before ChArUco interpolation. Calibration: better marker corners generally improve interpolated chessboard corners and reduce reprojection residuals.",
-    "range_text": "Enum: CORNER_REFINE_NONE, CORNER_REFINE_SUBPIX, CORNER_REFINE_CONTOUR, CORNER_REFINE_APRILTAG",
+    "range_text": "Enum: CORNER_REFINE_NONE, CORNER_REFINE_SUBPIX, CORNER_REFINE_CONTOUR, CORNER_REFINE_APRILTAG. A study never samples CORNER_REFINE_APRILTAG; it stays a fixed choice. Its quad corners come back shifted by about +0.4 px in x and y (AprilTag's pixel-corner convention inside OpenCV's pixel-centre API) and it loses markers on small squares, so trials would compare corners in two conventions.",
     "range_source": "OpenCV-provided",
     "suggested": "CORNER_REFINE_SUBPIX"
   },

@@ -69,12 +69,29 @@ aruco2's own corners are then refined and validated before they are returned
   smoothed at sigma 1.8, with a coarse-to-fine retry for a corner the fine
   scale refuses. Unlike aruco2's own `cornerSubPix`-based refinement, a
   saddle point does not drift with the camera's gamma, and it recovers most
-  of the accuracy a blurred or small-squared board otherwise loses (RMS
-  1.40 px to 0.21 px on a blurred, low-contrast render, in stage A task A3's
-  validation). The four outer corners of the board are not saddle points, so
-  they are typically left at aruco2's own position, not a defect. A refined
-  corner near an occluder or another non-corner feature is rejected by a
-  point-symmetry check and also keeps aruco2's position.
+  of the accuracy a blurred board otherwise loses: on the quality tests' own
+  blurred render (a 15x15 board, 48 px squares, Gaussian blur sigma 3, then
+  gamma 2.2) the corner RMS falls from 2.87 px for aruco2 alone to 0.41 px.
+  A refined corner near an occluder or another non-corner feature is
+  rejected by a point-symmetry check.
+- **Re-seeding** gives the corners refinement refused a second chance.
+  aruco2 refines each black marker's corners and only then pushes them
+  outward along the marker's diagonal, by 3 px on an image narrower than
+  2250 px and by up to a pixel more per extra erosion pass on wider ones;
+  an interior corner
+  averages that away over four markers, but an edge or outer corner seen by
+  one or two keeps part or all of it, which on small squares or under heavy
+  blur is further than the saddle search may move. Such a corner is searched
+  again from where its accepted neighbours put it, and kept only if that
+  search succeeds close to their prediction (on the render above: 0.41 px
+  to 0.008 px RMS). Every edge and interior corner is a saddle, and so is
+  each outer corner whose own square is black: top-left always, plus one
+  other, or all four when both sides are odd. The remaining outer corners
+  (top-right when the width is even, bottom-left when the height is even,
+  bottom-right when width plus height is odd) are L-junctions, which no
+  saddle search accepts; they are placed from the 3x3 block of refined
+  corners next to them, unless that block does not fit a single homography
+  to within 0.2 px, in which case aruco2's own position is kept.
 - **Validation** checks every corner against its lattice neighbours (a
   leave-one-out local homography, Tukey-reweighted so a cluster of wrong
   neighbours cannot drag the fit) and drops it if the neighbours disagree, or
@@ -82,11 +99,13 @@ aruco2's own corners are then refined and validated before they are returned
   occasional false marker detections (see the ghost-marker warning below),
   which otherwise silently place a corner tens of pixels off.
 
-**Pixel convention:** a returned corner is 0.5 px, on both axes, from
-aruco2's own raw position -- the same pixel-*corner* convention pyCamSet's
-OpenCV-backed `ChArUco`/`Ccube` targets use, so a calibration does not depend
-on which target read the image. See `detect_grid_board_corners`'s docstring
-for how this is checked.
+**Pixel convention:** a returned corner is in the same convention as the
+installed OpenCV's `CharucoDetector`, which pyCamSet's OpenCV-backed
+`ChArUco`/`Ccube` targets report, so a calibration does not depend on which
+target read the image. aruco2 and the refinement work in the pixel-*centre*
+convention; `opencv_charuco_pixel_offset()` is added last: 0 on OpenCV 5 or
+later (pixel-centre), 0.5 px on both axes on OpenCV 4.x (pixel-*corner*). See
+`detect_grid_board_corners`'s docstring for how this is checked.
 
 Two boards are handled at construction. One whose markers include a marker
 that reads the same after a half turn (with `DICT_ARUCO_ORIGINAL`, marker 1023,

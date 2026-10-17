@@ -293,9 +293,12 @@ def _newton_to_saddle(
     A saddle of the image's light is a saddle of any monotone tone curve
     applied to it -- unlike ``cv2.cornerSubPix``, which chases the image's
     own second moments and so drifts with gamma -- which is why this, not a
-    bigger ``cornerSubPix`` window, is what recovers accuracy under blur
-    (validated in stage A task A3: RMS 1.40 -> 0.21 px on a blurred,
-    gamma-2.2 ChArUco2 render).
+    bigger ``cornerSubPix`` window, is what recovers accuracy under blur. On
+    ``tests/test_aruco2_gridboard_quality.py``'s own blurred render (a 15x15
+    ``DICT_4X4_1000`` board, 48 px squares, Gaussian blur sigma 3 then gamma
+    2.2) the corner RMS falls from 2.87 px for aruco2 alone to 0.41 px after
+    this search, and to 0.008 px once :func:`reseed_refused_corners` has
+    retried the one corner it refuses.
 
     :param derivatives: as :func:`_saddle_derivatives` returns.
     :param points: ``(N, 2)`` starting positions, in the derivative images'
@@ -371,12 +374,16 @@ def refine_grid_board_corners(
     starting at ``coarse_sigma`` and finishing at ``sigma``: this recovers
     most of the corners a single fine pass misses under blur, without the
     coarse scale's worse localisation on a sharp image (stage A task A3).
-    The four outer corners of the board are not saddle points of a
-    chequerboard signal, so both passes typically refuse them; they keep
-    aruco2's own position, which is what this function's contract promises,
-    not a defect. A refined corner is accepted only when it is also
-    point-symmetric (see :func:`_point_symmetry`) -- otherwise, most often
-    near an occluder, it keeps aruco2's position too.
+    Every edge and interior corner is a saddle, and so is every outer corner
+    whose own square is black: top-left always, plus one of the other three,
+    or all three when both sides are odd (see :func:`outer_l_corners`), so a
+    board has two X outer corners, or four. The remaining outer corners are
+    L-junctions, not saddles; both passes refuse them, and this function
+    returns them at aruco2's own position, as its contract promises --
+    :func:`reseed_refused_corners` places them afterwards. A refined corner
+    is accepted only when it is also point-symmetric (see
+    :func:`_point_symmetry`) -- otherwise, most often near an occluder, it
+    keeps aruco2's position too.
 
     :param image: the uint8 (or greyscale-convertible) image to refine in.
     :param lattice_cr: ``(N, 2)`` ``(col, row)`` lattice coordinates of each
@@ -436,6 +443,213 @@ def refine_grid_board_corners(
     symmetry = _point_symmetry(grey.astype(np.float32), refined, square)
     accepted = ok_fine & (symmetry >= min_symmetry) & finite
     return np.where(accepted[:, None], refined, pts), accepted
+
+
+def outer_l_corners(grid_w: int, grid_h: int) -> np.ndarray:
+    """
+    The board's outer corners that are L-junctions rather than saddles, as
+    ``(K, 2)`` ``(col, row)`` lattice coordinates.
+
+    The band round the board puts a black square diagonally off each outer
+    corner and a black tab opposite each white edge square, so an outer
+    corner whose own square is black is an X-junction (a saddle), and one
+    whose square is white is an L-junction (three black quadrants, one
+    white). The top-left square is always black, so -- as read off aruco2's
+    own raster for every board from 3x3 to 11x11 -- top-left is always X;
+    top-right is X iff ``grid_w`` is odd; bottom-left iff ``grid_h`` is odd;
+    bottom-right iff ``grid_w + grid_h`` is even. Every board therefore has
+    exactly two X outer corners, or all four when both sides are odd. Every
+    edge and interior corner is an X.
+    """
+    grid_w, grid_h = int(grid_w), int(grid_h)
+    out = []
+    if grid_w % 2 == 0:
+        out.append((grid_w, 0))
+    if grid_h % 2 == 0:
+        out.append((0, grid_h))
+    if (grid_w + grid_h) % 2 == 1:
+        out.append((grid_w, grid_h))
+    return np.array(out, dtype=np.int64).reshape(-1, 2)
+
+
+#: How far (Chebyshev, in lattice steps) the neighbours a refused corner is
+#: re-seeded from may lie, and how many of them are needed.
+_RESEED_RADIUS = 2
+_RESEED_MIN_NEIGHBOURS = 5
+#: Re-seed only when the neighbours' prediction lies within this fraction of
+#: the local (most foreshortened) lattice step of aruco2's own estimate.
+_RESEED_MAX_SHIFT = 0.35
+#: Keep a re-seeded saddle only when it settles within this fraction of the
+#: local lattice step of the prediction (at least 1 px): a bit-cell junction
+#: is a sixth of a square away, the true corner much closer.
+_RESEED_MAX_SETTLE = 0.06
+#: A neighbour homography is trusted only if every neighbour it was fitted
+#: to lies within this many pixels of it (or this fraction of the local
+#: lattice step, if larger): one wrong neighbour among five or eight is
+#: otherwise followed by the least-squares fit.
+_RESEED_FIT_PX = 0.5
+_RESEED_FIT_REL = 0.02
+#: The same gate for an L-junction corner, which is *placed* by the fit
+#: rather than searched from it, so inherits the neighbourhood's own
+#: irregularity directly: tighter, and with no allowance growing with the
+#: square, so an irregular lattice (a raster whose squares alternate 39 and
+#: 40 px, say) leaves aruco2's measurement in place.
+_L_CORNER_FIT_PX = 0.2
+#: The lattice offsets a prediction projects: the corner and its four
+#: lattice neighbours, so a homography also gives the local lattice step.
+_UNIT_STEPS = np.array([[0.0, 0.0], [1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]])
+
+
+def _trusted_homography(src: np.ndarray, dst: np.ndarray,
+                        fit_px: float = _RESEED_FIT_PX, fit_rel: float = _RESEED_FIT_REL):
+    """
+    The normalised-DLT homography from lattice offsets ``src`` to image
+    points ``dst`` (:func:`_fit_local_homographies`, unweighted), with the
+    corner it predicts at offset (0, 0) and the local lattice step there --
+    or None when the fit is under-determined, non-finite, or leaves any
+    point further from it than ``fit_px`` pixels or ``fit_rel`` of the
+    step, whichever is larger.
+
+    :return: ``(homography, predicted corner, step)`` or None.
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        homography, ok = _fit_local_homographies(src[None], dst[None], np.ones((1, len(src))))
+    if not ok[0] or not np.all(np.isfinite(homography[0])):
+        return None
+    homography = homography[0]
+    projected = _apply_homography(homography[None], _UNIT_STEPS[None])[0]
+    mapped = _apply_homography(homography[None], src[None])[0]
+    if not (np.all(np.isfinite(projected)) and np.all(np.isfinite(mapped))):
+        return None
+    step = float(np.min(np.linalg.norm(projected[1:] - projected[0], axis=1)))
+    worst = float(np.max(np.linalg.norm(mapped - dst, axis=1)))
+    if not worst <= max(fit_px, fit_rel * step):
+        return None
+    return homography, projected[0], step
+
+
+def _predict_saddle_corner(lattice_cr, points, ok, centre_cr):
+    """
+    Where a corner sits according to its accepted neighbours within
+    Chebyshev :data:`_RESEED_RADIUS`: :func:`_trusted_homography` over at
+    least :data:`_RESEED_MIN_NEIGHBOURS` non-collinear ones.
+
+    :return: ``(predicted corner, local lattice step)`` or None.
+    """
+    offset = lattice_cr - centre_cr
+    reach = np.abs(offset).max(axis=1)
+    near = ok & (reach <= _RESEED_RADIUS) & (reach > 0)
+    if near.sum() < _RESEED_MIN_NEIGHBOURS:
+        return None
+    src = offset[near].astype(np.float64)
+    centred = src - src.mean(axis=0)
+    if np.linalg.eigvalsh(centred.T @ centred)[0] < 1e-9:  # collinear: no plane to fit
+        return None
+    fit = _trusted_homography(src, points[near].astype(np.float64))
+    return None if fit is None else (fit[1], fit[2])
+
+
+def _predict_outer_l_corner(lattice_cr, points, ok, corner_cr):
+    """
+    Where an outer L-junction corner sits, from its refined neighbours.
+
+    A homography fitted to the accepted corners of the 3x3 lattice block the
+    corner closes (all saddles) is extrapolated one step to it -- exact for a
+    pinhole camera, since the board is a plane. Lens distortion bends the
+    lattice, which this does not model: on exact projected lattices (a
+    1780 px focal length, 8x6 to 15x15 boards tilted 30-70 degrees) the
+    prediction is within 0.02-0.09 px of the corner at k1 = -0.05,
+    0.08-0.29 px at k1 = -0.15 and 0.17-0.61 px at an extreme k1 = -0.30,
+    the larger figure in each case for the 15x15 board, whose outer corners
+    reach furthest into the frame's own corners. A second-order correction
+    from the boundary rows was tried and dropped: extrapolating a quadratic
+    one step multiplies the neighbours' own noise about fourfold.
+
+    :return: ``(predicted corner, local lattice step)`` or None when the
+        block is too incomplete or its fit is not trusted.
+    """
+    col, row = int(corner_cr[0]), int(corner_cr[1])
+    dc = 1 if col == 0 else -1
+    dr = 1 if row == 0 else -1
+    index = {(int(c), int(r)): i for i, (c, r) in enumerate(lattice_cr)}
+    block = [(col + dc * a, row + dr * b) for a in range(3) for b in range(3) if (a, b) != (0, 0)]
+    have = [q for q in block if q in index and ok[index[q]]]
+    # Both boundary directions must be present, so the fit is not extrapolating
+    # sideways along a single line.
+    if len(have) < 6 or (col + dc, row) not in have or (col, row + dr) not in have:
+        return None
+    src = np.array([[dc * (q[0] - col), dr * (q[1] - row)] for q in have], dtype=np.float64)
+    dst = np.array([points[index[q]] for q in have], dtype=np.float64)
+    fit = _trusted_homography(src, dst, _L_CORNER_FIT_PX, 0.0)
+    return None if fit is None else (fit[1], fit[2])
+
+
+def reseed_refused_corners(
+    image: np.ndarray, lattice_cr: np.ndarray, points: np.ndarray, accepted: np.ndarray,
+    grid_size: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Second chance for the corners :func:`refine_grid_board_corners` refused.
+
+    aruco2 refines each black marker's corners and only then pushes them
+    ``2 + i`` px outward along the marker's diagonal (aruco2.cpp:735-750,
+    1004-1019), before averaging them per lattice point and running one more
+    ``cornerSubPix`` (aruco2.cpp:1448-1484). Interior corners average the
+    push away over four markers; an edge or outer corner seen by one or two
+    markers keeps part or all of it, and on small squares, or where that
+    last ``cornerSubPix`` drifts under blur, the start lies beyond the
+    saddle search's movement cap, so the corner is refused and kept at
+    aruco2's biased position (or dropped by validation). Here a refused
+    saddle corner is searched again from where its accepted neighbours put
+    it (a local homography), and the result kept only if the search is
+    accepted, settles near that prediction, and the prediction was itself
+    plausible -- near aruco2's estimate, from neighbours the homography fits.
+
+    An outer L-junction corner (see :func:`outer_l_corners`) is not a saddle,
+    so no search can accept it; it is placed by
+    :func:`_predict_outer_l_corner` from its refined neighbours instead of
+    keeping aruco2's position, which carries the push and an L-corner's
+    ``cornerSubPix`` blur bias -- under the same plausibility check.
+
+    :return: ``(points, accepted)``, with ``accepted`` now also True for the
+        corners placed here.
+    """
+    pts = np.asarray(points, dtype=np.float64).copy()
+    ok = np.asarray(accepted, dtype=bool).copy()
+    lattice_cr = np.asarray(lattice_cr, dtype=np.int64).reshape(-1, 2)
+    if len(pts) == 0 or ok.all():
+        return pts, ok
+    l_corners = {tuple(map(int, q)) for q in outer_l_corners(*grid_size)}
+    is_l = np.array([tuple(map(int, q)) in l_corners for q in lattice_cr], dtype=bool)
+    finite = np.isfinite(pts).all(axis=1)
+
+    # Saddle corners first, from the neighbours accepted by the first pass.
+    seeds = pts.copy()
+    seeded = np.zeros(len(pts), dtype=bool)
+    step = np.full(len(pts), np.nan)
+    for i in np.flatnonzero(~ok & ~is_l & finite):
+        prediction = _predict_saddle_corner(lattice_cr, pts, ok, lattice_cr[i])
+        # aruco2's own estimate is off by its push plus cornerSubPix drift;
+        # neighbours that put the corner much further away than that are
+        # more likely wrong themselves, so the corner is left as it was.
+        if prediction is not None and np.hypot(*(prediction[0] - pts[i])) <= _RESEED_MAX_SHIFT * prediction[1]:
+            seeds[i], step[i], seeded[i] = prediction[0], prediction[1], True
+    if seeded.any():
+        refined, ok_again = refine_grid_board_corners(image, lattice_cr, seeds)
+        settled = np.zeros(len(pts), dtype=bool)
+        settled[seeded] = (np.hypot(*(refined[seeded] - seeds[seeded]).T)
+                           <= np.maximum(1.0, _RESEED_MAX_SETTLE * step[seeded]))
+        take = seeded & ok_again & settled
+        pts[take] = refined[take]
+        ok[take] = True
+
+    # Then the L-junction outer corners, from the (now fuller) accepted set.
+    for i in np.flatnonzero(is_l & ~ok & finite):
+        prediction = _predict_outer_l_corner(lattice_cr, pts, ok & ~is_l, lattice_cr[i])
+        if prediction is not None and np.hypot(*(prediction[0] - pts[i])) <= _RESEED_MAX_SHIFT * prediction[1]:
+            pts[i] = prediction[0]
+            ok[i] = True
+    return pts, ok
 
 
 #: How far (in lattice steps) a corner's leave-one-out neighbourhood reaches.
@@ -774,8 +988,9 @@ def detect_grid_board_corners(
         under the defaults, so one with its own id range (a cube face) must
         pass them.
     :param refine: run :func:`refine_grid_board_corners` on aruco2's own
-        corners before returning them. On by default; ChArUco2 and Ccube2
-        use the default.
+        corners, then :func:`reseed_refused_corners` on the ones it refuses,
+        before returning them. On by default; ChArUco2 and Ccube2 use the
+        default.
     :param validate: run :func:`validate_grid_board_corners` afterwards,
         dropping corners its lattice neighbours disagree with. On by
         default; ChArUco2 and Ccube2 use the default.
@@ -882,6 +1097,8 @@ def detect_grid_board_corners(
         lattice_cr = _lattice_coords(corner_ids, grid_w)
         if refine:
             refined_points, refined_mask = refine_grid_board_corners(img, lattice_cr, img_points)
+            refined_points, refined_mask = reseed_refused_corners(
+                img, lattice_cr, refined_points, refined_mask, (grid_w, grid_h))
             _LOG.debug(
                 "aruco2 grid-board refinement: %d of %d corner(s) moved to a saddle point.",
                 int(refined_mask.sum()), len(corner_ids))

@@ -139,6 +139,50 @@ def test_seeding_reads_a_colour_image_as_its_grey():
         assert np.array_equal(q1, q2)
 
 
+@pytest.mark.parametrize("method", [cv2.aruco.CORNER_REFINE_SUBPIX, cv2.aruco.CORNER_REFINE_APRILTAG],
+                         ids=["subpix", "apriltag"])
+def test_opencv_seed_quads_are_never_corner_refined(monkeypatch, method):
+    """The OpenCV quads are contour corners whatever refinement a caller
+    configured: SUBPIX would bring back a window bias, and APRILTAG returns
+    corners in AprilTag's pixel convention (about +0.45 px in x and y).
+    Simulated here by making every new DetectorParameters ask for *method*."""
+    target, image, _truth, markers = next(_views())
+    expected = a2._seed_quads(image, target.board, markers)
+
+    make_parameters = cv2.aruco.DetectorParameters
+    used = []
+
+    def preset():
+        params = make_parameters()
+        params.cornerRefinementMethod = method
+        return params
+
+    make_detector = cv2.aruco.ArucoDetector
+
+    def spy(dictionary, params, *args):
+        used.append(params.cornerRefinementMethod)
+        return make_detector(dictionary, params, *args)
+
+    monkeypatch.setattr(cv2.aruco, "DetectorParameters", preset)
+    monkeypatch.setattr(cv2.aruco, "ArucoDetector", spy)
+    seeded = a2._seed_quads(image, target.board, markers)
+    assert used and set(used) == {cv2.aruco.CORNER_REFINE_NONE}
+    for (_m1, q1), (_m2, q2) in zip(expected, seeded):
+        assert np.array_equal(q1, q2)
+
+
+@pytest.mark.parametrize("method", [cv2.aruco.CORNER_REFINE_SUBPIX, cv2.aruco.CORNER_REFINE_APRILTAG],
+                         ids=["subpix", "apriltag"])
+def test_a_targets_corner_refinement_setting_does_not_change_its_aruco2_reading(method):
+    plain = _target()
+    configured = ChArUco(num_squares_x=9, num_squares_y=6, square_size=10.0, marker_backend="aruco2",
+                         legacy=False, detection_options={"cornerRefinementMethod": method})
+    image, _truth = _render(plain.board, 18, 7.0)
+    first, second = plain.find_in_image(image), configured.find_in_image(image)
+    assert np.array_equal(np.asarray(first.keys), np.asarray(second.keys))
+    assert np.array_equal(np.asarray(first.image_points), np.asarray(second.image_points))
+
+
 def test_a_far_away_opencv_reading_of_the_same_id_is_not_used():
     """OpenCV's quad replaces aruco2's only when both read the same marker:
     a quad displaced by more than a fraction of its side is left alone (and

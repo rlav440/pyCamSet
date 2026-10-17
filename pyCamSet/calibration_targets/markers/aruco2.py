@@ -344,8 +344,10 @@ def _opencv_quads(gray: np.ndarray, dictionary, quads: list[np.ndarray]) -> dict
     scale = max(height, width) / max(y1 - y0, x1 - x0)
     params.minMarkerPerimeterRate = params.minMarkerPerimeterRate * scale
     params.maxMarkerPerimeterRate = params.maxMarkerPerimeterRate * scale
-    # Explicit rather than defaulted: the point is OpenCV's contour corners,
-    # which no corner refinement has moved.
+    # Forced, never taken from a caller's settings: the point is OpenCV's
+    # contour corners. SUBPIX would bring back a window bias, and APRILTAG
+    # returns corners in AprilTag's pixel convention, about +0.45 px in x
+    # and y from OpenCV's (OpenCV 5.0.0 aruco_detector.cpp, delta 0.5).
     params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_NONE
     detector = cv2.aruco.ArucoDetector(dictionary, params)
     corners, ids, _rejected = detector.detectMarkers(

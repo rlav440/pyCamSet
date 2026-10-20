@@ -381,7 +381,7 @@ def test_pixel_convention_matches_opencv_charuco() -> None:
     chess_mm = np.asarray(board.getChessboardCorners()).reshape(-1, 3)[:, :2]
     # A corner on the boundary of pixels n-1 and n is at n - 0.5 in the
     # pixel-centre convention; the live CharucoDetector reports it
-    # opencv_charuco_pixel_offset() further on (0.5 on OpenCV 4.x, 0 on 5),
+    # opencv_charuco_pixel_offset() further on (0.5 before OpenCV 4.14, 0 from it),
     # so this also checks that helper against the installed OpenCV.
     charuco_truth = (chess_mm / (square_px / 1000.0) * square_px
                      - 0.5 + opencv_charuco_pixel_offset())
@@ -398,10 +398,11 @@ def test_pixel_convention_matches_opencv_charuco() -> None:
 
 
 @pytest.mark.parametrize("version, offset", [
-    ("4.11.0", 0.5), ("4.12.0", 0.5), ("4.13.0", 0.5), ("5.0.0", 0.0), ("5.1.0-pre", 0.0)])
-def test_opencv_charuco_pixel_offset_follows_the_major_version(version, offset) -> None:
+    ("4.11.0", 0.5), ("4.12.0", 0.5), ("4.13.0", 0.5), ("4.14.0", 0.0), ("5.0.0", 0.0),
+    ("5.1.0-pre", 0.0)])
+def test_opencv_charuco_pixel_offset_follows_the_version(version, offset) -> None:
     """OpenCV 4.11-4.13's CharucoDetector reports the pixel-corner
-    convention, 5.0's the pixel-centre one (measured on synthetic renders)."""
+    convention, 4.14's and 5.0's the pixel-centre one (measured on synthetic renders)."""
     assert opencv_charuco_pixel_offset(version) == offset
     assert opencv_charuco_pixel_offset() == opencv_charuco_pixel_offset(cv2.__version__)
 

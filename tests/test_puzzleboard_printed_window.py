@@ -11,6 +11,7 @@ and that a detection cache written before the key revision is a miss.
 """
 import numpy as np
 import pytest
+from conftest import skip_without_aruco2
 
 from pyCamSet.calibration_targets import puzzleboard
 from pyCamSet.calibration_targets.puzzleboard import _CODE_SIZE, PuzzleBoard
@@ -90,6 +91,7 @@ def test_a_puzzleboard_cache_from_an_earlier_key_revision_is_a_miss(tmp_path, ty
     {"type": "ChArUco2"},
 ], ids=["ChArUco-aruco1", "ChArUco2"])
 def test_other_targets_caches_do_not_depend_on_the_key_revision(tmp_path, spec):
+    skip_without_aruco2(spec["type"])
     from pyCamSet.calibration.detection_cache import cache_matches
     from pyCamSet.calibration_targets.markers.puzzleboard import PUZZLEBOARD_KEY_REVISION
     target, path = _puzzleboard_cache(tmp_path, spec, revision=PUZZLEBOARD_KEY_REVISION + 7)

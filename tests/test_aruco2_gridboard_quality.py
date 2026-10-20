@@ -399,10 +399,11 @@ def test_pixel_convention_matches_opencv_charuco() -> None:
 
 
 @pytest.mark.parametrize("version, offset", [
-    ("4.11.0", 0.5), ("4.12.0", 0.5), ("4.13.0", 0.5), ("5.0.0", 0.0), ("5.1.0-pre", 0.0)])
-def test_opencv_charuco_pixel_offset_follows_the_major_version(version, offset) -> None:
+    ("4.11.0", 0.5), ("4.12.0", 0.5), ("4.13.0", 0.5), ("4.14.0", 0.0), ("5.0.0", 0.0),
+    ("5.1.0-pre", 0.0)])
+def test_opencv_charuco_pixel_offset_follows_the_version(version, offset) -> None:
     """OpenCV 4.11-4.13's CharucoDetector reports the pixel-corner
-    convention, 5.0's the pixel-centre one (measured on synthetic renders)."""
+    convention, 4.14's and 5.0's the pixel-centre one (measured on synthetic renders)."""
     assert opencv_charuco_pixel_offset(version) == offset
     assert opencv_charuco_pixel_offset() == opencv_charuco_pixel_offset(cv2.__version__)
 

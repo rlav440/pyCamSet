@@ -3,9 +3,11 @@
     targets. Implements plan v4 decisions D3 (dictionary resolution) and
     D5 (marker detection) for the aruco2 backend; the aruco1 (OpenCV) path
     is untouched. ChArUco corner interpolation (D4) is an adapter: aruco2's
-    own markers are handed straight to a cached ``cv2.aruco.CharucoDetector``
-    per board, so the same native interpolation and sub-pixel refinement the
-    aruco1 path uses also reads aruco2's markers -- there is no separate
+    own markers (their quads corrected where aruco2's corner refinement
+    biases them, see ``_seed_quads``) are handed to a cached
+    ``cv2.aruco.CharucoDetector`` per board, so the same native
+    interpolation and sub-pixel refinement the aruco1 path uses also reads
+    aruco2's markers -- there is no separate
     homography/refinement implementation to keep in step with OpenCV's own.
 :Status: Active. aruco1/aruco2 backend work (plan v4), corner-interpolation
     adapter revision; legacy-pattern handling rewritten to the approved
@@ -258,6 +260,273 @@ def _charuco_detector_for(board) -> cv2.aruco.CharucoDetector:
         return detector
 
 
+#: Revision of the marker quads :func:`interpolate_board_corners` hands to
+#: ``detectBoard``. Part of a detection cache's identity for a classic
+#: (ChArUco, Ccube, CIco) target read with aruco2, so a cache written by an
+#: earlier revision is a miss rather than reused. Bump it whenever the
+#: quads, and so the corners, a given image yields can change.
+CHARUCO_SEED_REVISION = 2
+
+#: Slack, in pixels, added to aruco2's sub-pixel half-window when deciding
+#: whether that window could have reached the neighbouring chessboard
+#: corner (see :func:`_saddle_reachable`).
+_SEED_GATE_SLACK_PX = 1.5
+
+#: A replacement quad whose corners move further than this fraction of the
+#: aruco2 quad's side is not the same marker reading, and is not used.
+_SEED_MAX_SHIFT_FRACTION = 0.3
+
+
+def _gray_of(image: np.ndarray) -> np.ndarray:
+    """A single-channel view of a uint8 image, converted as OpenCV's own
+    marker detection converts a colour image."""
+    if image.ndim == 3 and image.shape[2] == 1:
+        return image[:, :, 0]
+    if image.ndim == 3 and image.shape[2] == 4:
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+    if image.ndim == 3:
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return image
+
+
+def _mean_side(quad: np.ndarray) -> float:
+    """Mean side length of a (4, 2) quad, in pixels."""
+    return float(np.mean(np.linalg.norm(quad - np.roll(quad, -1, axis=0), axis=1)))
+
+
+def _aruco2_subpix_halfwin(sides: list[float]) -> int:
+    """The cornerSubPix half-window aruco2 refined these markers with.
+
+    aruco2 refines every marker corner in an image with ONE window, sized
+    from the mean marker side L: ``min(int(3 * max(1, L / 34)), 9)``, so
+    never below 3 px (aruco2_fork src/aruco2.cpp, the corner-refinement
+    block after marker identification). Here L is the mean over the markers
+    this call was given, which for a cube face is that face's markers: the
+    caller's marker list is all this function sees.
+    """
+    return min(int(3 * max(1.0, float(np.mean(sides)) / 34.0)), 9)
+
+
+def _saddle_reachable(side: float, marker_fraction: float, halfwin: int) -> bool:
+    """Whether aruco2's window could have pulled this marker's corners onto
+    the neighbouring chessboard corner.
+
+    On a classic ChArUco a marker corner sits ``(1 - f) / (2 f) * side``
+    pixels from the adjacent chessboard corner along each axis (f = marker
+    length / square length). When that is inside the half-window (plus a
+    little slack), cornerSubPix sees the stronger chessboard saddle and
+    drags the marker corner towards it.
+    """
+    gap = (1.0 - marker_fraction) / (2.0 * marker_fraction) * side
+    return gap < halfwin + _SEED_GATE_SLACK_PX
+
+
+def _opencv_quads(gray: np.ndarray, dictionary, quads: list[np.ndarray]) -> dict[int, np.ndarray]:
+    """OpenCV's own, unrefined marker quads near the given quads, by id.
+
+    Detection runs on a crop around *quads* rather than the whole image: a
+    cube face's markers occupy a small part of it, and the call is repeated
+    per face. It reads as the whole image would: the margin keeps OpenCV's
+    adaptive threshold (window at most 23 px) clear of the crop edge, and
+    the marker perimeter limits, which OpenCV states relative to the image's
+    larger side, are rescaled so they stay the same in pixels.
+    """
+    pts = np.concatenate(quads, axis=0)
+    margin = max(32.0, 2.0 * max(_mean_side(q) for q in quads))
+    height, width = gray.shape[:2]
+    x0 = int(max(0, np.floor(pts[:, 0].min() - margin)))
+    y0 = int(max(0, np.floor(pts[:, 1].min() - margin)))
+    x1 = int(min(width, np.ceil(pts[:, 0].max() + margin) + 1))
+    y1 = int(min(height, np.ceil(pts[:, 1].max() + margin) + 1))
+    if x1 <= x0 or y1 <= y0:
+        return {}
+    params = cv2.aruco.DetectorParameters()
+    scale = max(height, width) / max(y1 - y0, x1 - x0)
+    params.minMarkerPerimeterRate = params.minMarkerPerimeterRate * scale
+    params.maxMarkerPerimeterRate = params.maxMarkerPerimeterRate * scale
+    # Forced, never taken from a caller's settings: the point is OpenCV's
+    # contour corners. SUBPIX would bring back a window bias, and APRILTAG
+    # returns corners in AprilTag's pixel convention, about +0.45 px in x
+    # and y from OpenCV's (OpenCV 5.0.0 apriltag_quad_thresh.cpp:782-783,
+    # delta = 0.5).
+    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_NONE
+    detector = cv2.aruco.ArucoDetector(dictionary, params)
+    corners, ids, _rejected = detector.detectMarkers(
+        np.ascontiguousarray(gray[y0:y1, x0:x1]))
+    if ids is None:
+        return {}
+    offset = np.array([x0, y0], dtype=np.float32)
+    found: dict[int, np.ndarray] = {}
+    seen: set[int] = set()
+    for c, i in zip(corners, np.asarray(ids).reshape(-1)):
+        i = int(i)
+        if i in seen:
+            # Read twice: ambiguous, so neither copy is used.
+            found.pop(i, None)
+            continue
+        seen.add(i)
+        found[i] = np.asarray(c, dtype=np.float32).reshape(4, 2) + offset
+    return found
+
+
+def _edge_refit(gray: np.ndarray, quad: np.ndarray, marker_fraction: float,
+                origin: np.ndarray) -> np.ndarray:
+    """Re-estimate a marker quad from its own outer edges.
+
+    Each side's position is measured along the middle 60 % of the side,
+    away from the corners (which is where aruco2's window drags them), and
+    the four fitted lines are intersected. *gray* is a lightly blurred
+    float32 crop of the image whose top-left pixel is *origin* (integer
+    x, y) in the frame of *quad*.
+
+    Along each side's outward normal the search runs from
+    ``-max(2, 0.2 * side)`` to ``+max(0.6, 0.5 * gap)`` pixels, gap being the
+    white border between the marker and the neighbouring black square, and
+    takes the strongest dark-to-bright step. A side with fewer than three
+    usable samples, near-parallel neighbouring sides, or a result that moves
+    any corner by more than ``_SEED_MAX_SHIFT_FRACTION * side`` keeps the
+    quad as it was.
+    """
+    q = np.asarray(quad, dtype=np.float64).reshape(4, 2)
+    side = _mean_side(q)
+    centre = q.mean(axis=0)
+    gap = (1.0 - marker_fraction) / (2.0 * marker_fraction) * side
+    offsets = np.arange(-max(2.0, 0.2 * side), max(0.6, 0.5 * gap) + 1e-9, 0.25)
+    lines = []
+    for k in range(4):
+        a, b = q[k], q[(k + 1) % 4]
+        direction = (b - a) / np.linalg.norm(b - a)
+        normal = np.array([direction[1], -direction[0]])
+        if np.dot(normal, (a + b) / 2 - centre) < 0:
+            normal = -normal  # point outwards, away from the marker
+        n_samples = max(5, int(np.linalg.norm(b - a) / 1.5))
+        ts = np.linspace(0.2, 0.8, n_samples)
+        base = a[None] + ts[:, None] * (b - a)[None]
+        # One intensity profile per sample point, across the edge.
+        grid = base[:, None, :] + offsets[None, :, None] * normal[None, None, :]
+        # Rounded to float32 in the image's own frame, then moved into the
+        # crop's: subtracting an integer origin is exact, so remap samples
+        # exactly where it would on the whole image.
+        grid = grid.astype(np.float32) - origin.astype(np.float32)
+        profile = cv2.remap(gray, np.ascontiguousarray(grid[..., 0]), np.ascontiguousarray(grid[..., 1]),
+                            cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        step = np.diff(profile, axis=1)  # dark marker -> white border is positive
+        best = np.argmax(step, axis=1)
+        edge_points = []
+        for r in range(len(ts)):
+            j = best[r]
+            if step[r, j] <= 3.0:  # no real edge on this profile
+                continue
+            frac = 0.0
+            if 0 < j < step.shape[1] - 1:
+                # Parabolic peak interpolation between neighbouring steps.
+                y0, y1, y2 = step[r, j - 1], step[r, j], step[r, j + 1]
+                den = y0 - 2 * y1 + y2
+                if den < 0:
+                    frac = 0.5 * (y0 - y2) / den
+            # A difference sits half-way between its two samples (0.25 px apart).
+            offset = offsets[j] + 0.125 + frac * 0.25
+            edge_points.append(base[r] + offset * normal)
+        if len(edge_points) < 3:
+            return quad
+        edge_points = np.asarray(edge_points)
+        mean = edge_points.mean(axis=0)
+        # Total-least-squares line through the edge points.
+        _, _, vt = np.linalg.svd(edge_points - mean)
+        lines.append((mean, vt[0]))
+    refit = []
+    for k in range(4):
+        # Corner k is where side k-1 meets side k.
+        (c1, d1), (c0, d0) = lines[k], lines[(k - 1) % 4]
+        system = np.column_stack([d0, -d1])
+        if abs(np.linalg.det(system)) < 1e-6:
+            return quad
+        s = np.linalg.solve(system, c1 - c0)
+        refit.append(c0 + s[0] * d0)
+    refit = np.asarray(refit)
+    if np.max(np.linalg.norm(refit - q, axis=1)) > _SEED_MAX_SHIFT_FRACTION * side:
+        return quad
+    return refit.astype(np.float32)
+
+
+def _refit_quads(gray: np.ndarray, quads: list[np.ndarray], marker_fraction: float) -> list[np.ndarray]:
+    """:func:`_edge_refit` on each quad, blurring only the region they need.
+
+    The crop's margin covers the edge search and the blur kernel, so the
+    result is the one a whole-image blur would give.
+    """
+    pts = np.concatenate(quads, axis=0)
+    margin = max(_mean_side(q) for q in quads) + 10.0
+    height, width = gray.shape[:2]
+    x0 = int(max(0, np.floor(pts[:, 0].min() - margin)))
+    y0 = int(max(0, np.floor(pts[:, 1].min() - margin)))
+    x1 = int(min(width, np.ceil(pts[:, 0].max() + margin) + 1))
+    y1 = int(min(height, np.ceil(pts[:, 1].max() + margin) + 1))
+    if x1 <= x0 or y1 <= y0:
+        return list(quads)
+    blurred = cv2.GaussianBlur(gray[y0:y1, x0:x1].astype(np.float32), (0, 0), 0.6)
+    origin = np.array([x0, y0])
+    return [_edge_refit(blurred, q, marker_fraction, origin) for q in quads]
+
+
+def _seed_quads(image: np.ndarray, board, markers: list) -> list:
+    """aruco2's marker quads, corrected where aruco2's own refinement
+    biased them, ready for ``detectBoard``.
+
+    Why: aruco2 refines every marker corner with one image-wide cornerSubPix
+    window of at least 3 px (see :func:`_aruco2_subpix_halfwin`). On a
+    classic ChArUco with small squares that window reaches the adjacent
+    chessboard corner and drags the marker corner towards it, and
+    ``detectBoard``'s own corner refinement (a 1 px half-window at those
+    sizes) cannot undo the resulting error in the interpolated seed, so the
+    ChArUco corner comes back biased by a pixel or more.
+
+    What, per marker, ids and order unchanged. Only a marker whose corners
+    aruco2's window could have pulled onto the chessboard corner
+    (:func:`_saddle_reachable`) is touched at all:
+
+    1. where OpenCV's unrefined ``detectMarkers`` (the board's dictionary,
+       read near those markers) reads the same id, once, with every corner
+       within ``_SEED_MAX_SHIFT_FRACTION`` of a side of aruco2's, OpenCV's
+       quad is used;
+    2. otherwise the quad is refitted from its own edges
+       (:func:`_edge_refit`).
+
+    Every other marker keeps aruco2's quad: out of the window's reach it is
+    not biased this way, and swapping it for OpenCV's coarser contour corners
+    made larger-square real data (M_Nebula, ~57 px squares) measurably worse.
+
+    Deterministic: no randomness, and the result depends only on the image,
+    the board and the marker list.
+    """
+    quads = [corners for _mid, corners in markers]
+    sides = [_mean_side(q) for q in quads]
+    halfwin = _aruco2_subpix_halfwin(sides)
+    marker_fraction = float(board.getMarkerLength()) / float(board.getSquareLength())
+    reachable = [k for k in range(len(quads))
+                 if _saddle_reachable(sides[k], marker_fraction, halfwin)]
+    if not reachable:
+        return markers
+
+    gray = _gray_of(image)
+    opencv = _opencv_quads(gray, board.getDictionary(), [quads[k] for k in reachable])
+    seeded = list(quads)
+    to_refit = []
+    for k in reachable:
+        other = opencv.get(markers[k][0])
+        if other is not None and (np.max(np.linalg.norm(other - quads[k], axis=1))
+                                  <= _SEED_MAX_SHIFT_FRACTION * sides[k]):
+            seeded[k] = other
+        else:
+            to_refit.append(k)
+    if to_refit:
+        refitted = _refit_quads(gray, [quads[k] for k in to_refit], marker_fraction)
+        for k, quad in zip(to_refit, refitted):
+            seeded[k] = quad
+    return [(mid, np.ascontiguousarray(quad, dtype=np.float32))
+            for (mid, _corners), quad in zip(markers, seeded)]
+
+
 def detect_charuco_corners(image, board, dict_int, warn_legacy=None):
     """D4/D5: detect markers with aruco2 and interpolate ChArUco corners.
 
@@ -276,8 +545,10 @@ def detect_charuco_corners(image, board, dict_int, warn_legacy=None):
 def interpolate_board_corners(image, board, markers, warn_legacy=None):
     """D4: interpolate ChArUco corners from aruco2-detected markers.
 
-    An adapter, not a reimplementation: aruco2's own marker corners are
-    handed straight to OpenCV's native ``CharucoDetector.detectBoard``
+    An adapter, not a reimplementation: aruco2's marker quads, corrected
+    where aruco2's own corner refinement is known to bias them on small
+    squares (:func:`_seed_quads`; ids are never changed), are handed to
+    OpenCV's native ``CharucoDetector.detectBoard``
     (via :func:`_charuco_detector_for`), which does the per-marker
     homography, corner matching and sub-pixel refinement itself -- the
     same code the aruco1 path already runs on its own, natively-detected
@@ -384,6 +655,10 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
         good = [(mid, corners) for mid, corners in good if mid not in duplicate_ids]
     if not good:
         return None, None
+
+    # aruco2's quads are biased towards the chessboard corners on small
+    # squares; detectBoard is seeded with corrected ones (see _seed_quads).
+    good = _seed_quads(image, board, good)
 
     detector = _charuco_detector_for(board)
 

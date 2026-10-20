@@ -16,6 +16,7 @@ already does.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 import logging
 import threading
 from pathlib import Path
@@ -24,7 +25,6 @@ import cv2
 import numpy as np
 import svgwrite
 from cv2 import aruco
-from matplotlib import pyplot as plt
 
 from pyCamSet.calibration_targets.core import (
     AbstractTarget, FaceToShape, ImageDetection, exclude_by_prefix,
@@ -59,10 +59,21 @@ from pyCamSet.calibration_targets.polyhedra import (
     corners_within_cells,
     make_icosahedral,
 )
-from pyCamSet.cameras import Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
 from pyCamSet.utils.general_utils import (
     downsample_valid, split_aruco_dictionary,
 )
+
+# The cameras and matplotlib are imported where they are used, not here:
+# importing a target must not import pyvista, numba and matplotlib with it
+# (see core.abstract_target).  The names stay attributes of this module.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import Camera
+
+__getattr__ = lazy_attributes(__name__, {
+    "Camera": ("pyCamSet.cameras", "Camera"),
+    "plt": ("matplotlib.pyplot", None),
+})
 
 logger = logging.getLogger(__name__)
 

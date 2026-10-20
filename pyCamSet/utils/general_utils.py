@@ -11,12 +11,21 @@ import os
 import cv2
 import numpy as np
 from cv2 import aruco
-from matplotlib import pyplot as plt
 from natsort import natsorted
 from numpy.linalg import svd
 from tqdm import tqdm
 
-from scipy.spatial.transform import Rotation as R
+from pyCamSet.utils.lazy_imports import lazy_attributes
+
+# matplotlib and scipy are imported by the functions that use them, not
+# here.  This module is on the import path of every calibration target, and
+# the two of them cost a target import most of a second that finding a board
+# in an image never needs.  ``plt`` and ``R`` stay attributes of the module.
+__getattr__ = lazy_attributes(__name__, {
+    "plt": ("matplotlib.pyplot", None),
+    "R": ("scipy.spatial.transform", "Rotation"),
+})
+
 
 def someone_is_watching() -> bool:
     """
@@ -82,6 +91,8 @@ def average_tforms(tforms: list[np.ndarray]):
         return np.ones((4,4)) * np.nan
     if len(tforms) == 1:
         return tforms[0]
+    from scipy.spatial.transform import Rotation as R
+
     average_translation = np.mean([t[:3,-1] for t in tforms], axis=0)
     quats = [R.from_matrix(t[:3,:3]).as_quat(canonical=True) for t in tforms]
         
@@ -161,6 +172,8 @@ def mad_outlier_detection(data: np.ndarray|list, out_thresh = 3, draw=True) -> n
             # majority so concentrated that its score is infinite -- is drawn
             # on the threshold rather than left out, so the plot accounts for
             # every index the function just returned.
+            from matplotlib import pyplot as plt
+
             on_scale = finite & np.isfinite(scores)
             _, ax = plt.subplots(1, 1)
             ax.plot(np.nonzero(on_scale)[0], scores[on_scale], '.')

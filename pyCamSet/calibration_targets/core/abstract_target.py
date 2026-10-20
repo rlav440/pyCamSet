@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import logging
 
@@ -18,11 +18,9 @@ import os
 import signal
 
 from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
-from pyCamSet.cameras import CameraSet, Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
 from pyCamSet.calibration.telecentric import calibrate_telecentric
-from pyCamSet.cameras.lens_models import LENS_MODELS
 from pyCamSet.calibration.zhang import calibrate_zhang
-from pyCamSet.cameras.telecentric_camera import TelecentricCamera
 from pyCamSet.calibration.telecentric import is_planar, pose_from_affine
 from pyCamSet.calibration_targets.core.parameters import (
     NO_PARAMETERS,
@@ -31,6 +29,23 @@ from pyCamSet.calibration_targets.core.parameters import (
     combine,
 )
 from pyCamSet.calibration_targets.core.target_detections import TargetDetection, ImageDetection
+
+# The cameras are imported by the methods that build or inspect one, not
+# here.  pyCamSet.cameras brings in pyvista, numba and matplotlib through
+# CameraSet's visualisation, and every target imports this module, so an
+# eager import made finding a board in an image cost all three.  The names
+# stay attributes of this module, and annotations still name them.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import CameraSet, Camera
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+
+__getattr__ = lazy_attributes(__name__, {
+    "CameraSet": ("pyCamSet.cameras", "CameraSet"),
+    "Camera": ("pyCamSet.cameras", "Camera"),
+    "LENS_MODELS": ("pyCamSet.cameras.lens_models", "LENS_MODELS"),
+    "TelecentricCamera": (
+        "pyCamSet.cameras.telecentric_camera", "TelecentricCamera"),
+})
 
 
 #: The printable formats a target can be written as, by the name the
@@ -742,6 +757,10 @@ class AbstractTarget(ABC):
         :param model: the lens model to fit, "pinhole" or "telecentric"
         :return: A camera object.
         """
+        from pyCamSet.cameras import Camera
+        from pyCamSet.cameras.lens_models import LENS_MODELS
+        from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+
         if model not in LENS_MODELS:
             offered = ", ".join(repr(m) for m in LENS_MODELS)
             raise ValueError(f"Unknown lens model {model!r}; expected {offered}")
@@ -975,6 +994,8 @@ class AbstractTarget(ABC):
                 "Inadequate number of corners for pose estimation")
         if len(object_points) < 12:
             logger.warning("Low number of points used for pose estimation")
+
+        from pyCamSet.cameras.telecentric_camera import TelecentricCamera
 
         if isinstance(cam, TelecentricCamera):
             return self._affine_pose(object_points, image_points, cam, n_im[0])

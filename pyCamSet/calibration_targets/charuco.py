@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 import logging
 import threading
 from pathlib import Path
@@ -9,7 +10,6 @@ import numpy as np
 import svgwrite
 from PIL import Image
 from cv2 import aruco
-from matplotlib import pyplot as plt
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +35,19 @@ from pyCamSet.calibration_targets.markers.aruco2 import (
 from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
 from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
 from pyCamSet.calibration_targets.core.target_detections import ImageDetection
-from pyCamSet.cameras import Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
 from pyCamSet.utils.general_utils import downsample_valid
+
+# The cameras and matplotlib are imported where they are used, not here:
+# importing a target must not import pyvista, numba and matplotlib with it
+# (see core.abstract_target).  The names stay attributes of this module.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import Camera
+
+__getattr__ = lazy_attributes(__name__, {
+    "Camera": ("pyCamSet.cameras", "Camera"),
+    "plt": ("matplotlib.pyplot", None),
+})
 
 #: The smallest board OpenCV will build.  Below this it does not raise a
 #: catchable error; it corrupts its own module state.
@@ -507,6 +518,8 @@ class ChArUco(AbstractTarget):
         """
         Draws the target as a matplotlib plot.
         """
+        from matplotlib import pyplot as plt
+
         plt.imshow(self.board.generateImage(imres), cmap='gray')
         plt.axis("off")  # the raster's pixel indices say nothing about the board
         plt.show()

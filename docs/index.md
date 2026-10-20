@@ -132,6 +132,27 @@ git clone https://github.com/rlav440/pyCamSet
 pip install -e .
 ```
 
+Some features need packages the install leaves out:
+
+| Feature | Package | How it is installed |
+|---|---|---|
+| Detection optimisation studies | Optuna | `pip install "pyCamSet[optimisation]"` |
+| The lockbox editor's viewport | Open3D | `pip install "pyCamSet[viz]"` |
+| PuzzleBoard targets | `puzzle_board` | from its git repository; [details](troubleshooting.md#puzzleboard-is-not-installed) |
+| ChArUco2, Ccube2, CIco2, `marker_backend="aruco2"` | aruco2 | built from the `third_party/aruco2` submodule; [details](troubleshooting.md#aruco2-is-not-installed) |
+
+From a checkout, one script per system installs all of them with pip. It also checks
+what aruco2's build needs that pip cannot install, and names anything still missing:
+
+```bash
+setup_scripts/install_optional_linux.sh
+setup_scripts/install_optional_macos.sh
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup_scripts\install_optional_windows.ps1
+```
+
 ---
 
 ## A quick example.

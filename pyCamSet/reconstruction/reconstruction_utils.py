@@ -163,6 +163,9 @@ def matlab_stereo(im0, im1, disp_range = (128, 256), uniqueness_thresh=25, plot=
     """
     A function to run the matlab stereo algorithm, as it seems to perform better than the opencv one.
 
+    Needs a licensed MATLAB with the Computer Vision Toolbox (for ``disparitySGM``) and the MATLAB
+    Engine API for Python (``matlab.engine``), none of which pyCamSet installs.
+
     :param im0: The reference image, rectified
     :param im1: The comparison image, rectified
     :param disp_range: The disparity range to search

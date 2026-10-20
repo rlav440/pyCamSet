@@ -40,6 +40,7 @@ aruco2 = pytest.importorskip("aruco2")
 
 import pyCamSet.calibration_targets.markers.aruco2 as aruco2_backend
 from pyCamSet.calibration_targets.markers import aruco2_gridboard
+from pyCamSet.calibration_targets.markers.aruco_opencv import charuco_corners_to_pixel_centre
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     detect_grid_board_corners,
     opencv_charuco_pixel_offset,
@@ -106,13 +107,12 @@ def _render_and_degrade(
 
 
 def _analytic_corners(corner_ids: np.ndarray, grid_w: int, square_px: float, band_px: float) -> np.ndarray:
-    """Where a corner truly sits, in the convention
+    """Where a corner truly sits, in the pixel-*centre* frame
     ``detect_grid_board_corners`` returns: a corner on the boundary between
-    pixels n-1 and n is at n - 0.5 in the pixel-*centre* convention, plus
-    the installed OpenCV's ``opencv_charuco_pixel_offset()``. Compare its
-    output against this directly, with no further shift."""
+    pixels n-1 and n is at n - 0.5. Compare its output against this
+    directly, with no further shift."""
     lattice = np.stack([corner_ids % (grid_w + 1), corner_ids // (grid_w + 1)], axis=-1)
-    return band_px + lattice * square_px - 0.5 + opencv_charuco_pixel_offset()
+    return band_px + lattice * square_px - 0.5
 
 
 # -- 1. ghost regression --------------------------------------------------------
@@ -356,8 +356,8 @@ def test_an_occluder_bar_does_not_move_a_corner_more_than_1px() -> None:
     lattice_cr = np.stack([corner_ids % 13, corner_ids // 13], axis=-1)
     index = _index_by_cr(lattice_cr)
     assert target_cr in index
-    # Pixel-centre truth, moved to the installed OpenCV's convention.
-    truth = np.array([cx, cy]) - 0.5 + opencv_charuco_pixel_offset()
+    # Pixel-centre truth.
+    truth = np.array([cx, cy]) - 0.5
     error = float(np.linalg.norm(points[index[target_cr]] - truth))
     assert error < 1.0, f"occluded corner moved {error:.3f} px"
 
@@ -377,14 +377,15 @@ def test_pixel_convention_matches_opencv_charuco() -> None:
     charuco_image = board.generateImage((6 * square_px, 6 * square_px))
     detector = cv2.aruco.CharucoDetector(board)
     ch_points, ch_ids, _, _ = detector.detectBoard(charuco_image)
-    ch_points, ch_ids = ch_points.reshape(-1, 2), ch_ids.reshape(-1)
+    # The live CharucoDetector reports opencv_charuco_pixel_offset() off the
+    # pixel-centre frame (0.5 on OpenCV 4.x, 0 on 5); this checks that the
+    # conversion every ChArUco target applies lands it on the truth.
+    ch_points = np.asarray(charuco_corners_to_pixel_centre(ch_points)).reshape(-1, 2)
+    ch_ids = ch_ids.reshape(-1)
     chess_mm = np.asarray(board.getChessboardCorners()).reshape(-1, 3)[:, :2]
     # A corner on the boundary of pixels n-1 and n is at n - 0.5 in the
-    # pixel-centre convention; the live CharucoDetector reports it
-    # opencv_charuco_pixel_offset() further on (0.5 on OpenCV 4.x, 0 on 5),
-    # so this also checks that helper against the installed OpenCV.
-    charuco_truth = (chess_mm / (square_px / 1000.0) * square_px
-                     - 0.5 + opencv_charuco_pixel_offset())
+    # pixel-centre frame.
+    charuco_truth = chess_mm / (square_px / 1000.0) * square_px - 0.5
     charuco_error = np.linalg.norm(ch_points - charuco_truth[ch_ids], axis=1)
 
     bit_size = square_px // 4  # DICT_4X4: marker_bits == 4
@@ -425,9 +426,8 @@ def _warped_render(grid_size, square_px, angle_deg, shape=(700, 900), supersampl
     resolution and box-averaged down, an area-integrating sensor.
 
     :return: ``(image, truth)`` -- ``truth`` the ``(N, 2)`` position of
-        every lattice corner, row-major, in the convention
-        ``detect_grid_board_corners`` returns (pixel-centre plus the installed
-        OpenCV's ``opencv_charuco_pixel_offset()``).
+        every lattice corner, row-major, in the pixel-centre frame
+        ``detect_grid_board_corners`` returns.
     """
     master = np.asarray(render_grid_board_image(grid_size, _DICT_4X4, 3), dtype=np.float32)
     square, band = 12, 3.0
@@ -445,7 +445,7 @@ def _warped_render(grid_size, square_px, angle_deg, shape=(700, 900), supersampl
     image = np.round(cv2.resize(hi, (shape[1], shape[0]), interpolation=cv2.INTER_AREA)).astype(np.uint8)
     cols, rows = np.meshgrid(np.arange(grid_size[0] + 1), np.arange(grid_size[1] + 1))
     edge = np.stack([band + cols.ravel() * square, band + rows.ravel() * square], axis=-1) - 0.5
-    return image, cv2.perspectiveTransform(edge[None], warp)[0] + opencv_charuco_pixel_offset()
+    return image, cv2.perspectiveTransform(edge[None], warp)[0]
 
 
 @pytest.mark.parametrize("grid_size", [(3, 3), (4, 3), (3, 4), (4, 4), (5, 7), (8, 6), (9, 5), (6, 9)])

@@ -34,7 +34,10 @@ from pyCamSet.calibration_targets.markers.aruco2 import (
     interpolate_board_corners,
     resolve_dictionary,
 )
-from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
+from pyCamSet.calibration_targets.markers.aruco_opencv import (
+    ARUCO_OPENCV_DETECTOR,
+    charuco_corners_to_pixel_centre,
+)
 from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
 from pyCamSet.utils.lazy_imports import lazy_attributes
 from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform, downsample_valid
@@ -739,6 +742,8 @@ class Ccube(AbstractTarget):
         seen_data = []
         for idb, bd in enumerate(self.board_detectors):
             c_corners, c_ids, mloc, mid =  bd.detectBoard(image)
+            # Into the pixel-centre frame (OpenCV 4.x is half a pixel off it).
+            c_corners = charuco_corners_to_pixel_centre(c_corners)
             if c_corners is None and mloc is not None:
                 # A mismatch warns but never retries under the other
                 # pattern, and never takes corners from it. The probe costs

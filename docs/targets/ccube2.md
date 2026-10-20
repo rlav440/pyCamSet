@@ -139,10 +139,8 @@ Each face is refined and validated exactly as a ChArUco2 board is (see
 [ChArUco2's "Calibrating with it"](charuco2.md#calibrating-with-it) for what
 that does and why), since both go through the same
 `detect_grid_board_corners` choke point, once per face. The returned corners
-are in the same convention as every other ArUco-based target in pyCamSet:
-the installed OpenCV's `CharucoDetector` convention, which is aruco2's own
-pixel-centre position on OpenCV 5 or later and 0.5 px further on both axes
-(pixel-*corner*) on OpenCV 4.x.
+are in the same frame as every other target in pyCamSet: pixel-centre
+(integer coordinates are pixel centres), whichever OpenCV is installed.
 
 ## Printing one
 

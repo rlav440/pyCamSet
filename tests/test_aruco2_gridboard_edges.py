@@ -27,7 +27,6 @@ from pyCamSet.calibration_targets.ccube2 import Ccube2
 from pyCamSet.calibration_targets.markers import aruco2_gridboard
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     detect_grid_board_corners,
-    opencv_charuco_pixel_offset,
     rotation_ambiguous_marker_ids,
 )
 
@@ -58,11 +57,10 @@ def _board_pixels(target: ChArUco2, px_per_mm: float, border_mm: float) -> np.nd
     """Where each corner of ``target._render(dpi, border_mm)`` is, in the
     convention ``detect_grid_board_corners`` returns (see its "Pixel
     convention" docstring note): a corner on the boundary between pixels n-1
-    and n is at n - 0.5 in the pixel-*centre* convention, plus the installed
-    OpenCV's ``opencv_charuco_pixel_offset()``."""
+    and n is at n - 0.5 in the pixel-*centre* convention."""
     band_mm = target.square_size * 1000.0 / 4
     corners_mm = target.point_data.reshape(-1, 3)[:, :2] * 1000.0
-    return (corners_mm + band_mm + border_mm) * px_per_mm - 0.5 + opencv_charuco_pixel_offset()
+    return (corners_mm + band_mm + border_mm) * px_per_mm - 0.5
 
 
 # -- a board cut by the image edge ----------------------------------------------
@@ -98,7 +96,7 @@ def test_a_ccube2_face_cut_by_the_image_edge_is_read_where_it_is(side, cut) -> N
     cropped, shift = _crop(cube.textures[0], side, cut)
     lattice = layout.grid_board_corners(
         cube.grid_size, cube.square_size, origin=(cube.margin, cube.margin))
-    expected = lattice * (cube.draw_res[0] / cube.length) - 0.5 + opencv_charuco_pixel_offset() + shift
+    expected = lattice * (cube.draw_res[0] / cube.length) - 0.5 + shift
 
     detection = cube.find_in_image(cropped)
 
@@ -145,9 +143,8 @@ def test_padding_leaves_a_full_frame_detection_where_it_was(monkeypatch) -> None
     assert shapes == [(image.shape[0] + 2 * pad, image.shape[1] + 2 * pad)]
     assert sorted(ids.tolist()) == sorted(unpadded_by_id)
     for gid, point in zip(ids.tolist(), points):
-        # float32 corners carried 'pad' pixels further out: a few 1e-4 px,
-        # plus the installed OpenCV's pixel-convention offset.
-        assert np.abs(point - (unpadded_by_id[gid] + opencv_charuco_pixel_offset())).max() < 1e-3
+        # float32 corners carried 'pad' pixels further out: a few 1e-4 px.
+        assert np.abs(point - unpadded_by_id[gid]).max() < 1e-3
 
 
 @pytest.mark.parametrize("width", [640, 1499, 2448, 4000, 8192])

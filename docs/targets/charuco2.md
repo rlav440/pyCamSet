@@ -99,13 +99,11 @@ aruco2's own corners are then refined and validated before they are returned
   occasional false marker detections (see the ghost-marker warning below),
   which otherwise silently place a corner tens of pixels off.
 
-**Pixel convention:** a returned corner is in the same convention as the
-installed OpenCV's `CharucoDetector`, which pyCamSet's OpenCV-backed
-`ChArUco`/`Ccube` targets report, so a calibration does not depend on which
-target read the image. aruco2 and the refinement work in the pixel-*centre*
-convention; `opencv_charuco_pixel_offset()` is added last: 0 on OpenCV 5 or
-later (pixel-centre), 0.5 px on both axes on OpenCV 4.x (pixel-*corner*). See
-`detect_grid_board_corners`'s docstring for how this is checked.
+**Pixel convention:** a returned corner is in the pixel-*centre* frame
+(integer coordinates are pixel centres), whichever OpenCV is installed. aruco2
+and the refinement both work in it, and pyCamSet's OpenCV-backed
+`ChArUco`/`Ccube` targets report the same frame, so a calibration does not
+depend on which target read the image.
 
 Two boards are handled at construction. One whose markers include a marker
 that reads the same after a half turn (with `DICT_ARUCO_ORIGINAL`, marker 1023,

@@ -98,6 +98,10 @@ def run(params: dict,
             error = str(exc)
             diagnostics["error"] = error
 
+    # Imported here, not at module level: the ArUco detector module loads
+    # OpenCV's aruco bindings, which this workflow module otherwise leaves lazy.
+    from pyCamSet.calibration_targets.markers.aruco_opencv import PIXEL_CONVENTION
+
     run_id = make_run_id()
     # Validation reports are normally dictionaries, but the backend seam also
     # accepts report-like objects.  Keep status persistence independent of the
@@ -117,6 +121,10 @@ def run(params: dict,
         ),
         "params": params,
         "coordinate_mapping": COORDINATE_MAPPING,
+        # The frame every detector's points were returned in: pixel-centre,
+        # whichever OpenCV is installed (runs from before that was so recorded
+        # 'pixel-corner' for ChArUco-family corners read under OpenCV 4.x).
+        "pixel_convention": PIXEL_CONVENTION,
         "diagnostics": diagnostics,
         "report": report,
         "error": error,

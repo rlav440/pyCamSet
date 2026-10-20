@@ -63,24 +63,18 @@ Report corners on the same convention every other target uses, or a rig
 calibrated from two kinds of target mixes two coordinate systems and the
 difference is absorbed into the principal point.
 
-That convention is OpenCV's. `ChArUco` and `Ccube` inherit it by construction:
-they call `cv2.aruco.CharucoDetector`, which decides where a corner sits, and
-they apply no shift of their own. A target whose detector is not OpenCV's has
-nothing to inherit it from, so it must land on the same convention explicitly —
-`ChArUco2` adds half a pixel after refinement and validation, for exactly that
-reason. The check that the two agree is to render a pixel-aligned board of each
-kind with matching analytic corner positions and confirm both `find_in_image`
-implementations return the same points, which they do to about 0.05 px
-(`tests/test_aruco2_gridboard_quality.py`). Do the same for a new detector
-rather than assuming it.
-
-What is deliberately left open is whether OpenCV's convention coincides exactly
-with the pixel centres `cv2.projectPoints` projects onto. If it does not, the
-residual is a half-pixel offset in the principal point that every target in
-pyCamSet carries equally, since they all report on the one convention — it would
-move `cx`/`cy`, not the comparison between two targets. It is recorded here
-rather than corrected because changing a convention silently changes every
-calibration already made with this library.
+That convention is the pixel-centre frame
+(`aruco_opencv.PIXEL_CONVENTION`): integer coordinates are pixel centres, so a
+corner on the boundary between pixels n-1 and n is at n - 0.5. It is the frame
+`cv2.calibrateCamera` and `cv2.projectPoints` assume, and it does not depend on
+the installed OpenCV. OpenCV 5's `CharucoDetector` reports it; OpenCV 4.x's
+reports corners half a pixel further on, so `ChArUco`, `Ccube` and `CIco` pass
+its corners through `charuco_corners_to_pixel_centre`. Marker quads are
+pixel-centre under both. aruco2's grid board and the PuzzleBoard detector
+report pixel centres already. The check is to render a board whose analytic
+corner positions are known in the pixel-centre frame and confirm
+`find_in_image` returns them (`tests/test_pixel_centre_frame.py`). Do the same
+for a new detector rather than assuming it.
 
 ## 3. Say what your arguments mean
 

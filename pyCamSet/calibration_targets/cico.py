@@ -43,7 +43,7 @@ from pyCamSet.calibration_targets.markers.aruco2 import (
     resolve_dictionary,
 )
 from pyCamSet.calibration_targets.markers.aruco_opencv import (
-    ARUCO_OPENCV_DETECTOR, marker_bit_grid,
+    ARUCO_OPENCV_DETECTOR, charuco_corners_to_pixel_centre, marker_bit_grid,
 )
 from pyCamSet.calibration_targets.markers.backend_registry import (
     ARUCO1_BACKEND,
@@ -661,6 +661,8 @@ class CIco(AbstractTarget):
                 ]
             for face_index, detector in enumerate(self.board_detectors):
                 corners, corner_ids, marker_points, _ = detector.detectBoard(image)
+                # Into the pixel-centre frame (OpenCV 4.x is half a pixel off it).
+                corners = charuco_corners_to_pixel_centre(corners)
                 if corners is None and marker_points is not None:
                     if (not self.given_legacy_warning):
                         self._warn_legacy_once(face_index, self.boards[face_index])

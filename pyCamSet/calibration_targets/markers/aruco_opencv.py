@@ -123,6 +123,49 @@ class ArucoOpenCVDetector(DetectorParameterisation):
 ARUCO_OPENCV_DETECTOR = ArucoOpenCVDetector()
 
 
+#: The one pixel frame every ChArUco-family corner and marker quad pyCamSet
+#: returns is in, whichever OpenCV is installed: integer coordinates are
+#: pixel centres (pixel ``(i, j)``'s centre is at ``(i, j)``). It is the frame
+#: ``cv2.calibrateCamera`` and ``cv2.projectPoints`` assume.
+PIXEL_CONVENTION = "pixel-centre"
+
+
+def opencv_charuco_pixel_offset(version: str | None = None) -> float:
+    """
+    How far the installed OpenCV's ``CharucoDetector.detectBoard`` reports a
+    ChArUco corner from the pixel-*centre* convention, on both axes, in
+    pixels: 0.5 below major version 5, 0.0 from it on.
+
+    Measured on analytic renders whose truth is in the pixel-centre frame:
+    OpenCV 4.11 reports corners +0.48 px off (+0.50 once its cornerSubPix is
+    run to convergence; it starts half a pixel back and stops at its 0.1 px
+    accuracy), OpenCV 5.0 reports them at the truth. Marker quads, from
+    ``ArucoDetector`` or returned by ``detectBoard``, are pixel-centre under
+    both. :func:`charuco_corners_to_pixel_centre` takes the offset off.
+
+    :param version: an OpenCV version string to judge instead of the
+        installed ``cv2.__version__``.
+    """
+    text = cv2.__version__ if version is None else version
+    major = int(str(text).split(".")[0])
+    return 0.0 if major >= 5 else 0.5
+
+
+def charuco_corners_to_pixel_centre(corners, version: str | None = None):
+    """
+    ChArUco corners as ``CharucoDetector.detectBoard`` returned them, moved
+    into :data:`PIXEL_CONVENTION`.
+
+    Returned unchanged (the same object) where the installed OpenCV already
+    reports pixel centres, and None stays None; otherwise a float32 array of
+    the same shape, :func:`opencv_charuco_pixel_offset` less on both axes.
+    """
+    offset = opencv_charuco_pixel_offset(version)
+    if corners is None or offset == 0.0:
+        return corners
+    return np.asarray(corners, dtype=np.float32) - np.float32(offset)
+
+
 def marker_bit_grid(dictionary: cv2.aruco.Dictionary, marker_id: int) -> np.ndarray:
     """A marker as its printed cells, one-cell border included, 1 for black.
 

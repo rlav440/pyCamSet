@@ -50,7 +50,10 @@ from pyCamSet.calibration_targets.core.parameters import (
 # The corner-interpolation adapter below hands aruco2's markers to
 # OpenCV's CharucoDetector, built through the same helper the aruco1
 # path uses, so both are configured alike.
-from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
+from pyCamSet.calibration_targets.markers.aruco_opencv import (
+    ARUCO_OPENCV_DETECTOR,
+    charuco_corners_to_pixel_centre,
+)
 from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
 
 # This module must import cleanly without aruco2 installed;
@@ -613,6 +616,9 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
         stop passing a real callable once its own de-duplication state
         says the warning has already fired.
     :return: (corner_ids 1D int32 array, pts (N,2) float32) or (None, None).
+        The points are in the pixel-centre frame
+        (:data:`~pyCamSet.calibration_targets.markers.aruco_opencv.PIXEL_CONVENTION`)
+        whichever OpenCV is installed.
     """
     image = _as_uint8_image(image)
 
@@ -686,7 +692,7 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
         return None, None
 
     ids = np.asarray(c_ids).reshape(-1).astype(np.int32)
-    pts = np.asarray(c_corners).reshape(-1, 2).astype(np.float32)
+    pts = np.asarray(charuco_corners_to_pixel_centre(c_corners)).reshape(-1, 2).astype(np.float32)
     return ids, pts
 
 

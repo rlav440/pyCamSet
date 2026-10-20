@@ -32,7 +32,10 @@ from pyCamSet.calibration_targets.markers.aruco2 import (
     detect_charuco_corners,
     resolve_dictionary,
 )
-from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR
+from pyCamSet.calibration_targets.markers.aruco_opencv import (
+    ARUCO_OPENCV_DETECTOR,
+    charuco_corners_to_pixel_centre,
+)
 from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
 from pyCamSet.calibration_targets.core.target_detections import ImageDetection
 from pyCamSet.utils.lazy_imports import lazy_attributes
@@ -466,6 +469,9 @@ class ChArUco(AbstractTarget):
             # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
             # _, _, mloc, mid = self.board_detectors.detectBoard(image)
             c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image)
+            # OpenCV 4.x reports the corners half a pixel off the pixel-centre
+            # frame every target returns; the aruco2 branch is already in it.
+            c_corners = charuco_corners_to_pixel_centre(c_corners)
             if c_corners is None and mloc is not None:
                 # Approved policy: detect using ONLY self.board's configured
                 # legacy pattern -- no retry under the opposite one, and

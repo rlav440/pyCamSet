@@ -94,3 +94,43 @@ def test_other_targets_caches_do_not_depend_on_the_key_revision(tmp_path, spec):
     from pyCamSet.calibration_targets.markers.puzzleboard import PUZZLEBOARD_KEY_REVISION
     target, path = _puzzleboard_cache(tmp_path, spec, revision=PUZZLEBOARD_KEY_REVISION + 7)
     assert cache_matches(path, target, ["cam0"], None) is True
+
+
+def _render(target, edge_px: float = 40.0, supersample: int = 4) -> np.ndarray:
+    """*target*'s own printable SVG rasterised at *edge_px* pixels per square (white paper)."""
+    import cv2
+
+    scale = edge_px / target.square_size * supersample
+    width = int(round(target.paper_width * edge_px / target.square_size))
+    height = int(round(target.paper_height * edge_px / target.square_size))
+    big = np.full((height * supersample, width * supersample), 255, dtype=np.uint8)
+    shift, fixed = 4, 16.0  # cv2 fixed-point fraction bits, for sub-pixel shapes
+    for element in target._svg_document().elements:
+        attribs = element.attribs
+        colour = 0 if attribs.get("fill") == "black" else 255
+        if element.elementname == "rect":
+            x0, y0 = float(attribs["x"]) * scale, float(attribs["y"]) * scale
+            x1 = x0 + float(attribs["width"]) * scale
+            y1 = y0 + float(attribs["height"]) * scale
+            quad = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]) * fixed
+            cv2.fillPoly(big, [np.round(quad).astype(np.int32)], colour, cv2.LINE_8, shift)
+        elif element.elementname == "circle":
+            centre = (int(round(float(attribs["cx"]) * scale * fixed)),
+                      int(round(float(attribs["cy"]) * scale * fixed)))
+            cv2.circle(big, centre, int(round(float(attribs["r"]) * scale * fixed)), colour, -1,
+                       cv2.LINE_8, shift)
+    return cv2.resize(big, (width, height), interpolation=cv2.INTER_AREA)
+
+
+@pytest.mark.parametrize(("start_x", "start_y"), [(0, 0), (37, 0), (0, 120), (200, 301)])
+def test_a_real_render_keeps_every_printed_corner_at_any_window_offset(start_x, start_y):
+    """The window filter must not cost a printed corner wherever in the code the board starts:
+    a render of the board's own print gives back every one of its 22 x 15 keys."""
+    pytest.importorskip("puzzle_board")
+    target = PuzzleBoard(num_squares_x=22, num_squares_y=15, square_size=10.0,
+                         paper_width=260.0, paper_height=190.0,
+                         start_x=start_x, start_y=start_y)
+    found = target.find_in_image(_render(target))
+    expected = {(start_y + row) * _CODE_SIZE + start_x + col
+                for row in range(15) for col in range(22)}
+    assert set(np.asarray(found.keys).tolist()) == expected

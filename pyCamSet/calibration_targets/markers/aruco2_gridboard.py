@@ -33,6 +33,7 @@ sub-pixel image-point reprojection error.
 from __future__ import annotations
 
 import logging
+import re
 import warnings
 
 import cv2
@@ -162,17 +163,18 @@ def opencv_charuco_pixel_offset(version: str | None = None) -> float:
     the pixel-*centre* convention (pixel ``(i, j)``'s centre at ``(i, j)``),
     on both axes, in pixels.
 
-    Measured on an exact synthetic ChArUco render: OpenCV 4.11, 4.12 and
-    4.13 report corners 0.5 px further on (the pixel-*corner* convention);
-    OpenCV 5.0 reports them at pixel centres. So 0.5 below major version 5
+    Measured on synthetic ChArUco renders: OpenCV 4.11, 4.12 and 4.13
+    report corners 0.5 px further on (the pixel-*corner* convention);
+    OpenCV 4.14 and 5.0 report them at pixel centres. So 0.5 below 4.14
     and 0.0 from it on.
 
     :param version: an OpenCV version string to judge instead of the
         installed ``cv2.__version__``.
     """
     text = cv2.__version__ if version is None else version
-    major = int(str(text).split(".")[0])
-    return 0.0 if major >= 5 else 0.5
+    # "5.1.0-pre" and the like: the leading digits of the first two fields.
+    major, minor = (int(re.match(r"\d+", part).group()) for part in str(text).split(".")[:2])
+    return 0.0 if (major, minor) >= (4, 14) else 0.5
 
 
 def _edge_margin() -> int:
@@ -1016,8 +1018,8 @@ def detect_grid_board_corners(
         refinement work in the pixel-*centre* convention (pixel ``(i, j)``'s
         centre is at ``(i, j)``; a corner on the boundary between pixels
         n-1 and n is at n - 0.5); :func:`opencv_charuco_pixel_offset` is
-        added last, after refinement and validation: 0.0 on OpenCV >= 5
-        (pixel-centre), 0.5 on OpenCV 4.x (pixel-*corner*: that corner at n).
+        added last, after refinement and validation: 0.0 from OpenCV 4.14
+        (pixel-centre), 0.5 before it (pixel-*corner*: that corner at n).
     :raises ValueError: when ``ids`` is given and is not one distinct
         marker of the dictionary per square.
     """

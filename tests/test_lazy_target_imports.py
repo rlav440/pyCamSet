@@ -217,3 +217,44 @@ def test_shape_by_faces_without_pyvista_is_as_it_was(monkeypatch):
     base = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], dtype=float)
     with pytest.raises(ImportError, match="pyvista is required"):
         shape_by_faces.make_tforms(base, "cube")
+
+
+def _lazy_maps():
+    """Every module on the path that sets a lazy ``__getattr__``, with the names it maps.
+
+    Read from the source rather than listed by hand, so a module that gains a
+    mapping is checked without anyone remembering to add it here.
+    """
+    import ast
+    from pathlib import Path
+
+    import pyCamSet
+
+    root = Path(pyCamSet.__file__).parent
+    found = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "lazy_attributes"
+                    and len(node.args) >= 2 and isinstance(node.args[1], ast.Dict)):
+                module = ".".join(("pyCamSet", *path.relative_to(root).with_suffix("").parts))
+                mapping = {key.value: tuple(elt.value for elt in value.elts)
+                           for key, value in zip(node.args[1].keys, node.args[1].values)}
+                found.append((module, mapping))
+    return found
+
+
+_LAZY_MAPS = _lazy_maps()
+
+
+@pytest.mark.parametrize(("module_name", "mapping"), _LAZY_MAPS, ids=[m for m, _ in _LAZY_MAPS])
+def test_every_lazy_name_resolves_to_its_source(module_name, mapping):
+    """Each mapped name is the object its source module holds: a typo in any mapping fails here."""
+    import importlib
+
+    module = importlib.import_module(module_name)
+    for name, (source, attribute) in mapping.items():
+        expected = importlib.import_module(source)
+        if attribute is not None:
+            expected = getattr(expected, attribute)
+        assert getattr(module, name) is expected, f"{module_name}.{name}"

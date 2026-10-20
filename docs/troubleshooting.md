@@ -89,6 +89,53 @@ The PuzzleBoard source is released under CC0 upstream. Retain the upstream
 attribution, and cite the original PuzzleBoard work when publishing results
 that use this target.
 
+## aruco2 is not installed
+
+ChArUco2, Ccube2 and CIco2 are printed with aruco2 markers, and the classic
+targets read with `marker_backend="aruco2"` use its detector. Without it,
+building one of those targets raises an `ImportError` that names this fix.
+aruco2 is not on PyPI, so pip builds it from the `third_party/aruco2` submodule
+of a pyCamSet checkout. The install scripts do this for you:
+
+```bash
+setup_scripts/install_optional_linux.sh
+setup_scripts/install_optional_macos.sh
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup_scripts\install_optional_windows.ps1
+```
+
+The build needs two things pip cannot install. The scripts check for both:
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| C++ compiler | Visual Studio Build Tools, "Desktop development with C++" | `xcode-select --install` | `build-essential` or equivalent |
+| OpenCV 4.9+ with its CMake files | the release from [opencv.org/releases](https://opencv.org/releases/), with `OPENCV_DIR` set to its `build` folder | `brew install opencv` (found automatically) | conda-forge `libopencv`, with `OPENCV_DIR` set to its `lib/cmake/opencv4` |
+
+OpenCV 4.9 is the oldest release whose headers aruco2 compiles against. Ubuntu
+24.04's `libopencv-dev` is 4.6 and too old. The built module links to this
+native OpenCV, not to the `opencv-contrib-python` wheel pyCamSet imports as
+`cv2`; the two coexist in one process. On Windows the build copies OpenCV's
+`opencv_world` DLL into the installed package, so nothing has to go on `PATH`.
+
+To build by hand instead, run `git submodule update --init third_party/aruco2`,
+then `pip install -v ./third_party/aruco2`, adding
+`--config-settings=cmake.define.OpenCV_DIR=<that folder>` for an OpenCV
+CMake does not find by itself. On Windows, write the folder with forward
+slashes, and when a Visual Studio newer than the OpenCV release cannot find
+its binaries, add `--config-settings=cmake.define.OpenCV_ARCH=x64` and
+`--config-settings=cmake.define.OpenCV_RUNTIME=vc16` (the `x64/vcNN` folder the
+release ships). `CITATION.md` says which builds aruco2's own release check covers.
+
+## The MATLAB stereo matcher
+
+`reconstruction_utils.stereo_reconstruct(..., matlab=True)` computes the
+disparity with MATLAB's `disparitySGM` instead of OpenCV's StereoSGBM, the
+default. It needs a licensed MATLAB with the Computer Vision Toolbox and the
+MATLAB Engine API for Python (`matlab.engine`) installed into the environment.
+The install scripts leave it out, and nothing else in pyCamSet uses it.
+
 ## PuzzleBoardCube rejects `n_points`
 
 `PuzzleBoardCube` is a modified implementation of the original PuzzleBoard

@@ -58,7 +58,9 @@ The submodule also cites work behind features pyCamSet does not use, for example
 
 aruco2 is not published on PyPI. `pyproject.toml` declares no `aruco2` extra: it is not on PyPI,
 so there is nothing to pin. `pip install pyCamSet[aruco2]` fails with an unknown-extra error.
-Build the wrapper from the submodule instead, into the environment pyCamSet runs in:
+Build the wrapper from the submodule instead, into the environment pyCamSet runs in. The
+`setup_scripts/install_optional_*` scripts do this, and "aruco2 is not installed" in
+`docs/troubleshooting.md` lists what the build needs on each system; by hand:
 
 1. Fetch the source, if the checkout does not have it yet:
    `git submodule update --init third_party/aruco2`.

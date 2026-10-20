@@ -122,8 +122,8 @@ def run(params: dict,
         "params": params,
         "coordinate_mapping": COORDINATE_MAPPING,
         # The frame every detector's points were returned in: pixel-centre,
-        # whichever OpenCV is installed (runs from before that was so recorded
-        # 'pixel-corner' for ChArUco-family corners read under OpenCV 4.x).
+        # whichever OpenCV is installed. A run saved before this was recorded
+        # has no such field.
         "pixel_convention": PIXEL_CONVENTION,
         "diagnostics": diagnostics,
         "report": report,

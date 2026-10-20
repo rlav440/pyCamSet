@@ -2,10 +2,10 @@
 Every detector's points are recorded in the one pixel frame they are returned in.
 
 All targets return points in the pixel-centre frame (integer coordinates are
-pixel centres) whichever OpenCV is installed.  Detection caches written before
-that, under OpenCV 4.x, recorded ChArUco-family corners as 'pixel-corner'
-(half a pixel further on); such a cache must be a miss.  A detection read from
-a resized image is mapped back by the plain pixel-centre rule.
+pixel centres) whichever OpenCV is installed, and a cache records it.  A cache
+whose recorded frame differs, or that records none (written before the frame
+was recorded), must be a miss.  A detection read from a resized image is
+mapped back by the plain pixel-centre rule.
 """
 import json
 
@@ -64,10 +64,21 @@ def test_a_cache_records_pixel_centre_and_matches(tmp_path, spec):
 
 
 @pytest.mark.parametrize("spec", CHARUCO_FAMILY, ids=CHARUCO_FAMILY_IDS)
-def test_a_pixel_corner_cache_is_a_miss(tmp_path, spec):
+def test_a_cache_from_before_the_frame_was_recorded_is_a_miss(tmp_path, spec):
+    """Every cache written before this change lacks the field; its corners may sit half a pixel
+    on (OpenCV 4.x), so it is detected again rather than trusted."""
     target, path = _write_cache(tmp_path, spec)
     identity = _recorded_identity(path)
-    identity["pixel_convention"] = "pixel-corner"  # what OpenCV 4.x wrote before the frame was fixed
+    del identity["pixel_convention"]
+    _rewrite_identity(path, identity)
+    assert cache_module.cache_matches(path, target, ["cam0"], None) is False
+
+
+@pytest.mark.parametrize("spec", [{"type": "ChArUco", "marker_backend": "aruco1"}])
+def test_a_cache_recording_another_frame_is_a_miss(tmp_path, spec):
+    target, path = _write_cache(tmp_path, spec)
+    identity = _recorded_identity(path)
+    identity["pixel_convention"] = "pixel-corner"
     _rewrite_identity(path, identity)
     assert cache_module.cache_matches(path, target, ["cam0"], None) is False
 

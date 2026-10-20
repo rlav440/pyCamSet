@@ -116,10 +116,20 @@ See [PuzzleBoardCube](targets/puzzleboard-cube.md).
 ## OpenCV version differences
 
 pyCamSet supports OpenCV 4.8 and above, including 5.x, and handles the API
-differences at the call sites. Be aware that **OpenCV 5 shifts detected ChArUco
-corners by about half a pixel**, so calibrations produced under OpenCV 4 and
-OpenCV 5 are not numerically comparable. Do not compare reprojection errors
-across the major versions.
+differences at the call sites.
+
+**Every detector returns points in the pixel-centre frame, whichever OpenCV
+is installed.** Integer coordinates are pixel centres, the frame
+`cv2.calibrateCamera` and `cv2.projectPoints` assume. OpenCV 5's
+`CharucoDetector` returns ChArUco corners in it; OpenCV 4's returns them half a
+pixel further on, on both axes (measured: +0.5 px on 4.11 and 4.13, 0 on 5.0),
+and `aruco_opencv.charuco_corners_to_pixel_centre` moves them back, so ChArUco,
+Ccube and CIco give the same points under either version and the same frame as
+ChArUco2, Ccube2, CIco2 and PuzzleBoard. Sub-pixel positions still differ by a
+few hundredths of a pixel between the majors. A detection cache written before
+this frame was recorded is detected again; a camset saved before it may have
+its principal points half a pixel on from a newer one's, so re-run its
+calibration before comparing the two.
 
 pyCamSet depends on `opencv-contrib-python`. Every `opencv-*` wheel installs
 the same `cv2` package, so an environment that already has `opencv-python`

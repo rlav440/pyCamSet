@@ -114,10 +114,11 @@ def _target_identity(calibration_target, cam_names: list[str],
         # cache written before the current revision is a miss.
         identity["puzzleboard_keys"] = PUZZLEBOARD_KEY_REVISION
     else:
-        # A ChArUco-family target: its corners are pixel-centre whichever
-        # OpenCV is installed. A cache that recorded 'pixel-corner' (written
-        # under OpenCV 4.x before that was so) is a miss rather than a silent
-        # 0.5 px shift.
+        # Every other target (today the ChArUco family): its corners are
+        # pixel-centre whichever OpenCV is installed. A cache written before
+        # the frame was recorded has no such field, so it is a miss rather
+        # than a possible silent 0.5 px shift. PuzzleBoard points were always
+        # pixel-centre.
         identity["pixel_convention"] = PIXEL_CONVENTION
     if preprocessing is not None:
         identity["preprocessing"] = dict(preprocessing)

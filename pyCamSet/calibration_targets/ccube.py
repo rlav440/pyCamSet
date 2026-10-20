@@ -742,7 +742,7 @@ class Ccube(AbstractTarget):
         seen_data = []
         for idb, bd in enumerate(self.board_detectors):
             c_corners, c_ids, mloc, mid =  bd.detectBoard(image)
-            # Into the pixel-centre frame (OpenCV 4.x is half a pixel off it).
+            # Into the pixel-centre frame (OpenCV before 4.14 is half a pixel off it).
             c_corners = charuco_corners_to_pixel_centre(c_corners)
             if c_corners is None and mloc is not None:
                 # A mismatch warns but never retries under the other

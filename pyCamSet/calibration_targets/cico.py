@@ -661,7 +661,7 @@ class CIco(AbstractTarget):
                 ]
             for face_index, detector in enumerate(self.board_detectors):
                 corners, corner_ids, marker_points, _ = detector.detectBoard(image)
-                # Into the pixel-centre frame (OpenCV 4.x is half a pixel off it).
+                # Into the pixel-centre frame (OpenCV before 4.14 is half a pixel off it).
                 corners = charuco_corners_to_pixel_centre(corners)
                 if corners is None and marker_points is not None:
                     if (not self.given_legacy_warning):

@@ -84,7 +84,7 @@ def _unseeded(image, board, markers):
         markerIds=np.asarray([mid for mid, _q in markers], dtype=np.int32).reshape(-1, 1))
     if ids is None:
         return np.zeros(0, dtype=int), np.zeros((0, 2))
-    # In the pixel-centre frame the adapter returns (OpenCV 4.x is half a pixel off it).
+    # In the pixel-centre frame the adapter returns (OpenCV before 4.14 is half a pixel off it).
     return np.asarray(ids).reshape(-1), np.asarray(charuco_corners_to_pixel_centre(corners)).reshape(-1, 2)
 
 

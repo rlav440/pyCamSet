@@ -67,10 +67,10 @@ That convention is the pixel-centre frame
 (`aruco_opencv.PIXEL_CONVENTION`): integer coordinates are pixel centres, so a
 corner on the boundary between pixels n-1 and n is at n - 0.5. It is the frame
 `cv2.calibrateCamera` and `cv2.projectPoints` assume, and it does not depend on
-the installed OpenCV. OpenCV 5's `CharucoDetector` reports it; OpenCV 4.x's
-reports corners half a pixel further on, so `ChArUco`, `Ccube` and `CIco` pass
-its corners through `charuco_corners_to_pixel_centre`. Marker quads are
-pixel-centre under both. aruco2's grid board and the PuzzleBoard detector
+the installed OpenCV. The `CharucoDetector` of OpenCV 4.14 and later reports it;
+earlier versions report corners half a pixel further on, so `ChArUco`, `Ccube`
+and `CIco` pass its corners through `charuco_corners_to_pixel_centre`. Marker
+quads are pixel-centre under every version. aruco2's grid board and the PuzzleBoard detector
 report pixel centres already. The check is to render a board whose analytic
 corner positions are known in the pixel-centre frame and confirm
 `find_in_image` returns them (`tests/test_pixel_centre_frame.py`). Do the same

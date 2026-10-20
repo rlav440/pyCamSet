@@ -120,13 +120,13 @@ differences at the call sites.
 
 **Every detector returns points in the pixel-centre frame, whichever OpenCV
 is installed.** Integer coordinates are pixel centres, the frame
-`cv2.calibrateCamera` and `cv2.projectPoints` assume. OpenCV 5's
-`CharucoDetector` returns ChArUco corners in it; OpenCV 4's returns them half a
-pixel further on, on both axes (measured: +0.5 px on 4.11 and 4.13, 0 on 5.0),
-and `aruco_opencv.charuco_corners_to_pixel_centre` moves them back, so ChArUco,
-Ccube and CIco give the same points under either version and the same frame as
-ChArUco2, Ccube2, CIco2 and PuzzleBoard. Sub-pixel positions still differ by a
-few hundredths of a pixel between the majors. A detection cache written before
+`cv2.calibrateCamera` and `cv2.projectPoints` assume. The `CharucoDetector` of
+OpenCV 4.14 and later returns ChArUco corners in it; earlier versions return them
+half a pixel further on, on both axes (measured: +0.5 px on 4.11 and 4.13, 0 on
+4.14 and 5.0), and `aruco_opencv.charuco_corners_to_pixel_centre` moves them back,
+so ChArUco, Ccube and CIco give the same points under any version and the same
+frame as ChArUco2, Ccube2, CIco2 and PuzzleBoard. Sub-pixel positions still differ
+by a few hundredths of a pixel between versions. A detection cache written before
 this frame was recorded is detected again; a camset saved before it may have
 its principal points half a pixel on from a newer one's, so re-run its
 calibration before comparing the two.

@@ -11,6 +11,7 @@ import json
 
 import numpy as np
 import pytest
+from conftest import ARUCO2_ONLY_TARGETS
 
 import pyCamSet.calibration.detection_cache as cache_module
 from pyCamSet.calibration_targets import ImageDetection, TargetDetection
@@ -20,6 +21,10 @@ from pyCamSet.calibration_targets.markers import aruco2_gridboard, aruco_opencv
 
 
 def _write_cache(tmp_path, spec):
+    from pyCamSet.calibration_targets.markers.aruco2 import ARUCO2_AVAILABLE
+    if not ARUCO2_AVAILABLE and (spec.get("marker_backend") == "aruco2"
+                                 or spec["type"] in ARUCO2_ONLY_TARGETS):
+        pytest.skip(f"{spec} needs aruco2, which is not installed")
     target = build_target(spec)
     path = tmp_path / "detected_datapoints.npz"
     cache_module.save_to_cache(
@@ -66,7 +71,7 @@ def test_a_cache_records_pixel_centre_and_matches(tmp_path, spec):
 @pytest.mark.parametrize("spec", CHARUCO_FAMILY, ids=CHARUCO_FAMILY_IDS)
 def test_a_cache_from_before_the_frame_was_recorded_is_a_miss(tmp_path, spec):
     """Every cache written before this change lacks the field; its corners may sit half a pixel
-    on (OpenCV 4.x), so it is detected again rather than trusted."""
+    on (OpenCV before 4.14), so it is detected again rather than trusted."""
     target, path = _write_cache(tmp_path, spec)
     identity = _recorded_identity(path)
     del identity["pixel_convention"]
@@ -89,7 +94,7 @@ def test_a_puzzleboard_cache_records_no_convention(tmp_path):
     assert cache_module.cache_matches(path, target, ["cam0"], None) is True
 
 
-@pytest.mark.parametrize("version, offset", [("4.11.0", 0.5), ("4.13.0", 0.5), ("5.0.0", 0.0)])
+@pytest.mark.parametrize("version, offset", [("4.11.0", 0.5), ("4.13.0", 0.5), ("4.14.0", 0.0), ("5.0.0", 0.0)])
 def test_detectboard_corners_are_moved_to_pixel_centre(version, offset):
     native = np.array([[[10.5, 20.5]], [[123.75, 7.5]]], dtype=np.float32)  # as detectBoard returns them
     moved = aruco_opencv.charuco_corners_to_pixel_centre(native, version)

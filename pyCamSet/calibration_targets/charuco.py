@@ -469,7 +469,7 @@ class ChArUco(AbstractTarget):
             # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
             # _, _, mloc, mid = self.board_detectors.detectBoard(image)
             c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image)
-            # OpenCV 4.x reports the corners half a pixel off the pixel-centre
+            # OpenCV before 4.14 reports the corners half a pixel off the pixel-centre
             # frame every target returns; the aruco2 branch is already in it.
             c_corners = charuco_corners_to_pixel_centre(c_corners)
             if c_corners is None and mloc is not None:

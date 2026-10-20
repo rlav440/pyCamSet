@@ -605,7 +605,7 @@ def adaptive_decimated_charuco_detection_stereo(frame_L, charuco_board, aruco_di
         all_charuco_corners_L, all_charuco_ids_L, _, _ = detector.detectBoard(decimated_image_L)
         if all_charuco_corners_L is None:
             continue
-        # Into the pixel-centre frame (OpenCV 4.x reports corners half a pixel
+        # Into the pixel-centre frame (OpenCV before 4.14 reports corners half a pixel
         # off it), where the strided image's pixel i is the original's i * d.
         all_charuco_corners_L = charuco_corners_to_pixel_centre(all_charuco_corners_L)
         num_corners_detected_L = len(all_charuco_corners_L)

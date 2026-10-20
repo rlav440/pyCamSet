@@ -14,6 +14,7 @@ library and differ only in how many boards they point it at.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -134,12 +135,13 @@ def opencv_charuco_pixel_offset(version: str | None = None) -> float:
     """
     How far the installed OpenCV's ``CharucoDetector.detectBoard`` reports a
     ChArUco corner from the pixel-*centre* convention, on both axes, in
-    pixels: 0.5 below major version 5, 0.0 from it on.
+    pixels: 0.5 below OpenCV 4.14, 0.0 from it on.
 
     Measured on analytic renders whose truth is in the pixel-centre frame:
     OpenCV 4.11 reports corners +0.48 px off (+0.50 once its cornerSubPix is
     run to convergence; it starts half a pixel back and stops at its 0.1 px
-    accuracy), OpenCV 5.0 reports them at the truth. Marker quads, from
+    accuracy) and 4.13 +0.50 px; OpenCV 4.14 and 5.0 report them at the
+    truth. Marker quads, from
     ``ArucoDetector`` or returned by ``detectBoard``, are pixel-centre under
     both. :func:`charuco_corners_to_pixel_centre` takes the offset off.
 
@@ -147,8 +149,9 @@ def opencv_charuco_pixel_offset(version: str | None = None) -> float:
         installed ``cv2.__version__``.
     """
     text = cv2.__version__ if version is None else version
-    major = int(str(text).split(".")[0])
-    return 0.0 if major >= 5 else 0.5
+    # "5.1.0-pre" and the like: the leading digits of the first two fields.
+    major, minor = (int(re.match(r"\d+", part).group()) for part in str(text).split(".")[:2])
+    return 0.0 if (major, minor) >= (4, 14) else 0.5
 
 
 def charuco_corners_to_pixel_centre(corners, version: str | None = None):

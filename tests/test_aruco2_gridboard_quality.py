@@ -378,7 +378,7 @@ def test_pixel_convention_matches_opencv_charuco() -> None:
     detector = cv2.aruco.CharucoDetector(board)
     ch_points, ch_ids, _, _ = detector.detectBoard(charuco_image)
     # The live CharucoDetector reports opencv_charuco_pixel_offset() off the
-    # pixel-centre frame (0.5 on OpenCV 4.x, 0 on 5); this checks that the
+    # pixel-centre frame (0.5 before OpenCV 4.14, 0 from it); this checks that the
     # conversion every ChArUco target applies lands it on the truth.
     ch_points = np.asarray(charuco_corners_to_pixel_centre(ch_points)).reshape(-1, 2)
     ch_ids = ch_ids.reshape(-1)

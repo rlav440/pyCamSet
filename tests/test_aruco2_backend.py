@@ -47,8 +47,8 @@ def _count(det):
 
 def _gt_corner_map(gt_c, gt_ids):
     """``{corner_id: (2,) float xy}`` from a raw ``detectBoard`` return,
-    in the pixel-centre frame the targets return (OpenCV 4.x reports it
-    half a pixel off; see ``charuco_corners_to_pixel_centre``).
+    in the pixel-centre frame the targets return (OpenCV before 4.14 reports
+    it half a pixel off; see ``charuco_corners_to_pixel_centre``).
 
     OpenCV 4.x returns ``(N, 1, 2)`` corners and ``(N, 1)`` ids; OpenCV 5
     squeezes the singleton axis to ``(N, 2)`` / ``(N,)``. Indexing ``[:, 0]``

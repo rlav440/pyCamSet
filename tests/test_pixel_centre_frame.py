@@ -8,8 +8,8 @@ The boards are rendered analytically: a texture whose pixel k spans
 (i, j), centred on (i, j), is the mean of a grid of samples around its centre,
 each reading the texture at floor(H^-1 p). A texture point u is therefore at
 H u in the pixel-centre frame, which is the truth the detections are held to.
-OpenCV 4.x's CharucoDetector reports corners half a pixel off that frame and
-OpenCV 5's on it, so these pass under both only if the conversion is right.
+The CharucoDetector of OpenCV before 4.14 reports corners half a pixel off that
+frame and 4.14's and 5's on it, so these pass under both only if the conversion is right.
 """
 import cv2
 import numpy as np
@@ -82,7 +82,7 @@ def _grid_board_scenes(target):
         yield _render(texture, homography), cv2.perspectiveTransform(lattice_u[None], homography)[0]
 
 
-#: OpenCV's sub-pixel refinement run to convergence. OpenCV 4.x's CharucoDetector
+#: OpenCV's sub-pixel refinement run to convergence. OpenCV 4.11's CharucoDetector
 #: starts cornerSubPix half a pixel back and stops at its default 0.1 px accuracy,
 #: which leaves corners up to ~0.02 px short of the saddle on a 30 px square
 #: (measured: 0.500 px between 4.11 and 5.0 once converged, 0.48 at the default),
@@ -144,7 +144,7 @@ def test_corners_land_in_the_pixel_centre_frame(name, make, scenes, scale, conve
 @pytest.mark.parametrize("scale", [1.0, 1.5])
 @pytest.mark.parametrize("name, make, scenes", _targets(), ids=lambda v: v if isinstance(v, str) else "")
 def test_default_settings_land_in_the_pixel_centre_frame(name, make, scenes, scale):
-    """The targets as they are built by default, where OpenCV 4.x's early stop costs little (see CONVERGED)."""
+    """The targets as they are built by default, where OpenCV 4.11's early stop costs little (see CONVERGED)."""
     median = _median_error(name, make(None), scenes, scale)
     assert np.all(np.abs(median) < 0.02), (
         f"{name} at scale {scale} (OpenCV {cv2.__version__}): median offset from the pixel-centre truth "

@@ -43,10 +43,10 @@ low by design — the kernels are covered behaviourally by the `data` tests.
 
 Two more things worth knowing before you file a bug against your own run:
 
-- **OpenCV 4 and 5 are not numerically identical.** Their `CharucoDetector`s report
-  ChArUco corners half a pixel apart; pyCamSet moves OpenCV 4's into OpenCV 5's
-  pixel-centre frame, but sub-pixel positions still differ by a few hundredths of a
-  pixel. Don't expect reprojection errors to match exactly across the majors.
+- **OpenCV versions are not numerically identical.** Before 4.14 the `CharucoDetector`
+  reports ChArUco corners half a pixel further on than 4.14 and 5.x do; pyCamSet moves
+  them into the same pixel-centre frame, but sub-pixel positions still differ by a few
+  hundredths of a pixel. Don't expect reprojection errors to match exactly across versions.
 - **On Windows, some tests need symlink permission.** A fixture symlinks the test
   corpus; without Developer Mode enabled you get `OSError: [WinError 1314]`. That is
   your machine, not the change you are testing.

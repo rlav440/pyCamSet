@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import threading
+
 import cv2
 import numpy as np
 
@@ -76,17 +79,75 @@ def prepare_puzzleboard_image(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 
+#: Serialises every call into the upstream detector within one process.
+#: ``puzzle_board`` keeps detection state at module and class level -- the
+#: Hessian and corner-checker objects with their reused, size-dependent
+#: filter buffers (``puzzle_board_detector.h_d`` / ``corner_checker``) and
+#: the union-find root ring ``Grid.first_root`` -- so two threads detecting
+#: at once corrupt each other: measured, 87-95 of 128 concurrent calls on
+#: same-size images returned wrong results (many with no points at all),
+#: different sizes raised a broadcasting ``ValueError``, and one run hung.
+_DETECT_LOCK = threading.Lock()
+
+
 def detect_puzzleboard_image(
     image: np.ndarray,
     min_width: int = 4,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    """Detect PuzzleBoard grid points from a pyCamSet/OpenCV image."""
+    """Detect PuzzleBoard grid points from a pyCamSet/OpenCV image.
+
+    Thread-safe: concurrent calls in one process run the upstream detector
+    one at a time (see ``_DETECT_LOCK``); separate processes are unaffected.
+    """
     # puzzle_board is an optional extra: a module-level import would make
     # it a hard requirement of everything that reaches this file.
     from puzzle_board.puzzle_board_detector import detect_puzzleboard
 
     detector_image = prepare_puzzleboard_image(image)
-    return detect_puzzleboard(detector_image, min_width=int(min_width))
+    with _DETECT_LOCK:
+        return detect_puzzleboard(detector_image, min_width=int(min_width))
+
+
+def drop_duplicate_keys(keys, image_points, target_name: str = "PuzzleBoard"):
+    """
+    Drop every point whose key was decoded at more than one place in one image.
+
+    The upstream detector can report one code position at two (or more) image
+    locations in a single image -- measured: 18 repeated ids in one synthetic
+    scene of 7415 points, and 8 keys placed 100-250 px apart in one live pcube
+    image.  At most one of those locations is right and nothing here says
+    which, so all of them are dropped rather than one being picked: a
+    conflicting observation fed to the solve is worse than a missing one.
+
+    :param keys: one key per point, either integers (an array or a list) or
+        ``[face, point]`` pairs
+    :param image_points: one image location per key, in the same order
+    :param target_name: names the target in the log line
+    :return: ``(keys, image_points)`` with the duplicated keys removed, in the
+        container types they came in
+    """
+    if len(keys) == 0:
+        return keys, image_points
+    # A [face, point] pair is not hashable as a list, so it is counted as a tuple.
+    hashable = [tuple(int(v) for v in key) if np.ndim(key) else int(key) for key in keys]
+    counts: dict = {}
+    for key in hashable:
+        counts[key] = counts.get(key, 0) + 1
+    duplicated = {key for key, count in counts.items() if count > 1}
+    if not duplicated:
+        return keys, image_points
+    keep = [key not in duplicated for key in hashable]
+    n_dropped = len(keep) - sum(keep)
+    shown = sorted(duplicated)
+    logging.info(
+        "%s: dropped %d point(s) carrying %d id(s) decoded at more than one "
+        "place in one image: %s%s", target_name, n_dropped, len(duplicated),
+        shown[:10], " ..." if len(shown) > 10 else "")
+    if isinstance(keys, np.ndarray):
+        mask = np.asarray(keep, dtype=bool)
+        return keys[mask], np.asarray(image_points)[mask]
+    return ([key for key, kept in zip(keys, keep) if kept],
+            [point for point, kept in zip(image_points, keep) if kept])
 
 
 class PuzzleBoardDetector(DetectorParameterisation):

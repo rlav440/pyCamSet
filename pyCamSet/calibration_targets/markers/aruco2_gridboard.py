@@ -747,6 +747,14 @@ def validate_grid_board_corners(
     return alive
 
 
+#: Revision of the corners :func:`detect_grid_board_corners` returns. Part of
+#: a detection cache's identity for a target read through it (ChArUco2,
+#: Ccube2, CIco2), so a cache written by an earlier revision is a miss rather
+#: than reused. Bump it whenever the corners a given image yields can change.
+#: 1: corners returned in the pixel-centre frame on every OpenCV version.
+GRID_BOARD_CORNER_REVISION = 1
+
+
 def detect_grid_board_corners(
     image, grid_size: tuple[int, int], dict_int: int, marker_size: float,
     ids=None, *, refine: bool = True, validate: bool = True,

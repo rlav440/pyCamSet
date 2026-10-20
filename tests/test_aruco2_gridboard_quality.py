@@ -567,3 +567,33 @@ def test_require_aruco2_does_not_double_the_full_stop(monkeypatch) -> None:
     message = str(excinfo.value)
     assert ".." not in message
     assert "_aruco2. This is usually" in message
+
+
+# -- detection-cache identity ----------------------------------------------------
+
+
+def _grid_board_cache(tmp_path, spec, revision=None):
+    """A cache written for *spec*, as if by a build whose grid-board corner
+    revision was *revision* (None: this build's)."""
+    import pyCamSet.calibration.detection_cache as cache_module
+    from pyCamSet.calibration_targets import TargetDetection
+    from pyCamSet.calibration_targets.core.target_registry import build_target
+    target = build_target(spec)
+    path = tmp_path / "detected_datapoints.npz"
+    with pytest.MonkeyPatch.context() as patch:
+        if revision is not None:
+            patch.setattr(cache_module, "GRID_BOARD_CORNER_REVISION", revision)
+        cache_module.save_to_cache(
+            TargetDetection(cam_names=["cam0"], data=np.array([[0, 0, 0, 1.0, 2.0]])),
+            [(8, 12)], path, target, ["cam0"], None)
+    return target, path
+
+
+@pytest.mark.parametrize("type_", ["ChArUco2", "Ccube2", "CIco2"])
+def test_a_grid_board_cache_from_an_earlier_corner_revision_is_a_miss(tmp_path, type_):
+    from pyCamSet.calibration.detection_cache import cache_matches
+    target, path = _grid_board_cache(
+        tmp_path, {"type": type_}, revision=aruco2_gridboard.GRID_BOARD_CORNER_REVISION - 1)
+    assert cache_matches(path, target, ["cam0"], None) is False
+    target, path = _grid_board_cache(tmp_path, {"type": type_})
+    assert cache_matches(path, target, ["cam0"], None) is True

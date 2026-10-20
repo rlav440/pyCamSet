@@ -22,7 +22,13 @@ fine pitch to be worth it.
     pip install --no-deps "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
     ```
 
-    Constructing the target without it raises an `ImportError` naming that fix.
+    It is needed to *detect*, not to *make*: constructing, plotting and
+    printing the target work without it, because the package is imported
+    only when an image is detected. Without it the GUI
+    refuses to start detection, calibration or optimisation, with a message
+    naming the missing package, and a script that detects anyway (through
+    `calibrate_cameras` or `find_in_image`) fails with
+    `ModuleNotFoundError: No module named 'puzzle_board'`.
     See [Troubleshooting](../troubleshooting.md#puzzleboard-is-not-installed).
 
 ---

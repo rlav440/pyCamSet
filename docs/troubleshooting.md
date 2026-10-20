@@ -78,8 +78,13 @@ the whole calibration is reachable from a script through
 The PuzzleBoard targets depend on the upstream
 [PuzzleBoard repository](https://github.com/PStelldinger/PuzzleBoard) by Peer
 Stelldinger and the HAW Hamburg authors. It is a research codebase that is not
-published on PyPI, so it is optional, and constructing the target without it
-raises an `ImportError` naming the fix:
+published on PyPI, so it is optional. It is needed to detect, not to make:
+constructing, plotting and printing a PuzzleBoard target work without it,
+because the package is imported only when an image is detected. Without it
+the GUI refuses to start detection, calibration or optimisation with a
+message naming the missing package, and a script that detects anyway
+(through `calibrate_cameras` or `find_in_image`) fails with
+`ModuleNotFoundError: No module named 'puzzle_board'`. The fix is:
 
 ```bash
 pip install --no-deps "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"

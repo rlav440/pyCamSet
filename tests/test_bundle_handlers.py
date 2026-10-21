@@ -885,6 +885,30 @@ def test_set_from_templated_camset_refuses_a_self_calibration_vector(
         ).set_from_templated_camset(cams)
 
 
+def test_set_from_templated_camset_reads_a_reloaded_solve_with_missing_poses(
+        synthetic_problem):
+    """A solve that left unposed images out saves a shorter vector than a reloaded layout expects.
+
+    On a real telecentric rig, Phase 3 dropped 17 of 99 unposed images (558
+    parameters), the camset read back from disk rebuilt its layout with every pose free (660),
+    and every Phase 4 started from it failed.
+    """
+    cams, target, detection, prev = _solved_camset(synthetic_problem)
+    n_poses = prev.bundlePrimitive.poses.shape[0]
+    missing = np.zeros(n_poses, dtype=bool)
+    missing[-1] = True
+    prev.missing_poses = missing
+    # the solve's own vector had the missing pose fixed out; the reloaded primitive did not
+    cams.calibration_params = cams.calibration_params[:prev.bundlePrimitive.pose_end - 6]
+
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    handler.set_from_templated_camset(cams)
+
+    assert len(handler.initial_params) == handler.bundlePrimitive.bdpt_end
+    assert handler.missing_poses is not None and bool(np.asarray(handler.missing_poses)[-1])
+
+
 def test_set_from_templated_camset_needs_parameters_to_read(synthetic_problem):
     cams, target, detection, _ = _solved_camset(synthetic_problem)
     cams.calibration_params = None
@@ -1023,3 +1047,24 @@ def test_the_gauge_moves_a_pinhole_translation_and_no_pixel(synthetic_problem):
 
     assert np.allclose(spread(centres(new_extr)), spread(centres(extr)) / s0)
     assert np.allclose(new_points, target.point_data.reshape(-1, 3), atol=1e-9)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

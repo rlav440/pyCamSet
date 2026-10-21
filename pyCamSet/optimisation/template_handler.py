@@ -170,6 +170,14 @@ class TemplateBundleHandler:
         n_cams = camset.get_n_cams()
 
         self._intr_block, self._extr_block = blocks_for_camset(camset)
+        if self._extr_block.params.n_params < 6:
+            # The kernel projects a rotation-only camera with no translation, and
+            # get_camset saves it with none, so a given translation is folded
+            # into the principal point here rather than silently dropped later.
+            fixed_intr = {name for name in self.cam_names
+                          if 'int' in self.fixed_params.get(name, {})}
+            camset = _translation_in_principal_point(camset, fixed_intr)
+            self.camset = camset
         intr = np.zeros((n_cams, self._intr_block.params.n_params))
         extr = np.zeros((n_cams, self._extr_block.params.n_params))
         poses = np.zeros((n_poses, 6))
@@ -624,7 +632,18 @@ class TemplateBundleHandler:
         
         for idc, intr_unfixed in enumerate(self.bundlePrimitive.intr_unfixed):
             if intr_unfixed:
-                param_array.append(cams[idc].to_param_vector())
+                camera = cams[idc]
+                if (self.bundlePrimitive.n_extr < 6
+                        and self.bundlePrimitive.extr_unfixed[idc]):
+                    camera = _seed_offset_in_principal_point(camera, cam_poses[idc])
+                param_array.append(camera.to_param_vector())
+            elif (self.bundlePrimitive.n_extr < 6
+                    and self.bundlePrimitive.extr_unfixed[idc]
+                    and np.any(np.asarray(cam_poses[idc])[:2, 3])):
+                logger.warning(
+                    f"{self.cam_names[idc]}: its intrinsics are fixed, so the seed's "
+                    "in-plane offset has no principal point to go to and the "
+                    "solve starts without it.")
 
         for idc, ext_unfixed in enumerate(self.bundlePrimitive.extr_unfixed):
             if ext_unfixed:
@@ -792,15 +811,114 @@ def _extrinsic_from_params(params: np.ndarray, current: np.ndarray) -> np.ndarra
     Rebuilds a 4x4 extrinsic from the pose parameters a lens model estimates.
 
     A telecentric camera's translation is not identifiable and so is not
-    estimated; what it had from the seed is kept rather than invented, because
-    nothing in the solve had an opinion about it.
+    estimated: the kernel projects it with none, its in-plane position living
+    in the principal point. The extrinsic is rebuilt with none too, so the
+    camera saved projects exactly as the camera fitted; keeping a translation
+    from elsewhere would move every pixel by ``m * t``.
 
     :param params: the estimated pose parameters, rodrigues first
-    :param current: the camera's existing extrinsic, read only if needed
+    :param current: the camera's existing extrinsic; no longer read, kept so
+        every handler calls this the same way
     :return: the 4x4 extrinsic
     """
-    translation = params[3:] if len(params) > 3 else current[:3, 3]
+    translation = params[3:] if len(params) > 3 else np.zeros(3)
     return gu.make_4x4h_tform(params[:3], translation)
+
+
+def _seed_offset_in_principal_point(cam: Camera, seed_extrinsic: np.ndarray) -> Camera:
+    """
+    A copy of *cam* whose principal point carries the seed's in-plane offset.
+
+    A lens model whose extrinsic is rotation only (telecentric) has nowhere in
+    the parameter vector to put the seed's translation, and the kernel projects
+    with none. Dropped, each camera started shifted by ``m * t`` - on a real telecentric rig
+    68-165 px, which made a 34.9 px seed a 121.9 px solver start. The principal
+    point is where the model says that offset lives, so it is moved by however
+    far the seed's translation moves the world origin's image. Exact for
+    ``k = eps = 0`` (what Phase 2 hands over); otherwise exact at the origin
+    and second order elsewhere. The axial component, a gauge, is left alone.
+
+    :param cam: the camera as the seed was scored with
+    :param seed_extrinsic: the seed's 4x4 world to camera transform
+    :return: *cam* itself when there is nothing to move, else a moved copy
+    """
+    seed_extrinsic = np.asarray(seed_extrinsic, dtype=float)
+    if not np.all(np.isfinite(seed_extrinsic)) or not np.any(seed_extrinsic[:2, 3]):
+        return cam
+    rotation_only = seed_extrinsic.copy()
+    rotation_only[:3, 3] = 0.0
+    origin = np.zeros((1, 3))
+    projected = []
+    for extrinsic in (seed_extrinsic, rotation_only):
+        posed = copy(cam)
+        posed.extrinsic = extrinsic
+        posed._update_state()
+        projected.append(posed.project_points(origin)[0])
+    shift = projected[0] - projected[1]
+    if not np.all(np.isfinite(shift)):
+        return cam
+    moved = copy(cam)
+    intrinsic = np.array(cam.intrinsic, dtype=float, copy=True)
+    intrinsic[:2, 2] += shift
+    moved.intrinsic = intrinsic
+    moved._update_state()
+    return moved
+
+
+def _translation_in_principal_point(camset: CameraSet, fixed_intrinsics: set[str]) -> CameraSet:
+    """
+    *camset* with every rotation-only camera's translation moved into its principal point.
+
+    The solve and the saved result both treat a telecentric camera's translation
+    as zero. A camera set that arrives with one (Phase 2 hands over none, but a
+    saved calibration from elsewhere may) would otherwise start the solve from,
+    and be compared against, a camera that projects ``m * t`` away from the one
+    fitted. The in-plane part is moved the way :func:`_seed_offset_in_principal_point`
+    moves the seed's: exact for ``k = eps = 0``, otherwise exact at the world
+    origin only. The axial part changes nothing unless ``eps`` is set, and is
+    dropped either way: the model has no depth origin to put it in.
+
+    :param camset: the camera set the handler was given; not edited
+    :param fixed_intrinsics: names of cameras whose intrinsics the solve holds
+        fixed, which therefore cannot take the offset
+    :return: *camset* itself when no camera carries a translation, else a new set
+        holding moved copies of the cameras that did
+    """
+    cameras, moved_any = {}, False
+    for name in camset.get_names():
+        cam = camset[name]
+        extrinsic = np.array(cam.extrinsic, dtype=float, copy=True)
+        translation = extrinsic[:3, 3].copy()
+        if not np.any(translation):
+            cameras[name] = cam
+            continue
+        moved = _seed_offset_in_principal_point(cam, extrinsic)
+        if moved is cam:
+            moved = copy(cam)
+        extrinsic[:3, 3] = 0.0
+        moved.extrinsic = extrinsic
+        moved._update_state()
+        cameras[name] = moved
+        moved_any = True
+
+        k = float(np.reshape(cam.distortion_coefs, -1)[0])
+        eps = float(getattr(cam, "telecentricity", 0.0))
+        shift = np.asarray(moved.principal_point) - np.asarray(cam.principal_point)
+        if name in fixed_intrinsics:
+            logger.warning(
+                f"{name}: a rotation-only camera given with translation "
+                f"{np.array2string(translation, precision=4)}; the model has none and "
+                "its intrinsics are fixed, so the offset is dropped, not carried.")
+        else:
+            exact = eps == 0.0 and (k == 0.0 or not np.any(translation[:2]))
+            logger.warning(
+                f"{name}: a rotation-only camera given with translation "
+                f"{np.array2string(translation, precision=4)}; the model has none, so "
+                f"its principal point moves by {np.array2string(shift, precision=2)} px "
+                "and the translation is zeroed"
+                + ("." if exact else
+                   " (approximate: with k or eps set the move is exact at the origin only)."))
+    return CameraSet(camera_dict=cameras) if moved_any else camset
 
 
 def check_for_target_misalignment(tforms: np.ndarray, ref_cam: int = 0,

@@ -21,7 +21,8 @@ from pyCamSet.optimisation.function_block_implementations import (
     telecentric_extrinsic, telecentric_intrinsic)
 from pyCamSet.optimisation.optimisation_handling import run_bundle_adjustment
 from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
-from pyCamSet.optimisation.template_handler import TemplateBundleHandler
+from pyCamSet.optimisation.template_handler import (
+    TemplateBundleHandler, _extrinsic_from_params)
 from pyCamSet.utils.general_utils import h_tform, make_4x4h_tform
 
 REF_MAGNIFICATION = np.array([30000.0, 29000.0])  # px per metre
@@ -922,3 +923,462 @@ def test_the_gauge_spacing_ignores_pairs_across_faces():
                       for y in range(5) for x in range(5)])
     target = SimpleNamespace(square_size=0.01, point_data=np.vstack([face, other]))
     assert _gauge_square_size(target) == pytest.approx(0.01)
+
+
+# --------------------------------------------------------------------------
+# Tests carried over from isolated/education/integration.  Where a test
+# shares a name with one of ours and differs, the education version keeps
+# the ``_education_line`` suffix; ours keeps the original name.
+# --------------------------------------------------------------------------
+
+
+def test_get_camset_returns_a_telecentric_camset_education_line(telecentric_problem):
+    """What Phase 3 and Phase 4 call the moment a solve finishes.
+
+    The failure being guarded is not a wrong number: it is a ValueError raised
+    after the optimisation has already converged, which costs the entire run.
+    """
+    cams, target, detection, poses = telecentric_problem
+    # SelfBundleHandler, deliberately: TemplateBundleHandler.get_camset does not
+    # call the gauge transform, which is exactly why Phase 3 survives this bug.
+    # Asserting against that class would have passed before the fix too.
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+
+    # SelfBundleHandler's vector carries the free points too (see _self_params).
+    params = _self_params(handler, cams, poses, target)
+    out = handler.get_camset(params)
+
+    assert out.get_n_cams() == len(cams)
+    for name in cams.get_names():
+        assert isinstance(out[name], TelecentricCamera)
+        got = np.asarray(out[name].intrinsic, dtype=float)
+        want = np.asarray(cams[name].intrinsic, dtype=float)
+        assert got[0, 0] == pytest.approx(want[0, 0])
+        assert got[1, 1] == pytest.approx(want[1, 1])
+
+
+def test_get_updated_target_returns_the_recovered_shape_education_line(telecentric_problem):
+    """The other read-back Phase 4's diagnostics depend on."""
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+
+    params = ground_truth_params(handler, cams, poses)
+    updated = handler.get_updated_target(params)
+
+    n_points = int(np.prod(target.point_data.shape[:2]))
+    assert np.asarray(updated).shape == (n_points, 3)
+    assert np.all(np.isfinite(updated))
+
+
+def test_a_saved_telecentric_camset_reloads_with_its_handler_education_line(tmp_path, telecentric_problem):
+    """Save and reload is how Phase 4 receives Phase 3's result.
+
+    The handler class round-trips, which matters because it is the object the
+    Assess Calibration figures are drawn from.
+    """
+    from pyCamSet.utils.saving import load_CameraSet
+
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+    out = handler.get_camset(ground_truth_params(handler, cams, poses))
+
+    written = tmp_path / "telecentric.camset"
+    out.save(written)
+    reloaded = load_CameraSet(written)
+
+    assert reloaded.get_n_cams() == len(cams)
+    assert all(isinstance(reloaded[n], TelecentricCamera) for n in cams.get_names())
+
+
+def test_fix_all_cameras_packs_telecentric_widths(telecentric_problem):
+    """Holding every camera fixed takes its widths from the lens model.
+
+    The literals here were six and nine whatever the model, so a telecentric
+    set could not be held at all: the handler's broadcast refused them.
+    """
+    from pyCamSet.optimisation.find_target import fix_all_cameras
+
+    cams, _, _, _ = telecentric_problem
+    fixed = fix_all_cameras(cams)
+
+    assert set(fixed) == set(cams.get_names())
+    for name in cams.get_names():
+        assert fixed[name]["ext"].shape == (3,), "rotation only: no translation"
+        assert fixed[name]["int"].shape == (6,), "m_x, c_x, m_y, c_y, k, eps"
+
+
+def test_a_telecentric_set_can_be_held_at_its_calibration(telecentric_problem):
+    """The whole point of the widths: construct a handler that holds them fixed.
+
+    This is find_target's real path -- it photographs a known target in a known
+    rig -- so it has to work for whatever lens that rig was calibrated with.
+    """
+    from pyCamSet.optimisation.find_target import fix_all_cameras
+
+    cams, target, detection, poses = telecentric_problem
+    handler = TemplateBundleHandler(
+        camset=cams, target=target, detection=detection,
+        fixed_params=fix_all_cameras(cams),
+        options={"verbosity": 0, "fixed_pose": []})
+
+    assert not np.any(handler.bundlePrimitive.extr_unfixed)
+    assert not np.any(handler.bundlePrimitive.intr_unfixed)
+
+
+def test_the_gauge_rescales_the_lens_when_the_camera_has_no_translation_education_line(
+        telecentric_problem):
+    """Where the world's scale is absorbed, for a camera that cannot carry it.
+
+    The gauge hands the rig back re-expressed in the target's units, and the
+    world scale is one of the freedoms it removes.  A pinhole camera takes that
+    scale in its extrinsic TRANSLATION: its projection divides by z, so the
+    camera's own position is the only thing the scale can change, and the code
+    scales that field.  A telecentric extrinsic is rotation-only -- three
+    parameters, no translation at all -- so that step has nothing to act on.
+
+    The compensation has to happen in the lens instead.  A telecentric pixel is
+
+        u = m*x/(1 + eps*z) + c
+
+    and scaling the world by s is undone exactly by m -> m/s together with
+    eps -> eps/s, because (m/s)(s*x)/(1 + (eps/s)(s*z)) is the original
+    expression.
+
+    Feeding the problem a target carried at a scale of its own is what makes the
+    gauge's scale non-trivial; with the target already at the model's scale s
+    comes out at 1 and this branch does nothing.  That is exactly why the defect
+    survived: every fixture in this file has the target at the model's scale.
+    """
+    s0 = 1.37
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection)
+    handler.missing_poses = np.zeros(len(poses), dtype=bool)
+    bp = handler.bundlePrimitive
+
+    before = bp.return_bundle_primitives(
+        _self_params(handler, cams, poses, target, point_scale=s0))
+    proj_in, extr_in = (np.asarray(a, dtype=float).copy() for a in before[:2])
+
+    proj_out, extr_out, _, _ = handler.apply_gauge_transform(*before)
+    proj_out = np.asarray(proj_out, dtype=float)
+    extr_out = np.asarray(extr_out, dtype=float)
+
+    # what the gauge must have done: divide the lens by the scale it removed.
+    # the scale itself is read back from that division, so this also fails, and
+    # with this message, on code that left the lens alone entirely -- which is
+    # the defect it is here to catch.
+    assert not np.allclose(proj_out[:, 0], proj_in[:, 0]), (
+        "the magnification did not take the world's scale. A translation-free "
+        "camera has no extrinsic to carry it, so every pixel moves by the whole "
+        "size of the correction")
+    ratios = proj_in[:, 0] / proj_out[:, 0]
+    assert not np.allclose(ratios, 1.0), (
+        "the gauge found no scale to remove; this test would be vacuous. The "
+        "target has to be carried at its own scale for the branch to do work")
+    assert np.allclose(ratios, ratios[0]), (
+        "every camera in a rig is re-expressed with the same scale")
+
+    # m_x, m_y and eps carry the scale; the principal point and k do not
+    assert np.allclose(proj_out[:, 1], proj_in[:, 1]), "c_x is not a scale"
+    assert np.allclose(proj_out[:, 3], proj_in[:, 3]), "c_y is not a scale"
+    assert np.allclose(proj_out[:, 4], proj_in[:, 4]), "k is not a scale"
+    assert np.allclose(proj_out[:, 2], proj_in[:, 2] / ratios), "m_y must follow"
+    assert np.allclose(proj_out[:, 5], proj_in[:, 5] / ratios), (
+        "the telecentricity must be divided by the same scale as the "
+        "magnification, or the depth term drifts as the world does")
+
+    # the rig itself has not turned; only the world's frame moved.
+    #
+    # This is not exact: two of this handler's sixteen points are held at the
+    # model's coordinates to pin the gauge (find_gauge_points spreads them
+    # apart for a well-conditioned solve, here the two opposite corners of the
+    # grid), and they do not carry point_scale with the rest. The rigid fit
+    # against the target is a least-squares match over all sixteen, so those
+    # two un-scaled points pull in a small spurious rotation alongside the
+    # genuine scale change -- a real solve would show the same thing. The
+    # tolerance below is generous against that expected residual (~0.011 rad
+    # measured here) while still catching a rotation of the size a real
+    # gauge defect would produce.
+    assert np.allclose(extr_out, extr_in, atol=0.02), (
+        "the gauge moved the camera rotations by more than the held gauge "
+        "points can explain; a world scale is not a rotation of the rig")
+
+
+def test_the_gauge_transform_leaves_a_telecentric_projection_alone_education_line(
+        telecentric_problem):
+    """The gauge transform re-expresses a solve in the reference frame. It is
+    allowed to move every parameter; it is not allowed to move a pixel.
+
+    A telecentric camera's extrinsic is rotation only, so it cannot absorb the
+    gauge the way a pinhole's translation does. The poses take the translation
+    and the magnification takes the scale. If any part of that bookkeeping is
+    wrong the calibration silently changes, which is worse than the crash this
+    replaced -- so the check is on the pixels, not on the parameters.
+
+    The points are pushed off the reference deliberately. Left where they are
+    the gauge is the identity and this would pass without testing anything.
+    """
+    from pyCamSet.utils.general_utils import ext_4x4_to_rod
+
+    cams, target, detection, poses = telecentric_problem
+    handler = SelfBundleHandler(camset=cams, target=target, detection=detection,
+                                options={"outliers": "n"})
+
+    proj = np.array([cam.to_param_vector() for cam in cams], dtype=float)
+    extr = np.array([np.asarray(ext_4x4_to_rod(cam.extrinsic)[0], dtype=float)
+                     for cam in cams], dtype=float)
+    assert extr.shape[1] == 3, "a telecentric extrinsic is rotation only"
+
+    pose_block = np.array(
+        [np.concatenate(ext_4x4_to_rod(p)) for p in poses], dtype=float)
+
+    # A solve that has drifted: the points come back scaled, turned and moved.
+    drift = make_4x4h_tform(
+        Rotation.from_euler("xyz", [0.03, -0.02, 0.05]).as_rotvec(),
+        [0.0004, -0.0007, 0.0011])
+    points = h_tform(target.point_data.reshape(-1, 3) * 1.037, drift)
+
+    before = _telecentric_pixels(proj, extr, pose_block, points)
+    new_proj, new_extr, new_poses, new_points = handler.apply_gauge_transform(
+        proj.copy(), extr.copy(), pose_block.copy(), points.copy())
+    after = _telecentric_pixels(np.asarray(new_proj), np.asarray(new_extr),
+                               np.asarray(new_poses), np.asarray(new_points))
+
+    assert np.isfinite(before).all() and np.isfinite(after).all()
+    moved = np.linalg.norm(after - before, axis=1)
+    assert np.nanmax(moved) < 1e-6, (
+        f"the gauge transform moved a pixel by {np.nanmax(moved):.3e} px")
+
+    # and it did do something: the scale left the extrinsic, which has nowhere
+    # to put it, and landed in the magnification.
+    assert not np.allclose(np.asarray(new_proj)[:, 0], proj[:, 0]), \
+        "magnification should carry the gauge scale for a telecentric lens"
+    assert np.allclose(np.asarray(new_proj)[:, 1], proj[:, 1]), \
+        "there is no in-plane shift left for the principal point to absorb"
+
+
+def _offset_rig(k=0.0, eps=0.0):
+    """
+    A telecentric rig whose seed puts each camera off the world origin in plane.
+
+    The cameras that generated the detections carry the offset in their
+    translation, as the rig estimate reports it; the camera set handed to the
+    handler is what Phase 2 produces: translation zero, principal point at
+    the image centre.
+    """
+    rotations = ((0.0, 0.0, 0.0), (0.0, 0.45, 0.0), (-0.40, 0.0, 0.25))
+    offsets = ((0.0021, -0.0013, 0.0004), (-0.0034, 0.0019, 0.0), (0.0009, 0.0027, -0.002))
+    truth, handed = {}, {}
+    for idx, (rot, offset) in enumerate(zip(rotations, offsets)):
+        name = f"cam_{idx}"
+        cam = make_telecentric_camera(name, rotation=rot, k=k, eps=eps)
+        extrinsic = cam.extrinsic.copy()
+        extrinsic[:3, 3] = offset
+        truth[name] = TelecentricCamera(
+            extrinsic=extrinsic, intrinsic=cam.intrinsic, res=cam.res,
+            distortion_coefs=cam.distortion_coefs, telecentricity=eps, name=name)
+        handed[name] = make_telecentric_camera(name, k=k, eps=eps)
+    truth, handed = CameraSet(camera_dict=truth), CameraSet(camera_dict=handed)
+    target = GridTarget()
+    poses = _target_poses()
+    points = target.point_data.reshape(-1, 3)
+    detection = TargetDetection(cam_names=truth.get_names())
+    for im_num, pose in enumerate(poses):
+        for name in truth.get_names():
+            detection.add_detection(name, im_num, ImageDetection(
+                keys=np.arange(len(points)),
+                image_points=truth[name].project_points(h_tform(points, pose))))
+    return truth, handed, target, detection, np.array(poses)
+
+
+def _seeded_start(monkeypatch, truth, handed, target, detection, poses, **handler_kwargs):
+    """The handler's starting residuals when the seed is the exact rig."""
+    from pyCamSet.optimisation import template_handler
+
+    extrinsics = np.array([truth[name].extrinsic for name in truth.get_names()])
+    monkeypatch.setattr(template_handler, "estimate_camera_relative_poses",
+                        lambda **kwargs: (extrinsics, poses, np.zeros(len(poses))))
+    handler = TemplateBundleHandler(camset=handed, target=target, detection=detection,
+                                    options={"outliers": "n"}, **handler_kwargs)
+    params = handler.get_initial_params()
+    residuals = np.reshape(handler.make_loss_fun(threads=1)(params), (-1, 2))
+    return handler, params, np.linalg.norm(residuals, axis=1)
+
+
+def test_the_seeds_in_plane_offset_reaches_the_principal_point(monkeypatch):
+    """
+    The solver starts where the seed was scored, not m * t pixels away from it.
+
+    A rotation-only extrinsic has no slot for the seed's translation, so it
+    used to be dropped: a real telecentric rig scored its seed at 34.9 px and
+    started the solve at 121.9 px. The model keeps the in-plane position in
+    the principal point, so that is where the offset goes.
+    """
+    truth, handed, target, detection, poses = _offset_rig()
+    handler, params, error = _seeded_start(monkeypatch, truth, handed, target, detection, poses)
+    assert np.max(error) < 1e-6, f"the start is {np.max(error):.3g} px off the seed"
+
+    n_intr = handler.bundlePrimitive.n_intr
+    for idx, name in enumerate(truth.get_names()):
+        intr = params[idx * n_intr:(idx + 1) * n_intr]
+        moved = handed[name].principal_point + REF_MAGNIFICATION * truth[name].extrinsic[:2, 3]
+        assert np.allclose(intr[[1, 3]], moved, atol=1e-9), name
+        # the camera set the handler was given is not edited
+        assert np.allclose(handed[name].principal_point, np.array(REF_RES) / 2), name
+
+
+def test_a_distorted_seed_offset_is_carried_far_closer_than_dropped(monkeypatch):
+    """
+    With k and eps set the move is exact at the world origin only.
+
+    Elsewhere the distortion and the depth term differ at second order, which
+    is still a small fraction of the first order m * t that dropping it costs.
+    """
+    from pyCamSet.optimisation import template_handler
+
+    truth, handed, target, detection, poses = _offset_rig(k=REF_K, eps=REF_EPS)
+    _, _, carried = _seeded_start(monkeypatch, truth, handed, target, detection, poses)
+    monkeypatch.setattr(template_handler, "_seed_offset_in_principal_point", lambda cam, _: cam)
+    _, _, dropped = _seeded_start(monkeypatch, truth, handed, target, detection, poses)
+    assert np.mean(dropped) > 50.0
+    assert np.mean(carried) < 0.1 * np.mean(dropped)
+
+
+def test_fixed_intrinsics_keep_the_camera_as_given(monkeypatch):
+    """With nowhere to put the offset, the intrinsics stay exactly as fixed."""
+    truth, handed, target, detection, poses = _offset_rig()
+    fixed = {"cam_1": {"int": handed["cam_1"].to_param_vector()}}
+    handler, params, _ = _seeded_start(monkeypatch, truth, handed, target, detection, poses,
+                                       fixed_params=fixed)
+    n_intr = handler.bundlePrimitive.n_intr
+    assert handler.bundlePrimitive.free_intr == 2
+    # cam_0 and cam_2 moved; cam_1's fixed intrinsics are not in the vector at all
+    for slot, name in enumerate(("cam_0", "cam_2")):
+        intr = params[slot * n_intr:(slot + 1) * n_intr]
+        assert not np.allclose(intr[[1, 3]], handed[name].principal_point), name
+    assert np.allclose(handler.bundlePrimitive.intr[1], handed["cam_1"].to_param_vector())
+
+
+def test_a_pinhole_seed_is_handed_over_unchanged(monkeypatch):
+    """A pinhole extrinsic carries its own translation; its intrinsics are copied as they are."""
+    from pyCamSet.optimisation import template_handler
+
+    _, _, target, _, poses = _offset_rig()
+    cams = CameraSet(camera_dict={
+        f"cam_{i}": Camera(res=REF_RES, name=f"cam_{i}") for i in range(2)})
+    points = target.point_data.reshape(-1, 3)
+    extrinsics = np.array([make_4x4h_tform(np.array([0.0, 0.1 * i, 0.0]),
+                                           np.array([0.01 * i, -0.02, 0.5])) for i in range(2)])
+    detection = TargetDetection(cam_names=cams.get_names())
+    for im_num, pose in enumerate(poses):
+        for i, name in enumerate(cams.get_names()):
+            posed = Camera(extrinsic=extrinsics[i], intrinsic=cams[name].intrinsic,
+                           res=REF_RES, name=name)
+            detection.add_detection(name, im_num, ImageDetection(
+                keys=np.arange(len(points)), image_points=posed.project_points(h_tform(points, pose))))
+    monkeypatch.setattr(template_handler, "estimate_camera_relative_poses",
+                        lambda **kwargs: (extrinsics, poses, np.zeros(len(poses))))
+    called = []
+    monkeypatch.setattr(template_handler, "_seed_offset_in_principal_point",
+                        lambda *a: called.append(a))
+    handler = TemplateBundleHandler(camset=cams, target=target, detection=detection,
+                                    options={"outliers": "n"})
+    params = handler.get_initial_params()
+    assert called == []
+    n_intr = handler.bundlePrimitive.n_intr
+    for i, name in enumerate(cams.get_names()):
+        assert np.array_equal(params[i * n_intr:(i + 1) * n_intr], cams[name].to_param_vector())
+
+
+def _rotation_only_seed(monkeypatch, cams, poses):
+    """Seed with each camera's rotation, as the affine seed does once the offset is in the principal point."""
+    from pyCamSet.optimisation import template_handler
+
+    extrinsics = np.array([cams[name].extrinsic for name in cams.get_names()])
+    extrinsics[:, :3, 3] = 0.0
+    monkeypatch.setattr(template_handler, "estimate_camera_relative_poses",
+                        lambda **kwargs: (extrinsics, np.array(poses), np.zeros(len(poses))))
+
+
+def _saved_camera_residuals(handler, params, floc):
+    """
+    The residuals of what get_camset returns, saved and loaded, at the solver's own poses.
+
+    Laid out as the kernel's: one row per flattened detection, projected minus detected.
+    """
+    from pyCamSet.utils.saving import load_CameraSet
+
+    handler.get_camset(params).save(floc)
+    loaded = load_CameraSet(floc)
+    _, _, pose_params = handler.bundlePrimitive.return_bundle_primitives(params)
+    points = handler.target.point_data.reshape(-1, 3)
+    rows = handler._flat_detections()
+    projected = np.array([
+        loaded[handler.cam_names[int(cam)]].project_points(h_tform(
+            points[int(key)][None], make_4x4h_tform(pose_params[int(im)][:3],
+                                                    pose_params[int(im)][3:])))[0]
+        for cam, im, key in rows[:, :3]])
+    return loaded, projected - rows[:, -2:]
+
+
+@pytest.mark.parametrize("k, eps", [(0.0, 0.0), (REF_K, REF_EPS)], ids=["perfect", "distorted"])
+def test_a_translated_camera_set_saves_the_cameras_the_solver_fitted(monkeypatch, tmp_path, k, eps):
+    """
+    The kernel projects a telecentric camera with no translation, so the saved one has none.
+
+    get_camset used to keep the translation of the camera set it was handed. Phase 2
+    hands over none, but a camera set that arrived with one saved cameras that
+    projected m * t away from the solve: 68-165 px at a real rig's offsets.
+    """
+    truth, _, target, detection, poses = _offset_rig(k=k, eps=eps)
+    given = {name: truth[name].extrinsic.copy() for name in truth.get_names()}
+    _rotation_only_seed(monkeypatch, truth, poses)
+    handler = TemplateBundleHandler(camset=truth, target=target, detection=detection,
+                                    options={"outliers": "n"})
+    params = handler.get_initial_params()
+    solver = np.reshape(handler.make_loss_fun(threads=1)(params), (-1, 2))
+
+    loaded, saved = _saved_camera_residuals(handler, params, tmp_path / "rig.camset")
+    assert np.max(np.abs(saved - solver)) < 1e-6, \
+        f"the saved cameras project {np.max(np.abs(saved - solver)):.3g} px from the solver's"
+    for name in truth.get_names():
+        assert np.array_equal(loaded[name].extrinsic[:3, 3], np.zeros(3)), name
+        # the camera set the handler was given is not edited
+        assert np.array_equal(truth[name].extrinsic, given[name]), name
+
+
+def test_a_translated_camera_set_starts_where_it_was_given(monkeypatch):
+    """
+    For k = eps = 0 the translation moves into the principal point exactly.
+
+    The handler's cameras project as the given ones did, so the solve starts at
+    zero error on detections those cameras made.
+    """
+    truth, _, target, detection, poses = _offset_rig()
+    _rotation_only_seed(monkeypatch, truth, poses)
+    handler = TemplateBundleHandler(camset=truth, target=target, detection=detection,
+                                    options={"outliers": "n"})
+    params = handler.get_initial_params()
+    error = np.linalg.norm(np.reshape(handler.make_loss_fun(threads=1)(params), (-1, 2)), axis=1)
+    assert np.max(error) < 1e-6, f"the start is {np.max(error):.3g} px off the given cameras"
+    for name in truth.get_names():
+        cam = handler.camset[name]
+        assert np.array_equal(cam.extrinsic[:3, 3], np.zeros(3)), name
+        moved = truth[name].principal_point + REF_MAGNIFICATION * truth[name].extrinsic[:2, 3]
+        assert np.allclose(cam.principal_point, moved, atol=1e-9), name
+
+
+def test_a_translated_camera_set_round_trips_through_a_solve(monkeypatch, tmp_path):
+    """After a solve the cameras run_bundle_adjustment returns, saved and loaded, are the fitted ones."""
+    truth, _, target, detection, poses = _offset_rig(k=REF_K, eps=REF_EPS)
+    _rotation_only_seed(monkeypatch, truth, poses)
+    handler = TemplateBundleHandler(camset=truth, target=target, detection=detection,
+                                    options={"outliers": "n", "max_nfev": 5})
+    handler.get_initial_params()
+    optimisation, final_cams = run_bundle_adjustment(param_handler=handler, threads=1)
+
+    solver = np.reshape(handler.make_loss_fun(threads=1)(optimisation.x), (-1, 2))
+    _, saved = _saved_camera_residuals(handler, optimisation.x, tmp_path / "rig.camset")
+    assert np.max(np.abs(saved - solver)) < 1e-6
+    for name in truth.get_names():
+        assert np.array_equal(final_cams[name].extrinsic[:3, 3], np.zeros(3)), name

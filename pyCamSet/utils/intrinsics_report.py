@@ -255,6 +255,116 @@ def _board_views(detections, calibration_target, cam_name,
     return objects, images, of_image, has_detection
 
 
+def telecentric_project(cam, points: np.ndarray, rvec: np.ndarray, tvec: np.ndarray) -> np.ndarray:
+    """Project board-frame points through a telecentric camera at a given board pose.
+
+    The camera's own model (``TelecentricCamera.project_points``) with the pose given
+    explicitly: ``u = m_x * x * w * d + c_x`` with ``w = 1 / (1 + eps * z)`` and the
+    camera's division distortion ``d``.
+
+    :param cam: the telecentric camera
+    :param points: N x 3 board-frame points
+    :param rvec: board-to-camera Rodrigues rotation
+    :param tvec: board-to-camera translation (its z matters only when eps != 0)
+    :return: N x 2 pixel coordinates
+    """
+    rotation, _ = cv2.Rodrigues(np.asarray(rvec, dtype=float).reshape(3))
+    in_camera = np.asarray(points, dtype=float).reshape(-1, 3) @ rotation.T + np.asarray(tvec, dtype=float)
+    w = 1.0 / (1.0 + float(cam.telecentricity) * in_camera[:, 2])
+    m_x, m_y = cam.magnification
+    c_x, c_y = cam.principal_point
+    xs, ys = cam._distort(m_x * in_camera[:, 0] * w, m_y * in_camera[:, 1] * w)
+    return np.stack([xs + c_x, ys + c_y], axis=-1)
+
+
+def _orthographic_starts(points: np.ndarray, pixels: np.ndarray, cam) -> list[np.ndarray]:
+    """Closed-form starting poses (rvec, tx, ty) for an orthographic view of a board.
+
+    A least-squares affine fit gives the first two rows of the rotation scaled by the
+    magnification. A planar board leaves the third column of those rows free; it is fixed
+    by unit length and orthogonality up to a sign - the classic two-fold tilt ambiguity of
+    an orthographic view - so both signs are returned.
+    """
+    m = np.asarray(cam.magnification, dtype=float)
+    c = np.asarray(cam.principal_point, dtype=float)
+    centred = points - points.mean(axis=0)
+    _, spread, frame = np.linalg.svd(centred, full_matrices=False)
+    if frame.shape == (3, 3) and np.linalg.det(frame) < 0:
+        # SVD may return a reflection; rotation_local @ frame then is no rotation and its
+        # Rodrigues vector is garbage. Flipping the normal leaves a planar board's local x, y
+        # alone. (Found teaching the single-face recovery: both tilts' starts fitted their own
+        # camera at 224 px on exact synthetic data; only the joint refinement hid it.)
+        frame = frame * np.array([1.0, 1.0, -1.0])[:, None]
+    planar = spread[-1] <= 1e-9 * max(spread[0], 1e-300)
+    # work in the board's own principal frame so a planar board has z = 0
+    local = centred @ frame.T
+    design = np.column_stack([local[:, :2] if planar else local, np.ones(len(local))])
+    coefficients, *_ = np.linalg.lstsq(design, pixels - c, rcond=None)
+    rows = (coefficients[:-1].T / m[:, None])  # 2 x (2 or 3)
+    candidates = []
+    if planar:
+        r1, r2 = rows[0], rows[1]
+        a = max(0.0, 1.0 - r1 @ r1)
+        b = max(0.0, 1.0 - r2 @ r2)
+        third = (np.sqrt(a), -(r1 @ r2) / np.sqrt(a)) if a > 1e-12 else (0.0, np.sqrt(b))
+        for sign in (1.0, -1.0):
+            candidates.append(np.array([[r1[0], r1[1], sign * third[0]],
+                                        [r2[0], r2[1], sign * third[1]]]))
+    else:
+        candidates.append(rows)
+    starts = []
+    for top in candidates:
+        full = np.vstack([top, np.cross(top[0], top[1])])
+        u, _, vt = np.linalg.svd(full)
+        rotation_local = u @ vt
+        if np.linalg.det(rotation_local) < 0:
+            rotation_local = u @ np.diag([1.0, 1.0, -1.0]) @ vt
+        rotation = rotation_local @ frame  # board frame -> camera
+        offset = coefficients[-1] / m - (rotation @ points.mean(axis=0))[:2]
+        rvec, _ = cv2.Rodrigues(rotation)
+        starts.append(np.concatenate([rvec.reshape(3), offset]))
+    return starts
+
+
+def telecentric_view_rms(points, pixels, cam) -> float:
+    """One board view's RMS under the telecentric model, its pose solved at fixed intrinsics.
+
+    The telecentric counterpart of OpenCV's pose-only solve used for pinhole cameras:
+    rotation and in-plane translation (plus depth when the lens has a telecentricity
+    error) are fitted with the camera's own projection and distortion, from both
+    orthographic starting poses. (Before this, D2.6 for telecentric cameras ran OpenCV's
+    pinhole solve, a different model; found while testing on real rigs.)
+
+    :param points: the board view's object points, (1, N, 3) or (N, 3)
+    :param pixels: its image points, (1, N, 2) or (N, 2)
+    :param cam: the calibrated telecentric camera
+    :return: the RMS reprojection error in pixels, or NaN if no pose could be fitted
+    """
+    from scipy.optimize import least_squares
+
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    pixels = np.asarray(pixels, dtype=float).reshape(-1, 2)
+    if len(points) < 3:
+        return float("nan")
+    with_depth = float(cam.telecentricity) != 0.0
+    best = float("nan")
+    for start in _orthographic_starts(points, pixels, cam):
+        x0 = np.concatenate([start, [0.0]]) if with_depth else start
+
+        def residual(x):
+            t = np.array([x[3], x[4], x[5] if with_depth else 0.0])
+            return (telecentric_project(cam, points, x[:3], t) - pixels).reshape(-1)
+        try:
+            fit = least_squares(residual, x0, method="lm" if len(points) * 2 >= len(x0) else "trf")
+        except (ValueError, np.linalg.LinAlgError):
+            continue
+        errors = fit.fun.reshape(-1, 2)
+        rms = float(np.sqrt(np.mean(np.sum(errors ** 2, axis=1))))
+        if np.isfinite(rms) and not (rms >= best):
+            best = rms
+    return best
+
+
 def _board_errors(objects, images, cam):
     """
     Each board view's RMS, as Zhang's closed form leaves it.
@@ -274,6 +384,11 @@ def _board_errors(objects, images, cam):
     counts = np.array([o.shape[1] for o in objects], dtype=int)
     if not objects:
         return np.array([], dtype=float), counts
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+    if isinstance(cam, TelecentricCamera):
+        return np.array([telecentric_view_rms(o, i, cam) for o, i in zip(objects, images)],
+                        dtype=float), counts
+
     intrinsic = np.asarray(cam.intrinsic, dtype=float)
     coefficients = np.asarray(cam.distortion_coefs, dtype=float).reshape(-1)
     per_view = np.full(len(objects), float("nan"))
@@ -365,7 +480,10 @@ def per_view_reprojection(
             n_points.append(int(np.sum(board_points[here])))
             valid_pose.append(True)
 
+        from pyCamSet.cameras.telecentric_camera import TelecentricCamera
         per_view[cam_name] = {
+            "pose_model": ("telecentric" if isinstance(cams[cam_name], TelecentricCamera)
+                           else "pinhole"),
             "image_indices": list(range(max_ims)),
             "rms_px": rms_px,
             "n_points": n_points,

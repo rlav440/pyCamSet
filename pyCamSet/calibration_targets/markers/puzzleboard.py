@@ -93,11 +93,16 @@ _DETECT_LOCK = threading.Lock()
 def detect_puzzleboard_image(
     image: np.ndarray,
     min_width: int = 4,
+    explain: dict | None = None,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """Detect PuzzleBoard grid points from a pyCamSet/OpenCV image.
 
     Thread-safe: concurrent calls in one process run the upstream detector
     one at a time (see ``_DETECT_LOCK``); separate processes are unaffected.
+    :param explain: optional dict that, when given, receives the RGB image
+        handed to the detector and, per grid patch it decoded, the patch's
+        grid of points, the edge bits it read and the positions it decoded
+        (education view). None changes nothing.
     """
     # puzzle_board is an optional extra: a module-level import would make
     # it a hard requirement of everything that reaches this file.
@@ -105,7 +110,36 @@ def detect_puzzleboard_image(
 
     detector_image = prepare_puzzleboard_image(image)
     with _DETECT_LOCK:
-        return detect_puzzleboard(detector_image, min_width=int(min_width))
+        if explain is None:
+            return detect_puzzleboard(detector_image, min_width=int(min_width))
+        explain["detector_image"] = detector_image
+        explain["min_width"] = int(min_width)
+        try:
+            # detect_puzzleboard is exactly this call with a fresh decoder; the
+            # recording decoder only copies each patch's result after decoding.
+            from puzzle_board.puzzle_board_detector import _detect_puzzles
+            from puzzle_board.puzzle_board_decoder import PuzzleBoardDecoder
+        except ImportError:  # a puzzle_board without the private seam
+            explain["patches"] = None
+            return detect_puzzleboard(detector_image, min_width=int(min_width))
+        patches: list[dict] = []
+
+        class _RecordingDecoder(PuzzleBoardDecoder):
+            def decode(self, root, sub_dot, img):
+                result = super().decode(root, sub_dot, img)
+                record = {}
+                for name in ("valid", "sub_dot", "positions", "hbits", "vbits",
+                             "hvalid", "vvalid", "hsub_dot", "vsub_dot",
+                             "hcorrect", "vcorrect"):
+                    value = getattr(self, name, None)
+                    if value is not None:
+                        record[name] = np.array(value, copy=True)
+                patches.append(record)
+                return result
+
+        explain["patches"] = patches
+        return _detect_puzzles(detector_image, int(min_width), False,
+                               decoder=_RecordingDecoder())
 
 
 def drop_duplicate_keys(keys, image_points, target_name: str = "PuzzleBoard"):
@@ -211,3 +245,17 @@ PUZZLEBOARD_DETECTOR = PuzzleBoardDetector()
 #: three targets), and the planar board keeps only keys inside its printed
 #: window.
 PUZZLEBOARD_KEY_REVISION = 2
+
+def _trace_id_values(values, limit: int = 4096) -> dict:
+    """Bound the ID list retained for one opt-in Python-stage trace."""
+    total = len(values)
+    ids = values[:limit]
+    if total and isinstance(ids[0], (list, tuple, np.ndarray)):
+        ids = [[int(value[0]), int(value[1])] for value in ids]
+    else:
+        ids = [int(value) for value in ids]
+    return {
+        "ids": ids,
+        "total": total,
+        "truncated": total > limit,
+    }

@@ -405,10 +405,22 @@ class Ccube2(AbstractTarget):
         seen_data = []
         # aruco2 finds one grid board per call, and a face is only found
         # under its own ids, so each face is looked for on its own.
+        # Education view only (see AbstractTarget's detect_in_image): None
+        # in every normal run, which then calls exactly as before.
+        explain = getattr(self, "_detect_explain", None)
         for idb, ids in enumerate(self.face_ids):
-            c_ids, c_pts = detect_grid_board_corners(
-                image, self.grid_size, self._aruco_dict_int, self.square_size,
-                ids=ids)
+            if explain is None:
+                c_ids, c_pts = detect_grid_board_corners(
+                    image, self.grid_size, self._aruco_dict_int, self.square_size,
+                    ids=ids)
+            else:
+                face_explain = {}
+                explain.append({"event": "grid_board_face", "face": int(idb),
+                                "ids": list(map(int, np.asarray(ids).reshape(-1))),
+                                "detail": face_explain})
+                c_ids, c_pts = detect_grid_board_corners(
+                    image, self.grid_size, self._aruco_dict_int, self.square_size,
+                    ids=ids, explain=face_explain)
             if c_ids is None:
                 continue
             valid = (c_ids >= 0) & (c_ids < n_corners)

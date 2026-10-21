@@ -21,6 +21,7 @@ from pyCamSet.calibration_targets.core.parameters import (
 )
 from pyCamSet.calibration_targets.markers.puzzleboard import (
     PUZZLEBOARD_DETECTOR,
+    _trace_id_values,
     detect_puzzleboard_image,
     drop_duplicate_keys,
 )
@@ -254,7 +255,7 @@ def _drop_duplicate_keys(keys: list, image_points: list) -> tuple[list, list]:
 
     Two image locations for one (face, point) key cannot both be right, and nothing here
     says which one is, so both are dropped rather than fed to the solve as a conflicting
-    observation. (Found live: pcube 5_squares, 8 keys placed twice, 100-250 px apart, in
+    observation. (On a real PuzzleBoard cube set, 8 keys were placed twice, 100-250 px apart, in
     16,295 detections.)  The rule is shared by every PuzzleBoard target; see
     :func:`~pyCamSet.calibration_targets.markers.puzzleboard.drop_duplicate_keys`.
     """
@@ -1131,8 +1132,32 @@ class PuzzleBoardCube(AbstractTarget):
     ) -> ImageDetection:
         """Detect PuzzleBoard points and assign each point to its deterministic cube face."""
         del camera
-        point_ids, point_coords = detect_puzzleboard_image(image, min_width=self.min_width)
+        trace_enabled = bool(getattr(self, "phase1_trace_enabled", False))
+        if trace_enabled:
+            self._last_phase1_trace = None
+        # Education view only (see AbstractTarget's detect_in_image): None
+        # in every normal run, which then calls exactly as before.
+        explain = getattr(self, "_detect_explain", None)
+        if explain is None:
+            point_ids, point_coords = detect_puzzleboard_image(image, min_width=self.min_width)
+        else:
+            puzzle_explain: dict = {}
+            explain.append({"event": "puzzleboard", "detail": puzzle_explain})
+            point_ids, point_coords = detect_puzzleboard_image(
+                image, min_width=self.min_width, explain=puzzle_explain)
+        trace_stages = []
         if len(point_ids) == 0:
+            if trace_enabled:
+                trace_stages.append({
+                    "name": "puzzleboard_decoded",
+                    "corner_ids": _trace_id_values([]),
+                })
+                trace_stages.append({
+                    "name": "puzzleboard_window_assignment",
+                    "dropped_window_ids": _trace_id_values([]),
+                    "assigned_keys": _trace_id_values([]),
+                })
+                self._last_phase1_trace = trace_stages
             return ImageDetection()
         positions = np.asarray(point_ids, dtype=np.int64)  # Detector positions are [row, column].
         coordinates = np.asarray(point_coords, dtype=np.float64)  # Detector image coordinates are [row, column].
@@ -1140,8 +1165,15 @@ class PuzzleBoardCube(AbstractTarget):
             raise ValueError("PuzzleBoard detector positions must have shape (n, 2).")
         if coordinates.ndim != 2 or coordinates.shape[1] != 2:
             raise ValueError("PuzzleBoard detector coordinates must have shape (n, 2).")
+        if trace_enabled:
+            raw_ids = positions.tolist()
+            trace_stages.append({
+                "name": "puzzleboard_decoded",
+                "corner_ids": _trace_id_values(raw_ids),
+            })
         keys: list[list[int]] = []
         image_points: list[np.ndarray] = []
+        window_drops: list[list[int]] = []
         size = self.n_points
         for position, coordinate in zip(positions, coordinates):
             row, column = int(position[0]), int(position[1])  # Preserve the detector's row/column convention.
@@ -1152,16 +1184,39 @@ class PuzzleBoardCube(AbstractTarget):
                 if 0 <= local_column < size and 0 <= local_row < size:
                     matches.append((face_index, local_row, local_column))
             if len(matches) != 1:  # Reject guard-band or ambiguous points rather than assigning the wrong face.
+                if trace_enabled:
+                    window_drops.append([row, column])
+                if explain is not None:
+                    puzzle_explain.setdefault("window_dropped", []).append(
+                        (row, column, coordinate[::-1].copy(), len(matches)))
                 continue
             face_index, local_row, local_column = matches[0]
             keys.append([face_index, local_row * size + local_column])
             image_points.append(coordinate[::-1])  # Convert detector [row, column] to pyCamSet [x, y].
+        if trace_enabled:
+            trace_stages.append({
+                "name": "puzzleboard_window_assignment",
+                "dropped_window_ids": _trace_id_values(window_drops),
+                "assigned_keys": _trace_id_values(keys),
+            })
+        if explain is not None:
+            puzzle_explain["assigned"] = ([list(k) for k in keys], [np.array(p) for p in image_points])
         if self.plane_consistency_gate and self.face_reassignment:  # Reassign dropped points to their true face (opt-in, requires the gate).
             keys, image_points = self._run_face_reassignment(keys, image_points, image_shape=np.asarray(image).shape if image is not None else None)
         elif self.plane_consistency_gate:  # Drop geometrically inconsistent merged face points (opt-in gate).
             keys, image_points = self._run_plane_consistency_gate(keys, image_points)
+        if explain is not None:
+            puzzle_explain["after_gate"] = ([list(k) for k in keys], [np.array(p) for p in image_points])
         keys, image_points = _drop_duplicate_keys(keys, image_points)
+        if explain is not None:
+            puzzle_explain["after_duplicates"] = ([list(k) for k in keys], [np.array(p) for p in image_points])
         if not keys:
+            if trace_enabled:
+                trace_stages.append({
+                    "name": "puzzleboard_target_points",
+                    "corner_ids": _trace_id_values([]),
+                })
+                self._last_phase1_trace = trace_stages
             return ImageDetection()
         image_points_array = np.asarray(image_points, dtype=np.float64)
         if draw:
@@ -1170,5 +1225,11 @@ class PuzzleBoardCube(AbstractTarget):
                 cv2.circle(display_im, (int(round(point[0])), int(round(point[1]))), 3, (0, 0, 255), 1)
             cv2.imshow("PuzzleBoard cube detections", display_im)
             cv2.waitKey(wait_len)
+        if trace_enabled:
+            trace_stages.append({
+                "name": "puzzleboard_target_points",
+                "corner_ids": _trace_id_values(keys),
+            })
+            self._last_phase1_trace = trace_stages
         return ImageDetection(np.asarray(keys, dtype=np.int64), image_points_array)
 

@@ -305,7 +305,15 @@ class PuzzleBoard(AbstractTarget):
     ) -> ImageDetection:
         """Detect PuzzleBoard grid points and return pyCamSet-compatible IDs."""
         del camera
-        point_ids, point_coords = detect_puzzleboard_image(image, min_width=self.detection_options["min_width"])
+        # Education view only (see AbstractTarget's detect_in_image).
+        explain = getattr(self, "_detect_explain", None)
+        if explain is None:
+            point_ids, point_coords = detect_puzzleboard_image(image, min_width=self.detection_options["min_width"])
+        else:
+            puzzle_explain: dict = {}
+            explain.append({"event": "puzzleboard", "detail": puzzle_explain})
+            point_ids, point_coords = detect_puzzleboard_image(
+                image, min_width=self.detection_options["min_width"], explain=puzzle_explain)
         if not point_ids:
             return ImageDetection()
         positions = np.asarray(point_ids, dtype=np.int64)

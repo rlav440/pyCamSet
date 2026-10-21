@@ -443,6 +443,15 @@ class ChArUco(AbstractTarget):
 
         :return ImageDetection: a data class wrapping the data detected in the image.
         """
+        if getattr(self, "phase1_trace_enabled", False):
+            self._last_phase1_trace = None
+        trace_stages = []
+        # Education view only (see AbstractTarget's detect_in_image).
+        explain = getattr(self, "_detect_explain", None)
+        face_explain = None
+        if explain is not None:
+            face_explain = {}
+            explain.append({"event": "charuco_face", "face": 0, "detail": face_explain})
         if self.marker_backend == "aruco2":
             # aruco2 branch (D4): detect markers with aruco2 and interpolate
             # ChArUco corners under ONLY the board's configured legacy
@@ -459,8 +468,11 @@ class ChArUco(AbstractTarget):
                 # None (P2, round-1 review), so this also stops the probe
                 # itself from being paid on every later qualifying frame.
                 warn_legacy=None if self.given_legacy_warning else self._warn_legacy_once,
+                **({} if face_explain is None else {"explain": face_explain}),
             )
             if c_ids is None:
+                if getattr(self, "phase1_trace_enabled", False):
+                    self._last_phase1_trace = trace_stages
                 return ImageDetection()  # return an empty detection
             # normalise to the aruco1 shapes used below: (N,1,2) and (N,1)
             c_corners = np.asarray(c_corners, dtype=np.float32).reshape(-1, 1, 2)
@@ -472,6 +484,13 @@ class ChArUco(AbstractTarget):
             # OpenCV before 4.14 reports the corners half a pixel off the pixel-centre
             # frame every target returns; the aruco2 branch is already in it.
             c_corners = charuco_corners_to_pixel_centre(c_corners)
+            if face_explain is not None:
+                face_explain["detect_board"] = (c_corners, c_ids, mloc, mid)
+            if getattr(self, "phase1_trace_enabled", False) and mid is not None:
+                trace_stages.append({
+                    "name": "aruco_markers",
+                    "marker_ids": np.asarray(mid).reshape(-1).astype(int).tolist(),
+                })
             if c_corners is None and mloc is not None:
                 # Approved policy: detect using ONLY self.board's configured
                 # legacy pattern -- no retry under the opposite one, and
@@ -490,7 +509,16 @@ class ChArUco(AbstractTarget):
                     self._warn_legacy_once()
 
         if c_corners is None:
+            if getattr(self, "phase1_trace_enabled", False):
+                self._last_phase1_trace = trace_stages
             return ImageDetection() # return an empty detection
+
+        if getattr(self, "phase1_trace_enabled", False):
+            trace_stages.append({
+                "name": "charuco_corners",
+                "corner_ids": np.asarray(c_ids).reshape(-1).astype(int).tolist(),
+            })
+            self._last_phase1_trace = trace_stages
 
             # aruco.drawDetectedMarkers(display_im, np.array(corners)/d_f, ids)
 

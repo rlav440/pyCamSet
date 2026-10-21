@@ -68,6 +68,7 @@ from pyCamSet.calibration_targets.markers.aruco2 import _as_uint8_image
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     CHARUCO2_DETECTOR,
     detect_grid_board_corners,
+    refines_with_newton,
     dictionary_marker_count,
     grid_board_marker_bits,
     refuse_rotation_ambiguous_markers,
@@ -248,8 +249,8 @@ class CIco2(AbstractTarget):
             blank margin rather than board. The band of tabs around a face's
             board is drawn in it. Suggested: 0.1-0.2.
         :param detection_options: what the detector is told, by the keys
-            :meth:`detector_parameterisation` describes. aruco2's grid-board
-            detector takes none, so this is always empty.
+            :meth:`detector_parameterisation` describes: only
+            ``corner_refinement``, how aruco2's corners are refined.
         """
         super().__init__(inputs=locals(), backend=ARUCO2_BACKEND)
 
@@ -717,10 +718,11 @@ class CIco2(AbstractTarget):
 
         # aruco2 finds one grid board per call, and a face is only found under
         # its own ids, so each face is looked for on its own.
+        refine = refines_with_newton(self.detection_options)
         for face_index, ids in enumerate(self.face_ids):
             corner_ids, corner_points = detect_grid_board_corners(
                 image, self.grid_size, self._aruco_dict_int, self.square_size,
-                ids=ids)
+                ids=ids, refine=refine)
             if corner_ids is None:
                 continue
             for gid, point in zip(np.asarray(corner_ids).reshape(-1),

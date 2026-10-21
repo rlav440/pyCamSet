@@ -63,7 +63,11 @@ the edge and pulled it off its true position.
 
 aruco2's own corners are then refined and validated before they are returned
 (on by default; pass `refine=False`/`validate=False` to
-`detect_grid_board_corners` directly to skip either):
+`detect_grid_board_corners` directly to skip either). Which refinement runs
+is a detection option of ChArUco2, Ccube2 and CIco2, shown as "Corner
+refinement" on the Phase 1 form: `detection_options={"corner_refinement":
+"newton_saddle"}` (the default) runs the refinement and re-seeding below, and
+`"cornersubpix"` keeps aruco2's own `cornerSubPix` corners.
 
 - **Refinement** moves each corner to the saddle point of the image, Gaussian
   smoothed at sigma 1.8, with a coarse-to-fine retry for a corner the fine

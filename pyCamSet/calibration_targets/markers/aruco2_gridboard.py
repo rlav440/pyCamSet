@@ -54,6 +54,7 @@ from pyCamSet.calibration_targets.markers.aruco_opencv import (  # noqa: F401
     opencv_charuco_pixel_offset,
 )
 from pyCamSet.calibration_targets.core.parameters import (
+    Choice,
     Parameter,
     DetectorParameterisation,
 )
@@ -206,6 +207,14 @@ _REFINE_COARSE_SIGMA = 3.0
 #: Point-symmetry NCC a refined corner must reach to be accepted (an occluder
 #: or another non-corner feature nearby fails this).
 _REFINE_MIN_SYMMETRY = 0.3
+
+#: The ways a grid board's chessboard corners can be refined, by the value
+#: ``detection_options["corner_refinement"]`` takes. ``newton_saddle`` runs
+#: :func:`refine_grid_board_corners` and :func:`reseed_refused_corners` on
+#: aruco2's corners; ``cornersubpix`` keeps aruco2's own ``cv2.cornerSubPix``
+#: result, which drifts under blur but is what aruco2 alone reports.
+CORNER_REFINEMENTS = ("newton_saddle", "cornersubpix")
+DEFAULT_CORNER_REFINEMENT = "newton_saddle"
 
 # Keep a single education-trace stage small even for an unusually large board.
 _PHASE1_TRACE_MAX_IDS = 4096
@@ -1019,6 +1028,21 @@ def validate_grid_board_corners(
     return alive
 
 
+def refines_with_newton(detection_options: dict | None) -> bool:
+    """
+    Whether a target's ``detection_options`` ask for the Newton saddle refinement.
+
+    :param detection_options: the target's resolved options; None or a
+        missing key means the default
+    """
+    method = (detection_options or {}).get("corner_refinement", DEFAULT_CORNER_REFINEMENT)
+    if method not in CORNER_REFINEMENTS:
+        raise ValueError(
+            f"A grid board's corners are refined by one of {', '.join(CORNER_REFINEMENTS)}; "
+            f"got corner_refinement={method!r}.")
+    return method == "newton_saddle"
+
+
 def detect_grid_board_corners(
     image, grid_size: tuple[int, int], dict_int: int, marker_size: float,
     ids=None, *, refine: bool = True, validate: bool = True,
@@ -1040,8 +1064,9 @@ def detect_grid_board_corners(
         pass them.
     :param refine: run :func:`refine_grid_board_corners` on aruco2's own
         corners, then :func:`reseed_refused_corners` on the ones it refuses,
-        before returning them. On by default; ChArUco2 and Ccube2 use the
-        default.
+        before returning them. On by default; ChArUco2, Ccube2 and CIco2
+        turn it off when their ``corner_refinement`` option is
+        ``cornersubpix`` (see :func:`refines_with_newton`).
     :param validate: run :func:`validate_grid_board_corners` afterwards,
         dropping corners its lattice neighbours disagree with. On by
         default; ChArUco2 and Ccube2 use the default.
@@ -1391,20 +1416,37 @@ def grid_board_marker_bits(
 
 class ChArUco2Detector(DetectorParameterisation):
     """
-    aruco2's grid-board detector, which takes no settings.
+    aruco2's grid-board detector, and how its corners are refined.
 
     ``aruco2.detect_grid_board`` is given an image, a board size, a
     dictionary and, optionally, the marker ids, and nothing else -- so there
-    is no ``DetectionParameters``-style control here for a form to show or a
-    study to sweep. It runs a fixed internal detection pipeline with no
-    exposed tuning.
+    is no ``DetectionParameters``-style control of aruco2 itself. What a
+    person can choose is pyCamSet's own step afterwards: how the corners
+    aruco2 reports are refined (:data:`CORNER_REFINEMENTS`).
     """
 
     name = ARUCO2_BACKEND
 
     @property
     def parameters(self) -> tuple[Parameter, ...]:
-        return ()
+        return (Parameter(
+            key="corner_refinement", label="Corner refinement",
+            default=DEFAULT_CORNER_REFINEMENT, dtype="str", group="Refinement",
+            choices=(Choice("Newton saddle (default)", "newton_saddle"),
+                     Choice("aruco2 cornerSubPix only", "cornersubpix")),
+            concept=("Where each chessboard corner is placed once aruco2 has found it. "
+                     "Newton saddle moves it to the saddle point of the smoothed image, "
+                     "which holds under blur and any tone curve, and re-seeds the corners "
+                     "it refuses from their neighbours. cornerSubPix only keeps aruco2's "
+                     "own estimate, which drifts towards the darker square under blur."),
+        ),)
+
+    def validate(self, values: dict) -> list[str]:
+        method = (values or {}).get("corner_refinement", DEFAULT_CORNER_REFINEMENT)
+        if method in CORNER_REFINEMENTS:
+            return []
+        return [f"corner_refinement must be one of {', '.join(CORNER_REFINEMENTS)}, "
+                f"not {method!r}."]
 
     def unavailable_reason(self, values: dict | None = None) -> str | None:
         if marker_backend_available(ARUCO2_BACKEND):

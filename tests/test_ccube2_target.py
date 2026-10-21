@@ -114,7 +114,7 @@ def test_ccube2_is_read_with_aruco2_only() -> None:
     from pyCamSet.workflow.targets import detector_backend_of_spec
 
     assert list(Ccube2.DETECTOR_BACKENDS) == ["aruco2"]
-    assert Ccube2.DETECTOR_BACKENDS["aruco2"].parameters == ()
+    assert [p.key for p in Ccube2.DETECTOR_BACKENDS["aruco2"].parameters] == ["corner_refinement"]
     assert detector_backend_of_spec({"type": "Ccube2"}) == "aruco2"
     cube = Ccube2(n_points=3, length=20.0, border_fraction=0.2)
     assert detector_backend_of(cube) == "aruco2"

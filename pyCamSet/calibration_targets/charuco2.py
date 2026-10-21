@@ -28,6 +28,7 @@ from pyCamSet.calibration_targets.markers.backend_registry import (
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     CHARUCO2_DETECTOR,
     detect_grid_board_corners,
+    refines_with_newton,
     dictionary_marker_count,
     grid_board_marker_bits,
     refuse_rotation_ambiguous_markers,
@@ -152,8 +153,8 @@ class ChArUco2(AbstractTarget):
         :param a_dict: ArUco dictionary -- the marker alphabet printed on
             the board. It must have at least one marker per square.
         :param detection_options: what the detector is told, by the keys
-            :meth:`detector_parameterisation` describes. aruco2's grid-board
-            detector takes none, so this is always empty for ChArUco2.
+            :meth:`detector_parameterisation` describes: only
+            ``corner_refinement``, how aruco2's corners are refined.
         """
         super().__init__(inputs=locals(), backend=ARUCO2_BACKEND)
 
@@ -228,6 +229,7 @@ class ChArUco2(AbstractTarget):
             index :attr:`point_data` was built with.
         """
         trace_enabled = bool(getattr(self, "phase1_trace_enabled", False))
+        refine = refines_with_newton(self.detection_options)
         # Education view only (see AbstractTarget's detect_in_image).
         explain = getattr(self, "_detect_explain", None)
         if explain is not None:
@@ -239,18 +241,19 @@ class ChArUco2(AbstractTarget):
             trace_stages = [] if trace_enabled else None
             corner_ids, image_points = detect_grid_board_corners(
                 image, self.grid_size, self._aruco_dict_int, self.square_size,
-                trace_stages=trace_stages, explain=face_explain)
+                refine=refine, trace_stages=trace_stages, explain=face_explain)
         elif trace_enabled:
             # A miss or exception must never expose the prior frame's stages.
             self._last_phase1_trace = None
             trace_stages = []
             corner_ids, image_points = detect_grid_board_corners(
                 image, self.grid_size, self._aruco_dict_int, self.square_size,
-                trace_stages=trace_stages)
+                refine=refine, trace_stages=trace_stages)
         else:
             # Preserve the legacy call path unless Phase 1 recording is opted in.
             corner_ids, image_points = detect_grid_board_corners(
-                image, self.grid_size, self._aruco_dict_int, self.square_size)
+                image, self.grid_size, self._aruco_dict_int, self.square_size,
+                refine=refine)
         if corner_ids is None:
             if trace_enabled:
                 self._last_phase1_trace = trace_stages

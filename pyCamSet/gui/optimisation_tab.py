@@ -460,7 +460,9 @@ class OptimisationTab(QWidget):
 
         self._nothing_to_sweep.setText("" if parameters else (
             f"The {detector.name} detector takes no settings, so there is "
-            f"nothing for a study to search over."))
+            f"nothing for a study to search over." if not detector.settable() else
+            f"The {detector.name} detector has no settings a study searches "
+            f"over, so there is nothing to sweep."))
         self._param_rows_area.setVisible(bool(parameters))
         self._detection_profile_label.setVisible(bool(parameters))
         self._detection_profile_combo.setVisible(bool(parameters))
@@ -791,7 +793,7 @@ class OptimisationTab(QWidget):
             # its whole budget re-running one configuration.
             QMessageBox.warning(
                 self, "Nothing to optimise",
-                f"The {detector.name} detector takes no settings, so every "
+                f"The {detector.name} detector has no settings to search over, so every "
                 f"trial would run the same detection. Choose a target or "
                 f"detector with settings to search over.")
             return

@@ -32,6 +32,7 @@ from pyCamSet.calibration_targets.markers.backend_registry import (
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     CHARUCO2_DETECTOR,
     detect_grid_board_corners,
+    refines_with_newton,
     dictionary_marker_count,
     grid_board_marker_bits,
     refuse_rotation_ambiguous_markers,
@@ -196,8 +197,8 @@ class Ccube2(AbstractTarget):
         :param line_fraction: the thickness of a face's edge line, as a
             fraction of the face width.
         :param detection_options: what the detector is told, by the keys
-            :meth:`detector_parameterisation` describes. aruco2's grid-board
-            detector takes none, so this is always empty for Ccube2.
+            :meth:`detector_parameterisation` describes: only
+            ``corner_refinement``, how aruco2's corners are refined.
         """
         super().__init__(inputs=locals(), backend=ARUCO2_BACKEND)
 
@@ -408,11 +409,12 @@ class Ccube2(AbstractTarget):
         # Education view only (see AbstractTarget's detect_in_image): None
         # in every normal run, which then calls exactly as before.
         explain = getattr(self, "_detect_explain", None)
+        refine = refines_with_newton(self.detection_options)
         for idb, ids in enumerate(self.face_ids):
             if explain is None:
                 c_ids, c_pts = detect_grid_board_corners(
                     image, self.grid_size, self._aruco_dict_int, self.square_size,
-                    ids=ids)
+                    ids=ids, refine=refine)
             else:
                 face_explain = {}
                 explain.append({"event": "grid_board_face", "face": int(idb),
@@ -420,7 +422,7 @@ class Ccube2(AbstractTarget):
                                 "detail": face_explain})
                 c_ids, c_pts = detect_grid_board_corners(
                     image, self.grid_size, self._aruco_dict_int, self.square_size,
-                    ids=ids, explain=face_explain)
+                    ids=ids, refine=refine, explain=face_explain)
             if c_ids is None:
                 continue
             valid = (c_ids >= 0) & (c_ids < n_corners)

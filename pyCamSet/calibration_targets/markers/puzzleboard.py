@@ -6,6 +6,11 @@ import threading
 import cv2
 import numpy as np
 
+from pyCamSet.calibration_targets.core.preparation import (
+    MIN_MAX,
+    UPPER_BYTE,
+    validate_loader,
+)
 from pyCamSet.calibration_targets.core.parameters import (
     Parameter,
     DetectorParameterisation,
@@ -20,35 +25,66 @@ def _validate_preprocessing_value(value: float, name: str) -> float:
     return value
 
 
+def min_max_to_uint8(image: np.ndarray) -> np.ndarray:
+    """Stretch one image's own darkest..brightest value onto 0..255 (a per-image min/max stretch).
+
+    All colour channels share one stretch; an alpha channel is reduced by its upper byte
+    (uint16) or kept (uint8), as the upper-byte loader does, because it is not image content.
+    """
+    def stretch(data: np.ndarray) -> np.ndarray:
+        # cv2.normalize keeps the input dtype and rounds; the values already lie in 0..255.
+        return cv2.normalize(np.ascontiguousarray(data), None, 0, 255,
+                             cv2.NORM_MINMAX).astype(np.uint8)
+
+    if image.ndim == 3 and image.shape[2] == 4:
+        out = np.empty(image.shape, dtype=np.uint8)
+        out[..., :3] = stretch(image[..., :3])
+        alpha = image[..., 3]
+        out[..., 3] = (alpha >> 8).astype(np.uint8) if alpha.dtype == np.uint16 else alpha
+        return out
+    return stretch(image)
+
+
 def preprocess_puzzleboard_image(
     image: np.ndarray,
     *,
     enabled: bool = False,
     scale: float = 0.25,
     gamma: float = 0.5,
+    loader: str = UPPER_BYTE,
 ) -> np.ndarray:
-    """Apply the optional one-pass pcube image preparation.
+    """Apply the optional one-pass "Rescale and apply gamma" image preparation.
 
-    The frozen comparator is intentionally explicit: uint16 input is reduced
-    by taking its upper byte, uint8 input remains uint8, gamma is applied once,
-    and one area resize follows. RGB/BGR channels are corrected independently;
-    an RGBA/BGRA alpha channel is reduced/resized but is not gamma-corrected.
+    Despite its name this serves every target type (see
+    :mod:`pyCamSet.calibration_targets.core.preparation` for when it runs and with which
+    defaults).  The frozen comparator is intentionally explicit: the image is reduced to
+    uint8 by *loader*, gamma is applied once, and one area resize follows. RGB/BGR channels
+    are corrected independently; an RGBA/BGRA alpha channel is reduced/resized but is not
+    gamma-corrected.
+
+    :param loader: ``"upper_byte"`` (default, pyCamSet's historical behaviour) keeps bits
+        8-15 of a uint16 image and leaves uint8 unchanged.  ``"min_max"`` stretches each
+        image's own darkest..brightest value onto 0..255, uint8 included; use it for 12-bit
+        data stored in uint16, whose upper byte holds at most 16 grey levels.
     """
     scale = _validate_preprocessing_value(scale, "scale")
     gamma = _validate_preprocessing_value(gamma, "gamma")
+    loader = validate_loader(loader)
     image = np.asarray(image)
     if image.ndim not in (2, 3):
         raise ValueError("PuzzleBoard images must be grayscale, RGB, or RGBA arrays")
     if image.ndim == 3 and image.shape[2] not in (3, 4):
         raise ValueError("PuzzleBoard images must have three or four channels")
-    if image.dtype == np.uint16:
-        base = (image >> 8).astype(np.uint8)
-    elif image.dtype == np.uint8:
-        base = image
-    else:
+    if image.dtype not in (np.uint8, np.uint16):
         raise ValueError("PuzzleBoard preprocessing accepts only uint8 or uint16 images")
     if not enabled:
         return image
+    if loader == MIN_MAX:
+        base = min_max_to_uint8(image)
+    elif image.dtype == np.uint16:
+        base = (image >> 8).astype(np.uint8)
+    else:
+        base = image
 
     corrected = base.copy()
     if base.ndim == 2:

@@ -1,4 +1,4 @@
-'''Purpose: Lock the optional PuzzleBoard rescale-and-gamma detector contract.
+'''Purpose: Lock the optional rescale-and-gamma detector contract (PuzzleBoard defaults; any target since 2026-10-13).
 Status: Active regression coverage for the pcube preprocessing path.
 Future: Add bounded real-dataset evidence alongside this deterministic suite.
 '''
@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from pyCamSet.calibration_targets.core.abstract_target import AbstractTarget
+from conftest import UndrawableTarget
 from pyCamSet.calibration_targets.core.target_detections import ImageDetection
 from pyCamSet.calibration_targets.markers.puzzleboard import (
     preprocess_puzzleboard_image,
@@ -93,24 +94,8 @@ def test_preparation_rejects_non_positive_or_non_finite_gamma(gamma):
                                      enabled=True, scale=0.25, gamma=gamma)
 
 
-class _CountingTarget(AbstractTarget):
+class _CountingTarget(UndrawableTarget, AbstractTarget):
     """Small real-folder target double for the production entry point."""
-
-    @classmethod
-    def printable_name(cls, values, kind="svg"):
-        return "counting.svg"
-
-    def save_printable(self, *args, **kwargs):
-        raise NotImplementedError
-
-    def save_to_svg(self, *args, **kwargs):
-        raise NotImplementedError
-
-    def save_to_pdf(self, *args, **kwargs):
-        raise NotImplementedError
-
-    def plot(self, *args, **kwargs):
-        raise NotImplementedError
 
     def find_in_image(self, image, draw=False, camera=None, wait_len=1):
         self.calls += 1
@@ -171,26 +156,34 @@ def test_production_detection_entry_threads_preparation_to_target_once(tmp_path)
 
 
 def test_pcube_cache_identity_includes_preprocessing_settings(tmp_path):
-    from pyCamSet.calibration.detection_cache import (
-        TargetDetection,
-        cache_matches,
-        save_to_cache,
-    )
+    """A slot detected under one preprocessing setting is not reused under another."""
+    from pyCamSet.calibration.detection_cache import cache_matches, save_to_cache
+    from pyCamSet.calibration_targets import TargetDetection
     from pyCamSet.calibration_targets.core.target_registry import build_target
 
     cache = tmp_path / "detected_datapoints.npz"
     target = build_target({"type": "PuzzleBoardCube"})
-    preprocessing = {"rescale_and_gamma": True, "scale": 0.25, "gamma": 0.5}
-    save_to_cache(
-        TargetDetection(cam_names=["cam0"]), [(16, 24)], cache, target,
-        ["cam0"], None, preprocessing=preprocessing)
+    settings = {"rescale_and_gamma": True, "scale": 0.25, "gamma": 0.5}
+    save_to_cache(TargetDetection(cam_names=["cam0"], data=np.array([[0, 0, 0, 1.0, 2.0]])),
+                  [(8, 12)], cache, target, ["cam0"], None, preprocessing=settings)
 
-    assert cache_matches(
-        cache, target, ["cam0"], None,
-        preprocessing=preprocessing)
-    assert not cache_matches(
-        cache, target, ["cam0"], None,
-        preprocessing={"rescale_and_gamma": True, "scale": 0.5, "gamma": 0.5})
+    assert cache_matches(cache, target, ["cam0"], None, preprocessing=settings)
+    assert not cache_matches(cache, target, ["cam0"], None,
+                             preprocessing=dict(settings, scale=0.5))
+    # a pass with no preprocessing does not take the preprocessed slot either
+    assert not cache_matches(cache, target, ["cam0"], None)
+
+
+def test_phase1_notes_that_rescale_and_gamma_may_help_a_puzzleboard_target_without_it():
+    """A PuzzleBoard/pcube run without the preparation is told it may help."""
+    from pyCamSet.workflow.phase1 import PUZZLEBOARD_RESCALE_NOTICE, puzzleboard_rescale_notices
+
+    puzzle = type("PuzzleBoardCube", (), {"__module__": "pyCamSet.calibration_targets.puzzleboard_cube"})()
+    charuco = type("ChArUco", (), {"__module__": "pyCamSet.calibration_targets.charuco"})()
+    assert puzzleboard_rescale_notices(puzzle, False) == [PUZZLEBOARD_RESCALE_NOTICE]
+    assert puzzleboard_rescale_notices(puzzle, True) == []
+    assert puzzleboard_rescale_notices(charuco, False) == []
+    assert "Rescale and apply gamma" in PUZZLEBOARD_RESCALE_NOTICE
 
 
 def test_a_cache_from_another_coordinate_mapping_is_a_miss(tmp_path, monkeypatch):
@@ -245,3 +238,28 @@ def test_restore_native_coordinates_is_pixel_centre_exact(scale):
     restored = _restore_native_coordinates(
         ImageDetection(keys=np.asarray([0]), image_points=detected), scale)
     np.testing.assert_allclose(restored.image_points, truth, atol=1e-9)
+
+
+def test_find_in_imfolder_threads_the_min_max_loader(tmp_path):
+    """The 16-bit loader option reaches the image the target sees (12-bit data, scale 1.0)."""
+    from pyCamSet.calibration_targets.core.preparation import MIN_MAX
+
+    image_dir = tmp_path / "frame"
+    image_dir.mkdir()
+    source = (np.arange(16 * 24, dtype=np.uint16).reshape(16, 24) * 10)  # 12-bit range
+    assert cv2.imwrite(str(image_dir / "image.tiff"), source)
+
+    class _SeeingTarget(_CountingTarget):
+        def find_in_image(self, image, draw=False, camera=None, wait_len=1):
+            self.seen.append(np.asarray(image).copy())
+            return super().find_in_image(image, draw=draw, camera=camera, wait_len=wait_len)
+
+    target = object.__new__(_SeeingTarget)
+    target.calls, target.seen_shapes, target.seen, target.input_args = 0, [], [], {}
+    detections = target.find_in_imfolder(
+        image_dir, cam_names=["frame"], threads=1, rescale_and_gamma=True,
+        preprocessing_scale=1.0, preprocessing_gamma=1.0, preprocessing_loader=MIN_MAX)
+
+    assert target.seen[0].min() == 0 and target.seen[0].max() == 255
+    # scale 1.0 leaves the detector's points where they were
+    np.testing.assert_allclose(detections.get_data()[:, -2:], [[2.0, 3.0]])

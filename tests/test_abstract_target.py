@@ -372,7 +372,9 @@ def test_initial_calibration_can_return_poses(charuco_target, charuco_detections
 
     assert isinstance(cam, Camera)
     assert len(poses) > 0
-    assert len(per_im) > 0
+    # one residual, point count and image per posed view
+    assert len(per_im.rms) == len(per_im.points) == len(per_im.image) == len(poses)
+    assert len(per_im.has_detection) == detections.max_ims
 
 
 @pytest.mark.data

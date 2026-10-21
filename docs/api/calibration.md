@@ -7,3 +7,7 @@ The one call that runs a whole calibration, and the pieces it is made of.
 ## Detection cache
 
 ::: pyCamSet.calibration.detection_cache
+
+## Seed residuals
+
+::: pyCamSet.calibration.seed_residuals

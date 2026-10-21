@@ -84,14 +84,18 @@ def calibrate_cameras(
     validate_detections(detections, calibration_target,
                         image_counts=images_per_camera(f_loc), n_lim=n_lim)
 
+    # what the seed left in each view, for the report to restate; a camera
+    # set loaded or handed in has none, and the report measures it instead
+    seeded: list = []
     if initial_cams is None:
-        initial_cams = run_initial_calibration(
+        initial_cams, _, seeded = run_initial_calibration(
             detections,
             calibration_target,
             camera_res,
             save=save,
             save_loc=save_loc / 'initial_cameras.camset',
             fixed_params=fixed_params,
+            return_poses_and_costs=True,
             min_detections_per_board=min_detections_per_board,
             model=model,
         )
@@ -105,12 +109,13 @@ def calibrate_cameras(
                 camset=initial_cams
             )
 
-            initial_cams = run_initial_calibration(
+            initial_cams, _, seeded = run_initial_calibration(
                 detections,
                 calibration_target,
                 camera_res,
                 save=save,
                 save_loc=save_loc / 'initial_cameras_high_distortion.camset',
+                return_poses_and_costs=True,
                 min_detections_per_board=min_detections_per_board,
                 model=model,
                 )
@@ -121,8 +126,10 @@ def calibrate_cameras(
         logger.info("Using the provided initial cameras.")
 
     initial_cams.set_resolutions_from_file(floc=f_loc)
-    report_initial_calibration(initial_cams, detections, calibration_target,
-                               min_detections_per_board)
+    report_initial_calibration(
+        initial_cams, detections, calibration_target, min_detections_per_board,
+        seeded={name: residuals for name, residuals
+                in zip(initial_cams.get_names(), seeded) if residuals is not None})
     if len(initial_cams) == 1:
         logger.warning("Only found and calibrated one camera - returning single camera calibration")
         return initial_cams
@@ -206,6 +213,10 @@ def run_initial_calibration(detection: TargetDetection,
     :param model: the lens model to fit, "pinhole" or "telecentric"
     :param min_detections_per_board: Minimum number of detected corners required
         for a board observation to contribute to the initial per-camera calibration.
+    :param return_poses_and_costs: also return, per camera, the seed's per view
+        poses and its :class:`~pyCamSet.calibration.seed_residuals.SeedResiduals`;
+        ``None`` for a camera ``fixed_params`` gave whole, which was not seeded,
+        and empty lists when a saved calibration was loaded instead
     :return: the camera set with the initial calibration
     """
 
@@ -240,6 +251,10 @@ def run_initial_calibration(detection: TargetDetection,
                zip(cam_names, detection.get_cam_list(), cam_res)]
 
     if return_poses_and_costs:
+        # a camera fixed_params gave, or whose extrinsics it fixed, comes back
+        # on its own: nothing was seeded, so it has no poses or residuals
+        results = [res if isinstance(res, tuple) else (res, None, None)
+                   for res in results]
         raw_calibration = [res[0] for res in results]
         poses = [res[1] for res in results]
         per_im = [res[2] for res in results]

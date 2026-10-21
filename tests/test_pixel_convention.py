@@ -196,8 +196,27 @@ def _photo(tmp_path, saved, unknown, corner_offset=0.5):
         verified=False, charuco_convention_unknown=unknown, pixel_corner_offset=corner_offset)
 
 
+def test_an_old_run_in_the_pixel_corner_frame_is_compared_half_a_pixel_back(tmp_path):
+    """A ChArUco run saved under OpenCV 4 before any frame was recorded is exactly half a
+    pixel on; the education check says so instead of calling it a different result."""
+    from pyCamSet.calibration_targets.core.target_detections import ImageDetection
+
+    def old(live):
+        return ImageDetection(live.keys, np.asarray(live.image_points, float) + 0.5)
+
+    check = _photo(tmp_path, old, unknown=True).explain().consistency
+    assert check.ok and "pixel-corner frame" in check.message
+    # A run whose frame is known gets no such allowance.
+    assert not _photo(tmp_path, old, unknown=False).explain().consistency.ok
 
 
+def test_any_other_offset_is_still_a_difference(tmp_path):
+    from pyCamSet.calibration_targets.core.target_detections import ImageDetection
+
+    def moved(live):
+        return ImageDetection(live.keys, np.asarray(live.image_points, float) + 0.3)
+
+    assert not _photo(tmp_path, moved, unknown=True).explain().consistency.ok
 
 
 def _phase1_run(tmp_path, spec, image):
@@ -246,6 +265,20 @@ def _rewrite_run_as_pixel_corner(run_dir, metadata_edit):
     save_pickle(payload, pickle_path)
 
 
+def test_a_known_pixel_corner_run_is_moved_back_and_matches(tmp_path):
+    """A ChArUco run saved with charuco_corner_convention 'pixel-corner-v1' (the frame the
+    previous pyCamSet fixed every target to) is moved half a pixel back and matches."""
+    from pyCamSet.workflow.education_detect_explain import load_phase1_photo
+
+    spec, image = _charuco_spec_and_image()
+    run = _phase1_run(tmp_path, spec, image)
+    run_dir = _run_dir(tmp_path, run)
+    _rewrite_run_as_pixel_corner(
+        run_dir, lambda m: m.update({"charuco_corner_convention": "pixel-corner-v1"}))
+    photo = load_phase1_photo(run_dir, "cam0", 0)
+    assert not photo.charuco_convention_unknown
+    check = photo.explain().consistency
+    assert check.ok and "pixel-corner frame" in check.message, check.message
 
 
 def _run_dir(tmp_path, run):

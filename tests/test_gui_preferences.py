@@ -36,6 +36,15 @@ def test_preferences_round_trip_and_defaults(tmp_path, monkeypatch):
     assert document["schema"] == "pycamset.gui-preferences"
     assert document["version"] == 1
 
+    # The education controls have a separate tolerant sidecar and must not
+    # migrate or widen the strict, shared per-user preferences schema.
+    from pyCamSet.gui import education_preferences
+    monkeypatch.setattr(education_preferences, "config_directory", lambda: tmp_path)
+    education_preferences.save_preferences({"reduce_motion": True})
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 1
+    assert json.loads(path.read_text(encoding="utf-8"))["preferences"].keys() == {
+        "info_enabled", "terminal_visible", "export_presets"}
+
 
 def test_invalid_or_corrupt_settings_use_defaults_without_silent_loss(tmp_path, monkeypatch):
     """Malformed settings are rejected and preserved before an edit replaces them."""
@@ -86,6 +95,36 @@ def test_failed_atomic_write_keeps_old_file_and_memory(tmp_path, monkeypatch):
         loaded.set("terminal_visible", False)
     assert path.read_bytes() == original
     assert loaded.values["terminal_visible"] is True
+
+
+def test_application_identity_leaves_legacy_styles_alone(tmp_path, monkeypatch):
+    """Legacy generic-config visual styles are neither copied nor deleted.
+
+    The intent was a copy-not-move migration of ``visual-styles``. Decision
+    (merge of isolated/education/integration): GUI style loading follows
+    pycamsetDev, which has no migration, so the legacy file must simply stay
+    where it is and the new location stays empty.
+    """
+    from PySide6.QtCore import QStandardPaths
+    from PySide6.QtWidgets import QApplication
+
+    monkeypatch.delenv("PYCAMSET_CONFIG_DIR", raising=False)
+    app = QApplication.instance() or QApplication([])
+    app.setOrganizationName("")
+    app.setApplicationName("python")
+    old_root = tmp_path / "legacy"
+    new_root = tmp_path / "pyCamSet"
+    legacy_style = old_root / "visual-styles" / "style.json"
+    legacy_style.parent.mkdir(parents=True)
+    legacy_style.write_text("legacy-style", encoding="utf-8")
+
+    def resolved_location(_location):
+        return str(new_root if app.organizationName() == "pyCamSet" else old_root)
+
+    monkeypatch.setattr(QStandardPaths, "writableLocation", resolved_location)
+    preferences.initialise_application_identity(app)
+    assert not (new_root / "visual-styles" / "style.json").exists()
+    assert legacy_style.read_text(encoding="utf-8") == "legacy-style"
 
 
 def test_fresh_gui_process_persists_preferences_outside_repository(tmp_path):
@@ -212,3 +251,33 @@ def test_export_preset_rejects_a_key_that_is_not_a_visual_id(tmp_path, monkeypat
         loaded.set("export_preset:C:/private/input", 1)
     assert loaded.values["export_presets"] == {}
     assert not path.exists()
+
+
+_CONFIG_DIR_PROBE = """
+import sys
+from PySide6.QtWidgets import QApplication
+from pyCamSet.gui import preferences
+
+before = preferences.config_directory()
+app = QApplication([])
+preferences.initialise_application_identity(app)
+after = preferences.config_directory()
+print(before)
+print(after)
+"""
+
+
+def test_config_directory_is_the_same_with_and_without_a_qapplication(tmp_path):
+    """The GUI-less sidecar must resolve the directory the launched GUI uses.
+
+    Run in a fresh process: Qt's identity statics and the one QApplication are
+    process-wide, so the other tests in this file would already have set them.
+    """
+    env = {**os.environ, "QT_QPA_PLATFORM": "offscreen"}
+    env.pop("PYCAMSET_CONFIG_DIR", None)
+    run = subprocess.run([sys.executable, "-c", _CONFIG_DIR_PROBE], env=env,
+                         capture_output=True, text=True, timeout=300, cwd=tmp_path)
+    assert run.returncode == 0, run.stderr
+    before, after = run.stdout.splitlines()[-2:]
+    assert before == after
+    assert Path(before).name == "pyCamSet"

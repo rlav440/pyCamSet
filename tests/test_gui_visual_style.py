@@ -22,7 +22,9 @@ from pyCamSet.gui.visual_style import (
     style_path_for_visual,
     style_to_json,
     _validate_user_style_filename,
+    education_palette,
 )
+from pyCamSet.gui.theme import THEME_TOKENS, contrast_ratio
 
 
 def test_style_json_round_trip_is_versioned_and_visual_specific():
@@ -105,6 +107,19 @@ def test_style_paths_are_separate_and_visual_ids_do_not_collide(tmp_path):
     assert first.parent == second.parent == tmp_path / "visual-styles"
     assert first != second
     assert first.suffix == ".json"
+
+
+def test_education_palette_uses_actual_theme_surface_and_passes_contrast_floors():
+    """Light/Sepia share categorical choices; text follows each actual theme."""
+    for theme in ("Light", "Sepia", "Dark"):
+        palette = education_palette(theme)
+        surface = THEME_TOKENS[theme]["surface"]
+        assert palette["surface"] == surface
+        assert palette["text"] == THEME_TOKENS[theme]["text"]
+        assert contrast_ratio(palette["text"], surface) >= 4.5
+        for category in ("accent", "secondary", "tertiary", "grid"):
+            assert contrast_ratio(palette[category], surface) >= 3.0
+    assert education_palette("Light")["accent"] == education_palette("Sepia")["accent"]
 
 
 @pytest.mark.parametrize("filename", [

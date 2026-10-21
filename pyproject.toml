@@ -25,9 +25,10 @@ dependencies = [
     # >=4.8: CharucoBoard.setLegacyPattern and the CharucoDetector API.
     # No upper bound: the 4.x/5.x differences are handled at the call sites
     # (detectBoard's squeezed returns, stereoRectify's column-vector T, and
-    # putText's 8-bit assertion).  OpenCV before 4.14 reports ChArUco corners
-    # half a pixel off the pixel-centre frame; pyCamSet moves them into it, so
-    # calibrations differ across versions only by a few hundredths of a pixel.
+    # putText's 8-bit assertion, and the ChArUco corners of OpenCV before 4.14,
+    # which aruco_opencv.detect_board moves half a pixel back into the
+    # pixel-centre frame 4.14 and 5 report).  Sub-pixel corners still differ by
+    # a few hundredths of a pixel between versions.
     "opencv-contrib-python>=4.8",
     "tqdm",
     "numba",
@@ -58,7 +59,7 @@ dependencies = [
     # The GUI is the default install, so its one hard dependency is a base
     # dependency.  It is also by far the largest -- see requirements_core.txt
     # for the lean install that leaves it out.
-    "PySide6",
+    "PySide6>=6.8",
     # Embeds the Assess Calibration 3D views in the GUI.  Pure Python over
     # qtpy, so it is part of the lean install too; it needs a Qt binding only
     # when a view is embedded, and the GUI offers a separate viewer window

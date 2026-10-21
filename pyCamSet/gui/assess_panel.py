@@ -69,6 +69,42 @@ def _active_theme() -> str:
     return (application.property("pycamsetTheme") if application else None) or "Light"
 
 
+def _style_assessment_figure(figure, theme_name: str) -> None:
+    """Apply the locked accessible palette to the reused assessment source figures."""
+    from matplotlib.colors import LinearSegmentedColormap
+
+    from pyCamSet.gui.theme import THEME_TOKENS
+    from pyCamSet.gui.visual_style import education_palette
+
+    theme = theme_name if theme_name in THEME_TOKENS else "Light"
+    palette = education_palette(theme)
+    figure.patch.set_facecolor(palette["surface"])
+    for axis in figure.axes:
+        axis.set_facecolor(palette["surface"])
+        axis.title.set_color(palette["text"])
+        axis.xaxis.label.set_color(palette["text"])
+        axis.yaxis.label.set_color(palette["text"])
+        axis.tick_params(colors=palette["text"])
+        for spine in axis.spines.values():
+            spine.set_color(palette["grid"])
+        # Coverage uses a diverging sign map. Give its endpoints explicit
+        # palette colours with contrast against the figure surface.
+        for collection in axis.collections:
+            colour_map = collection.get_cmap()
+            if colour_map is not None and colour_map.name == "coolwarm":
+                collection.set_cmap(LinearSegmentedColormap.from_list(
+                    "pycamset_assessment_polarity",
+                    [palette["accent"], palette["grid"], palette["secondary"]]))
+        for line in axis.lines:
+            if line.get_color() in {"r", "red", "#ff0000"}:
+                line.set_color(palette["secondary"])
+    for axis in figure.axes:
+        for text in axis.texts:
+            text.set_color(palette["text"])
+    for text in figure.texts:
+        text.set_color(palette["text"])
+
+
 def _run_key(run: Optional[dict]) -> Optional[tuple]:
     """What identifies a run's drawing: its camset file and when it was written."""
     if run is None:
@@ -432,6 +468,7 @@ class AssessCalibrationPanel(QWidget):
         run = self._run or {}
         cards = []
         for key, title, figure in figures:
+            _style_assessment_figure(figure, _active_theme())
             columns, rows = payloads.get(key, ([], []))
             cards.append(MatplotlibFigureCard(
                 title, figure, FigureCanvasQTAgg, parent=self.figure_grid,

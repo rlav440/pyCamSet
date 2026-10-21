@@ -20,15 +20,120 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QVBoxLayout, QWidget,
 )
 
+from pyCamSet.gui.education_preferences import education_mode_enabled
 from pyCamSet.gui.theme import set_text_role
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def open_education_run(run: dict, phase: str, workspace: Optional[Path],
+                       parent: QWidget | None = None) -> bool:
+    """Open the explanation for exactly one persisted run.
+
+    Refuses while the education mode is off: this is the single place every
+    Diagnostics button, Phase 4 button and run-finished entry point reaches,
+    so the flag cannot be bypassed by a caller that skipped the widget gate.
+    """
+    if not education_mode_enabled():
+        return False
+    run_dir = run.get("_run_dir")
+    if not run_dir and workspace is not None and run.get("run_id"):
+        run_dir = Path(workspace) / f"{phase}_runs" / str(run["run_id"])
+    if not run_dir:
+        return False
+    try:
+        from pyCamSet.gui.education_dialog import EducationDialog, EducationRunView
+
+        view = EducationRunView.from_run_dir(run_dir)
+        # 'Change run' lists every readable saved run in this workspace, so
+        # the learner can switch runs (and phases) without closing the dialog.
+        runs = _workspace_runs(view, EducationRunView)
+        dialog = EducationDialog(runs, selected_run_ids=[view.run_id], parent=parent)
+        # Free the views, replay state, figures and VTK windows when the learner closes it;
+        # without this every open kept the whole explanation alive under the main window.
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
+        return True
+    except (OSError, ValueError, KeyError) as exc:
+        _LOGGER.warning("Could not open run explanation: %s", exc)
+        _tell_unopenable(parent, str(run.get("run_id") or Path(str(run_dir)).name), exc)
+        return False
+
+
+def _workspace_runs(opened, view_type) -> list:
+    """Return ``opened`` plus every other readable saved run of phases 1-4 in its workspace.
+
+    Runs are grouped by phase, newest first within a phase. A run whose saved
+    record cannot be read is left out; it never blocks the run being opened.
+    """
+    runs = [opened]
+    try:
+        workspace = Path(opened.run_dir).parent.parent
+        for index in range(1, 5):
+            phase_dir = workspace / f"phase{index}_runs"
+            if not phase_dir.is_dir():
+                continue
+            for run_dir in sorted((p for p in phase_dir.iterdir() if p.is_dir()),
+                                  key=lambda p: p.name, reverse=True):
+                if f"phase{index}" == opened.phase and run_dir.name == opened.run_id:
+                    continue
+                try:
+                    runs.append(view_type.from_run_dir(run_dir))
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    _LOGGER.info("Run %s left out of the run chooser: %s", run_dir.name, exc)
+    except OSError as exc:
+        _LOGGER.info("Other saved runs could not be listed: %s", exc)
+        return [opened]
+    order = {f"phase{index}": index for index in range(5)}
+    runs.sort(key=lambda run: run.run_id, reverse=True)  # run ids are timestamps
+    runs.sort(key=lambda run: order.get(run.phase, 9))  # stable: newest first per phase
+    return runs
+
+
+def _tell_unopenable(parent: QWidget | None, run_id: str, exc: Exception) -> None:
+    """Say, without blocking, why a run's explanation did not open."""
+    from PySide6.QtWidgets import QMessageBox
+
+    reason = ("its saved record could not be read" if isinstance(exc, OSError) else
+              f"its saved record is incomplete or does not match its folder ({exc})")
+    box = QMessageBox(QMessageBox.Icon.Information, "Explanation not available",
+                      f"The explanation for run {run_id} cannot be opened: {reason}. "
+                      "Choose another run, or run this phase again.",
+                      QMessageBox.StandardButton.Ok, parent)
+    box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    box.open()
+
+
+def explain_selection_hint(button: QWidget, count: int) -> None:
+    """Explain a Diagnostics 'Explain selected run' click that selected 0 or 2+ runs."""
+    from PySide6.QtWidgets import QToolTip
+
+    text = ("No run is selected. Select one run in the list, then press "
+            "‘Explain selected run’." if count == 0 else
+            f"{count} runs are selected. Select only one run to explain.")
+    # Long enough to read; the tooltip alone vanishes on the next key press and
+    # is not announced, so screen-reader and keyboard users also hear it.
+    QToolTip.showText(button.mapToGlobal(button.rect().bottomLeft()), text, button,
+                      QRect(), 6000)
+    _announce(button, text)
+
+
+def _announce(widget: QWidget, text: str) -> None:
+    """Send a polite screen-reader announcement from widget."""
+    from PySide6.QtGui import QAccessible, QAccessibleAnnouncementEvent
+
+    event = QAccessibleAnnouncementEvent(widget, text)
+    event.setPoliteness(QAccessible.AnnouncementPoliteness.Polite)
+    QAccessible.updateAccessibility(event)
 
 
 def _theme() -> str:
@@ -79,12 +184,41 @@ class RunResultPanel(QFrame):
         self.more.setFlat(True)
         self.more.setCursor(Qt.CursorShape.PointingHandCursor)
         self.more.clicked.connect(open_diagnostics)
+        self._explain_btn = QPushButton("Explain this run")
+        self._explain_btn.setObjectName("educationRunButton")
+        self._explain_btn.setEnabled(False)
+        self._explain_btn.setVisible(False)
+        self._explain_btn.clicked.connect(self._open_education)
         row = QHBoxLayout()
         row.addStretch()
+        row.addWidget(self._explain_btn)
         row.addWidget(self.more)
         row.addStretch()
         layout.addLayout(row)
         self.setVisible(False)
+        self._education_run_dir: Path | None = None
+
+    def set_education_run(self, run_dir: Path | None) -> None:
+        """Point the entry point at *run_dir*, if the mode is on and it exists."""
+        enabled = education_mode_enabled()
+        self._education_run_dir = run_dir
+        self._explain_btn.setVisible(enabled)
+        self._explain_btn.setEnabled(
+            enabled and run_dir is not None and run_dir.is_dir())
+
+    def set_education_enabled(self, enabled: bool) -> None:
+        """Apply the window's education-mode gate to the current run."""
+        self._explain_btn.setVisible(bool(enabled))
+        run_dir = self._education_run_dir
+        self._explain_btn.setEnabled(
+            bool(enabled and run_dir is not None and run_dir.is_dir()))
+
+    def _open_education(self) -> None:
+        if self._education_run_dir is None:
+            return
+        open_education_run({"_run_dir": str(self._education_run_dir)},
+                           self._education_run_dir.parent.name.removesuffix("_runs"),
+                           self._education_run_dir.parent.parent, self)
 
     def clear(self) -> None:
         while self._body.count():
@@ -157,6 +291,39 @@ def _image_points(detections, camera_index: int, image_index: int) -> np.ndarray
     return np.empty((0, 2))
 
 
+def _preparation_ran(params: dict) -> bool:
+    """Whether a ticked rescale-and-gamma box was applied (unknown target: assume it was)."""
+    from pyCamSet.calibration_targets.core.preparation import (
+        ANY_TARGET_KEY, PUZZLEBOARD, family_of_target_type)
+    if params.get(ANY_TARGET_KEY):
+        return True
+    try:
+        from pyCamSet.workflow.targets import target_spec_of
+        family = family_of_target_type(str(target_spec_of(dict(params)).get("type")))
+    except (KeyError, TypeError, ValueError, ImportError):
+        return True  # as before: an unrecorded target was taken to be prepared
+    return family == PUZZLEBOARD
+
+
+def _detector_to_native_scale(params: dict) -> float:
+    """Return the detector-pixel to source-image scale for Phase 1 overlays."""
+    # The producer maps rescale-and-gamma coordinates back to the native image;
+    # only explicit upscaling leaves detections in a larger pixel frame.  Runs
+    # saved before 2026-10-13 ignored a ticked box for non-PuzzleBoard targets
+    # (and then did upscale), so ask the same rule Phase 1 used.
+    if params.get("rescale_and_gamma") and _preparation_ran(params):
+        return 1.0
+    try:
+        factor = float(params.get("upscale_factor", 1) or 1)
+    except (TypeError, ValueError):
+        return 1.0
+    return factor if np.isfinite(factor) and factor > 0 else 1.0
+
+
+def _points_in_native_frame(points: np.ndarray, params: dict) -> np.ndarray:
+    """Map detector-frame pixel coordinates onto the original image."""
+    scale = _detector_to_native_scale(params)
+    return np.asarray(points, dtype=float) / scale
 
 
 def _camera_images(image_folder: Path, camera: str) -> list[Path]:
@@ -168,7 +335,7 @@ def _camera_images(image_folder: Path, camera: str) -> list[Path]:
     return natsorted(glob_ims(image_folder / camera))
 
 
-def detection_figure(image_path: Path, points: np.ndarray):
+def detection_figure(image_path: Path, points: np.ndarray, params: Optional[dict] = None):
     """One image with its detections, styled like the diagnostics overlay."""
     import matplotlib.image as mpimg
     from matplotlib.figure import Figure
@@ -185,7 +352,8 @@ def detection_figure(image_path: Path, points: np.ndarray):
     except (OSError, ValueError, SyntaxError) as exc:
         axes.text(0.5, 0.5, f"Image unreadable\n{type(exc).__name__}",
                   transform=axes.transAxes, ha="center", va="center")
-    overlay = axes.scatter(points[:, 0], points[:, 1], s=10, c="lime", marker="o",
+    native_points = _points_in_native_frame(points, params or {})
+    overlay = axes.scatter(native_points[:, 0], native_points[:, 1], s=10, c="lime", marker="o",
                            linewidths=0.4)
     # The same identity and saved style as the diagnostics viewer's overlay,
     # so a marker shape chosen there is the one shown here.
@@ -231,7 +399,8 @@ def phase1_view(run: dict, workspace: Optional[Path]) -> tuple[Optional[QWidget]
         caption.setToolTip(str(images[image_index]))
         column.addWidget(caption)
         points = _image_points(detections, camera_index, image_index)
-        column.addWidget(_canvas(detection_figure(images[image_index], points)), 1)
+        column.addWidget(_canvas(detection_figure(
+            images[image_index], points, run.get("params") or {})), 1)
         columns.addLayout(column, 1)
     empty = extremes[2]
     note = (f"{empty} camera image{'s' if empty != 1 else ''} had no detections."
@@ -402,8 +571,16 @@ VIEWS = {"phase1": phase1_view, "phase2": phase2_view, "phase3": phase3_view}
 def show_run_result(panel: RunResultPanel, phase: str, metadata: dict,
                     workspace: Optional[Path]) -> None:
     """Fill *panel* from a finished run's metadata; failures are shown, not raised."""
-    if not metadata or metadata.get("error") or not metadata.get("run_id"):
+    if not metadata or not metadata.get("run_id"):
         panel.setVisible(False)
+        return
+    run_dir = metadata.get("_run_dir")
+    if not run_dir and workspace is not None:
+        run_dir = Path(workspace) / f"{phase}_runs" / str(metadata["run_id"])
+    panel.set_education_run(Path(run_dir) if run_dir else None)
+    if metadata.get("error"):
+        # a failed run still keeps its education entry point (the Explain button reads its trace)
+        panel.show_widget(None, f"Run {metadata['run_id']} did not finish successfully.")
         return
     try:
         widget, note = VIEWS[phase](metadata, workspace)

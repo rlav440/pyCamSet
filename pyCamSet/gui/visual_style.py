@@ -88,6 +88,36 @@ ELEMENT_KEYS = {
 }
 _LINE_COLOUR_BASELINES = WeakKeyDictionary()
 
+# Locked semantic palettes for the education dialog. The chrome and figures
+# sit on each theme's ``surface`` token; Light and Sepia share a light palette.
+EDUCATION_PALETTES: dict[str, dict[str, str]] = {
+    "light": {
+        "surface": "#ffffff", "text": "#1e2432", "accent": "#1f4e9c",
+        "secondary": "#8b1e3f", "tertiary": "#2e6b35", "grid": "#777777",
+        # Phase 4 point classes (paired with distinct marker shapes) and the
+        # neutral used for displacement arrows and display-factor endpoints.
+        "class_several": "#176b45", "class_single": "#a35b00", "class_unseen": "#59636e",
+        "neutral": "#6b7280",
+    },
+    "dark": {
+        "surface": "#2a2c36", "text": "#e8eaf2", "accent": "#a9c7ff",
+        "secondary": "#ff9eae", "tertiary": "#91d69a", "grid": "#a6aab8",
+        "class_several": "#6fd3a0", "class_single": "#f2b056", "class_unseen": "#b4bac4",
+        "neutral": "#9aa0ad",
+    },
+}
+
+
+def education_palette(theme_name: str) -> dict[str, str]:
+    """Return the locked education palette for the active theme."""
+    from pyCamSet.gui.theme import THEME_TOKENS
+
+    theme = theme_name if theme_name in THEME_TOKENS else "Light"
+    palette = EDUCATION_PALETTES["dark" if theme == "Dark" else "light"].copy()
+    palette["surface"] = THEME_TOKENS[theme]["surface"]
+    palette["text"] = THEME_TOKENS[theme]["text"]
+    return palette
+
 
 @dataclass
 class VisualStyle:

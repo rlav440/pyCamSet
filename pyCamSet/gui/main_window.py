@@ -147,6 +147,7 @@ class PyCamSetApp(QMainWindow):
         # Deferred imports so module is importable without a display server
         from pyCamSet.gui.export_calibration_tab import ExportCalibrationTab
         from pyCamSet.gui.detection_cost_tab import DetectionCostTab, TAB_DETECTION_COST
+        from pyCamSet.gui.education_preferences import education_mode_enabled
         from pyCamSet.gui.phase_0_input import Phase0Tab
         from pyCamSet.gui.phase_1_detection import Phase1DiagnosticsTab, Phase1Tab
         from pyCamSet.gui.phase_2_intrinsics import Phase2DiagnosticsTab, Phase2Tab
@@ -380,6 +381,33 @@ class PyCamSetApp(QMainWindow):
         self._notebook.currentChanged.connect(self._on_tab_changed)
         self._apply_phase3_handoff()
         self._apply_phase4_handoff()
+
+        # The education mode is a persisted per-user preference
+        # (education_preferences.json), read once here and re-applied on demand; the entry points and the
+        # per-run recording opt-ins are hidden while it is off.
+        self._education_enabled = education_mode_enabled()
+        self.set_education_enabled(self._education_enabled)
+
+    def set_education_enabled(self, enabled: bool) -> None:
+        """Apply the education mode to every widget this window owns."""
+        self._education_enabled = bool(enabled)
+        for tab in (self.phase1_diag_tab, self.phase2_diag_tab,
+                    self.phase3_diag_tab, self.phase4_diag_tab):
+            tab.set_education_enabled(self._education_enabled)
+        for tab in (self.phase1_tab, self.phase2_tab,
+                    self.phase3_tab, self.phase4_tab):
+            tab.set_education_enabled(self._education_enabled)
+        for tab in (self.phase1_tab, self.phase2_tab, self.phase3_tab):
+            panel = getattr(tab, "_result_panel", None)
+            if panel is not None:
+                panel.set_education_enabled(self._education_enabled)
+
+    def refresh_education_enabled(self) -> bool:
+        """Re-read the sidecar and apply it; returns the new mode."""
+        from pyCamSet.gui.education_preferences import education_mode_enabled
+
+        self.set_education_enabled(education_mode_enabled())
+        return self._education_enabled
 
     def _apply_generic_option_tooltips(self, root: QWidget, phase_name: str) -> None:
         for w in root.findChildren(QWidget):
@@ -726,6 +754,8 @@ def main_window() -> None:
     # rather than a terminal, so the detection there says plain text.
     force_colour(True)
 
+    from pyCamSet.gui.education_perf import configure_surface_format
+    configure_surface_format()  # macOS: an OpenGL 4.1 core context, before the app exists
     app = QApplication.instance() or QApplication(sys.argv)
     window = PyCamSetApp()
     window.show()

@@ -200,6 +200,33 @@ def test_grid_columns_follow_the_width(qapp):
     assert grid.columns_for(2000) == 3
 
 
+def test_assessment_figure_source_styles_are_accessible_in_each_theme():
+    from matplotlib.figure import Figure
+
+    from pyCamSet.gui.assess_panel import _style_assessment_figure
+    from pyCamSet.gui.theme import THEME_TOKENS, contrast_ratio
+    from pyCamSet.gui.visual_style import education_palette
+
+    for theme, tokens in THEME_TOKENS.items():
+        figure = Figure()
+        axis = figure.subplots()
+        collection = axis.scatter([0, 1], [0, 1], c=[-1, 1], cmap="coolwarm")
+        line, = axis.plot([0, 1], [1, 0], color="red")
+        _style_assessment_figure(figure, theme)
+        palette = education_palette(theme)
+        assert figure.get_facecolor()[:3] == pytest.approx(
+            tuple(int(palette["surface"][i:i + 2], 16) / 255 for i in (1, 3, 5)))
+        assert axis.title.get_color() == palette["text"]
+        assert line.get_color() == palette["secondary"]
+        assert collection.get_cmap().name == "pycamset_assessment_polarity"
+        midpoint = collection.get_cmap()(0.5)[:3]
+        assert midpoint == pytest.approx(
+            tuple(int(palette["grid"][i:i + 2], 16) / 255 for i in (1, 3, 5)), abs=0.01)
+        assert contrast_ratio(palette["accent"], tokens["surface"]) >= 3.0
+        assert contrast_ratio(palette["secondary"], tokens["surface"]) >= 3.0
+        assert contrast_ratio(palette["grid"], tokens["surface"]) >= 3.0
+
+
 def test_both_diagnostics_tabs_use_the_shared_panel(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("PYCAMSET_CONFIG_DIR", str(tmp_path))
     from pyCamSet.gui.assess_panel import AssessCalibrationPanel

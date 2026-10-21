@@ -73,6 +73,11 @@ def test_visiting_phase4_does_not_invalidate_saved_parameters(tmp_path, monkeypa
         second.close()
 
 
+# The education line kept a legacy n/y outlier remapping on load; pycamsetDev dropped the legacy
+# outlier fallbacks on purpose (c88accc), so files saved with n/y are no longer migrated and
+# the former `test_legacy_outlier_spellings_still_load` is not carried over.
+
+
 @pytest.mark.gui
 def test_other_parameter_tabs_and_target_round_trip(tmp_path, monkeypatch):
     from PySide6.QtWidgets import QApplication

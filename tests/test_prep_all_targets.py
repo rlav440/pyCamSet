@@ -258,6 +258,15 @@ def test_load_phase1_photo_resolves_the_run_preparation(tmp_path):
 
 
 
+@pytest.mark.parametrize(("params", "scale"), [
+    ({"rescale_and_gamma": True, "upscale_factor": 2, "target": {"type": "ChArUco"}}, 2.0),
+    (dict(ON, upscale_factor=2, target={"type": "ChArUco"}), 1.0),
+    ({"rescale_and_gamma": True, "upscale_factor": 2, "target": {"type": "PuzzleBoard"}}, 1.0),
+])
+def test_overlay_scale_follows_whether_the_preparation_ran(params, scale):
+    pytest.importorskip("PySide6")
+    from pyCamSet.gui.run_results import _detector_to_native_scale
+    assert _detector_to_native_scale(params) == scale
 
 
 @pytest.mark.gui

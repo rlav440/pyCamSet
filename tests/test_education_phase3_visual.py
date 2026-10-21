@@ -123,6 +123,41 @@ def test_pose_graph_counts_shared_photos_and_reads_the_join_order(pinhole_run):
     assert layout.shape == (visual.n_cameras, 2) and np.all(np.isfinite(layout))
 
 
+def test_reduced_camera_system_is_the_schur_complement_of_the_jacobian(pinhole_run):
+    """S from the solver's own assembly equals Jc'Jc - Jc'Jp (Jp'Jp)^-1 Jp'Jc from the CSR J."""
+    pytest.importorskip("PySide6")
+    from pyCamSet.workflow.education_visual_p3 import reduced_camera_system, schur_structure
+    visual, handler, frames = _visual(pinhole_run)
+    x = np.asarray(frames["arrays"][1], dtype=float)
+    system = reduced_camera_system(handler, x)
+    S = system["S"]
+    assert np.allclose(S, S.T, rtol=1e-8, atol=1e-8 * np.abs(S).max())
+    J = handler.make_loss_jac(1)(x).toarray()[:2 * len(visual.rows_camera)]
+    primitive = handler.bundlePrimitive
+    n_cam = primitive.extr.shape[0]
+    n_keep = n_cam * (primitive.n_intr + primitive.n_extr)
+    Jc, Jp = J[:, :n_keep], J[:, n_keep:]
+    expected = Jc.T @ Jc - Jc.T @ Jp @ np.linalg.solve(Jp.T @ Jp, Jp.T @ Jc)
+    # The view reorders the camera block so each camera's intrinsics and extrinsics sit together.
+    order = []
+    for cam in range(n_cam):
+        order += list(range(cam * primitive.n_intr, (cam + 1) * primitive.n_intr))
+        order += list(range(n_cam * primitive.n_intr + cam * primitive.n_extr,
+                            n_cam * primitive.n_intr + (cam + 1) * primitive.n_extr))
+    expected = expected[np.ix_(order, order)]
+    free = ~system["pinned"]
+    assert np.allclose(S[np.ix_(free, free)], expected[np.ix_(free, free)],
+                       rtol=1e-6, atol=1e-8 * np.abs(expected).max())
+    assert system["n_kept"] == int(free.sum())
+    assert system["n_eliminated"] == len(x) - n_keep
+    # The view's per-camera-pair blocks are non-zero exactly where two cameras shared a photo.
+    from pyCamSet.gui.education_phase3 import reduced_system_blocks
+    blocks = reduced_system_blocks(system)
+    assert blocks.shape == (n_cam, n_cam) and blocks.max() == pytest.approx(1.0)
+    assert np.array_equal(blocks > 1e-12, visual.shared_photos() > 0)
+    structure = schur_structure(visual, primitive.n_intr, primitive.n_extr, len(x), 0)
+    assert structure.pair_points.sum() == len(visual.rows_camera)
+    assert structure.n_camera_params == n_keep and structure.n_pose_params == len(x) - n_keep
 
 
 def test_block_updates_and_scene_frames(pinhole_run):
@@ -363,6 +398,13 @@ def test_ladder_uses_one_statistic_and_maps_phase4_by_camera_name(pinhole_run):
     assert phase4_camera_rms(None) == {} and phase4_camera_rms({"artifacts": {}}) == {}
 
 
+def test_trail_points_grow_with_the_playback_position():
+    pytest.importorskip("PySide6")
+    from pyCamSet.gui.education_phase3 import trail_points
+    path = np.array([[0.0, 0, 0], [1, 0, 0], [1, 2, 0]])
+    assert np.allclose(trail_points(path, 0), path[:1])
+    assert np.allclose(trail_points(path, 1.5), [[0, 0, 0], [1, 0, 0], [1, 1, 0]])
+    assert np.allclose(trail_points(path, 9), path)
 
 
 def test_eps_is_shown_in_phase4s_unit():

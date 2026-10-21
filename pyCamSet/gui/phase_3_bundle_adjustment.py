@@ -108,6 +108,29 @@ except ImportError:
 _PYCAMSET_OK = phase3_workflow.BACKEND_OK
 
 
+def single_face_summary_lines(record: dict) -> list[str]:
+    """The diagnostics tab's compact D3.14 section: what was placed, what was left out and why."""
+    recovered = list(record.get("recovered") or [])
+    left_out = list(record.get("not_recovered") or [])
+
+    def cameras(entry: dict) -> str:
+        return ", ".join(str(name) for name in entry.get("cameras") or []) or "none"
+
+    if not record.get("enabled"):
+        lines = ["Recovery off for this run."]
+    elif record.get("telecentric") is False:
+        lines = ["On, no effect: the cameras are not telecentric."]
+    else:
+        lines = [f"On: {len(recovered)} recovered, {len(left_out)} left out."]
+    if record.get("enabled") and not recovered and not left_out and record.get("telecentric") is not False:
+        lines.append("No image needed it.")
+    for entry in recovered:
+        lines.append(f"Recovered: image {entry.get('image')}, fit {float(entry.get('rms_px', float('nan'))):.2f} px"
+                     f" ({cameras(entry)})")
+    for entry in left_out:
+        lines.append(f"Left out: image {entry.get('image')}, {entry.get('reason')} ({cameras(entry)})")
+    return lines
+
 
 class Phase3Tab(QWidget):
     def __init__(
@@ -326,6 +349,22 @@ class Phase3Tab(QWidget):
             "have a known reference.  Leave blank otherwise."
         )
         opts_form.addRow("Fixed params (JSON):", self._fp_edit)
+
+        # On a real 8-camera telecentric rig, 17 of 99 images were left out although up to seven
+        # cameras saw each - every camera saw one cube face, whose tilt no single camera fixes.
+        self._single_face_cb = QCheckBox(
+            "Recover images where each camera sees only one cube face (telecentric)")
+        self._single_face_cb.setObjectName("single_face_cb")
+        self._single_face_cb.setChecked(True)
+        self._single_face_cb.setToolTip(
+            "Concept: through a telecentric lens one flat face looks the same tilted towards\n"
+            "or away from the camera, so one camera alone cannot place such an image.\n"
+            "When ticked, both tilts are tried against every camera that saw the image and\n"
+            "the one that fits all of them is kept (at least 2 cameras, at most 20 px).\n\n"
+            "Default: ticked\n"
+            "Applies to telecentric cameras only; it has no effect on pinhole cameras.\n"
+            "Diagnostics list the images placed and those left out (D3.14).")
+        opts_form.addRow("Single-face images:", self._single_face_cb)
 
         # ── Camera Lockbox Priors ──────────────────────────────────────
         form_root.addWidget(make_separator())
@@ -617,6 +656,7 @@ class Phase3Tab(QWidget):
         """
         return {
             "f_loc": require_image_folder(self._floc_edit.text()),
+            "recover_single_face_telecentric": bool(self._single_face_cb.isChecked()),
             "threads": as_positive_int(
                 self._threads_edit.text().strip() or "1", "Threads"),
             "fixed_params": as_json_object(
@@ -1045,7 +1085,7 @@ class Phase3DiagnosticsTab(QWidget):
         self._summary_scroll.setWidget(self._summary_inner)
         summary_root = QVBoxLayout(self._summary_widget)
         summary_root.addWidget(self._summary_scroll)
-        self._sub_tabs.addTab(self._summary_widget, "Summary (D3.1-D3.10)")
+        self._sub_tabs.addTab(self._summary_widget, "Summary (D3.1-D3.10, D3.14)")
 
         self._initial_widget, self._initial_layout, self._initial_scroll = make_scrollable_tab()
         self._sub_tabs.addTab(self._initial_widget, "Initial Per-image Error (D3.4)")
@@ -1195,6 +1235,13 @@ class Phase3DiagnosticsTab(QWidget):
                     gate_label.setWordWrap(True)
                     set_text_role(gate_label, "danger")
                     form.addRow("Quality gate:", gate_label)
+                single_face = d.get("D3.14_single_face_recovery")
+                if isinstance(single_face, dict):
+                    single_face_label = QLabel("\n".join(single_face_summary_lines(single_face)))
+                    single_face_label.setWordWrap(True)
+                    single_face_label.setObjectName("single_face_summary")
+                    single_face_label.setAccessibleName("Single-face images (D3.14)")
+                    form.addRow("D3.14 single-face images:", single_face_label)
 
             if run.get("error"):
                 form.addRow("Error:", QLabel(str(run["error"])))

@@ -85,6 +85,9 @@ def run(params: dict,
 
     run_id = make_run_id()
     run_dir = workspace.run_dir("phase3", run_id)
+    params["recover_single_face_telecentric"] = bool(params.get(
+        "recover_single_face_telecentric",
+        (params.get("problem_options") or {}).get("recover_single_face_telecentric", True)))
 
     diagnostics: dict = {}
     report: Optional[dict] = None
@@ -317,10 +320,15 @@ def _solve(params: dict, run_dir: Path, camset_in: Path,
     target = target_of_params(params)
     lockbox_config, lockbox_source, lockbox_settings = _lockbox(params, cams, log)
 
+    # The setting rides in the handler's options, which the saved camset keeps, so a
+    # rebuild of this run (Phase 4, the education replays) seeds the same way.
+    options = dict(params["problem_options"] or {})
+    options["recover_single_face_telecentric"] = bool(
+        params.get("recover_single_face_telecentric", True))
     handler, optimisation, out_cams, stats = solve(
         cams, detections, target,
         fixed_params=params["fixed_params"],
-        options=params["problem_options"],
+        options=options,
         threads=params["threads"],
         lockbox_config=lockbox_config,
         lockbox_source_camset=lockbox_source,
@@ -393,6 +401,10 @@ def _diagnostics(optimisation, handler, stats: dict,
         "D3.11_residual_xy_scatter": residual_xy.tolist(),
         "D3.12_per_camera_mean_reprojection": per_camera,
         "D3.13_extrinsic_pose_view": "rendered in diagnostics tab",
+        # Telecentric images every camera saw one face of: placed, or why not. (On a real rig,
+        # 17 such images; D3.11 was taken, hence D3.14.)
+        "D3.14_single_face_recovery": dict(
+            getattr(handler, "single_face_recovery", None) or {}),
         "quality_gate": quality_gate,
     }
 

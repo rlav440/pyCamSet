@@ -1174,6 +1174,32 @@ def test_phase4_refuses_an_input_camset_that_is_not_the_recorded_one(
         )
 
 
+def test_phase4_inherits_single_face_recovery_from_the_phase3_handler(
+    tmp_path, monkeypatch
+):
+    camset_path = tmp_path / "phase3.camset"
+    run = {"run_id": "p3", "status": "complete",
+           "artifacts": {"optimised_camset": str(camset_path)}}
+    captured = []
+
+    def stop_after_option_capture(*args, options, **kwargs):
+        captured.append(dict(options))
+        raise RuntimeError("stop after checking options")
+
+    monkeypatch.setattr(phase4, "solve", stop_after_option_capture)
+    for opts, explicit, expected in (
+        ({"fixed_pose": 0, "recover_single_face_telecentric": True}, {}, True),
+        ({"fixed_pose": 0}, {}, False),
+        ({"fixed_pose": 0, "recover_single_face_telecentric": True},
+         {"recover_single_face_telecentric": False}, False),
+    ):
+        collection = _phase3_camera_collection(problem_opts=opts)
+        monkeypatch.setattr(phase4, "load_CameraSet", lambda _path: collection)
+        with pytest.raises(RuntimeError, match="stop after checking options"):
+            phase4._solve(
+                {"problem_options": explicit}, tmp_path, camset_path, run,
+                lambda _line: None)
+        assert captured[-1]["recover_single_face_telecentric"] is expected
 
 
 

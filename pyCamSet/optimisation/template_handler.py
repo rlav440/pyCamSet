@@ -8,6 +8,7 @@ from uniplot import plot_to_string
 
 import matplotlib.pyplot as plt
 
+import cv2
 import numpy as np
 
 from typing import TYPE_CHECKING, Optional
@@ -164,6 +165,8 @@ class TemplateBundleHandler:
         self.lockbox_config = lockbox_config or CameraLockboxConfig(enabled=False)
         self.lockbox_source_camset = lockbox_source_camset
         self.lockbox_warm_start = bool(lockbox_warm_start)
+        # What the seed's single-face classification found; Phase 3 saves it as D3.14.
+        self.single_face_recovery: dict = {}
         self.lockbox_prior: CameraLockboxPrior | None = None
 
         n_poses = detection.max_ims
@@ -186,6 +189,13 @@ class TemplateBundleHandler:
         intr_unfixed = np.array(['int' not in self.fixed_params.get(cam_name, {}) for cam_name in self.cam_names])
         pose_unfixed = np.ones(n_poses, dtype=bool)
 
+        # A pose that no camera detected the target in has nothing to estimate
+        # it from. Every residual that would mention it is simply absent, so
+        # its six parameters reach the jacobian as all-zero columns and the
+        # degeneracy check refuses to solve at all -- which costs the whole
+        # calibration for the sake of one frame where the target was blurred,
+        # or had left every view. Such a pose is fixed at the identity rather
+        # than left free, so the frame is what is lost, not the run.
         seen = detection.get_data()
         if seen is not None and len(seen):
             unseen = np.setdiff1d(np.arange(n_poses), np.unique(seen[:, 1].astype(int)))
@@ -610,9 +620,20 @@ class TemplateBundleHandler:
         self.jac_mask = []
         param_array = []
 
+        fixed_pose = int(self.problem_opts.get("fixed_pose", 0))
         cam_poses, target_poses, per_im_error = estimate_camera_relative_poses(
-            detection=self.detection, cams=self.camset, calibration_target=self.target
+            detection=self.detection,
+            cams=self.camset,
+            calibration_target=self.target,
+            anchor_pose=fixed_pose,
+            recover_single_face_telecentric=bool(
+                self.problem_opts.get("recover_single_face_telecentric", True)),
+            single_face_record=self.single_face_recovery,
         )
+        # Kept, not just consumed: phase 3 and phase 4 both report this as the
+        # per-image initial reprojection, and the diagnostics tab builds its
+        # threshold and its remove-these-images control on top of it. Computed
+        # and dropped, every one of those read an empty array and drew nothing.
         self.initial_per_im_error = np.asarray(per_im_error, dtype=float)
 
         unposed = np.array([np.isnan(t[0, 0]) for t in target_poses])
@@ -967,6 +988,9 @@ def estimate_camera_relative_poses(
         cams: CameraSet, ref_cam: int = 0, ref_pose: int = 0,
         max_bad_cams_iter=10,
         prior_poses_and_costs: Optional[tuple[np.ndarray, np.ndarray]] = None,
+        *, anchor_pose: int | None = None,
+        recover_single_face_telecentric: bool = True,
+        single_face_record: dict | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Estimate where every camera and every target pose is, before the solve.
@@ -976,6 +1000,9 @@ def estimate_camera_relative_poses(
     :param cams: the cameras, whose relative poses are not yet known
     :param ref_cam: the camera the rig consistency check measures against
     :param ref_pose: the image to anchor the world frame on
+    :param recover_single_face_telecentric: place telecentric single-face images
+        (see :func:`recover_single_face_telecentric_poses`); on by default
+    :param single_face_record: filled with the single-face classification (D3.14)
     :return: world to camera per camera, target to world per image, and the
         mean reprojection error the estimate leaves in each image
     """
@@ -986,9 +1013,33 @@ def estimate_camera_relative_poses(
         for cam in cams])
 
     check_for_target_misalignment(target_in_camera, ref_cam, cams.get_names())
-    ref_pose, _ = check_feasiblity_and_update_refpose(target_in_camera, ref_pose)
+    ref_pose = _seed_reference_pose(target_in_camera, ref_pose, anchor_pose)
     return estimate_initial_rig(
-        target_in_camera, cams, ref_pose, calibration_target, detection)
+        target_in_camera, cams, ref_pose, calibration_target, detection,
+        recover_single_face_telecentric=recover_single_face_telecentric,
+        single_face_record=single_face_record)
+
+
+def _seed_reference_pose(target_in_camera: np.ndarray, ref_pose: int,
+                         anchor_pose: int | None) -> int:
+    """
+    The image the seed puts the world frame on.
+
+    Without an anchor, the feasibility rule's choice (an image every camera saw, starting
+    from *ref_pose*). With one -- the solve's ``fixed_pose``, which it holds at the
+    identity -- the anchor itself whenever any camera has a usable view of it, since rig
+    growth can re-express the world on such an image; otherwise the feasibility rule's.
+
+    :param target_in_camera: (c, p, 4, 4) target pose as each camera saw it, NaN where unseen
+    :param ref_pose: where the feasibility rule starts looking
+    :param anchor_pose: the image to anchor on, or None
+    :return: the reference image index
+    """
+    if (anchor_pose is not None and 0 <= anchor_pose < target_in_camera.shape[1]
+            and bool(np.any(np.isfinite(target_in_camera[:, anchor_pose, 0, 0])))):
+        return int(anchor_pose)
+    ref_pose, _ = check_feasiblity_and_update_refpose(target_in_camera, ref_pose)
+    return ref_pose
 
 
 def target_radius(calibration_target: AbstractTarget) -> float:
@@ -1002,9 +1053,197 @@ def target_radius(calibration_target: AbstractTarget) -> float:
     return float(np.max(np.linalg.norm(points - np.mean(points, axis=0), axis=1)))
 
 
+#: The same hopeless-fit limit a single camera's pose is refused at (_check_pose_error).
+SINGLE_FACE_RECOVERY_MAX_RMS_PX = 20.0
+
+#: The reasons D3.14 gives for a single-face image left unplaced.
+SINGLE_FACE_REASON_OFF = "recovery off: every camera saw one face (recoverable in principle)"
+SINGLE_FACE_REASON_ONE_CAMERA = "seen by one camera only: the tilt cannot be resolved"
+SINGLE_FACE_REASON_NO_FIT = "no candidate tilt could be fitted"
+
+
+def _single_face_reason_over_limit(rms: float) -> str:
+    return f"best fit {rms:.2f} px exceeds the {SINGLE_FACE_RECOVERY_MAX_RMS_PX:.0f} px limit"
+
+
+def _is_planar(points: np.ndarray) -> bool:
+    """Whether object points lie on one plane: one face of the target."""
+    centred = points - points.mean(axis=0)
+    spread = np.linalg.svd(centred, compute_uv=False)
+    return bool(spread[-1] <= 1e-6 * max(spread[0], 1e-300))
+
+
+def single_face_views(poses: np.ndarray, extrinsics: np.ndarray, cams: CameraSet,
+                      calibration_target: AbstractTarget,
+                      detection: TargetDetection) -> dict[int, list[tuple[int, np.ndarray, np.ndarray]]]:
+    """
+    The unplaced images every telecentric camera saw only one flat face of, and their usable views.
+
+    Counting only, no fitting, so it also runs with recovery off and marks the images recovery
+    could have helped. An image any camera saw two faces of is unplaced for another reason and
+    is left to the existing missing-pose accounting. A view is usable when its camera has an
+    estimated extrinsic and saw at least 4 points of the image.
+
+    :return: image index -> [(camera index, object points, pixels)], empty unless every camera is telecentric
+    """
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+
+    camera_list = [cams[name] for name in cams.get_names()]
+    if not camera_list or not all(isinstance(cam, TelecentricCamera) for cam in camera_list):
+        return {}
+    unplaced = [int(i) for i in np.flatnonzero(~np.isfinite(poses[:, 0, 0]))]
+    if not unplaced:
+        return {}
+    flat = detection.return_flattened_keys(calibration_target.point_data.shape[:-1]).get_data()
+    points = calibration_target.point_data.reshape((-1, 3))
+    found = {}
+    for image in unplaced:
+        rows = flat[flat[:, 1].astype(int) == image]
+        views, single_face = [], True
+        for c in sorted(set(rows[:, 0].astype(int).tolist())):
+            here = rows[rows[:, 0].astype(int) == c]
+            obj = points[here[:, 2].astype(int)]
+            if len(here) >= 4 and not _is_planar(obj):
+                single_face = False
+                break
+            if len(here) < 4 or not np.all(np.isfinite(extrinsics[c])):
+                continue
+            views.append((c, obj, here[:, 3:5].astype(float)))
+        if single_face and views:
+            found[image] = views
+    return found
+
+
+def recover_single_face_telecentric_poses(poses: np.ndarray, extrinsics: np.ndarray, cams: CameraSet,
+                                          calibration_target: AbstractTarget,
+                                          detection: TargetDetection, *,
+                                          enabled: bool = True,
+                                          record: dict | None = None) -> np.ndarray:
+    """
+    Place images every telecentric camera saw only one flat face of, from several cameras at once.
+
+    A flat face seen orthographically has two poses that give identical pixels - the same
+    face tilted towards or away from the camera about the same axis (both facing it) - and
+    no depth, so a single camera cannot place it and the image used to be left out of the
+    solve. Once the rig has been grown from the unambiguous images, each camera's two
+    candidates are moved into the world frame through that camera's estimated extrinsic and
+    refined (rotation and full translation) against every camera's view of the image at once;
+    only the true tilt agrees across cameras. An image is placed only when at least two
+    cameras saw it and the best fit is within the single-camera limit
+    (SINGLE_FACE_RECOVERY_MAX_RMS_PX). (On a real 8-camera telecentric rig, 17 of 99
+    images stayed unposed although up to 7 cameras saw each - every camera saw exactly one face.)
+
+    Optional (``enabled``; Phase 3's ``recover_single_face_telecentric``, on by default in the
+    library and the GUI). The single-face images are classified either way, so
+    a run with recovery off still reports which images it could have placed.
+
+    :param poses: (p, 4, 4) target-to-world poses from the rig estimate, NaN where unplaced
+    :param extrinsics: (c, 4, 4) world-to-camera extrinsics from the rig estimate
+    :param cams: the cameras, in the order of extrinsics
+    :param calibration_target: the target, for its point geometry
+    :param detection: the detections
+    :param enabled: place the recoverable images, or only classify them
+    :param record: filled in place with what Phase 3 saves as D3.14: ``enabled``, ``telecentric``,
+        ``recovered`` [{image, rms_px, cameras}], ``not_recovered`` [{image, reason, cameras}] and
+        ``teaching`` {image: [{camera, tilt, own_camera_rms_px, all_cameras_rms_px,
+        all_cameras_tilt_kept_rms_px}]} (a recovered image's candidates; tilt kept: rotation held,
+        position fitted over every camera)
+    :return: the poses with every recoverable image placed
+    """
+    from scipy.optimize import least_squares
+
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+    from pyCamSet.utils.intrinsics_report import _orthographic_starts, telecentric_project
+
+    names = list(cams.get_names())
+    camera_list = [cams[name] for name in names]
+    if record is None:
+        record = {}
+    record.clear()
+    record.update(enabled=bool(enabled),
+                  telecentric=bool(camera_list) and all(
+                      isinstance(cam, TelecentricCamera) for cam in camera_list),
+                  recovered=[], not_recovered=[], teaching={})
+    candidates = single_face_views(poses, extrinsics, cams, calibration_target, detection)
+    poses = np.array(poses, copy=True)
+    recovered = []
+    for image, views in sorted(candidates.items()):
+        seen_by = [names[c] for c, _, _ in views]
+        if len(views) < 2:
+            record["not_recovered"].append(
+                {"image": image, "reason": SINGLE_FACE_REASON_ONE_CAMERA, "cameras": seen_by})
+            continue
+        if not enabled:
+            record["not_recovered"].append(
+                {"image": image, "reason": SINGLE_FACE_REASON_OFF, "cameras": seen_by})
+            continue
+
+        def residual(x):
+            world = gu.make_4x4h_tform(x[:3], x[3:6])
+            out = []
+            for c, obj, pix in views:
+                in_camera = extrinsics[c] @ world
+                rvec, _ = cv2.Rodrigues(in_camera[:3, :3])
+                out.append((telecentric_project(camera_list[c], obj, rvec.reshape(3), in_camera[:3, 3])
+                            - pix).reshape(-1))
+            return np.concatenate(out)
+
+        best, best_rms = None, np.inf
+        teaching = []
+        for c, obj, pix in views:
+            cam = camera_list[c]
+            undistorted = cam.undistort_points(pix)
+            try:
+                starts = _orthographic_starts(obj, undistorted, cam)
+            except (ValueError, np.linalg.LinAlgError):
+                continue
+            for tilt, start in zip("+-", starts):
+                # Each tilt's fit in the camera that proposed it: about equal, the ambiguity.
+                own = telecentric_project(cam, obj, start[:3], np.array([start[3], start[4], 0.0])) - pix
+                in_camera = gu.make_4x4h_tform(start[:3], np.array([start[3], start[4], 0.0]))
+                world = np.linalg.inv(extrinsics[c]) @ in_camera
+                rvec, _ = cv2.Rodrigues(world[:3, :3])
+                x0 = np.concatenate([rvec.reshape(3), world[:3, 3]])
+                try:
+                    fit = least_squares(residual, x0)
+                    # The same start with its tilt held and only the position fitted: freely
+                    # refined, a mirror start can be pulled to the true tilt (it was, on exact
+                    # synthetic data), which hides that only the true tilt fits every camera.
+                    kept = least_squares(lambda t: residual(np.concatenate([x0[:3], t])), x0[3:])
+                except (ValueError, np.linalg.LinAlgError):
+                    continue
+                errors = fit.fun.reshape(-1, 2)
+                rms = float(np.sqrt(np.mean(np.sum(errors ** 2, axis=1))))
+                teaching.append({"camera": names[c], "tilt": tilt,
+                                 "own_camera_rms_px": float(np.sqrt(np.mean(np.sum(own ** 2, axis=1)))),
+                                 "all_cameras_rms_px": rms,
+                                 "all_cameras_tilt_kept_rms_px": float(np.sqrt(np.mean(np.sum(
+                                     kept.fun.reshape(-1, 2) ** 2, axis=1))))})
+                if np.isfinite(rms) and rms < best_rms:
+                    best, best_rms = fit.x, rms
+        if best is not None and best_rms <= SINGLE_FACE_RECOVERY_MAX_RMS_PX:
+            poses[image] = gu.make_4x4h_tform(best[:3], best[3:6])
+            recovered.append((image, best_rms))
+            record["recovered"].append({"image": image, "rms_px": best_rms, "cameras": seen_by})
+            record["teaching"][str(image)] = teaching
+        else:
+            record["not_recovered"].append({
+                "image": image, "cameras": seen_by,
+                "reason": (_single_face_reason_over_limit(best_rms) if best is not None
+                           else SINGLE_FACE_REASON_NO_FIT)})
+    if recovered:
+        logger.info(
+            f"{len(recovered)} image(s) every camera saw only one face of were placed from several "
+            "cameras at once (telecentric tilt ambiguity resolved): "
+            + ", ".join(f"{i} ({e:.2f} px)" for i, e in recovered))
+    return poses
+
+
 def estimate_initial_rig(target_in_camera: np.ndarray, cams: CameraSet,
                          ref_pose: int, calibration_target: AbstractTarget,
                          detection: TargetDetection,
+                         recover_single_face_telecentric: bool = True,
+                         single_face_record: dict | None = None,
                          ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Grow the rig from its most agreed links, and score what that leaves.
@@ -1014,12 +1253,18 @@ def estimate_initial_rig(target_in_camera: np.ndarray, cams: CameraSet,
     :param ref_pose: the image to anchor the world frame on
     :param calibration_target: the target, for its point geometry
     :param detection: the detections, for scoring the estimate
+    :param recover_single_face_telecentric: place telecentric single-face images
+    :param single_face_record: filled with the single-face classification (D3.14)
     :return: world to camera per camera, target to world per image, and the
         mean reprojection error the estimate leaves in each image
     """
     extrinsics, poses = estimate_rig(
         target_in_camera, target_radius(calibration_target),
         reference_image=ref_pose, cam_names=cams.get_names())
+    # Classified even when off, so the run reports what recovery could have placed.
+    poses = recover_single_face_telecentric_poses(
+        poses, extrinsics, cams, calibration_target, detection,
+        enabled=recover_single_face_telecentric, record=single_face_record)
 
     solved = np.isfinite(poses[:, 0, 0])
     flat_detections = detection.return_flattened_keys(

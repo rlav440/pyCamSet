@@ -18,6 +18,8 @@ contract nothing has ever satisfied is not worth much.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -385,12 +387,32 @@ def test_a_study_writes_a_summary_and_a_record_per_success(tmp_path, dataset):
 
 def test_a_retained_trial_becomes_a_chain_of_workspace_runs(tmp_path):
     """The point of a study: its winner becomes a run like any other."""
+    from copy import deepcopy
+
+    from pyCamSet import Camera, CameraSet
+    from pyCamSet.utils.saving import load_CameraSet
+
     workspace = WorkspaceManager(workspace_path_for(tmp_path))
     artefacts = tmp_path / "trial"
     artefacts.mkdir()
-    for name in ("detected_datapoints.pickle", "camset_phase2.json",
-                 "camset_phase3.json"):
-        (artefacts / name).write_bytes(b"stand-in artefact")
+    (artefacts / "detected_datapoints.pickle").write_bytes(b"stand-in detections")
+
+    # Preserve independent references to the actual serialized stage camsets.
+    stage_references = {}
+    for phase, fx in (("phase2", 500.0), ("phase3", 750.0)):
+        camera = Camera(
+            extrinsic=np.eye(4), intrinsic=np.diag([fx, fx, 1.0]),
+            distortion_coefs=np.zeros(5), res=np.array([100, 100]),
+            name="cam0",
+        )
+        stage_camset = CameraSet(camera_dict={"cam0": camera})
+        stage_references[phase] = deepcopy({
+            "intrinsic": stage_camset["cam0"].intrinsic,
+            "extrinsic": stage_camset["cam0"].extrinsic,
+            "distortion": stage_camset["cam0"].distortion_coefs,
+        })
+        artifact_name = f"camset_{phase}.json"
+        stage_camset.save(artefacts / artifact_name)
 
     record = artefacts / "metadata.json"
     record.write_text(json.dumps({
@@ -399,6 +421,7 @@ def test_a_retained_trial_becomes_a_chain_of_workspace_runs(tmp_path):
         "target": {"type": "ChArUco"},
         "detector_settings": {"DetectorParameters.minMarkerPerimeterRate": 0.03},
         "extra": {
+            "education": {"trial_camset_snapshot_version": 1},
             "artifacts": {
                 "detected_datapoints_pickle": str(artefacts / "detected_datapoints.pickle"),
                 "phase2_initial_camset": str(artefacts / "camset_phase2.json"),
@@ -412,6 +435,19 @@ def test_a_retained_trial_becomes_a_chain_of_workspace_runs(tmp_path):
 
     assert set(promoted) == {"phase1", "phase2", "phase3"}
     phase3 = workspace.find_run("phase3", promoted["phase3"])
+    for phase, artifact_key, filename in (
+        ("phase2", "initial_camset", "camset_phase2.json"),
+        ("phase3", "optimised_camset", "camset_phase3.json"),
+    ):
+        promoted_path = Path(
+            workspace.find_run(phase, promoted[phase])["artifacts"][artifact_key])
+        assert promoted_path.read_bytes() == (artefacts / filename).read_bytes()
+        promoted_camset = load_CameraSet(promoted_path)
+        reference = stage_references[phase]
+        assert np.array_equal(promoted_camset["cam0"].intrinsic, reference["intrinsic"])
+        assert np.array_equal(promoted_camset["cam0"].extrinsic, reference["extrinsic"])
+        assert np.array_equal(
+            promoted_camset["cam0"].distortion_coefs, reference["distortion"])
     assert phase3["inputs"]["phase2_run_id"] == promoted["phase2"]
     assert workspace.find_run("phase2", promoted["phase2"])["inputs"][
         "phase1_run_id"] == promoted["phase1"]
@@ -428,6 +464,34 @@ def test_a_trial_that_did_not_succeed_cannot_be_promoted(tmp_path):
 
     with pytest.raises(RuntimeError, match="Only successful"):
         promote_retained_trial(workspace, record)
+
+
+def test_stage_camset_snapshot_detaches_camera_and_target_arrays(synthetic_camset):
+    from copy import deepcopy
+
+    from pyCamSet.workflow.tuning.worker import _snapshot_stage_camset
+
+    target = SimpleNamespace(point_data=np.array([[0.0, 0.0, 0.0]]))
+    synthetic_camset.calibration_handler = SimpleNamespace(target=target)
+    original = synthetic_camset["left"]
+    independent_reference = deepcopy({
+        "intrinsic": original.intrinsic,
+        "point_data": target.point_data,
+    })
+    snapshot = _snapshot_stage_camset({"camset": synthetic_camset})["camset"]
+    snapshot_intrinsic = snapshot["left"].intrinsic.copy()
+
+    assert np.array_equal(snapshot_intrinsic, independent_reference["intrinsic"])
+    assert np.array_equal(
+        snapshot.calibration_handler.target.point_data,
+        independent_reference["point_data"],
+    )
+    original.intrinsic[0, 0] += 10.0
+    target.point_data[0, 0] += 10.0
+
+    assert np.array_equal(snapshot["left"].intrinsic, snapshot_intrinsic)
+    assert snapshot.calibration_handler.target.point_data[0, 0] == 0.0
+    assert not np.array_equal(original.intrinsic, independent_reference["intrinsic"])
 
 
 @pytest.mark.slow

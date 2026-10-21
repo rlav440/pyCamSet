@@ -24,6 +24,7 @@ import logging
 import math
 import threading
 import time
+from copy import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -314,6 +315,39 @@ def _stage_result(optimisation, out_cams, stats: dict) -> dict[str, Any]:
     }
 
 
+def _snapshot_stage_camset(stage: dict[str, Any]) -> dict[str, Any]:
+    """Detach saved camera arrays before a later stage can mutate them."""
+    camset = stage.get("camset")
+    if camset is None or not hasattr(camset, "get_cam_dict"):
+        return stage
+    camera_dict = {}
+    for name, camera in camset.get_cam_dict().items():
+        camera_copy = copy(camera)
+        for attribute in ("extrinsic", "intrinsic", "distortion_coefs", "res"):
+            value = getattr(camera, attribute, None)
+            if value is not None:
+                setattr(camera_copy, attribute, np.array(value, copy=True))
+        camera_dict[name] = camera_copy
+    frozen_camset = type(camset)(camera_dict=camera_dict)
+    for attribute in ("calibration_params", "calibration_result", "calibration_jac"):
+        value = getattr(camset, attribute, None)
+        if value is not None:
+            setattr(frozen_camset, attribute, np.array(value, copy=True))
+    frozen_camset.calibration_report = getattr(camset, "calibration_report", None)
+    handler = getattr(camset, "calibration_handler", None)
+    if handler is not None:
+        handler_copy = copy(handler)
+        handler_copy.target = copy(handler.target)
+        points = getattr(handler.target, "point_data", None)
+        if points is not None:
+            handler_copy.target.point_data = np.array(points, copy=True)
+        handler_copy.camset = frozen_camset
+        frozen_camset.calibration_handler = handler_copy
+    snapshot = dict(stage)
+    snapshot["camset"] = frozen_camset
+    return snapshot
+
+
 # ---------------------------------------------------------------------------
 # Cancellation token
 # ---------------------------------------------------------------------------
@@ -509,6 +543,7 @@ def run_trial(
         if metadata_writer is not None:
             metadata_writer(result, payload)
         return result, payload
+    phase2 = _snapshot_stage_camset(phase2)
     payload["phase2"] = phase2
 
     # ---- Stage C: phase 3 ---------------------------------------------------
@@ -526,6 +561,7 @@ def run_trial(
 
     phase3_rpe = float(phase3.get("rpe")) if phase3.get("rpe") is not None else None
     result.phase3_rpe = phase3_rpe
+    phase3 = _snapshot_stage_camset(phase3)
     payload["phase3"] = phase3
     if phase3_rpe is None or math.isnan(phase3_rpe) or math.isinf(phase3_rpe):
         result.valid = False

@@ -829,6 +829,7 @@ class OptimisationStudy:
                             else payload.get("phase3", {}).get("source_phase2_camset")
                         ),
                     },
+                    "education": {"trial_camset_snapshot_version": 1},
                 },
             )
 

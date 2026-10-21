@@ -156,7 +156,7 @@ def save_figure(figure, name: str,
 
 
 def save_figure_at_width(figure, path: Path | str, width_mm: float, dpi: int,
-                         output_format: str = "png") -> None:
+                         output_format: str = "png", metadata: dict | None = None) -> None:
     """
     Write *figure* at a physical width, keeping its aspect, and restore its size.
 
@@ -168,6 +168,8 @@ def save_figure_at_width(figure, path: Path | str, width_mm: float, dpi: int,
     :param width_mm: the output width in millimetres
     :param dpi: the raster density, and the density recorded in a vector file
     :param output_format: a Matplotlib format name, such as ``png`` or ``svg``
+    :param metadata: optional Matplotlib metadata for the file (for example the
+        ``Description`` of a PNG or SVG, or the ``Subject`` of a PDF)
     """
     original_size = figure.get_size_inches().copy()
     width_inches = float(width_mm) / 25.4
@@ -177,7 +179,7 @@ def save_figure_at_width(figure, path: Path | str, width_mm: float, dpi: int,
         height_inches = round(height_inches * dpi) / dpi
     figure.set_size_inches(width_inches, height_inches, forward=False)
     try:
-        figure.savefig(path, dpi=int(dpi), format=output_format.lower())
+        figure.savefig(path, dpi=int(dpi), format=output_format.lower(), metadata=metadata)
     finally:
         figure.set_size_inches(original_size, forward=False)
 

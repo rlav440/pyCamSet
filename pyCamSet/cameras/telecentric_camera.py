@@ -63,7 +63,10 @@ class TelecentricCamera(Camera):
       bundle adjustment does not estimate it, and a calibrated camera's
       ``extrinsic`` carries no translation at all.
     - The in-plane position is carried by the principal point, not the
-      translation, because the two are degenerate.
+      translation.  A sideways shift is exactly interchangeable with the
+      image-centre offset only when there is no distortion and ``eps`` is zero;
+      with distortion or telecentricity error the two are only nearly
+      degenerate, because the bend is measured about the image centre (SCI3-15).
     - Only the rotation of ``extrinsic`` is estimated.  Relative camera
       geometry within a rig is recovered as rotation plus principal point.
     """

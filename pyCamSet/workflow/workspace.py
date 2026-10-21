@@ -338,6 +338,31 @@ class WorkspaceManager:
         chain.reverse()
         return chain
 
+    def resolve_parents(self, run: dict) -> list[dict]:
+        """Resolve every explicitly named input run without latest-run fallback.
+
+        Unlike ``build_predecessor_chain``, which follows the highest phase
+        edge as a linear ancestry, this method preserves all direct parents.
+        Missing parents are omitted; provenance callers can identify them from
+        the original ``inputs`` mapping and must not substitute another run.
+        """
+        inputs = run.get("inputs") or {}
+        if not isinstance(inputs, dict):
+            return []
+        parents = []
+        for key, run_id in sorted(inputs.items()):
+            if not key.endswith("_run_id") or not run_id:
+                continue
+            phase = key[:-len("_run_id")]
+            try:
+                parent = self.find_run(phase, str(run_id))
+            except ValueError:
+                parent = None
+            if parent is not None:
+                parent.setdefault("phase", phase)
+                parents.append(parent)
+        return parents
+
     def write_handoff(self, payload: dict) -> None:
         """Write *payload* to ``<workspace>/handoff.json``."""
         if self.workspace_path is None:

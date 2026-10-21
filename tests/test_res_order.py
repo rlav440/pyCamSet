@@ -161,7 +161,7 @@ def test_image_sizes_settle_an_unsettled_file(tmp_path):
 
 
 def test_detections_past_the_short_side_settle_a_legacy_file(tmp_path):
-    """As on mouse1: 375 x 448 portrait images, res stored [448, 375], y up to 438."""
+    """As on a real telecentric rig: 375 x 448 portrait images, res stored [448, 375], y up to 438."""
     path = tmp_path / "tele.camset"
     save_camset(CameraSet(camera_dict={"cam": _telecentric((448, 375))}), path)
     # | cam | image | key | x | y |

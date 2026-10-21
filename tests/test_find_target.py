@@ -189,6 +189,20 @@ def test_fix_all_cameras_packs_a_telecentric_lens_widths(telecentric_rig):
         assert np.allclose(entry["int"], telecentric_rig[name].to_param_vector())
 
 
+def test_fix_all_cameras_packs_telecentric_width_order_and_eps(telecentric_rig):
+    """The fixed blocks are rotation-only and [mx, cx, my, cy, k, eps]."""
+    fixed = fix_all_cameras(telecentric_rig)
+    assert set(fixed) == set(telecentric_rig.get_names())
+    for name in telecentric_rig.get_names():
+        entry = fixed[name]
+        assert entry["ext"].shape == (3,)
+        assert entry["int"].shape == (6,)
+        np.testing.assert_allclose(
+            entry["int"],
+            [30000.0, 640.0, 30000.0, 480.0, 0.1, 0.4],
+        )
+
+
 class SolidStubTarget(StubTarget):
     """StubTarget with a little out-of-plane depth.
 
@@ -216,6 +230,11 @@ def test_a_target_pose_is_found_with_a_telecentric_rig(telecentric_rig):
     its ``eps`` was not carried at all.
     """
     target = SolidStubTarget()
+    before = {
+        cam.name: (cam.extrinsic.copy(), cam.intrinsic.copy(),
+                   cam.distortion_coefs.copy(), cam.telecentricity)
+        for cam in telecentric_rig
+    }
     images = {name: _frame() for name in telecentric_rig.get_names()}
 
     got = find_target_pose_at_timestep(images, target, telecentric_rig)
@@ -224,6 +243,12 @@ def test_a_target_pose_is_found_with_a_telecentric_rig(telecentric_rig):
     # the detections are exact and the target sits at the world origin, so a rig
     # that was genuinely held at its calibration returns that pose back
     assert np.allclose(got, np.eye(4), atol=1e-6)
+    for cam in telecentric_rig:
+        ext, intrinsic, distortion, eps = before[cam.name]
+        np.testing.assert_allclose(cam.extrinsic, ext)
+        np.testing.assert_allclose(cam.intrinsic, intrinsic)
+        np.testing.assert_allclose(cam.distortion_coefs, distortion)
+        assert cam.telecentricity == eps
 
 
 # --------------------------------------------------------------------------

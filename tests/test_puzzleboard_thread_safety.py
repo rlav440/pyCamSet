@@ -3,7 +3,7 @@ PuzzleBoard detection gives the same answer from concurrent threads as serially.
 
 The upstream ``puzzle_board`` package keeps detection state at module and
 class level (the Hessian/corner-checker objects with reused, size-dependent
-buffers, and the union-find root ring ``Grid.first_root``).  Calibria's grid
+buffers, and the union-find root ring ``Grid.first_root``).  A parallel grid
 search calls the detector from four threads, and without serialisation those
 calls corrupted each other: wrong or empty results on same-size images, a
 broadcasting ``ValueError`` across sizes, and one hang.  These tests run real
@@ -74,7 +74,7 @@ def test_the_renders_are_detected(images):
 def test_concurrent_calls_match_the_serial_answer(images):
     reference = [_signature(image) for image in images]
     jobs = [i % len(images) for i in range(32)]
-    pool = ThreadPoolExecutor(max_workers=4)  # the width of Calibria's grid search
+    pool = ThreadPoolExecutor(max_workers=4)  # the width of a typical grid search
     try:
         # A bounded wait: unserialised, one measured run of this kind never finished.
         results = list(pool.map(lambda i: (i, _signature(images[i])), jobs, timeout=300))

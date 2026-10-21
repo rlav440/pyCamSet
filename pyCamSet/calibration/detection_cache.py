@@ -15,6 +15,8 @@ redetects.
 from __future__ import annotations
 
 import json
+import hashlib
+import io
 import logging
 import os
 import zipfile
@@ -83,13 +85,18 @@ def detection_cache_name(calibration_target, camset: Any | None = None,
 
 
 def _target_identity(calibration_target, cam_names: list[str],
-                     n_lim: int | None,
-                     camset: Any | None = None,
-                     preprocessing: dict | None = None) -> dict | None:
+                      n_lim: int | None,
+                      camset: Any | None = None,
+                      preprocessing: dict | None = None) -> dict | None:
     """The identity a detection cache is checked against.
 
     None -- always a miss, and nothing written -- for a detection biased by
     a camset, which is not fingerprinted, or for an unregistered target.
+
+    :param preprocessing: the image preprocessing a pass applied before
+        detecting (e.g. pcube's rescale-and-gamma settings), when there is
+        any. Folded into the identity so a slot detected under one
+        preprocessing setting is never handed back for another.
     """
     if camset is not None:
         return None
@@ -136,21 +143,36 @@ def _identity_text(payload: dict) -> str:
 
 def _open_cache(cache_path: Path, calibration_target, cam_names: list[str],
                  n_lim: int | None, camset: Any | None,
-                 preprocessing: dict | None = None):
+                 preprocessing: dict | None = None,
+                 compute_digest: bool = False):
     """The opened archive of a cache whose identity matches this call.
 
     Reads the ``identity`` member only, not the detection array beside it.
 
     :return: ``(archive, meta)``, which the caller must close, or None
     """
-    identity = _target_identity(
-        calibration_target, cam_names, n_lim, camset=camset,
-        preprocessing=preprocessing)
+    identity = _target_identity(calibration_target, cam_names, n_lim,
+                                camset=camset, preprocessing=preprocessing)
     if identity is None:
         return None
     try:
-        archive = np.load(long_path(cache_path), allow_pickle=False)
+        cache_file = open(long_path(cache_path), "rb")
+        if compute_digest:
+            # Staged copy-back can rewrite a slot in place while it is open.
+            payload = cache_file.read()
+            cache_file.close()
+            digest_value = hashlib.sha256(payload).hexdigest()
+            archive = np.load(io.BytesIO(payload), allow_pickle=False)
+            cache_file = None
+        else:
+            digest_value = None
+            archive = np.load(cache_file, allow_pickle=False)
     except _UNREADABLE:
+        try:
+            if cache_file is not None:
+                cache_file.close()
+        except (OSError, UnboundLocalError):
+            pass
         # Missing, damaged, or not one of ours -- a cache written before
         # this format is a pickle, and reads as a miss here.
         return None
@@ -162,8 +184,10 @@ def _open_cache(cache_path: Path, calibration_target, cam_names: list[str],
             raise ValueError("unknown format version")
     except _UNREADABLE:
         archive.close()
+        if cache_file is not None:
+            cache_file.close()
         return None
-    return archive, meta
+    return archive, meta, digest_value, cache_file
 
 
 def cache_matches(cache_path: Path, calibration_target, cam_names: list[str],
@@ -175,19 +199,21 @@ def cache_matches(cache_path: Path, calibration_target, cam_names: list[str],
     Reads the file's identity alone, for a caller deciding about a cache
     rather than reading one.
     """
-    opened = _open_cache(
-        cache_path, calibration_target, cam_names, n_lim, camset,
-        preprocessing=preprocessing)
+    opened = _open_cache(cache_path, calibration_target, cam_names, n_lim,
+                        camset, preprocessing=preprocessing)
     if opened is None:
         return False
     opened[0].close()
+    if opened[3] is not None:
+        opened[3].close()
     return True
 
 
 def load_verified_cache(cache_path: Path, calibration_target,
                          cam_names: list[str], n_lim: int | None,
                          camset: Any | None = None,
-                         preprocessing: dict | None = None):
+                         preprocessing: dict | None = None,
+                         side_channel: dict | None = None):
     """A confirmed cache hit, as the detection pass returns it.
 
     The identity is read from the same open as the detection it guards, so
@@ -196,12 +222,12 @@ def load_verified_cache(cache_path: Path, calibration_target,
     :return: ``(detected, cam_res)``, or ``None`` for anything
         :func:`cache_matches` calls a miss
     """
-    opened = _open_cache(
-        cache_path, calibration_target, cam_names, n_lim, camset,
-        preprocessing=preprocessing)
+    opened = _open_cache(cache_path, calibration_target, cam_names, n_lim,
+                        camset, preprocessing=preprocessing,
+                        compute_digest=side_channel is not None)
     if opened is None:
         return None
-    archive, meta = opened
+    archive, meta, cache_digest, cache_file = opened
     try:
         detected = TargetDetection.from_arrays(
             meta["cam_names"], archive["data"], meta["max_ims"])
@@ -212,27 +238,37 @@ def load_verified_cache(cache_path: Path, calibration_target,
         return None
     finally:
         archive.close()
+        if cache_file is not None:
+            cache_file.close()
+    if side_channel is not None:
+        side_channel.update({
+            "cache_hit": True,
+            "cache_sha256": cache_digest,
+            "enumeration": meta.get("image_enumeration"),
+        })
     return detected, cam_res
 
 
 def save_to_cache(detected: TargetDetection, cam_res: list[tuple],
                   cache_path: Path, calibration_target, cam_names: list[str],
                   n_lim: int | None, camset: Any | None = None,
-                  preprocessing: dict | None = None) -> None:
+                  preprocessing: dict | None = None,
+                  image_enumeration: dict | None = None) -> None:
     """Write a finished detection pass to its cache slot.
 
     Written beside the slot and moved onto it, so a reader sees one whole
     version or the other. A failure is logged rather than raised, and an
     unconfirmable identity (see :func:`_target_identity`) writes nothing.
     """
-    identity = _target_identity(
-        calibration_target, cam_names, n_lim, camset=camset,
-        preprocessing=preprocessing)
+    identity = _target_identity(calibration_target, cam_names, n_lim,
+                                camset=camset, preprocessing=preprocessing)
     if identity is None:
         return
     names, data, max_ims = detected.as_arrays()
     meta = {"format_version": FORMAT_VERSION, "cam_names": names,
             "max_ims": max_ims, "cam_res": [list(res) for res in cam_res]}
+    if image_enumeration is not None:
+        meta["image_enumeration"] = image_enumeration
     cache_path = long_path(cache_path)
     staging = cache_path.with_name(cache_path.name + ".partial")
     try:

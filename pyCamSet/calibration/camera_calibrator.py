@@ -321,6 +321,7 @@ def run_stereo_calibration(
     return optimised_cams
 
 
+
 def detect_datapoints_in_imfile(
     f_loc: Path,
     calibration_target: AbstractTarget,
@@ -335,6 +336,8 @@ def detect_datapoints_in_imfile(
     rescale_and_gamma: bool = False,
     preprocessing_scale: float = 0.25,
     preprocessing_gamma: float = 0.5,
+    side_channel: dict | None = None,
+    manifest_digest: bool = False,
     preprocessing_loader: str = "upper_byte",
 ) -> tuple[TargetDetection, list[tuple]]:
     """
@@ -381,11 +384,14 @@ def detect_datapoints_in_imfile(
         preprocessing_loader)
     cache_hit = (load_verified_cache(
         cache_path, calibration_target, cam_names, n_lim, camset=camset,
-        preprocessing=preprocessing)
+        preprocessing=preprocessing, side_channel=side_channel)
         if caching else None)
     if cache_hit is not None:
         logger.info('loading cached detection')
         return cache_hit
+    if side_channel is not None:
+        side_channel.update({"cache_hit": False, "cache_sha256": None,
+                             "enumeration": None})
 
     if not caching:
         logger.info('Not caching, starting detection')
@@ -403,8 +409,11 @@ def detect_datapoints_in_imfile(
         raise ValueError(f'no subfolders were found in {f_loc}')
     sanitise_input_images(detected_sub_folders)
 
-    work_fn = lambda file, cam=None: \
-        calibration_target.find_in_imfolder(
+    enumerations: dict[str, dict] = {}
+
+    def work_fn(file, cam=None):
+        enumeration_out: dict = {}
+        result = calibration_target.find_in_imfolder(
             file if subfolder_string is None else file/subfolder_string,
             cam_names=cam_names,
             draw=draw,
@@ -416,7 +425,11 @@ def detect_datapoints_in_imfile(
             preprocessing_scale=preprocessing_scale,
             preprocessing_gamma=preprocessing_gamma,
             preprocessing_loader=preprocessing_loader,
+            enumeration_out=enumeration_out,
         )
+        if "paths" in enumeration_out:
+            enumerations[file.name] = enumeration_out["paths"]
+        return result
 
     if camset is not None:
         cam_zip = [camset[f.parts[-1]] for f in detected_sub_folders]
@@ -425,15 +438,26 @@ def detect_datapoints_in_imfile(
         detections = [work_fn(file) for file in tqdm(detected_sub_folders)]
     detected = reduce(lambda x, y: x + y, detections)
 
-    # Detected coordinates are in the upscaled frame, so cam_res must be too:
-    # scaling the native shape is cheaper than re-reading and resizing.
+    # cam_res must reflect the upscaled coordinate frame, not native.
+    # When upscale_factor > 1, detected 2D pixel coords are in the upscaled
+    # frame, so cam_res must match. Multiply native .shape[:2] by the factor
+    # (cheaper than re-reading the image and resizing it). A rescale-and-gamma
+    # pass does not change the coordinate frame the way upscaling does.
     coordinate_scale = 1 if rescale_and_gamma else upscale_factor
     cam_res = [tuple(int(d * coordinate_scale) for d in cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2]) for cname in cam_names]
 
+    from pyCamSet.workflow.education_manifest import describe_enumeration
+
+    image_enumeration = describe_enumeration(
+        enumerations, f_loc, subfolder_string, include_digest=manifest_digest)
+    if side_channel is not None:
+        side_channel["enumeration"] = image_enumeration
+
+
     if caching:
         save_to_cache(detected, cam_res, cache_path, calibration_target,
-                      cam_names, n_lim, camset,
-                      preprocessing=preprocessing)
+                      cam_names, n_lim, camset, preprocessing=preprocessing,
+                      image_enumeration=image_enumeration)
     return detected, cam_res
 
 

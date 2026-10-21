@@ -421,6 +421,7 @@ def levenberg_marquardt(
     jac_csr: Callable | None = None,
     verbose: bool = False,
     callback: Callable[[int, float, np.ndarray], None] | None = None,
+    accepted_step_callback: Callable[[int, float, np.ndarray], None] | None = None,
 ) -> OptimizeResult:
     """
     Minimise ``0.5 * ||loss(x)||^2`` with the Schur complement step.
@@ -492,6 +493,8 @@ def levenberg_marquardt(
                         f"lam {lam:.2e} rho {rho:.3f}")
                 if callback is not None:
                     callback(nit, cost, r)
+                if accepted_step_callback is not None:
+                    accepted_step_callback(nit, cost, x)
                 if dcost < ftol * cost:
                     status, message = 2, "ftol reached"
                 elif dx_norm < xtol * (xtol + float(np.linalg.norm(x))):

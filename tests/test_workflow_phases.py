@@ -849,6 +849,7 @@ def test_a_lens_model_is_read_by_name_or_by_label():
     assert as_lens_model("") == "pinhole", "an unset field is the default"
     assert as_lens_model(None) == "pinhole"
 
+
 def test_a_misspelled_lens_model_is_refused_rather_than_defaulted():
     """Calibrating a telecentric rig as a pinhole one looks plausible and is
     wrong, so a typo must not quietly select it."""
@@ -856,6 +857,7 @@ def test_a_misspelled_lens_model_is_refused_rather_than_defaulted():
 
     with pytest.raises(ParamError, match="telecentrik"):
         as_lens_model("telecentrik")
+
 
 def test_phase_2_fits_the_lens_model_the_run_asked_for(monkeypatch):
     """The choice has to reach run_initial_calibration, or it changes nothing."""

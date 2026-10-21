@@ -166,7 +166,7 @@ def can_use_schur(param_handler) -> tuple[bool, str]:
 
 
 def run_schur_bundle_adjustment(param_handler, loss_fn, bundle_jac, init_params,
-                                threads: int) -> OptimizeResult:
+                                threads: int, accepted_step_callback=None) -> OptimizeResult:
     """
     Solve with Levenberg-Marquardt on the Schur reduced camera system.
 
@@ -205,12 +205,15 @@ def run_schur_bundle_adjustment(param_handler, loss_fn, bundle_jac, init_params,
             # accepted, so the readout stays in pixels
             def callback(iteration, cost, _transformed):
                 progress.update(iteration, cost, robust.raw)
+        callback_options = ({"accepted_step_callback": accepted_step_callback}
+                            if accepted_step_callback is not None else {})
         result = levenberg_marquardt(
             residuals, blocks, init_params, solver,
             max_iter=param_handler.problem_opts["max_nfev"],
             jac_csr=bundle_jac,
             verbose=param_handler.problem_opts["verbosity"] > 1,
             callback=callback,
+            **callback_options,
         )
     if robust is not None:
         # As scipy reports a robust solve: cost is the robust objective, fun
@@ -311,6 +314,7 @@ def _stat_int(value) -> int:
 def _solve_bundle_adjustment(
         param_handler: th.TemplateBundleHandler,
         threads: int = 1,
+        record_education: bool = False,
 ) -> tuple[OptimizeResult, CameraSet, dict]:
     """
     The solve behind both public entry points.
@@ -345,6 +349,11 @@ def _solve_bundle_adjustment(
         # param_handler.check_params(init_params)
 
     start = time.time()
+    collector = None
+    if record_education:
+        from pyCamSet.workflow.education_playback import AcceptedStepCollector
+        collector = AcceptedStepCollector(
+            param_handler, init_params, initial_residuals=init_err)
     usable, reason = can_use_schur(param_handler)
     requested_loss = param_handler.problem_opts.get("loss", "linear")
     # The Schur path honours scipy's named robust losses itself (see
@@ -359,7 +368,9 @@ def _solve_bundle_adjustment(
         if usable:
             solver = "schur"
             optimisation = run_schur_bundle_adjustment(
-                param_handler, loss_fn, bundle_jac, init_params, threads)
+                param_handler, loss_fn, bundle_jac, init_params, threads,
+                accepted_step_callback=(collector.add_schur
+                                        if collector is not None else None))
         else:
             solver = "trf"
             if param_handler.problem_opts.get("solver", "schur") == "schur":
@@ -370,6 +381,11 @@ def _solve_bundle_adjustment(
             bounds = (-np.inf, np.inf)
             if hasattr(param_handler, "get_lockbox_bounds"):
                 bounds = param_handler.get_lockbox_bounds(len(init_params))
+            callback_options = {}
+            callback_supported = (
+                collector is not None and _least_squares_supports_callback())
+            if collector is not None and callback_supported:
+                callback_options["callback"] = collector.scipy_callback
             optimisation = least_squares(
                 loss_fn,
                 init_params,
@@ -381,8 +397,17 @@ def _solve_bundle_adjustment(
                 loss=requested_loss,
                 f_scale=float(param_handler.problem_opts.get("f_scale", 1.0)),
                 bounds=bounds,
+                **callback_options,
             )
+            if collector is not None:
+                collector.endpoints_only = not callback_supported
     end = time.time()
+    if collector is not None:
+        collector.finish(
+            optimisation.x, float(getattr(optimisation, "cost", 0.0)),
+            int(getattr(optimisation, "nit", 0)))
+        param_handler.education_step_trace = collector.to_payload(
+            solver=solver, problem_opts=param_handler.problem_opts)
 
     report = CalibrationReport.from_optimisation(
         optimisation, param_handler,
@@ -400,6 +425,15 @@ def _solve_bundle_adjustment(
     return optimisation, camset, stats
 
 
+def _least_squares_supports_callback() -> bool:
+    """Feature-detect the SciPy callback without requiring a minimum version."""
+    import inspect
+    try:
+        return "callback" in inspect.signature(least_squares).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def run_bundle_adjustment(param_handler: th.TemplateBundleHandler,
                           threads: int = 1) -> tuple[OptimizeResult, CameraSet]:
     """
@@ -409,14 +443,14 @@ def run_bundle_adjustment(param_handler: th.TemplateBundleHandler,
     :param param_handler: The parameter handler that represents the optimisation
     :return: The output of the calibration and the argmin defined CameraSet
     """
-    optimisation, camset, _stats = _solve_bundle_adjustment(
-        param_handler, threads)
+    optimisation, camset, _stats = _solve_bundle_adjustment(param_handler, threads)
     return optimisation, camset
 
 
 def run_bundle_adjustment_with_stats(
         param_handler: th.TemplateBundleHandler,
         threads: int = 1,
+        record_education: bool = False,
 ) -> tuple[OptimizeResult, CameraSet, dict]:
     """
     :func:`run_bundle_adjustment`, and the run statistics alongside it.
@@ -430,5 +464,6 @@ def run_bundle_adjustment_with_stats(
     :return: the optimisation, the argmin defined CameraSet, and the
         statistics described in :func:`get_bundle_adjustment_stats`
     """
-    return _solve_bundle_adjustment(param_handler, threads)
+    return _solve_bundle_adjustment(
+        param_handler, threads, record_education=record_education)
 

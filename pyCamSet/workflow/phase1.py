@@ -29,6 +29,7 @@ from pyCamSet.calibration_targets.core.preparation import (
     target_family,
 )
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
+from pyCamSet.workflow.education_trace import write_trace
 from pyCamSet.workflow.targets import (
     detector_backend_of_spec,
     target_of_params,
@@ -98,10 +99,12 @@ def run(params: dict,
     error: Optional[str] = None
     detections = None
     cam_res = None
+    trace_records = []
 
     with captured_output(log):
         try:
             detections, cam_res, diagnostics, report = _detect(params, log)
+            trace_records = diagnostics.pop("_phase1_trace_records", [])
         except Exception as exc:
             error = str(exc)
             diagnostics["error"] = error
@@ -145,6 +148,28 @@ def run(params: dict,
         "error": error,
     }
     workspace.save_run("phase1", run_id, metadata)
+
+    if params.get("record_phase1_trace", False):
+        run_dir = workspace.run_dir("phase1", run_id)
+        try:
+            if not trace_records:
+                metadata.setdefault("diagnostics", {})["education_trace"] = {
+                    "status": "unavailable",
+                    "reason": "no Python-stage records returned (cache hit or trace loss)",
+                }
+            else:
+                for record in trace_records:
+                    write_trace(run_dir, run_id, "phase1", "stage", record,
+                                enabled=True)
+                metadata.setdefault("artifacts", {})["education_trace"] = str(
+                    run_dir / "education_trace.json")
+        except (OSError, ValueError) as exc:
+            # A supplementary trace must never turn valid detections into a
+            # failed calibration run; make the missing trace explicit instead.
+            metadata.setdefault("diagnostics", {})["education_trace"] = {
+                "status": "unavailable", "reason": str(exc),
+            }
+        workspace.save_run("phase1", run_id, metadata)
 
     if detections is not None:
         run_dir = workspace.run_dir("phase1", run_id)
@@ -372,6 +397,16 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
             "Camera folders must contain equal non-zero image counts.")
 
     target = target_of_params(params)
+    # Telemetry stays outside target construction parameters and cache identity.
+    # Do not mutate targets in the default-off path: lightweight test doubles
+    # and third-party targets need not allow arbitrary attributes.
+    if params.get("record_phase1_trace", False):
+        try:
+            target.phase1_trace_enabled = True
+        except (AttributeError, TypeError):
+            # Trace recording is supplementary; an unsupported target still
+            # completes its detection pass without recording telemetry.
+            pass
     # The preparation applies to any target when it is ticked, with per-target
     # defaults for any value left blank (preparation.py).  Params saved before
     # that (no rescale_and_gamma_any_target key) keep the old PuzzleBoard-only
@@ -389,6 +424,7 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
     for notice in notices:
         log(f"NOTE: {notice}")
     cache_name = _cache_name_of(params)
+    trace_records: list[dict] = []
 
     # Scanned again, as late as possible -- immediately before the
     # containment check this feeds -- rather than reusing the selection
@@ -430,6 +466,7 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
                         "existing cache at %s: %s; proceeding to redetect.",
                         cached_source, exc)
 
+        detection_provenance: dict = {}
         detections, cam_res = detect_datapoints_in_imfile(
             f_loc=root,
             calibration_target=target,
@@ -452,7 +489,10 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
             # into this run's own detections, regardless of how fresh
             # staged_camera_root's own containment check was.
             cam_names=cam_names,
+            side_channel=detection_provenance,
+            manifest_digest=bool(params.get("manifest_digest", False)),
         )
+        trace_records = list(getattr(target, "phase1_trace_records", []))
         log("1b  Detection complete.")
 
         if root != f_loc and caching:
@@ -485,6 +525,14 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
         diagnostics["notices"] = notices
     if prep is not None:
         diagnostics["preparation"] = prep.record()
+    diagnostics["education_manifest"] = detection_provenance.get("enumeration")
+    diagnostics["education_cache"] = {
+        "reused": detection_provenance.get("cache_hit") is True,
+        "sha256": detection_provenance.get("cache_sha256"),
+        "creator": "unknown" if detection_provenance.get("cache_hit") else None,
+    }
+    if getattr(target, "phase1_trace_enabled", False):
+        diagnostics["_phase1_trace_records"] = trace_records
     return detections, cam_res, diagnostics, report.to_dict()
 
 

@@ -7,6 +7,8 @@ cameras near a known rig geometry through the lockbox priors.
 """
 from __future__ import annotations
 
+import hashlib
+import io
 import logging
 from pathlib import Path
 from typing import Optional
@@ -33,8 +35,36 @@ from pyCamSet.workflow.workspace import (
     path_exists,
     resolve_artifact,
 )
+from pyCamSet.workflow.education_trace import atomic_write_bytes, write_trace
 
 _LOG = logging.getLogger(__name__)
+MAX_INITIAL_STATE_BYTES = 8 * 1024 * 1024
+
+
+def _write_initial_state(run_dir: Path, calibration_params: np.ndarray,
+                         missing_poses: np.ndarray,
+                         initial_error_px: float) -> Path | None:
+    """Atomically preserve a bounded snapshot of the Phase 3 solver start.
+
+    Written only for a run that records for education mode.  A snapshot over
+    :data:`MAX_INITIAL_STATE_BYTES` is not written (None) rather than failing
+    the run: the explanation then says the starting vector was not saved.
+    """
+    buffer = io.BytesIO()
+    np.savez_compressed(
+        buffer,
+        calibration_params=np.asarray(calibration_params, dtype=np.float64),
+        missing_poses=np.asarray(missing_poses, dtype=np.bool_),
+        initial_error_px=np.asarray(initial_error_px, dtype=np.float64),
+    )
+    payload = buffer.getvalue()
+    if len(payload) > MAX_INITIAL_STATE_BYTES:
+        _LOG.info("Phase 3 starting vector (%d bytes) is over the %d byte bound; not saved",
+                  len(payload), MAX_INITIAL_STATE_BYTES)
+        return None
+    destination = run_dir / "phase3_initial_state.npz"
+    atomic_write_bytes(destination, payload)
+    return destination
 
 try:
     from pyCamSet.optimisation.camera_lockbox import CameraLockboxConfig
@@ -85,6 +115,9 @@ def run(params: dict,
 
     run_id = make_run_id()
     run_dir = workspace.run_dir("phase3", run_id)
+    params = dict(params)
+    params["record_education"] = bool(params.get("record_education", False))
+    # On unless switched off, in scripts and the GUI alike (on by default).
     params["recover_single_face_telecentric"] = bool(params.get(
         "recover_single_face_telecentric",
         (params.get("problem_options") or {}).get("recover_single_face_telecentric", True)))
@@ -117,6 +150,14 @@ def run(params: dict,
         artifacts["optimised_camset"] = str(camset_out)
     if pruned_path is not None:
         artifacts["filtered_detection_pickle"] = str(pruned_path)
+    if diagnostics.get("initial_state_artifact"):
+        artifacts["initial_state"] = diagnostics["initial_state_artifact"]
+    if diagnostics.get("initial_state_sha256"):
+        artifacts["initial_state_sha256"] = diagnostics["initial_state_sha256"]
+    if diagnostics.get("lockbox_source_sha256"):
+        artifacts["lockbox_source_sha256"] = diagnostics["lockbox_source_sha256"]
+    if diagnostics.get("education_trace"):
+        artifacts["education_trace"] = diagnostics["education_trace"]
 
     metadata = {
         "run_id": run_id,
@@ -255,7 +296,8 @@ def solve(cams, detections, target, *,
           threads: int = 1,
           lockbox_config=None,
           lockbox_source_camset=None,
-          lockbox_warm_start: bool = True):
+          lockbox_warm_start: bool = True,
+          record_education: bool = False):
     """
     Bundle-adjust a camera set against a target, from objects in hand.
 
@@ -286,9 +328,10 @@ def solve(cams, detections, target, *,
         lockbox_config=lockbox_config,
         lockbox_source_camset=lockbox_source_camset,
         lockbox_warm_start=bool(lockbox_warm_start),
+        record_education=record_education,
     )
     optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
-        handler, threads=threads)
+        handler, threads=threads, record_education=record_education)
     return handler, optimisation, out_cams, stats
 
 
@@ -333,6 +376,7 @@ def _solve(params: dict, run_dir: Path, camset_in: Path,
         lockbox_config=lockbox_config,
         lockbox_source_camset=lockbox_source,
         lockbox_warm_start=lockbox_settings.get("warm_start", True),
+        record_education=bool(params.get("record_education", False)),
     )
 
     # The errors, the termination message and the timing are the calibration
@@ -340,11 +384,58 @@ def _solve(params: dict, run_dir: Path, camset_in: Path,
     initial_euclid = float(stats.get("initial_euclid", float("nan")))
     final_euclid = float(stats.get("final_euclid", float("nan")))
 
+    # When recording for education mode, preserve the actual solver input,
+    # including the missing-pose mask at the same point, in a bounded
+    # run-private binary artifact, and the lockbox source's digest.
+    initial_state_path = None
+    lockbox_source_sha256 = None
+    lockbox_source_path = lockbox_settings.get("source_camset")
+    if handler.record_education:
+        initial_params = np.asarray(handler.get_initial_params(), dtype=np.float64).copy()
+        missing_poses = np.asarray(handler.missing_poses, dtype=np.bool_).copy()
+        initial_state_path = _write_initial_state(
+            run_dir, initial_params, missing_poses, initial_euclid)
+    if handler.record_education and lockbox_source_path:
+        digest = hashlib.sha256()
+        with open(long_path(lockbox_source_path), "rb") as source_stream:
+            for chunk in iter(lambda: source_stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        lockbox_source_sha256 = digest.hexdigest()
+
     camset_out = run_dir / "optimised_cameras.camset"
     out_cams.save(camset_out)
 
     diagnostics = _diagnostics(
         optimisation, handler, stats, initial_euclid, final_euclid, log)
+    diagnostics["initial_error_px"] = initial_euclid
+    if initial_state_path is not None:
+        diagnostics["initial_state_artifact"] = str(initial_state_path)
+        # The bounded run-private snapshot is independently bound to metadata;
+        # accidental in-place edits cannot silently change a keyed seed chart.
+        diagnostics["initial_state_sha256"] = hashlib.sha256(
+            initial_state_path.read_bytes()).hexdigest()
+    diagnostics["starting_state_disposition"] = getattr(
+        handler, "starting_state_disposition", "starting state inconsistent")
+    diagnostics["lockbox_source_sha256"] = lockbox_source_sha256
+    if handler.record_education:
+        diagnostics["seed_join_order"] = list(handler.seed_join_order)
+        # The trace is opt-in teaching material: one that cannot be written (too large,
+        # or an I/O error) is recorded as unavailable rather than failing a finished solve.
+        try:
+            trace_path = write_trace(
+                run_dir, run_dir.name, "phase3", "seed_join_order",
+                {"events": handler.seed_join_order}, enabled=True)
+            diagnostics["education_trace"] = str(trace_path) if trace_path else None
+            step_payload = getattr(handler, "education_step_trace", None)
+            if step_payload is not None:
+                step_payload["run_id"] = run_dir.name
+                step_payload["phase"] = "phase3"
+                trace_path = write_trace(
+                    run_dir, run_dir.name, "phase3", "accepted_step",
+                    step_payload, enabled=True)
+                diagnostics["education_trace"] = str(trace_path) if trace_path else None
+        except (OSError, ValueError) as exc:
+            diagnostics["education_trace"] = f"unavailable: {exc}"
     report = getattr(out_cams, "calibration_report", None)
     return camset_out, diagnostics, pruned_path, (
         report.to_dict() if report is not None else None)

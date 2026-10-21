@@ -315,7 +315,7 @@ class Phase2Tab(QWidget):
 
         self._hd_cb = QCheckBox("High Distortion Mode (2c re-detection)")
         self._hd_cb.setToolTip(
-            "Concept: perform an extra detection+calibration pass using initial intrinsics.\n"
+            "Concept: perform an extra detection+calibration pass using first-pass camera estimates.\n"
             "Default: disabled."
         )
         opts_form.addRow(self._hd_cb)
@@ -1311,9 +1311,9 @@ class Phase2DiagnosticsTab(QWidget):
             )
 
             ax = fig.add_subplot(n_rows, n_cols, i)
-            sc = ax.quiver(pts_ideal[:, 0], pts_ideal[:, 1], u, -v, mag,
+            sc = ax.quiver(pts_ideal[:, 0], pts_ideal[:, 1], u, v, mag,
                            cmap="plasma", angles="xy", scale_units="xy",
-                           scale=0.25, width=0.002)
+                           scale=1.0, width=0.002)
             fig.colorbar(sc, ax=ax, label="displacement (px)")
             ax.set_xlim(0, w)
             ax.set_ylim(h, 0)

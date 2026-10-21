@@ -26,6 +26,11 @@ from pyCamSet.workflow.detections import (
     staged_camera_root,
 )
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
+from pyCamSet.workflow.education_trace import (
+    USED_DETECTIONS_KEY,
+    make_used_detections_record,
+    write_trace,
+)
 from pyCamSet.workflow.phase1 import target_of_params
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
@@ -77,6 +82,8 @@ def run(params: dict,
     if ws_path is None:
         raise RuntimeError("Workspace path is not set.")
 
+    params = dict(params)
+    params["record_phase2_per_view"] = bool(params.get("record_phase2_per_view", False))
     run_id = make_run_id()
     run_dir = workspace.run_dir("phase2", run_id)
     detections_path = _detections_path(
@@ -87,14 +94,26 @@ def run(params: dict,
     error: Optional[str] = None
     camset_path: Optional[Path] = None
     pruned_path: Optional[Path] = None
+    used_record_holder: dict = {}
+    calibration_notes: list[str] = []
 
-    with captured_output(log):
+    def phase2_log(line: str) -> None:
+        """Preserve actionable Zhang fallback warnings for downstream notes."""
+        if "fitting the focal lengths alone" in line:
+            note = ("Zhang closed-form principal point was outside the sensor; "
+                    "focals_at_principal held it at image centre before refinement.")
+            if note not in calibration_notes:
+                calibration_notes.append(note)
+        log(line)
+
+    with captured_output(phase2_log):
         try:
             camset_path, diagnostics, pruned_path, report = _calibrate(
-                params, run_dir, detections_path, prune, log)
+                params, run_dir, detections_path, prune, phase2_log,
+                used_record_holder=used_record_holder)
         except Exception as exc:
             error = str(exc)
-            log(f"ERROR: {error}")
+            phase2_log(f"ERROR: {error}")
 
     artifacts: dict = {
         "phase1_detection_pickle": (
@@ -107,6 +126,18 @@ def run(params: dict,
     if pruned_path is not None:
         artifacts["filtered_detection_pickle"] = str(pruned_path)
         artifacts["detection_source_override"] = str(pruned_path)
+    if used_record_holder.get("record") is not None:
+        used_record = used_record_holder["record"]
+        if (used_record.get("source") == "phase1_pickle"
+                and override_pickle is not None and path_exists(override_pickle)
+                and detections_path == override_pickle):
+            used_record = dict(used_record, source="override_pickle")
+    else:
+        # If calibration failed before selecting inputs, do not infer which
+        # detections it would have used from the requested settings.
+        used_record = make_used_detections_record(
+            source="legacy_unknown", path=None)
+    artifacts[USED_DETECTIONS_KEY] = used_record
 
     metadata = {
         "run_id": run_id,
@@ -121,6 +152,8 @@ def run(params: dict,
         },
         "artifacts": artifacts,
     }
+    if calibration_notes:
+        metadata["calibration_notes"] = calibration_notes
     if prune is not None and prune.record:
         metadata["threshold_pruning"] = prune.record
 
@@ -176,7 +209,8 @@ def _detections_path(phase1_run: Optional[dict],
 def calibrate(detections, cam_res, target, *,
               fixed_params: Optional[dict] = None,
               min_detections_per_board: int = 12,
-              model: str = DEFAULT_LENS_MODEL):
+              model: str = DEFAULT_LENS_MODEL,
+              return_details: bool = False):
     """
     Calibrate each camera on its own, from detections already in hand.
 
@@ -196,22 +230,45 @@ def calibrate(detections, cam_res, target, *,
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet calibration modules are not importable.")
 
-    cams, _, _ = run_initial_calibration(
+    fixed = fixed_params or {}
+    # Some target routes return a bare Camera when extrinsics or both
+    # intrinsic blocks are fixed. Avoid requesting unavailable tuple details.
+    details_supported = not any(
+        "ext" in blocks or {"int", "dst"}.issubset(blocks)
+        for blocks in fixed.values() if isinstance(blocks, dict))
+    capture_details = bool(return_details and details_supported)
+    result = run_initial_calibration(
         detection=detections,
         calibration_target=target,
         cam_res=cam_res,
         save=False,
         fixed_params=fixed_params,
-        return_poses_and_costs=True,
+        return_poses_and_costs=capture_details,
         min_detections_per_board=int(min_detections_per_board),
         model=model,
     )
-    return cams
+    if return_details:
+        return result if capture_details else (result, None, None)
+    return result
+
+
+
+def _write_per_view_trace(run_dir: Path, camera_records: list) -> None:
+    """Write the opt-in per-view trace; one that cannot be written is logged, not raised."""
+    try:
+        write_trace(
+            run_dir, run_dir.name, "phase2", "phase2_per_view",
+            {"cost_semantics": "calibrate_zhang/calibrate_telecentric per-view RMS (px)",
+             "view_order": "usable-view order returned by the selected seed calibration",
+             "cameras": camera_records}, enabled=True)
+    except (OSError, ValueError) as exc:
+        _LOG.warning("Phase 2 per-view trace not written: %s", exc)
 
 
 def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
                prune: Optional[DetectionFilter],
-               log: LogFn) -> tuple[Path, dict, Optional[Path], dict]:
+               log: LogFn, *, used_record_holder: Optional[dict] = None
+               ) -> tuple[Path, dict, Optional[Path], dict]:
     """Run the initial calibration and compute its diagnostics."""
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet calibration modules are not importable.")
@@ -219,12 +276,20 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
     target = target_of_params(params)
 
     if prune is not None:
+        if params.get("high_distortion"):
+            raise RuntimeError(
+                "Cannot prune a high-distortion Phase 2 rerun: the authoritative "
+                "second-pass detections were not persisted. Re-run without pruning.")
         # Nothing re-detects here.  Detecting again would put back exactly the
         # observations the prune was asked to leave out, so a pruned run reads
         # the saved detections and nothing else -- which also means it needs
         # no images, and no staging folder to point at them.
-        return _calibrate_pruned(
+        result = _calibrate_pruned(
             params, run_dir, detections_path, prune, target, log)
+        if used_record_holder is not None:
+            used_record_holder["record"] = make_used_detections_record(
+                source="filtered_pickle", path=str(result[2]))
+        return result
 
     f_loc = Path(params["f_loc"])
     selected = list(params.get("selected_cameras") or [])
@@ -244,20 +309,28 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
     # would otherwise be silently folded into this pass's own detections.
     cam_names = [folder.name for folder in cam_folders]
 
+    pass_info: dict = {}
     with staged_camera_root(f_loc, cam_folders, log, "pycamset_phase2_") as root:
         detections, cam_res = _load_or_detect(
-            params, target, root, detections_path, set(selected), cam_names, log)
+            params, target, root, detections_path, set(selected), cam_names, log,
+            pass_info=pass_info)
 
-        cams = calibrate(
+        per_view_result = calibrate(
             detections, cam_res, target,
             fixed_params=params["fixed_params"],
             min_detections_per_board=params.get("min_detections_per_board", 12),
-            model=params.get("lens_model", DEFAULT_LENS_MODEL))
+            model=params.get("lens_model", DEFAULT_LENS_MODEL),
+            return_details=params.get("record_phase2_per_view", False))
+        if params.get("record_phase2_per_view", False):
+            cams, per_view_poses, per_view_costs = per_view_result
+        else:
+            cams = per_view_result
+            per_view_poses = per_view_costs = None
 
         if params["high_distortion"]:
-            log("2c  High-distortion mode: re-running detection with initial "
-                "intrinsics...")
-            detections, _ = detect_datapoints_in_imfile(
+            log("2c  High-distortion mode: re-running detection using first-pass "
+                "camera estimates...")
+            detections, cam_res = detect_datapoints_in_imfile(
                 f_loc=root,
                 calibration_target=target,
                 caching=False,
@@ -269,12 +342,56 @@ def _calibrate(params: dict, run_dir: Path, detections_path: Optional[Path],
                 # legacy params keep the PuzzleBoard-only gate.
                 **preparation_detect_kwargs(params, target),
             )
-            cams = calibrate(
+            per_view_result = calibrate(
                 detections, cam_res, target,
                 fixed_params=params["fixed_params"],
                 min_detections_per_board=params.get(
                     "min_detections_per_board", 12),
-                model=params.get("lens_model", DEFAULT_LENS_MODEL))
+                model=params.get("lens_model", DEFAULT_LENS_MODEL),
+                return_details=params.get("record_phase2_per_view", False))
+            if params.get("record_phase2_per_view", False):
+                cams, per_view_poses, per_view_costs = per_view_result
+            else:
+                cams = per_view_result
+                per_view_poses = per_view_costs = None
+
+    if used_record_holder is not None:
+        if params.get("high_distortion"):
+            record = make_used_detections_record(
+                source="fresh_pass_not_saved", path=None,
+                fresh_pass_reasons=pass_info.get("reasons", []) +
+                ["high_distortion_second_pass"], cache_hit=False)
+            record["passes"] = [
+                {"pass": "initial", "cache_hit": (
+                    pass_info.get("cache_hit") if pass_info.get("fresh_pass") else None)},
+                {"pass": "high_distortion_second_pass", "cache_hit": False},
+            ]
+            used_record_holder["record"] = record
+        elif pass_info.get("fresh_pass"):
+            record = make_used_detections_record(
+                source="fresh_pass_not_saved", path=None,
+                fresh_pass_reasons=pass_info["reasons"],
+                cache_hit=pass_info.get("cache_hit"))
+            record["passes"] = [{"pass": "initial", "cache_hit":
+                                 pass_info.get("cache_hit")}]
+            used_record_holder["record"] = record
+        else:
+            used_record_holder["record"] = make_used_detections_record(
+                source="phase1_pickle", path=str(detections_path))
+
+    if params.get("record_phase2_per_view") and per_view_poses is not None:
+        camera_records = []
+        for camera_name, poses, costs in zip(
+                detections.cam_names, per_view_poses, per_view_costs):
+            camera_records.append({
+                "camera": str(camera_name),
+                "views": [
+                    {"view_index": index, "pose_target_to_camera": np.asarray(pose).tolist(),
+                     "per_view_rms_px": float(cost)}
+                    for index, (pose, cost) in enumerate(zip(poses, costs))
+                ],
+            })
+        _write_per_view_trace(run_dir, camera_records)
 
     camset_path = run_dir / (
         "initial_cameras_high_distortion.camset"
@@ -309,14 +426,36 @@ def _calibrate_pruned(params: dict, run_dir: Path,
     log(f"Saved filtered detections: {pruned_path}")
 
     log("Running Phase 2 initial calibration on filtered detections…")
-    cams = calibrate(
+    per_view_result = calibrate(
         filtered, cam_res, target,
         fixed_params=params.get("fixed_params"),
         min_detections_per_board=params.get("min_detections_per_board", 12),
-        model=params.get("lens_model", DEFAULT_LENS_MODEL))
+        model=params.get("lens_model", DEFAULT_LENS_MODEL),
+        return_details=params.get("record_phase2_per_view", False))
+    if params.get("record_phase2_per_view", False):
+        cams, poses, costs = per_view_result
+    else:
+        cams = per_view_result
+        poses = costs = None
 
     camset_path = run_dir / "initial_cameras.camset"
     cams.save(camset_path)
+
+    if poses is not None:
+        camera_records = []
+        for camera_name, camera_poses, camera_costs in zip(
+                filtered.cam_names, poses, costs):
+            camera_records.append({
+                "camera": str(camera_name),
+                "views": [
+                    {"view_index": index,
+                     "pose_target_to_camera": np.asarray(pose).tolist(),
+                     "per_view_rms_px": float(cost)}
+                    for index, (pose, cost) in enumerate(
+                        zip(camera_poses, camera_costs))
+                ],
+            })
+        _write_per_view_trace(run_dir, camera_records)
 
     diagnostics, report = diagnostics_of(
         filtered, target, cams,
@@ -326,22 +465,31 @@ def _calibrate_pruned(params: dict, run_dir: Path,
 
 def _load_or_detect(params: dict, target, root: Path,
                     detections_path: Optional[Path],
-                    selected: set[str], cam_names: list[str], log: LogFn):
+                    selected: set[str], cam_names: list[str], log: LogFn,
+                    *, pass_info: Optional[dict] = None):
     """Read phase 1's detections, or detect again if they cannot be used."""
     detections = cam_res = None
+    reasons: list[str] = []
+    if detections_path is None or not path_exists(detections_path):
+        reasons.append("pickle_missing")
 
     if detections_path is not None and path_exists(detections_path):
         log(f"Using detections: {detections_path}")
         detections, cam_res = extract_detection_and_cam_res(
             load_pickle(long_path(detections_path)))
+        if cam_res is None:
+            reasons.append("no_cam_res")
         if selected and set(getattr(detections, "cam_names", []) or []) != selected:
             log("Detection artifact camera set does not match selected "
                 "cameras; running fresh detection on selected subset.")
             detections = cam_res = None
+            reasons.append("camera_subset")
+
 
     if detections is None or cam_res is None:
         log("Detection artifact missing/incompatible, falling back to "
             "detection pass.")
+        side_channel: dict = {}
         detections, cam_res = detect_datapoints_in_imfile(
             f_loc=root,
             calibration_target=target,
@@ -353,7 +501,15 @@ def _load_or_detect(params: dict, target, root: Path,
             # fresh scan of root/f_loc.
             cam_names=cam_names,
             **preparation_detect_kwargs(params, target),
+            side_channel=side_channel,
         )
+        if pass_info is not None:
+            pass_info.update({"fresh_pass": True,
+                              "reasons": sorted(set(reasons), key=(
+                                  "camera_subset", "no_cam_res", "pickle_missing").index),
+                              "cache_hit": side_channel.get("cache_hit")})
+    elif pass_info is not None:
+        pass_info.update({"fresh_pass": False, "reasons": [], "cache_hit": None})
     return detections, cam_res
 
 

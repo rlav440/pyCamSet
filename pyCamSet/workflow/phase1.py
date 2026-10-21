@@ -109,6 +109,7 @@ def run(params: dict,
     # Imported here, not at module level: the ArUco detector module loads
     # OpenCV's aruco bindings, which this workflow module otherwise leaves lazy.
     from pyCamSet.calibration_targets.markers.aruco_opencv import (
+        OPENCV_VERSION,
         PIXEL_CONVENTION,
     )
 
@@ -135,6 +136,10 @@ def run(params: dict,
         # whichever OpenCV is installed. A run saved before this was recorded
         # has no such field.
         "pixel_convention": PIXEL_CONVENTION,
+        # Different OpenCV versions place sub-pixel corners differently (by a few
+        # hundredths of a pixel on ChArUco boards between 4.11 and 5.0), so a later
+        # re-detection can only match this run exactly under the same version.
+        "opencv_version": OPENCV_VERSION,
         "diagnostics": diagnostics,
         "report": report,
         "error": error,

@@ -34,10 +34,7 @@ from pyCamSet.calibration_targets.markers.aruco2 import (
     interpolate_board_corners,
     resolve_dictionary,
 )
-from pyCamSet.calibration_targets.markers.aruco_opencv import (
-    ARUCO_OPENCV_DETECTOR,
-    charuco_corners_to_pixel_centre,
-)
+from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR, detect_board
 from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
 from pyCamSet.utils.lazy_imports import lazy_attributes
 from pyCamSet.utils.general_utils import split_aruco_dictionary, make_4x4h_tform, downsample_valid
@@ -764,9 +761,7 @@ class Ccube(AbstractTarget):
         seen_keys = []
         seen_data = []
         for idb, bd in enumerate(self.board_detectors):
-            c_corners, c_ids, mloc, mid =  bd.detectBoard(image)
-            # Into the pixel-centre frame (OpenCV before 4.14 is half a pixel off it).
-            c_corners = charuco_corners_to_pixel_centre(c_corners)
+            c_corners, c_ids, mloc, mid = detect_board(bd, image)
             if explain is not None:
                 explain.append({"event": "charuco_face", "face": int(idb), "detail": {
                     "detect_board": (c_corners, c_ids, mloc, mid)}})

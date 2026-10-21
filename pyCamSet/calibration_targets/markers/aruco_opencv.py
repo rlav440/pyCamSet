@@ -32,6 +32,14 @@ from pyCamSet.calibration_targets.core.parameters import (
 
 _LOG = logging.getLogger(__name__)
 
+#: The version of the OpenCV this process imported, and its major version.
+OPENCV_VERSION = str(cv2.__version__)
+OPENCV_MAJOR = int(OPENCV_VERSION.split(".")[0])
+
+#: The registered targets whose corners come from ``CharucoDetector``, with
+#: either marker backend.
+CHARUCO_DETECTOR_TARGETS = frozenset({"ChArUco", "Ccube", "CIco"})
+
 _PARAMETERS = parameters_from_json(
     Path(__file__).parent / "charuco_parameters.json")
 _PROFILES = profiles_from_json(
@@ -167,6 +175,27 @@ def charuco_corners_to_pixel_centre(corners, version: str | None = None):
     if corners is None or offset == 0.0:
         return corners
     return np.asarray(corners, dtype=np.float32) - np.float32(offset)
+
+
+def detect_board(detector, image, **kwargs):
+    """
+    ``detector.detectBoard(image, **kwargs)``, with the ChArUco corners in
+    :data:`PIXEL_CONVENTION` whatever OpenCV version is installed.
+
+    Every ChArUco path goes through this -- ChArUco, Ccube and CIco with
+    either marker backend -- so the one difference between OpenCV before 4.14
+    and from it is taken out in one place (:func:`charuco_corners_to_pixel_centre`).  The
+    marker corners it also returns are left as OpenCV gives them: they are
+    pixel-centre under every version.
+
+    :param detector: a ``cv2.aruco.CharucoDetector``.
+    :param image: the image to detect in.
+    :param kwargs: passed on, e.g. ``markerCorners`` and ``markerIds``.
+    :return: ``(charuco_corners, charuco_ids, marker_corners, marker_ids)``,
+        as ``detectBoard`` returns them.
+    """
+    corners, ids, marker_corners, marker_ids = detector.detectBoard(image, **kwargs)
+    return charuco_corners_to_pixel_centre(corners), ids, marker_corners, marker_ids
 
 
 def marker_bit_grid(dictionary: cv2.aruco.Dictionary, marker_id: int) -> np.ndarray:

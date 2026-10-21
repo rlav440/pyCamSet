@@ -32,10 +32,7 @@ from pyCamSet.calibration_targets.markers.aruco2 import (
     detect_charuco_corners,
     resolve_dictionary,
 )
-from pyCamSet.calibration_targets.markers.aruco_opencv import (
-    ARUCO_OPENCV_DETECTOR,
-    charuco_corners_to_pixel_centre,
-)
+from pyCamSet.calibration_targets.markers.aruco_opencv import ARUCO_OPENCV_DETECTOR, detect_board
 from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
 from pyCamSet.calibration_targets.core.target_detections import ImageDetection
 from pyCamSet.utils.lazy_imports import lazy_attributes
@@ -480,10 +477,7 @@ class ChArUco(AbstractTarget):
         else:
             # c_corners, c_ids, od = adaptive_decimated_charuco_detection_stereo(image, charuco_board=self.board, aruco_dict=self.a_dict)
             # _, _, mloc, mid = self.board_detectors.detectBoard(image)
-            c_corners, c_ids, mloc, mid = self.board_detectors.detectBoard(image)
-            # OpenCV before 4.14 reports the corners half a pixel off the pixel-centre
-            # frame every target returns; the aruco2 branch is already in it.
-            c_corners = charuco_corners_to_pixel_centre(c_corners)
+            c_corners, c_ids, mloc, mid = detect_board(self.board_detectors, image)
             if face_explain is not None:
                 face_explain["detect_board"] = (c_corners, c_ids, mloc, mid)
             if getattr(self, "phase1_trace_enabled", False) and mid is not None:

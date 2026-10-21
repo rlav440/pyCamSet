@@ -63,18 +63,31 @@ Report corners on the same convention every other target uses, or a rig
 calibrated from two kinds of target mixes two coordinate systems and the
 difference is absorbed into the principal point.
 
-That convention is the pixel-centre frame
-(`aruco_opencv.PIXEL_CONVENTION`): integer coordinates are pixel centres, so a
-corner on the boundary between pixels n-1 and n is at n - 0.5. It is the frame
-`cv2.calibrateCamera` and `cv2.projectPoints` assume, and it does not depend on
-the installed OpenCV. The `CharucoDetector` of OpenCV 4.14 and later reports it;
-earlier versions report corners half a pixel further on, so `ChArUco`, `Ccube`
-and `CIco` pass its corners through `charuco_corners_to_pixel_centre`. Marker
-quads are pixel-centre under every version. aruco2's grid board and the PuzzleBoard detector
-report pixel centres already. The check is to render a board whose analytic
-corner positions are known in the pixel-centre frame and confirm
-`find_in_image` returns them (`tests/test_pixel_centre_frame.py`). Do the same
-for a new detector rather than assuming it.
+That convention is the pixel-centre frame (`aruco_opencv.PIXEL_CONVENTION`):
+integer coordinates are pixel centres, so a corner on the boundary between
+pixels n-1 and n is at n - 0.5. It is the frame `cv2.calibrateCamera` and
+`cv2.projectPoints` assume, and it does not depend on the installed OpenCV.
+The `CharucoDetector` of OpenCV 4.14 and later reports ChArUco corners in it;
+earlier versions report them half a pixel further on, so `ChArUco`, `Ccube` and `CIco` read them
+through `aruco_opencv.detect_board`, which moves them into it
+(`charuco_corners_to_pixel_centre`). Marker quads are pixel-centre under every version.
+aruco2's grid board (`ChArUco2`, `Ccube2`, `CIco2`) and the
+PuzzleBoard detector work in pixel centres and return them as they are. The
+check is to render a board whose analytic corner positions are known in the
+pixel-centre frame and confirm `find_in_image` returns them
+(`tests/test_pixel_centre_frame.py`, `tests/test_aruco2_gridboard_quality.py`).
+Do the same for a new detector rather than assuming it.
+
+Simulated captures (`pyCamSet.simulation`) check it against the pixel centres
+`cv2.projectPoints` projects onto: every target's points land on them, under
+OpenCV 4 and 5
+(`tests/test_simulation.py::test_every_detector_reports_where_opencv_projects`),
+so a calibration's principal point is the one an OpenCV model of the same
+camera has. Before October 2026 every target but PuzzleBoard reported points
+half a pixel further on (the pixel-corner frame), which put `cx`/`cy` half a
+pixel on too. Detection caches and Phase 1 runs now record the frame
+(`pixel_convention`), so an older cache is detected again; re-run an older
+calibration before comparing it with a newer one.
 
 ## 3. Say what your arguments mean
 

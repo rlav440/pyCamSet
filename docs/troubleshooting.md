@@ -3,10 +3,10 @@
 ## A target class is `None`
 
 `ChArUco`, `Ccube`, `ChArUco2`, `Ccube2`, `PuzzleBoard`, `PuzzleBoardCube`,
-`CIco`, `CIco2` and `PuzzleBoardIco` are imported behind a guard, because they need graphics libraries that a
-reconstruction-only install does not. When one of those imports fails, the name
-is bound to `None` rather than raising, so the failure surfaces later and
-somewhere else:
+`CIco`, `CIco2` and `PuzzleBoardIco` are imported behind a guard, because they
+need graphics libraries that a reconstruction-only install does not. When one
+of those imports fails, the name is bound to `None` rather than raising, so
+the failure surfaces later and somewhere else:
 
 ```text
 TypeError: 'NoneType' object is not callable
@@ -181,13 +181,13 @@ is installed.** Integer coordinates are pixel centres, the frame
 `cv2.calibrateCamera` and `cv2.projectPoints` assume. The `CharucoDetector` of
 OpenCV 4.14 and later returns ChArUco corners in it; earlier versions return them
 half a pixel further on, on both axes (measured: +0.5 px on 4.11 and 4.13, 0 on
-4.14 and 5.0), and `aruco_opencv.charuco_corners_to_pixel_centre` moves them back,
-so ChArUco, Ccube and CIco give the same points under any version and the same
-frame as ChArUco2, Ccube2, CIco2 and PuzzleBoard. Sub-pixel positions still differ
-by a few hundredths of a pixel between versions. A detection cache written before
-this frame was recorded is detected again; a camset saved before it may have
-its principal points half a pixel on from a newer one's, so re-run its
-calibration before comparing the two.
+4.14 and 5.0), and `aruco_opencv.detect_board` moves them back, so ChArUco, Ccube
+and CIco give the same points under any version and the same frame as ChArUco2,
+Ccube2, CIco2 and PuzzleBoard. Sub-pixel positions still differ by a few
+hundredths of a pixel between versions. A detection cache written before this frame was
+recorded is detected again; a camset saved before it may have its principal
+points half a pixel on from a newer one's, so re-run its calibration before
+comparing the two.
 
 pyCamSet depends on `opencv-contrib-python`. Every `opencv-*` wheel installs
 the same `cv2` package, so an environment that already has `opencv-python`

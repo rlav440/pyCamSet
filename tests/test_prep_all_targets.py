@@ -256,6 +256,19 @@ def test_load_phase1_photo_resolves_the_run_preparation(tmp_path):
                     photo.preprocessing_loader) == expected[1:]
 
 
+@pytest.mark.parametrize(("params", "expected"), [
+    (dict(ON, upscale_factor=2, target={"type": "Ccube"}),
+     "resized each photo ×1 and adjusted its brightness and contrast (gamma 0.5)"),
+    (dict(ON, upscale_factor=2, preprocessing_scale=0.8, target={"type": "ChArUco"}),
+     "resized each photo ×0.8"),
+    (dict(ON, upscale_factor=2, target={"type": "PuzzleBoard"}),
+     "resized each photo ×0.25 and adjusted its brightness and contrast (gamma 0.5)"),
+])
+def test_detector_input_copy_uses_the_resolved_values(params, expected):
+    pytest.importorskip("PySide6")
+    from pyCamSet.gui.education_phase1 import _detector_input_copy, _frame_to_photo
+    assert expected in _detector_input_copy(params)
+    assert _frame_to_photo(params) == 1.0  # prepared points are already native
 
 
 @pytest.mark.parametrize(("params", "scale"), [

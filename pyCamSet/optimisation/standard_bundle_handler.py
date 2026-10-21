@@ -756,7 +756,8 @@ class SelfBundleHandler(TemplateBundleHandler):
         s.add_mesh(pv.PolyData(og_data*descale), color='k', label = "Original Model", point_size=0.3)
 
         for face in og_data.reshape((-1, self.point_data.shape[-2], 3)):
-            lattice = pv.PolyData(face*descale, lines=make_connectivity(face))
+            lattice = pv.PolyData(
+                face*descale, lines=make_connectivity(face, _gauge_square_size(self.target)))
             s.add_mesh(lattice, style='wireframe', line_width=2, color='lightgrey')
 
         s.add_legend(bcolor='w', border=True)
@@ -770,42 +771,36 @@ class SelfBundleHandler(TemplateBundleHandler):
         s.show()
 
 
-def make_connectivity(pts):
+def make_connectivity(pts, square_size: float, rtol: float = 1e-3):
     """
     The lines of the lattice a face's points sit on, as pyvista reads them.
 
-    :param pts: the (n, 3) points of one face, in the row major order a board
-        numbers its corners in.
+    Two points are joined when they sit one square apart, the same pairs the
+    solve takes its scale from, so any lattice draws -- square or triangular,
+    whatever order its points are numbered in.  Rows with a non-finite
+    coordinate (unplaced points) are left out; the indices returned are still
+    rows of ``pts``.
+
+    :param pts: the (n, 3) points of one face, as the target is drawn.
+    :param square_size: the distance between neighbouring points, as it occurs
+        in ``pts`` (see :func:`_gauge_square_size`); not finite or not positive
+        gives no lines.
+    :param rtol: relative tolerance on that distance.
     :return: a flat list of (2, start, end) line entries.
     """
-    n_pts = pts.shape[0]
-    n_points_per_line = row_length(pts)
-    connectivity = []
-    for idp, _ in enumerate(pts):
-        if (idp + n_points_per_line < n_pts):
-            connectivity.extend([2, idp, idp + n_points_per_line])
-        if not ((idp +1) % n_points_per_line == 0):
-            connectivity.extend([2, idp, idp + 1])
-    return connectivity
-
-
-def row_length(pts):
-    """
-    How many of a face's points lie on one row of its lattice.
-
-    The points of a face are numbered row major, so the first step that turns
-    away from the direction of the first one has left the first row. A square
-    face gives the square root; a rectangular board gives its own width, which
-    assuming the square root would have drawn a lattice at a diagonal to.
-
-    :param pts: the (n, 3) points of one face.
-    :return: the number of points in a row.
-    """
-    step = pts[1] - pts[0]
-    step = step / np.linalg.norm(step)
-    for idp in range(2, len(pts)):
-        next_step = pts[idp] - pts[idp - 1]
-        next_step = next_step / np.linalg.norm(next_step)
-        if np.linalg.norm(np.cross(step, next_step)) > 1e-6:
-            return idp
-    return len(pts)
+    pts = np.asarray(pts, dtype=float).reshape(-1, 3)
+    square_size = float(square_size)
+    finite = np.flatnonzero(np.all(np.isfinite(pts), axis=1))
+    if finite.size < 2 or not np.isfinite(square_size) or square_size <= 0:
+        return []
+    placed = pts[finite]
+    pairs = cKDTree(placed).query_pairs(square_size * (1 + rtol), output_type="ndarray")
+    if len(pairs) == 0:
+        return []
+    # query_pairs bounds the distance from above only; closer pairs are not
+    # neighbours at this spacing.
+    length = np.linalg.norm(placed[pairs[:, 0]] - placed[pairs[:, 1]], axis=1)
+    pairs = pairs[length >= square_size * (1 - rtol)]
+    pairs = pairs[np.lexsort((pairs[:, 1], pairs[:, 0]))]
+    starts, ends = finite[pairs[:, 0]], finite[pairs[:, 1]]
+    return np.column_stack([np.full(len(starts), 2), starts, ends]).ravel().tolist()

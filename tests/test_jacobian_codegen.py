@@ -305,6 +305,11 @@ SHIPPED_CHAINS = {
     "telecentric_intrinsic_telecentric_extrinsic_rigidTform3d_free_point":
         lambda: (fb.telecentric_intrinsic() + fb.telecentric_extrinsic()
                  + fb.rigidTform3d() + fb.free_point()),
+    # Telecentric stereo triangulates through a free-point handler with no
+    # rigid transform; generated on first use, it would otherwise be left in
+    # the package for this check to find unaccounted for.
+    "telecentric_intrinsic_telecentric_extrinsic_free_point":
+        lambda: fb.telecentric_intrinsic() + fb.telecentric_extrinsic() + fb.free_point(),
 }
 
 

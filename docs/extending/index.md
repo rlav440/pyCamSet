@@ -36,4 +36,12 @@ for name, (module, cls) in TARGET_CLASSES.items():
 Entries are held as module and class *names* rather than as classes, so that
 importing the registry costs nothing and so that a target with an optional
 dependency is only imported when one is actually asked for. A new target is one
-line in that table and nothing else.
+line in that table and nothing else in the registry.
+
+!!! note "Teach it in the education mode"
+
+    A new target, lens model, detector, solver or loss changes what the education
+    windows teach, so the same pull request must update them. The files for each kind
+    of extension are in
+    [The education mode](https://github.com/rlav440/pyCamSet/blob/master/CONTRIBUTING.md#the-education-mode)
+    in `CONTRIBUTING.md`.

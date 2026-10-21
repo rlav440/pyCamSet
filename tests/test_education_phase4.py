@@ -2309,6 +2309,67 @@ def _sentences(text):
     return [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s]
 
 
+@pytest.mark.gui
+@pytest.mark.parametrize("withheld", [False, True])
+def test_phase4_levels_are_additive_and_end_on_the_decision_question(tmp_path, monkeypatch, withheld):
+    """A1 sections 1 and 3: plain L1 copy, captions that grow with the level, and a closing
+    decision on the last stage."""
+    _app()
+    from test_education_copy_lint import learner_copy_findings
+    from pyCamSet.gui import education_phase4
+    from pyCamSet.workflow.education_derive import Phase4Derivation
+    from pyCamSet.workflow.education_visual_p4 import STAGES
+
+    monkeypatch.setattr(education_phase4, "read_trace", lambda *_: {"status": "unavailable"})
+    classes = SimpleNamespace(unseen=(5,), one_direction=(0,),
+                              several_directions=(1, 2, 3, 4), ray_separation_deg=())
+    result = Phase4Derivation(
+        status="available", reason=None, run_id="run-4", d41_visible_points=5,
+        d43_final_px=0.8, d45_gauge_scale=1.0, d47_mean_displacement_mm=0.2,
+        point_classes=classes, display_refit_points=np.zeros((6, 3)),
+        display_refit_scale=1.0, scale_consistency_ratio=1.0,
+        metric_qualifier_required=False, frames=())
+    monkeypatch.setattr(education_phase4, "derive_phase4", lambda *_args, **_kwargs: result)
+    state = _state(confirmed=True, verification=SimpleNamespace(value="verified"), reason=None,
+                   origin_run_id="p3", phase3_before_px=1.5, source_check="verified by manifest",
+                   fixed_pose_matches=not withheld,
+                   start_mismatch="fixed_pose" if withheld else None,
+                   rig_comparison_withheld=withheld,
+                   phase3_fixed_pose_ordinal1=1, phase4_fixed_pose_ordinal1=6 if withheld else 1)
+    metadata = {"params": {}, "diagnostics": {
+        "D4.3_initial_euclid_px": 1.2, "D4.2_gauge_fixed_points": {"indices": [0, 1, 2]}}}
+    view = education_phase4.Phase4View(_context(tmp_path, state=state, metadata=metadata))
+    try:
+        assert view.stage_view.stepper.count() == len(STAGES) == 6
+        assert STAGES[-1] == "What it is for"
+        assert "Phase 4" in view.stage_view.accessibleName()
+        captions, rendered = {}, {}
+        for level in (1, 2, 3):
+            captions[level], rendered[level] = [], []
+            for index in range(6):
+                text = view.stage_text(index, level=level)
+                caption = view.stage_view.caption.text()
+                captions[level].append(caption)
+                rendered[level].append(text)
+                assert learner_copy_findings(text, level) == [], (level, index, text)
+                # Captions: <= 2 / 3 / 4 short sentences at L1 / L2 / L3.
+                assert len(_sentences(caption)) <= {1: 2, 2: 3, 3: 4}[level], (level, index, caption)
+        for low, high in ((1, 2), (2, 3)):
+            assert all(a in b for a, b in zip(captions[low], captions[high]))
+        assert "D4.7" in rendered[2][1] and "D4.7" not in rendered[1][1]
+        decision = rendered[1][_RESULT]
+        assert ("Does Phase 4 fit your points better, and are the target-shape differences backed "
+                "by enough views to be believable?") in decision
+        assert "1.5 px at the end of Phase 3 and 0.8 px after Phase 4, lower than Phase 3's" in decision
+        assert "A lower error alone does not show a more accurate calibration." in decision
+        assert ("Answer: Fit: yes, the average point error is lower than Phase 3's. "
+                "Shape: partly backed, only the 4 of 6 points seen from several directions back a "
+                "shape difference; the rest are not backed.") in decision
+        assert "4 point(s) were estimated from several directions; 1 were seen from one direction only" in decision
+        assert "What to do next:" in decision
+        assert "Phase 3 used the 1st photo of the detection run's list (image index 0)" in rendered[1][0]
+    finally:
+        view.close()
 
 
 @pytest.mark.gui

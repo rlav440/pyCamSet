@@ -207,3 +207,12 @@ The name is then what a settings dictionary addresses and stores, what the GUI
 offers, and what `pyCamSet.calibration_targets.MyTarget` resolves to. To show the
 GUI a different name, add an entry to `TARGET_LABELS` beside it — ChArUco is
 offered as "ChArUco1" that way — while specs keep the registry name.
+
+!!! note "Teach it in the education mode"
+
+    Phase 1 explains a target's detection from the events its detector appends to the
+    `explain` list (read as `_detect_explain`, as `pyCamSet/calibration_targets/charuco.py`
+    does). `explain_detection` (`pyCamSet/workflow/education_detect_explain.py`) reads
+    the events. Add a case to `CASES` in `tests/test_education_detect_explain.py`, and
+    an entry to `pyCamSet/workflow/education_coverage.py`. A target that emits no events
+    is `not_yet_taught`.

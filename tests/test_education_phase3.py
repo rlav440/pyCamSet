@@ -812,6 +812,44 @@ def test_a0_anisotropic_six_mm_n40_healthy_case_answers_yes(tmp_path, monkeypatc
     view.close()
 
 
+@pytest.mark.gui
+def test_phase3_levels_are_additive_and_l1_is_plain(tmp_path, monkeypatch):
+    """A1 section 1: L1 is plain language; codes and rule parameters arrive at L2/L3.
+
+    Captions are short (brief: <= 2 sentences at L1) and each level only adds to the last.
+    """
+    _app()
+    from test_education_copy_lint import learner_copy_findings
+    from pyCamSet.gui import education_phase3
+
+    monkeypatch.setattr(education_phase3, "derive_phase3", lambda _context: _available_derivation())
+    monkeypatch.setattr(education_phase3, "read_trace",
+                        lambda *_args: {"status": "unavailable", "reason": "missing sidecar"})
+    view = education_phase3.Phase3View(_context(tmp_path, {"params": {}}))
+    rendered = {}
+    for level in (1, 2, 3):
+        view.stage_view.set_level(level)
+        rendered[level] = []
+        for index in range(len(view.stage_keys())):
+            view.stage_view.set_current_stage(index)
+            text = view.stage_view.caption.text()
+            rendered[level].append(text)
+            assert learner_copy_findings(text, level) == [], (level, index, text)
+    for low, high in ((1, 2), (2, 3)):
+        assert all(text_low in text_high for text_low, text_high in zip(rendered[low], rendered[high]))
+    # The agreement answer keeps its reviewed copy, now in the Result stage's Numbers drawer.
+    decision = compose(_frame(view, "Did the cameras agree?"), 1)
+    assert decision.startswith("Did the cameras agree on where the target was, across your photos?")
+    assert "Camera 2: its estimated position relative to camera 1 varied by 2.5 mm across photos." in decision
+    assert "first-guess position for every photo" in decision
+    assert "the solved rig has one position per camera" in decision
+    assert "Spread check" not in decision and "Single-photo rule" not in decision
+    assert "not the solved Phase 3 extrinsics" in compose(_frame(view, "Did the cameras agree?"), 2)
+    assert "Single-photo rule: it checks deviations" in compose(_frame(view, "Did the cameras agree?"), 3)
+    assert "Each camera is compared with camera-A (camera 1), the first camera." in decision
+    view.show_stage("result")
+    assert any("Did the cameras agree on where the target was" in cell for cell in _table_cells(view))
+    view.close()
 
 
 @pytest.mark.gui
@@ -952,6 +990,23 @@ def test_phase3_reference_photo_refusal_ends_with_recovery(tmp_path, monkeypatch
         view.close()
 
 
+@pytest.mark.gui
+def test_phase3_recorded_steps_copy_names_steps_not_motion(tmp_path, monkeypatch):
+    """The playback shows recorded solver states; its copy must not claim physical motion."""
+    _app()
+    from test_education_copy_lint import _rules, lint_copy
+    from pyCamSet.gui import education_phase3
+
+    monkeypatch.setattr(education_phase3, "derive_phase3", lambda _context: _available_derivation())
+    monkeypatch.setattr(education_phase3, "read_trace", lambda *_: {"status": "available", "records": []})
+    view = education_phase3.Phase3View(_context(tmp_path, {"params": {"record_education": True}}))
+    view._playback = {"status": "available", "payload": {"loss": "linear", "steps": []}, "frames": []}
+    copy = view._playback_copy()
+    assert ("Recorded accepted solver steps: they show the estimates changing, not the rig "
+            "physically moving.") in copy
+    assert "not pixels" in copy and "interpolated" in copy and "only the recorded states are data" in copy
+    assert lint_copy(copy, "education_phase3.py", "phase3.playback", _rules()) == []
+    view.close()
 
 @pytest.mark.gui
 def test_phase3_unit_free_answer_carries_never_zero_anchor(tmp_path, monkeypatch):
@@ -1095,8 +1150,70 @@ def _stage_texts(view, key):
     return texts
 
 
+@pytest.mark.gui
+def test_single_face_stage_follows_the_first_guess_with_its_figures_and_the_table(tmp_path, monkeypatch):
+    _app()
+    from test_education_copy_lint import _rules, learner_copy_findings, lint_copy
+
+    view = _single_face_view(tmp_path, monkeypatch, _single_face_record())
+    assert view.stage_keys() == ["graph", "first", "single", "solver", "result"]
+    assert view.stage_view.stepper.stage_name(2) == "One face"
+    assert view.single_face_image.accessibleName() == "Recovered single-face image"
+    assert view.single_face_image.count() == 2
+    texts = _stage_texts(view, "single")
+    # A/B: the tilt ambiguity, drawn from geometry (one camera, two cameras: UX-17, one letter
+    # each); C: this photo's candidate fits (photos numbered from 1: stored index 12 = Photo 13).
+    l1_axes, l2_axes = texts[1][2], texts[2][2]
+    assert "A  One camera" in l1_axes and "B  Two cameras" in l1_axes
+    assert l1_axes["C  Photo 13: both tilts, every camera"] == 2 * 4  # own camera + all, 4 candidates
+    assert l2_axes["C  Photo 13: both tilts, every camera"] == 3 * 4  # L2 adds the free refinement
+    assert "D  Every single-face photo" in l2_axes
+    assert view.single_face_image.itemText(0).startswith("Photo 13")
+    view.single_face_image.setCurrentIndex(1)  # image 14 has no recorded candidates
+    panel = next(ax for ax in view.stage_view.figure().axes
+                 if ax.get_title(loc="left").startswith("C"))
+    assert "were not recorded" in panel.texts[0].get_text()
+    # The table: placed and left-out photos with their reasons; D3.14 only from L2.
+    l1_cells, l2_cells = texts[1][1], texts[2][1]
+    assert "Photo 13 (index 12)" in l1_cells and "Photo 42 (index 41)" in l1_cells
+    assert "placed" in l1_cells
+    assert "best fit 33.10 px exceeds the 20 px limit" in l1_cells
+    assert not any("D3." in cell for cell in l1_cells) and any("D3.14" in cell for cell in l2_cells)
+    assert any("Hartley and Zisserman" in cell for cell in texts[3][1])
+    # Short captions, different per level, additive, plain at L1, clean under the copy lint.
+    copies = [texts[level][0] for level in (1, 2, 3)]
+    assert len(set(copies)) == 3 and copies[0] in copies[1] and copies[1] in copies[2]
+    assert copies[0].count(". ") <= 1
+    assert "a fit under 20 px only has to pick the tilt" in copies[1]  # ED2-10
+    assert "take photos where a camera sees two faces" in copies[2]
+    # UX-18: the method and its citation live in the Numbers drawer, not the caption (SCI-15:
+    # section 6.3 for the affine camera, chapter 14 for the reversal).
+    assert "Numbers drawer" in copies[2] and "Hartley" not in copies[2]
+    assert any("chapter 14" in cell for cell in texts[3][1])
+    for level, (copy, cells, _axes) in texts.items():
+        assert learner_copy_findings(copy, level) == [], (level, copy)
+        assert lint_copy(copy, "education_phase3.py", f"single_face.L{level}", _rules()) == []
+        assert lint_copy(" ".join(cells), "education_phase3.py", "single_face.table", _rules()) == []
+    view.close()
 
 
+@pytest.mark.gui
+def test_single_face_stage_with_recovery_off_shows_the_note_and_the_left_out_images(tmp_path, monkeypatch):
+    _app()
+    from test_education_copy_lint import learner_copy_findings
+
+    view = _single_face_view(tmp_path, monkeypatch, _single_face_record(enabled=False))
+    texts = _stage_texts(view, "single")
+    copy, cells, axes = texts[1]  # axes: {panel title: bar count}
+    assert "recovery was off for this run" in copy
+    # The quoted control is the Phase 3 checkbox's own label.
+    assert "‘Recover images where each camera sees only one cube face (telecentric)’" in copy
+    assert "1 of them was seen by two or more cameras" in copy
+    assert "Photo 8 (index 7)" in cells and "Photo 10 (index 9)" in cells and "left out" in cells
+    assert axes  # the tilt illustration and the (empty) candidate panel are still drawn
+    assert not view.single_face_image.isEnabled()
+    assert learner_copy_findings(copy, 1) == []
+    view.close()
 
 
 @pytest.mark.gui

@@ -627,6 +627,72 @@ def test_walkthrough_labels_board_views_with_their_source_image(tmp_path, monkey
     view.close()
 
 
+@pytest.mark.gui
+def test_phase2_levels_are_additive_and_the_decision_names_the_warning_level(tmp_path):
+    """A1 sections 1, 3 and 8: plain L1 copy, orientation, decision and opt-in next step."""
+    _app()
+    from test_education_copy_lint import learner_copy_findings
+    from pyCamSet.gui.education_levels import compose
+    from pyCamSet.gui.education_phase2 import Phase2View
+    from pyCamSet.utils.intrinsics_report import HIGH_INITIAL_RMS_PX
+
+    context = _context(tmp_path, {
+        "params": {"lens_model": "pinhole"},
+        "report": {"per_camera": [{"name": "camA", "n_views": 12, "rms_px": 0.42},
+                                  {"name": "camB", "n_views": 3, "rms_px": 7.5},
+                                  {"name": "camC", "n_views": 0, "rms_px": None}]},
+        "diagnostics": {
+            "D2.2_intrinsics": {"camA": {"fx": 900.0, "fy": 905.0, "cx": 320.0, "cy": 240.0}},
+            "D2.3_distortion": {"camA": {"coeffs": [0.1, -0.02, 0.0, 0.0, 0.001]}},
+        },
+    })
+    view = Phase2View(context)
+    try:
+        assert view.stage_view.stepper.accessibleName().startswith(
+            "Phase 2 — Calibrate individual cameras")
+        fit = _frame(view, "Initial camera fit")
+        assert fit["rows"][0][2] == "k1 = 0.1, k2 = -0.02, p1 = 0, p2 = 0, k3 = 0.001"
+        assert "{" not in compose(fit, 3) and "k1 = 0.1" in compose(fit, 2)
+        decision = _frame(view, "Fit error and decision")["copy"]
+        assert decision.startswith("Did each camera see the board in enough photos, with a fit error "
+                                   "below pyCamSet's warning level?")
+        level = f"{float(HIGH_INITIAL_RMS_PX):g} px warning level"
+        assert f"camA: board seen in 12 photo(s); fit error 0.42 px, at or below pyCamSet's {level}" in decision
+        assert f"camB: board seen in 3 photo(s); fit error 7.5 px, above pyCamSet's {level}" in decision
+        assert "camC: no usable board view" in decision
+        assert "does not check how varied the board angles were" in decision
+        assert "What to do next:" in decision
+        # camA saved fitted (nonzero) coefficients, so no unfitted-distortion cause line.
+        assert "which Phase 2 does not fit" not in decision
+        assert "D2.6" not in decision and "D2.6" in compose(_frame(view, "Fit error and decision"), 2)
+        rendered = {}
+        for level_index in (1, 2, 3):
+            view.stage_view.set_level(level_index)
+            rendered[level_index] = []
+            for index in range(5):
+                view.stage_view.set_current_stage(index)
+                text = view.stage_view.caption.text()
+                rendered[level_index].append(text)
+                assert learner_copy_findings(text, level_index) == [], (level_index, index, text)
+                table = view.stage_view.numbers.table
+                headers = [table.horizontalHeaderItem(column).text()
+                           for column in range(table.columnCount())]
+                assert not any(learner_copy_findings(header, 3) for header in headers), headers
+        for low, high in ((1, 2), (2, 3)):
+            assert all(a in b for a, b in zip(rendered[low], rendered[high]))
+        # The decision stage answers the question from the saved summary: camB is above the
+        # warning level, camC has no usable view.
+        view.stage_view.set_level(1)
+        view.stage_view.set_current_stage(4)
+        caption = view.stage_view.caption.text()
+        assert "2 of 3 cameras" in caption and "Camera 2 is above the" in caption
+        table = view.stage_view.numbers.table
+        rows = [[table.item(r, c).text() for c in range(5)] for r in range(table.rowCount())]
+        assert [row[4] for row in rows] == [
+            "goes on", f"above the {float(HIGH_INITIAL_RMS_PX):g} px warning level",
+            "dropped: no usable view"]
+    finally:
+        view.close()
 
 
 @pytest.mark.gui

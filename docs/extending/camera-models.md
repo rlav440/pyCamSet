@@ -296,3 +296,14 @@ For a model of your own:
       reprojection error — a wrong model can be self-consistent.
 
 `tests/test_telecentric_model.py` is the worked version of that last point.
+
+!!! note "Teach it in the education mode"
+
+    Phase 2 explains the lens in `pyCamSet/workflow/education_visual_p2.py`:
+    `is_telecentric` and `lens_summary` choose the model, `fit_views` fits each board
+    view, `face_warp` draws the warp, and `display_depths` sets how far each view is
+    drawn. Phase 3 draws the rig in `pyCamSet/workflow/education_visual_p3.py`.
+    `_phase4_point_classes` (`pyCamSet/workflow/education_derive.py`) counts viewing-ray
+    spread, which a telecentric camera's translation does not add. Add a `lens_model`
+    entry to `pyCamSet/workflow/education_coverage.py`, and a test in
+    `tests/test_education_phase2_visual.py` that uses the new model.

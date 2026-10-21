@@ -96,6 +96,34 @@ def test_card_hides_for_a_failed_run_and_reports_a_broken_one(qapp, monkeypatch)
     assert "disk gone" in panel.message.text()
 
 
+def test_failed_finished_run_keeps_education_entry_point(qapp, tmp_path, monkeypatch):
+    """A finished-but-failed run still reaches its explanation, mode permitting.
+
+    The F1b mode gate is on for this contract: the failed-run entry point is an
+    F1b deliverable, and the gate's own default-off behaviour is pinned in
+    ``tests/test_education_wiring.py``.
+    """
+    monkeypatch.setenv("PYCAMSET_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "education_preferences.json").write_text(
+        '{"preferences": {"education_enabled": true}}\n', encoding="utf-8")
+    from pyCamSet.gui import run_results
+
+    run_dir = tmp_path / "phase1_runs" / "failed-run"
+    run_dir.mkdir(parents=True)
+    panel = run_results.RunResultPanel("Detections", lambda: None)
+    opened = []
+    monkeypatch.setattr(run_results, "open_education_run",
+                        lambda run, phase, workspace, parent: opened.append((run, phase)))
+
+    run_results.show_run_result(
+        panel, "phase1", {"run_id": "failed-run", "error": "solver failed"}, tmp_path)
+
+    assert panel._explain_btn.isEnabled()
+    assert "did not finish successfully" in panel.message.text()
+    panel._explain_btn.click()
+    assert opened == [({"_run_dir": str(run_dir)}, "phase1")]
+
+
 def test_see_more_opens_diagnostics(qapp):
     from pyCamSet.gui.run_results import RunResultPanel
 

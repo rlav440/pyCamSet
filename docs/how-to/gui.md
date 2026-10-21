@@ -228,7 +228,7 @@ D3.13 diagnostics plot draws the same figure.
 
 Solves the whole camera set and the target poses together. The solver controls
 are here — thread count, `max_nfev`, verbosity, outlier rejection, and which
-camera and pose to hold fixed as the gauge.
+camera and pose to fix as the gauge.
 
 **Camera Lockbox Prior** is the optional section that holds the cameras near a
 known rig geometry. Its editor is a translation-only tool for repairing camera
@@ -455,6 +455,157 @@ This tab needs Optuna, which is optional. Without it the tab still appears, but
 ```bash
 pip install "pyCamSet[optimisation]"
 ```
+
+---
+
+## Education view: memory limits
+
+The education view keeps decoded photos and detector explanations in memory so that
+moving between photos is quick. Each of those caches is capped by size, and the
+least recently used entries are dropped first. The default cap is 64 MB per cache.
+
+To change it, set the environment variable `PYCAMSET_EDU_CACHE_MB` to a whole number of
+megabytes before starting the application, for example `PYCAMSET_EDU_CACHE_MB=128`. Values
+below 8 or above 1024 are clamped; a value that is not a number is ignored. A smaller cap
+uses less memory but re-runs the detector more often when you return to a photo. The most
+recently shown photo is always kept, even if it alone is larger than the cap.
+
+Closing the education window releases its photos, explanations and 3D views. Opening
+another explanation starts from an empty cache.
+
+## Education view: 3D view, slow machines and the debug log
+
+Education scenes are drawn in an embedded OpenGL view (PyVista) on every platform,
+macOS included. The view uses a static matplotlib picture instead (the same content,
+without drag-to-rotate) when a quick check of the computer's OpenGL fails: no context can
+be made, the renderer is software rendering (no GPU), the version is below 3.2, or a timed
+full-frame clear is too slow. It also switches to the static picture for the rest of the
+session if three renders in a row take over a second. When this happens automatically, the
+3D view's tooltip and the header of the **What’s Going On?** window say so.
+
+On macOS the application asks for an OpenGL 4.1 core context before it starts, which is the
+most macOS offers and what the 3D view needs.
+
+Set `PYCAMSET_EDU_3D` before starting the application to choose:
+
+| Value | Effect |
+|---|---|
+| `static` | always the static picture |
+| `pyvista` | always the embedded OpenGL view, without the automatic checks (on macOS too); the static picture is used only if PyVista is not installed |
+| `auto`, or unset | the rules above |
+
+On weak hardware (two or fewer logical CPUs, or under 6 GiB of RAM) and on macOS the views
+also cost less to draw: the 3D view uses cheap FXAA instead of 8-sample multisampling,
+rounded meshes use about 60 % of their divisions, canvases use at most a 1.5x device-pixel ratio, and playback redraws at most
+every 33 ms. Playback follows the clock, so a slow machine skips intermediate positions
+rather than slowing down, and the final step is always shown.
+
+For a maintainer chasing a freeze, set `PYCAMSET_EDU_DEBUG=1` before starting the
+application. The log records the chosen 3D backend and why, the platform, CPU count and
+RAM, the Qt version and platform plugin, the screen's device-pixel ratio, the OpenGL vendor
+and renderer when the check created a context, and the Python stack of the GUI thread
+whenever it stops responding for more than a second. It goes to stderr and to
+`logs/education-debug.log` in the pyCamSet config directory (`PYCAMSET_CONFIG_DIR` if set).
+Nothing is logged, and no watchdog runs, without this variable. Send the log file with a
+note of what froze and when.
+
+## Education view: release support statement
+
+The education view is hidden by default. To turn it on, set `education_enabled`
+to `true` in the `preferences` object in the per-user
+`education_preferences.json` file; an absent or invalid setting leaves it off.
+The developer launcher can open the view for a saved run:
+
+```bash
+python -m pyCamSet.gui.education_dialog --run <run dir>
+```
+
+Solver and detector step recording is a separate per-run opt-in and is off by default.
+It does not turn on merely because the education view is enabled.
+(Source: `pyCamSet/gui/education_preferences.py` and `pyCamSet/gui/education_dialog.py`.)
+
+**Using it.** With the mode on, each phase's **Diagnostics** tab shows an
+**Explain selected run** button. Select exactly one saved run of that phase and
+press it to open the **What’s Going On?** window for that run. The window reads
+the run's saved record; it never starts a new run.
+
+Each explanation opens with a short "What this phase does" line, steps through
+at most six frames (seven for a telecentric Phase 3 run that recovered, or left
+out, images in which each camera saw only one cube face: its **Single-face
+images (telecentric)** stage follows the first guess), and ends with that
+phase's decision question or, in
+Phase 3, with the quality check and the next step to take. Move between
+frames with the **Stage** list or the **Previous stage** and **Next stage**
+buttons; "Stage 2 of 6" shows where you are. If the window is smaller than the
+explanation, scroll it. The **Detail level** selector sets how much is shown:
+
+- **L1 — overview**: plain language and the one decision.
+- **L2 — details**: adds diagnostic names (such as D3.5), numbers, units and
+  where each value came from.
+- **L3 — full evidence**: adds method, assumptions and limitations, and raw
+  values such as matrices.
+
+A higher level only adds text to what L1 says. To see recorded steps for a
+later run, tick the phase's record checkbox before you run it: **Record
+detection stages for this run** (Phase 1), **Record per-view contributions for
+this run** (Phase 2) or **Record solver steps for this run** (Phases 3 and 4).
+These checkboxes appear only while the education mode is on.
+
+Phase 1 moves through its recorded detector steps with **Previous detector
+step** and **Next detector step**. Phase 2 lists recorded per-view
+contributions, and Phase 3 recorded solver steps, in a table, one row each.
+Only Phase 4 has playback controls: where a Phase 4 run has recorded steps,
+**Step back**, **Step forward** and **Play** move through them, and the slider
+jumps to any kept step. Nothing plays until
+you press Play. **Reduce motion** hides Play, so steps change only when you
+move them. With **Keyboard shortcuts** ticked, these keys also work while no
+list, number box, slider or 3D view has keyboard focus (Play or pause also works
+from the slider):
+
+| Action | Keys |
+|---|---|
+| Step back | Ctrl+Alt+Left |
+| Step forward | Ctrl+Alt+Right |
+| Play or pause | Ctrl+Alt+Space |
+
+On keyboard layouts where Ctrl+Alt acts as AltGr, these keys can clash with
+typing characters; untick **Keyboard shortcuts** and use the buttons instead.
+Hovering over a button shows its keys.
+
+The release matrix below was generated on Windows with Python 3.12.9, OpenCV
+5.0.0 and SciPy 1.18.1. It reports the tested family/backend/phase coverage;
+`a skip is not a pass`: skipped cells are untested, not supported. Linux untested (local-only policy); macOS untested (local-only policy).
+(Generated by `tools/edu_release/release_matrix.py`.)
+
+<!-- release-matrix:start -->
+| Family | Backend | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
+|---|---|---|---|---|---|
+| ChArUco | aruco1 | image-corpus | image-corpus | image-corpus | image-corpus |
+| ChArUco | aruco2 | synthetic-render | synthetic-detection | synthetic-detection | synthetic-detection |
+| ChArUco2 | aruco2 | synthetic-render | synthetic-detection | synthetic-detection | synthetic-detection |
+| Ccube | aruco1 | image-corpus | image-corpus | image-corpus | image-corpus |
+| Ccube | aruco2 | synthetic-render | synthetic-detection | synthetic-detection | synthetic-detection |
+| Ccube2 | aruco2 | synthetic-render | synthetic-detection | synthetic-detection | synthetic-detection |
+| CIco | aruco1 | synthetic-render | synthetic-detection | synthetic-detection | synthetic-detection |
+| CIco | aruco2 | synthetic-render | synthetic-detection | synthetic-detection | synthetic-detection |
+| CIco2 | aruco2 | synthetic-render | synthetic-detection | synthetic-detection | synthetic-detection |
+| PuzzleBoard | puzzle_board | synthetic-render | untested (projected PuzzleBoard-puzzle_board detections cannot seed Ph) | untested (projected PuzzleBoard-puzzle_board detections cannot seed Ph) | untested (projected PuzzleBoard-puzzle_board detections cannot seed Ph) |
+| PuzzleBoardCube | puzzle_board | synthetic-render | synthetic-detection | synthetic-detection | synthetic-detection |
+| PuzzleBoardIco | puzzle_board | synthetic-render | synthetic-detection | synthetic-detection | synthetic-detection |
+<!-- release-matrix:end -->
+
+The OpenCV 5 measurements are environment-specific. Under OpenCV 4.11, four
+scoped expectations are skipped rather than treated as passes: `test_the_printed_net_gives_back_every_face`,
+`test_real_scale_attribution_qualifies_every_mm_quantity`,
+`test_real_saved_camsets_rederive_phase3_metrics`, and
+`test_persisted_outlier_run_uses_seed_detection_denominator_in_storyboard`.
+OpenCV 4 places sub-pixel ChArUco corners slightly differently from OpenCV 5, so these
+OpenCV-5 measurements are not numerically comparable across those OpenCV majors.
+(Tests: the four scoped tests named above.)
+
+On Windows, use a short path for `NUMBA_CACHE_DIR` if a long checkout path
+causes cache-path errors; for example, a short folder such as `C:\nbc\pycamset`.
+(See `tools/edu_release/run_tests.py`.)
 
 ---
 

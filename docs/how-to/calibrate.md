@@ -380,8 +380,11 @@ from a feature's drawn position to where the free solve put it, magnified five
 times for visibility.
 Unseen features can't be optimised, so aren't drawn.
 
-pyCamSet fixes seven points when optimising the target to remove "gauge freedoms", essentially 
-scaling, rotation, and translation of the whole system expressed through bulk motion of the target points.
+When optimising the target, Phase 4 fixes three non-collinear target points: seven numbers in all,
+two points in full and one coordinate of the third. Those seven remove the gauge freedoms, the three
+translations, three rotations and the scale of the whole rig and target together, which leave every
+photo unchanged. The same solve also holds one reference photo's pose fixed (six numbers), and then
+returns one specific form of the answer.
 For use and visualisation, the cameras and target are mapped back to the closest scale and rotation of the target.
 
 This leaves the arrows to represent pure shape variation.

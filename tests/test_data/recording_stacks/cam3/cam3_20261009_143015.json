@@ -1,0 +1,111 @@
+{
+  "format": "panoramic-recording-stack",
+  "format_version": 1,
+  "stack_file": "cam3_20261009_143015.tif",
+  "index_file": "cam3_20261009_143015.idx",
+  "camera_name": "cam3",
+  "serial": "0",
+  "started_at": "2026-10-09T14:30:15+00:00",
+  "dtype": "uint8",
+  "byte_order": "little",
+  "shape": [
+    6,
+    4
+  ],
+  "bit_depth": 8,
+  "shift": 0,
+  "pixel_format": "Mono8",
+  "compression": "none",
+  "frame_nbytes": 24,
+  "first_ifd_offset": 464,
+  "ifd_nbytes": 304,
+  "first_data_offset": 768,
+  "page_stride": 336,
+  "data_offset_formula": "first_data_offset + page * page_stride",
+  "durable_offset": 368,
+  "durable_slot": {
+    "size": 48,
+    "count": 2,
+    "byte_order": "little",
+    "struct": "<4sIQQqI12x",
+    "fields": [
+      "magic",
+      "version",
+      "durable_frames",
+      "sync_seq",
+      "host_time_ns",
+      "crc32"
+    ],
+    "magic": "RSDW",
+    "crc32": "zlib.crc32 of the slot's bytes 0..31",
+    "rule": "the intact slot with the highest sync_seq: frames 0..durable_frames-1 are on disk (survive an OS crash or power loss)"
+  },
+  "index_record": {
+    "size": 64,
+    "byte_order": "little",
+    "struct": "<QQQQQqQII",
+    "fields": [
+      [
+        "page",
+        "<u8",
+        0
+      ],
+      [
+        "data_offset",
+        "<u8",
+        8
+      ],
+      [
+        "data_nbytes",
+        "<u8",
+        16
+      ],
+      [
+        "block_id",
+        "<u8",
+        24
+      ],
+      [
+        "timestamp",
+        "<u8",
+        32
+      ],
+      [
+        "host_time_ns",
+        "<i8",
+        40
+      ],
+      [
+        "ifd_offset",
+        "<u8",
+        48
+      ],
+      [
+        "magic",
+        "<u4",
+        56
+      ],
+      [
+        "crc32",
+        "<u4",
+        60
+      ]
+    ],
+    "magic": 826692434,
+    "crc32": "zlib.crc32 of bytes 0..59",
+    "end_page": 18446744073709551615,
+    "count": "valid records = index file size // 64 (a torn last record is ignored)"
+  },
+  "block_id_unavailable": 18446744073709551615,
+  "timestamp_unit": "camera TimeStamp ticks (0 = unavailable)",
+  "host_time": "time.time_ns() when the record was written (ns since 1970-01-01 UTC)",
+  "fsync_interval_s": null,
+  "write_queue_max_bytes": null,
+  "extra": {
+    "first_frame": {
+      "status": "ok",
+      "flagged": false,
+      "flagged_page": null
+    }
+  }
+}

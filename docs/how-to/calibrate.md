@@ -28,6 +28,14 @@ my_rig/
 The sub-folder names become the camera names. Images that correspond to the
 same instant should share a filename across the cameras.
 
+A camera folder may instead hold the BigTIFF recording stacks the panoramic
+acquisition software writes -- `cam0_20261009_143015.tif` with its `.idx` and
+`.json` -- and each stack is read as its frames, in order, as though they were
+separate files. A page the acquisition flagged as not belonging to the run is
+left out. Any other `.tif` is ignored, as before: OpenCV would read only its
+first page. [`recording_stack`][pyCamSet.utils.recording_stack] reads the
+format.
+
 ## The target
 
 Every stage below takes the target, because every stage needs to know what it is

@@ -18,6 +18,7 @@ import os
 import signal
 
 from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
+from pyCamSet.utils.recording_stack import read_image
 from pyCamSet.cameras import CameraSet, Camera
 from pyCamSet.calibration.telecentric import calibrate_telecentric
 from pyCamSet.cameras.lens_models import LENS_MODELS
@@ -140,7 +141,7 @@ def _process_image(
         was unreadable, and any warning the target stashed on
         ``legacy_warning_message`` for the caller to log
     """
-    im = cv2.imread(
+    im = read_image(
         im_file, cv2.IMREAD_UNCHANGED if rescale_and_gamma else cv2.IMREAD_COLOR)
     if im is None:
         return cam_name, idx, ImageDetection(), "unreadable or undecodable", True, None
@@ -461,7 +462,7 @@ class AbstractTarget(ABC):
             n_unreadable = 0
             n_detect_error = 0
             for idx, im_file in enumerate(im_locs):
-                im = cv2.imread(
+                im = read_image(
                     im_file,
                     cv2.IMREAD_UNCHANGED if rescale_and_gamma else cv2.IMREAD_COLOR)
                 if im is None:

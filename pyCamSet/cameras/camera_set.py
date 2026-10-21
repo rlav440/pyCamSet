@@ -28,6 +28,7 @@ from pyCamSet.utils.visualisation import (
 from pyCamSet.utils.gui_safety import refuse_window_inside_qt
 from pyCamSet.utils.general_utils import get_subfolder_names
 from pyCamSet.utils.general_utils import get_close_square_tuple, glob_ims
+from pyCamSet.utils.recording_stack import read_image
 
 
 from pyCamSet.optimisation.compiled_helpers import nb_triangulate_full
@@ -723,7 +724,7 @@ class CameraSet:
 
         for cam_name in cam_names:
             im_locs = glob_ims(floc/cam_name, recursive=False)
-            temp_im = cv2.imread(str(im_locs[0]))
+            temp_im = read_image(im_locs[0])
             self[cam_name].res = np.array((temp_im.shape[1], temp_im.shape[0])) #CV2 ordering
 
 

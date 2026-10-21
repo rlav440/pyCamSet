@@ -18,6 +18,7 @@ from pyCamSet.optimisation.standard_bundle_handler import SelfBundleHandler
 from pyCamSet.utils.paths import long_path
 from pyCamSet.utils.saving import load_CameraSet
 from pyCamSet.utils.general_utils import get_subfolder_names, glob_ims
+from pyCamSet.utils.recording_stack import read_image
 
 import logging
 
@@ -399,7 +400,7 @@ def detect_datapoints_in_imfile(
     # Detected coordinates are in the upscaled frame, so cam_res must be too:
     # scaling the native shape is cheaper than re-reading and resizing.
     coordinate_scale = 1 if rescale_and_gamma else upscale_factor
-    cam_res = [tuple(int(d * coordinate_scale) for d in cv2.imread(str(glob_ims(f_loc/cname)[0])).shape[:2]) for cname in cam_names]
+    cam_res = [tuple(int(d * coordinate_scale) for d in read_image(glob_ims(f_loc/cname)[0]).shape[:2]) for cname in cam_names]
 
     if caching:
         save_to_cache(detected, cam_res, cache_path, calibration_target,

@@ -185,13 +185,30 @@ def glob_ims(loc: Path, recursive: bool = True) -> list[Path]:
     """
     Every supported image under a path.
 
+    A recording stack written by the acquisition software (a ``.tif`` with
+    its ``.idx`` and ``.json``, see :mod:`pyCamSet.utils.recording_stack`)
+    stands in for its usable pages, one page path per frame in page order,
+    so a folder of stacks reads like a folder of per-frame files. Any other
+    ``.tif`` is still not an image here: OpenCV would read only its first page.
+
     :param loc: the folder to search
     :param recursive: search subfolders as well as this one
     :return: the resolved image paths
+    :raises StackFormatError: for a stack this reader cannot read, such as one
+        of a newer format version, rather than leaving its frames out
     """
+    # Imported here so that importing this module stays as light as it was.
+    from pyCamSet.utils import recording_stack
+
     pattern = "**/*" if recursive else "*"
-    return [p.resolve() for p in loc.glob(pattern)
-            if p.suffix.lower() in _SUPPORTED_IMAGE_SUFFIXES]
+    found = []
+    for p in loc.glob(pattern):
+        suffix = p.suffix.lower()
+        if suffix in _SUPPORTED_IMAGE_SUFFIXES:
+            found.append(p.resolve())
+        elif suffix == recording_stack.STACK_SUFFIX and recording_stack.is_recording_stack(p):
+            found.extend(recording_stack.stack_page_paths(p.resolve()))
+    return found
 
 
 def _is_candidate_camera_folder(path: Path) -> bool:

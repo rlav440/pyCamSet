@@ -293,12 +293,15 @@ def image_sizes_from_folder(folder: Path | str) -> dict[str, tuple[int, int]]:
     The ``(width, height)`` of each camera's images, as detection sees them.
 
     One image per camera, read from its header only, turned by its EXIF
-    orientation as ``cv2.imread`` turns it.
+    orientation as ``cv2.imread`` turns it. A page of a recording stack takes
+    its size from the stack's own header, which carries no orientation: its
+    pixels are stored the way up detection reads them.
 
     :param folder: an image folder holding one subfolder of images per camera
     :return: size by camera (subfolder) name; empty if there is no such folder
     """
     from PIL import Image
+    from pyCamSet.utils import recording_stack
     from pyCamSet.utils.general_utils import get_subfolder_names, glob_ims
 
     sizes = {}
@@ -306,12 +309,16 @@ def image_sizes_from_folder(folder: Path | str) -> dict[str, tuple[int, int]]:
         ims = sorted(glob_ims(cam_folder, recursive=False))
         if not ims:
             continue
+        page = recording_stack.split_page_path(ims[0])
         try:
-            with Image.open(long_path(ims[0])) as im:
-                width, height = im.size
-                if im.getexif().get(0x0112) in _QUARTER_TURN_ORIENTATIONS:
-                    width, height = height, width
-        except OSError:
+            if page is not None:
+                height, width = recording_stack.open_stack(page[0]).shape
+            else:
+                with Image.open(long_path(ims[0])) as im:
+                    width, height = im.size
+                    if im.getexif().get(0x0112) in _QUARTER_TURN_ORIENTATIONS:
+                        width, height = height, width
+        except (OSError, recording_stack.StackFormatError):
             continue
         sizes[cam_folder.name] = (int(width), int(height))
     return sizes

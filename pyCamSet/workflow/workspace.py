@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from pyCamSet.utils import recording_stack
 from pyCamSet.utils.general_utils import get_subfolder_names
 from pyCamSet.utils.paths import long_path
 
@@ -79,12 +80,23 @@ def get_camera_subfolders(root: Path) -> list[Path]:
 
 
 def count_images_in_folder(folder: Path) -> int:
-    """Count the image files directly inside *folder*."""
+    """Count the images directly inside *folder*.
+
+    A recording stack counts as its usable pages, the images detection reads
+    from it, not as one file.
+    """
     folder = Path(folder)
     if not folder.exists() or not folder.is_dir():
         return 0
-    return sum(1 for p in folder.iterdir()
-               if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
+    count = 0
+    for p in folder.iterdir():
+        if not p.is_file() or p.suffix.lower() not in IMAGE_EXTS:
+            continue
+        if recording_stack.is_recording_stack(p):
+            count += len(recording_stack.stack_page_paths(p))
+        else:
+            count += 1
+    return count
 
 
 def workspace_path_for(image_folder: Path | str) -> Path:

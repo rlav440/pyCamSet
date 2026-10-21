@@ -173,14 +173,18 @@ def detection_figure(image_path: Path, points: np.ndarray):
 
     from pyCamSet.gui.preferences import config_directory
     from pyCamSet.gui.visual_style import apply_visual_style, load_style_for_visual
+    from pyCamSet.utils.recording_stack import read_page, split_page_path
 
     figure = Figure(figsize=(4, 3), layout="constrained")
     axes = figure.add_subplot(111)
     axes.axis("off")
     try:
-        image = mpimg.imread(image_path)
+        # A recording-stack page is not a file matplotlib can open; its raw
+        # frame is what matplotlib returns for the per-frame file it replaces.
+        image = (read_page(image_path) if split_page_path(image_path) is not None
+                 else mpimg.imread(image_path))
         axes.imshow(image, cmap="gray" if getattr(image, "ndim", 3) == 2 else None)
-    except (OSError, ValueError, SyntaxError) as exc:
+    except (OSError, ValueError, SyntaxError, IndexError) as exc:
         axes.text(0.5, 0.5, f"Image unreadable\n{type(exc).__name__}",
                   transform=axes.transAxes, ha="center", va="center")
     overlay = axes.scatter(points[:, 0], points[:, 1], s=10, c="lime", marker="o",

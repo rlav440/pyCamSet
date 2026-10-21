@@ -1550,6 +1550,9 @@ class Phase1DiagnosticsTab(QWidget):
         max_images = int(self._draw_state["max_images"])
         empty = self._draw_state["empty"]
         mpimg = self._draw_state["mpimg"]
+        # A recording-stack page is not a file matplotlib can open; its raw
+        # frame is what matplotlib returns for the per-frame file it replaces.
+        from pyCamSet.utils.recording_stack import read_page, split_page_path
 
         idx = self._draw_index % max_images
         for cam in cams:
@@ -1563,8 +1566,9 @@ class Phase1DiagnosticsTab(QWidget):
 
             im_idx = idx % len(ims)
             try:
-                img = mpimg.imread(ims[im_idx])
-            except (OSError, ValueError, SyntaxError) as exc:
+                img = (read_page(ims[im_idx]) if split_page_path(ims[im_idx]) is not None
+                       else mpimg.imread(ims[im_idx]))
+            except (OSError, ValueError, SyntaxError, IndexError) as exc:
                 # Keep the producer's original index; never borrow pixels from a neighbouring frame.
                 if im_art[cam] is not None:
                     im_art[cam].remove()

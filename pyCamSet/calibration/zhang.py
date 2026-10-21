@@ -306,8 +306,9 @@ def calibrate_zhang(object_points: list[np.ndarray],
 
     :param object_points: per view, (n, 3) board points flat in their own plane
     :param image_points: per view, (n, 2) detected pixels
-    :param res: the camera resolution, ``(height, width)``, as detection
-        reports it and as ``initial_calibration`` passes it on
+    :param res: the image shape, ``(height, width)``, as detection
+        reports it and as ``initial_calibration`` passes it on -- the
+        reverse of ``Camera.res``, which is ``(width, height)``
     :return: the intrinsic matrix, per view 4x4 poses, and per view rms. The
         poses come straight out of the closed form, and the rms with them is
         what this model leaves behind rather than what the camera can reach:

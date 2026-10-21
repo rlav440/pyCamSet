@@ -547,7 +547,8 @@ def sensor_map(type, intrinsics, res=(1600, 1200), dist_coefs=None):
 
     :param type: normalised or linear sensor map. Normalised has length 1, linear has z==1.
     :param intrinsics: The camera intrinsics
-    :param res: the nominal resolution of the input camera THIS USES OPENCV (y,x) PIXEL ORDER.
+    :param res: the camera resolution, ``(width, height)`` as ``Camera.res`` holds it.
+        The map is indexed ``[u, v]``: its shape is ``(width, height, 3)``.
     :param dist_coefs: The distortion coefficients of the camera.
     :returns: A sensor map of the appropriate resolution,
     """

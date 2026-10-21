@@ -21,7 +21,7 @@ from copy import deepcopy
 from matplotlib import pyplot as plt
 
 
-from pyCamSet.cameras.camera import Camera
+from pyCamSet.cameras.camera import Camera, res_from_image_shape
 from pyCamSet.utils.visualisation import (
     CalibrationDiagnostics, visualise_calibration, finalise_figure,
     _target_mean_distance)
@@ -54,12 +54,13 @@ def make_cam_dict(camera_names:list, extrinsic_matrices:list, intrinsic_matrices
     :param extrinsic_matrices: A list of matrices representing the camera positions
     :param intrinsic_matrices: A list of intrinsic matrices of the camera as per the pinhole model
     :param dist_coefs: A list of parameter arrays containing 5 parameter Brown-Conrady models.
-    :param res: a list of the represent at
+    :param res: one ``(width, height)`` resolution per camera
     :return: A dictionary of Camera objects.
     """
 
     if res is None:
-        res = [768, 1024]
+        # one (width, height) per camera
+        res = [(1024, 768)] * len(camera_names)
     camera_dict = {}
     if dist_coefs is None:
         dist_coefs = [np.array([0,0,0,0,0])] * len(camera_names)
@@ -724,7 +725,7 @@ class CameraSet:
         for cam_name in cam_names:
             im_locs = glob_ims(floc/cam_name, recursive=False)
             temp_im = cv2.imread(str(im_locs[0]))
-            self[cam_name].res = np.array((temp_im.shape[1], temp_im.shape[0])) #CV2 ordering
+            self[cam_name].res = np.array(res_from_image_shape(temp_im.shape))
 
 
 

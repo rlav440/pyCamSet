@@ -13,6 +13,7 @@ from typing import Optional
 import numpy as np
 
 from pyCamSet.utils.paths import long_path
+from pyCamSet.utils.saving import RES_ORDER
 from pyCamSet.cameras.lens_models import DEFAULT_LENS_MODEL
 from pyCamSet.workflow.detections import (
     DetectionFilter,
@@ -378,6 +379,8 @@ def diagnostics_of(detections, target, cams,
         intrinsics[cam.name] = {
             "fx": cam.fx, "fy": cam.fy, "cx": cam.cx, "cy": cam.cy,
             "res": np.array(cams[cam.name].res).astype(float).tolist(),
+            # records written before this key hold (height, width)
+            "res_order": RES_ORDER,
         }
         distortion[cam.name] = {
             "coeffs": np.array(

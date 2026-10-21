@@ -105,10 +105,6 @@ def make_full_loss(op_fun, detections, threads):
         return np.resize(losses, (d_shape, 2))
     return full_loss'''
 
-# n_blocks is emitted although nothing reads it. Removing it, and with it the
-# only use of the n_params argument, makes numba's parfor prelowering emit
-# illegal IR (a del of static_slice_size) for the rigidTform3d chains; the
-# self-calibration tests are what catch it.
 _JAC_TEMPLATE = '''\
 from numba import prange, int64
 from numba.types import int_
@@ -121,10 +117,9 @@ from .{matflow_module} import matflow
 def make_full_jac(op_fun, detections, threads):
     {header}
     @njit(parallel=True,fastmath=True,cache=True)
-    def full_jac(inp_params, d_data, block_param_inds, n_lines, inp_mem, wrk_mem, param_len, n_threads, param_slices, n_outs, f_outs, n_params, template = None):
+    def full_jac(inp_params, d_data, block_param_inds, n_lines, inp_mem, wrk_mem, param_len, n_threads, param_slices, n_outs, f_outs, template = None):
         use_template = template is not None
         t_data: np.ndarray = template if use_template else np.zeros((3,1))
-        n_blocks = len(n_params)
         dense_output = np.empty((n_threads, n_lines * f_outs, param_len))
         for i in prange(n_threads):
             #make the memory components required
@@ -591,7 +586,6 @@ class optimisation_function:
         block_param_inds = self.get_block_param_inds(detections, threads, **problem_max_vals)
         block_param_inds_unthreaded = self.get_block_param_inds(detections, threads, unthreaded=True, **problem_max_vals)
         c, compressed_row = self.make_jac_CSR_columns_row_pointers(detections, threads, unfixed_params, problem_maximums=problem_max_vals)
-        n_params = np.array(self.n_params)
         f_outs = 2
 
         jac_param_inds = np.repeat(block_param_inds_unthreaded, 2, axis=0)
@@ -603,7 +597,7 @@ class optimisation_function:
             return base_jac_fn(
                 param, parallel_data, block_param_inds, n_lines,
                 inp_mem, wrk_mem, param_len, threads,
-                param_slices, n_outs, f_outs, n_params,
+                param_slices, n_outs, f_outs,
                 template=template
             )[:n_elements]
 

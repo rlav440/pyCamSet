@@ -382,59 +382,40 @@ def test_initial_calibration_saves_and_reloads(
 # --------------------------------------------------------------------------
 
 
-def _rigid_pose_rms(cams, detections, target) -> float:
-    """What the report would say if it charged the cube's build error to the camera.
-
-    One rigid pose for the whole cube per image, rather than a pose per face,
-    so every millimetre the cube was not assembled to lands in the residual.
-    """
-    from pyCamSet.calibration_targets.core.abstract_target import get_keys
-    from pyCamSet.utils.general_utils import h_tform
-
-    squared, count = 0.0, 0
-    for name in cams.get_names():
-        cam = cams[name]
-        for image in detections.get(cam=name).get_image_list():
-            if not image.has_data():
-                continue
-            pose = target.target_pose_in_cam_image(image, cam, mode="nan")
-            if np.isnan(pose[0, 0]):
-                continue
-            data = image.get_data()
-            object_points = target.point_data[tuple(get_keys(data).astype(int).T)]
-            projected = cam.project_points(h_tform(object_points, pose))
-            squared += float(np.sum((projected - data[:, -2:]) ** 2))
-            count += len(data)
-    return float(np.sqrt(squared / count))
-
-
 @pytest.mark.data
-def test_the_intrinsics_report_measures_the_camera_not_the_cube(
+def test_the_intrinsics_report_is_the_seeds_own_residual(
         session_data_dir, ccube_target, ccube_detections):
-    """The report's RMS is per board, which is how the cameras were seeded.
+    """The report's RMS is what Zhang's closed form left, board by board.
 
     ``initial_calibration`` seeds from one planar board per cube face per
-    image, each with a pose of its own, so the cube's assembly never enters
-    the residual.  Measuring the finished cameras against a single rigid pose
-    for the whole cube instead reported ~3.4 px where the per board figure is
-    sub-pixel -- the cube's build error, charged to the camera, in the one
-    block whose job is to say whether the camera is a usable starting point.
-
-    Measured here both ways rather than against the seed's own log line, which
-    reports the closed form's residual: a different quantity, several times
-    larger, because those poses are never solved against the pixels.
+    image, each posed from its own homography, so the cube's assembly never
+    enters the residual, and hands those residuals to the report, which
+    restates them.  A calibration loaded from disk has none to hand over, and
+    the report measures it instead -- which has to come to the same numbers.
+    Nothing is solved again either way: a pose only OpenCV solve over every
+    view once was, and on a many-faced target -- a thousand face views a
+    camera, solved jointly at a cost cubic in their number -- it took over
+    an hour.
     """
     from pyCamSet.utils.intrinsics_report import IntrinsicsReport
 
     detections, camera_res = ccube_detections
-    cams = run_initial_calibration(
-        detections, ccube_target, camera_res, save=False)
+    cams, _, seeded = run_initial_calibration(
+        detections, ccube_target, camera_res, save=False,
+        return_poses_and_costs=True)
     cams.set_resolutions_from_file(floc=session_data_dir / "calibration_ccube")
 
-    report = IntrinsicsReport.from_calibration(cams, detections, ccube_target)
-    rigid = _rigid_pose_rms(cams, detections, ccube_target)
+    restated = IntrinsicsReport.from_calibration(
+        cams, detections, ccube_target,
+        seeded=dict(zip(cams.get_names(), seeded)))
+    measured = IntrinsicsReport.from_calibration(cams, detections, ccube_target)
 
-    assert {cam.name for cam in report.per_camera} == set(cams.get_names())
-    for cam in report.per_camera:
-        assert cam.rms_px < 1.5
-        assert cam.rms_px < 0.5 * rigid
+    assert {cam.name for cam in restated.per_camera} == set(cams.get_names())
+    for given, found in zip(restated.per_camera, measured.per_camera):
+        assert given.name == found.name
+        assert given.n_views == found.n_views and given.n_points == found.n_points
+        assert given.rms_px == found.rms_px
+    for name in cams.get_names():
+        for series in ("rms_px", "n_points", "has_detection", "valid_pose"):
+            np.testing.assert_array_equal(
+                restated.per_view[name][series], measured.per_view[name][series])

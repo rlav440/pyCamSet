@@ -11,11 +11,14 @@ calibration summaries either side of it.  The per view reprojection it is
 measured from lives here too, because the report and the phase diagnostics
 both want it and neither should compute it twice.
 
-It is measured under the model the calibration was solved under -- every face
-of the target an independent board, posed on its own -- so the number here is
-the one OpenCV achieved.  Holding the target rigid instead measures something
-real, but it is the target's build error rather than the camera's, and it
-belongs to the bundle adjustment's summary rather than to this one.
+It is the residual the seed itself leaves: every face of the target an
+independent board, posed from its own homography at the camera's intrinsics
+by Zhang's closed form (:mod:`pyCamSet.calibration.zhang`).  The seed hands
+those numbers over (:class:`~pyCamSet.calibration.seed_residuals.SeedResiduals`)
+and they are restated as they are; only a camera that was not seeded here --
+loaded from a saved calibration, or handed in -- is measured, the same way.  Holding the target rigid instead measures
+something real, but it is the target's build error rather than the camera's,
+and it belongs to the bundle adjustment's summary rather than to this one.
 """
 from __future__ import annotations
 
@@ -26,6 +29,12 @@ from typing import Any
 import cv2
 import numpy as np
 
+from pyCamSet.calibration.seed_residuals import SeedResiduals
+from pyCamSet.calibration.zhang import (
+    homography_of,
+    pose_from_homography,
+    reprojection_rms,
+)
 from pyCamSet.calibration_targets.core.abstract_target import get_keys
 from pyCamSet.utils import report_format as fmt
 
@@ -81,7 +90,9 @@ class IntrinsicsReport:
 
     @classmethod
     def from_calibration(cls, cams, detection, target,
-                         min_detections_per_board: int = 12) -> IntrinsicsReport:
+                         min_detections_per_board: int = 12,
+                         seeded: dict[str, SeedResiduals] | None = None,
+                         ) -> IntrinsicsReport:
         """
         Measure a per camera calibration against the detections it solved.
 
@@ -89,9 +100,11 @@ class IntrinsicsReport:
         :param detection: the detections it was solved from
         :param target: the calibration target they were found with
         :param min_detections_per_board: the per board minimum it was solved under
+        :param seeded: the residuals the seed left, per camera, which are
+            restated as they are; a camera without them is measured here
         """
         per_view, pooled_rms = per_view_reprojection(
-            detection, target, cams, min_detections_per_board)
+            detection, target, cams, min_detections_per_board, seeded)
 
         per_camera = []
         for index, name in enumerate(cams.get_names()):
@@ -197,18 +210,6 @@ class IntrinsicsReport:
         return self.summary()
 
 
-#: Every intrinsic parameter held, so the solve moves only the board poses.
-#: The initial calibration has already chosen the intrinsics; what is wanted
-#: back is the reprojection they achieved, not a second opinion on them.
-_POSE_ONLY = (
-    cv2.CALIB_USE_INTRINSIC_GUESS
-    | cv2.CALIB_FIX_FOCAL_LENGTH | cv2.CALIB_FIX_PRINCIPAL_POINT
-    | cv2.CALIB_FIX_ASPECT_RATIO | cv2.CALIB_FIX_TANGENT_DIST
-    | cv2.CALIB_FIX_K1 | cv2.CALIB_FIX_K2 | cv2.CALIB_FIX_K3
-    | cv2.CALIB_FIX_K4 | cv2.CALIB_FIX_K5 | cv2.CALIB_FIX_K6
-)
-
-
 def _board_views(detections, calibration_target, cam_name,
                  min_detections_per_board):
     """
@@ -256,11 +257,14 @@ def _board_views(detections, calibration_target, cam_name,
 
 def _board_errors(objects, images, cam):
     """
-    Each board view's RMS, with OpenCV solving the poses at fixed intrinsics.
+    Each board view's RMS, as Zhang's closed form leaves it.
 
-    Its own solver rather than a pose per board of ours, because the number
-    being reproduced is the one its calibration returned, and a weaker pose
-    solve shows up as error the calibration never had.
+    The view is posed from its own homography at the camera's intrinsics and
+    measured with no distortion, which is how ``initial_calibration`` seeded
+    it and the residual it logged -- the same numbers, not a second solve.  A
+    camera given with distortion (``fixed_params``) is measured on its
+    undistorted pixels, so the lens model it was given is not charged as
+    error.
 
     :param objects: the object points of each board view
     :param images: the image points of each board view
@@ -270,18 +274,22 @@ def _board_errors(objects, images, cam):
     counts = np.array([o.shape[1] for o in objects], dtype=int)
     if not objects:
         return np.array([], dtype=float), counts
-
-    matrix = np.asarray(cam.intrinsic, dtype=float).copy()
-    coefficients = np.asarray(
-        cam.distortion_coefs, dtype=float).reshape(-1).copy()
-    size = tuple(int(v) for v in np.asarray(cam.res).reshape(-1)[:2])
-    try:
-        *_, per_view = cv2.calibrateCameraExtended(
-            objects, images, size, matrix, coefficients, flags=_POSE_ONLY)
-    except cv2.error as exc:
-        logger.debug("pose only solve failed for %s: %s", cam.name, exc)
-        return np.full(len(objects), float("nan")), counts
-    return np.asarray(per_view, dtype=float).reshape(-1), counts
+    intrinsic = np.asarray(cam.intrinsic, dtype=float)
+    coefficients = np.asarray(cam.distortion_coefs, dtype=float).reshape(-1)
+    per_view = np.full(len(objects), float("nan"))
+    for k, (obj, img) in enumerate(zip(objects, images)):
+        obj = np.asarray(obj, dtype=float).reshape(-1, 3)
+        img = np.asarray(img, dtype=float).reshape(-1, 2)
+        if np.any(coefficients):
+            img = cv2.undistortPoints(img.reshape(-1, 1, 2), intrinsic, coefficients,
+                                      P=intrinsic).reshape(-1, 2)
+        try:
+            pose = pose_from_homography(intrinsic, homography_of(obj, img))
+        except (ValueError, np.linalg.LinAlgError) as exc:
+            logger.debug("no closed form pose for %s, view %d: %s", cam.name, k, exc)
+            continue
+        per_view[k] = reprojection_rms(intrinsic, pose, obj, img)
+    return per_view, counts
 
 
 def _pool(rms, counts):
@@ -304,12 +312,13 @@ def _pool(rms, counts):
 def per_view_reprojection(
         detections, calibration_target, cams,
         min_detections_per_board: int = 12,
+        seeded: dict[str, SeedResiduals] | None = None,
 ) -> tuple[dict[str, dict], dict[str, float]]:
     """
     The reprojection each camera's own calibration achieved, per image.
 
     Each face of the target is an independent board with a pose of its own,
-    which is the model the calibration was solved under: ``cv2.calibrateCamera``
+    which is the model the calibration was solved under: Zhang's closed form
     is handed one planar board per face per image and never asks the faces to
     agree about where the target is. Measuring the result against a single
     rigid pose for the whole target instead charges the camera for the
@@ -319,17 +328,29 @@ def per_view_reprojection(
     :param calibration_target: the target they were found with
     :param cams: the calibrated cameras
     :param min_detections_per_board: the per board minimum the calibration used
+    :param seeded: the residuals the seed left, per camera, restated as they
+        are.  A camera without them -- loaded from a saved calibration, handed
+        in, or given whole by ``fixed_params`` -- has its views collected and
+        measured here, the same way the seed measured them.
     :return: the per-view series per camera, and each camera's pooled RMS
     """
     per_view: dict[str, dict] = {}
     overall_rms: dict[str, float] = {}
     max_ims = int(detections.max_ims)
+    seeded = seeded or {}
 
     for cam_name in cams.get_names():
-        objects, images, of_image, has_detection = _board_views(
-            detections, calibration_target, cam_name, min_detections_per_board)
-        board_rms, board_points = _board_errors(objects, images, cams[cam_name])
-        of_image = np.array(of_image, dtype=int)
+        seed = seeded.get(cam_name)
+        if seed is not None:
+            board_rms = np.asarray(seed.rms, dtype=float)
+            board_points = np.asarray(seed.points, dtype=int)
+            of_image = np.asarray(seed.image, dtype=int)
+            has_detection = [bool(h) for h in seed.has_detection]
+        else:
+            objects, images, of_image, has_detection = _board_views(
+                detections, calibration_target, cam_name, min_detections_per_board)
+            board_rms, board_points = _board_errors(objects, images, cams[cam_name])
+            of_image = np.array(of_image, dtype=int)
         solved = ~np.isnan(board_rms) if board_rms.size else np.zeros(0, bool)
 
         rms_px, n_points, valid_pose = [], [], []
@@ -357,7 +378,9 @@ def per_view_reprojection(
 
 
 def report_initial_calibration(cams, detection, target,
-                               min_detections_per_board: int = 12) -> IntrinsicsReport:
+                               min_detections_per_board: int = 12,
+                               seeded: dict[str, SeedResiduals] | None = None,
+                               ) -> IntrinsicsReport:
     """
     Reports what each camera's own calibration came out as.
 
@@ -365,9 +388,11 @@ def report_initial_calibration(cams, detection, target,
     :param detection: the detections it was solved from
     :param target: the calibration target they were found with
     :param min_detections_per_board: the per board minimum it was solved under
+    :param seeded: the residuals the seed left, per camera; see
+        :func:`per_view_reprojection`
     :return: the report, which is also logged
     """
     report = IntrinsicsReport.from_calibration(
-        cams, detection, target, min_detections_per_board)
+        cams, detection, target, min_detections_per_board, seeded)
     logger.info("\n" + report.summary())
     return report

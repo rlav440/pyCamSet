@@ -21,6 +21,7 @@ from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4
 from pyCamSet.utils.lazy_imports import lazy_attributes
 from pyCamSet.calibration.telecentric import calibrate_telecentric
 from pyCamSet.calibration.zhang import calibrate_zhang
+from pyCamSet.calibration.seed_residuals import SeedResiduals
 from pyCamSet.calibration.telecentric import is_planar, pose_from_affine
 from pyCamSet.calibration_targets.core.parameters import (
     NO_PARAMETERS,
@@ -753,7 +754,7 @@ class AbstractTarget(ABC):
                             fixed_params: dict|None =None,
                             return_poses=False,
                             min_detections_per_board: int = 12,
-                            model: str = "pinhole") -> Camera | tuple[Camera, np.ndarray, np.ndarray]:
+                            model: str = "pinhole") -> Camera | tuple[Camera, np.ndarray, SeedResiduals]:
         """
         Takes a single camera's detections, and performs an initial
         calibration on them.
@@ -776,7 +777,12 @@ class AbstractTarget(ABC):
         :param min_detections_per_board: Minimum number of detected corners required
             for a board observation to contribute to the initial calibration.
         :param model: the lens model to fit, "pinhole" or "telecentric"
-        :return: A camera object.
+        :param return_poses: also return the seed's per view poses, and the
+            residual each view was left with, for the intrinsics report to
+            restate.  Not for a camera whose extrinsics were fixed, which
+            returns the camera alone.
+        :return: A camera object, or the camera, its per view 4x4 poses and
+            its :class:`SeedResiduals`.
         """
         from pyCamSet.cameras import Camera
         from pyCamSet.cameras.lens_models import LENS_MODELS
@@ -823,12 +829,17 @@ class AbstractTarget(ABC):
         # board's.
         view_object_points: list[np.ndarray] = []
         view_image_points: list[np.ndarray] = []
+        # which image each board, and each telecentric view, came from
+        board_image: list[int] = []
+        view_image: list[int] = []
+        has_detection = np.zeros(len(detections_in_image), dtype=bool)
 
-        for im_detect in detections_in_image:
+        for im_idx, im_detect in enumerate(detections_in_image):
 
             data = im_detect.get_data()
             if data is None:
                 continue  # no data here, so don't add it to the optimisation
+            has_detection[im_idx] = len(data) > 0
             keys = get_keys(data) # this slicing is always 2d.
             boards, board_id, b_counts = np.unique(keys[:, :-1], return_inverse=True,   return_counts=True)
             mask = boards < np.prod(self.point_local.shape[:-2])
@@ -848,6 +859,7 @@ class AbstractTarget(ABC):
                     board_im = data[key_mask, -2:][None, ...].astype('float32')
                     object_points.append(board_obj)
                     image_points.append(board_im)
+                    board_image.append(im_idx)
                 else:
                     dropped.append(num_detections)
                     logger.debug(
@@ -866,6 +878,7 @@ class AbstractTarget(ABC):
                                dtype=float).reshape(-1, 3))
                 view_image_points.append(
                     np.asarray(data[kept, -2:], dtype=float).reshape(-1, 2))
+                view_image.append(im_idx)
 
         if dropped:
             logger.info(
@@ -891,7 +904,8 @@ class AbstractTarget(ABC):
             # OpenCV has no telecentric model, and the affine seed needs none:
             # with the distortion and the telecentricity error set aside the
             # projection is linear, and the bundle adjustment refines both.
-            usable = [(o, i) for o, i in zip(view_object_points, view_image_points)
+            usable = [(o, i, im) for o, i, im
+                      in zip(view_object_points, view_image_points, view_image)
                       if not is_planar(o)]
             flat = len(view_object_points) - len(usable)
             if flat:
@@ -909,8 +923,8 @@ class AbstractTarget(ABC):
                     "angles that show more than one face at a time."
                 )
             magnification, principal, tele_poses, tele_rms = calibrate_telecentric(
-                [o for o, _ in usable],
-                [i for _, i in usable],
+                [o for o, _, _ in usable],
+                [i for _, i, _ in usable],
                 cam_res,
             )
             logger.info(
@@ -927,7 +941,12 @@ class AbstractTarget(ABC):
                 init_cam, fixed_params, fixed_param)
             if ext_was_fixed or not return_poses:
                 return init_cam
-            return init_cam, np.stack(tele_poses).astype(float), np.asarray(tele_rms, dtype=float)
+            residuals = SeedResiduals(
+                rms=np.asarray(tele_rms, dtype=float),
+                points=np.array([len(o) for o, _, _ in usable], dtype=int),
+                image=np.array([im for _, _, im in usable], dtype=int),
+                has_detection=has_detection)
+            return init_cam, np.stack(tele_poses).astype(float), residuals
 
         # Zhang's closed form rather than cv2.calibrateCamera, and no
         # distortion with it.  The bundle adjustment solves for the distortion
@@ -945,8 +964,9 @@ class AbstractTarget(ABC):
         # what the closed form leaves behind, not what the camera reaches:
         # these poses come straight out of the homographies, and a pose solved
         # against the pixels at these same intrinsics does several times
-        # better.  The intrinsics report measures that number; this one says
-        # how far the board views sit from a distortion free pinhole model.
+        # better.  This says how far the board views sit from a distortion
+        # free pinhole model, and the intrinsics report breaks the same
+        # residual down per camera and per image.
         logger.info(f'{cam_name} took {end - start:.1f} seconds'
             f', closed form residual of {np.mean(board_rms):.2f} pixels'
             ' with no distortion fit')
@@ -957,8 +977,12 @@ class AbstractTarget(ABC):
             init_cam, fixed_params, fixed_param)
         if ext_was_fixed or not return_poses:
             return init_cam
-        return (init_cam, np.stack(board_poses).astype(float),
-                np.asarray(board_rms, dtype=float))
+        residuals = SeedResiduals(
+            rms=np.asarray(board_rms, dtype=float),
+            points=np.array([o.shape[1] for o in object_points], dtype=int),
+            image=np.array(board_image, dtype=int),
+            has_detection=has_detection)
+        return init_cam, np.stack(board_poses).astype(float), residuals
 
     def target_pose_in_cam_image(
             self, detection: TargetDetection, cam: Camera,

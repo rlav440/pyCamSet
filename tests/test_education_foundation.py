@@ -1112,6 +1112,20 @@ def test_no_new_direct_error_map_users_in_phase_code():
     assert not unexpected, f"non-error data must use es.amount_cmap / amount_scale: {unexpected}"
 
 
+def test_phase3_coupling_matrix_uses_the_amount_map_or_is_pending():
+    """The dynamic half: the checker runs on a real phase drawing (draw_coupling)."""
+    pytest.importorskip("PySide6")
+    import matplotlib
+    from matplotlib.figure import Figure
+    from pyCamSet.gui import education_phase3 as p3
+    from pyCamSet.gui import education_style as es
+    with matplotlib.rc_context(es.figure_style("Light")):
+        fig = Figure(figsize=(4, 4))
+        ax = fig.subplots()
+        p3.draw_coupling(ax, np.array([[1.0, 0.3], [0.3, 1.0]]))
+        es.panel_title(ax, "E", "The camera system", "tie strong/weak")
+    if es.colour_map_misuse(fig):
+        assert ("education_phase3.py", "draw_coupling") in PENDING_ERROR_MAP_ADOPTION
 
 
 def test_card_overflow_checker_and_card_text_fit():

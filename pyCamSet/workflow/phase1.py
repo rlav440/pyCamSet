@@ -20,6 +20,14 @@ from pyCamSet.workflow.detections import (
     staged_camera_root,
 )
 from pyCamSet.calibration_targets.core.abstract_target import COORDINATE_MAPPING
+from pyCamSet.calibration_targets.core.preparation import (
+    CHARUCO,
+    CHARUCO_MIN_SCALE,
+    PUZZLEBOARD,
+    cache_identity as preparation_cache_identity,
+    resolve_preparation,
+    target_family,
+)
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
 from pyCamSet.workflow.targets import (
     detector_backend_of_spec,
@@ -100,7 +108,9 @@ def run(params: dict,
 
     # Imported here, not at module level: the ArUco detector module loads
     # OpenCV's aruco bindings, which this workflow module otherwise leaves lazy.
-    from pyCamSet.calibration_targets.markers.aruco_opencv import PIXEL_CONVENTION
+    from pyCamSet.calibration_targets.markers.aruco_opencv import (
+        PIXEL_CONVENTION,
+    )
 
     run_id = make_run_id()
     # Validation reports are normally dictionaries, but the backend seam also
@@ -265,17 +275,49 @@ def load_matching_image_folder_cache(params: dict) -> Optional[tuple]:
             Path(f_loc), params.get("selected_cameras"))]
     except Exception:
         return None
-    preprocessing = None
-    if (params.get("rescale_and_gamma", False)
-            and "puzzleboard" in type(target).__module__.lower()):
-        preprocessing = {
-            "rescale_and_gamma": True,
-            "scale": float(params.get("preprocessing_scale", 0.25)),
-            "gamma": float(params.get("preprocessing_gamma", 0.5)),
-        }
+    # Resolved exactly as _detect resolves it, so the identity matches the one
+    # detect_datapoints_in_imfile wrote (per-target defaults, explicit values win).
+    try:
+        prep = resolve_preparation(params, target)
+    except (TypeError, ValueError):
+        return None
+    preprocessing = None if prep is None else preparation_cache_identity(
+        True, prep.scale, prep.gamma, prep.loader)
     return load_verified_cache(
         candidate, target, cam_names, params.get("n_lim"),
         preprocessing=preprocessing)
+
+
+#: Phase 1's note when a PuzzleBoard target is searched without its rescale-and-gamma preparation.
+PUZZLEBOARD_RESCALE_NOTICE = (
+    "Rescale and gamma is off for this PuzzleBoard target. If few or no points were found (for "
+    "example in dark or 16-bit images), turning on 'Rescale and apply gamma' in Phase 1 may help.")
+
+
+def puzzleboard_rescale_notices(target, rescale_and_gamma: bool) -> list[str]:
+    """The note Phase 1 logs and records when a PuzzleBoard target is searched unprepared.
+
+    The run is not changed, only told. (For example, dark 16-bit
+    PuzzleBoard cube images from a real rig detect nothing without the preparation and ~1,800 points with it.)
+    """
+    if target_family(target) == PUZZLEBOARD and not rescale_and_gamma:
+        return [PUZZLEBOARD_RESCALE_NOTICE]
+    return []
+
+
+#: Phase 1's warning when a ChArUco-family target is asked for a strong downscale.
+CHARUCO_DOWNSCALE_WARNING = (
+    "Rescale and gamma scale {scale:g} is below {floor:g} for this ChArUco-family target. "
+    "ChArUco detections collapse when downscaled (in measurements on real images, 0.25 found "
+    "no points); clear 'Preprocessing scale' to use the target default of 1.0.")
+
+
+def preparation_warnings(target, prep) -> list[str]:
+    """Warnings about a resolved preparation that measurements on real images say will fail."""
+    if (prep is not None and target_family(target) == CHARUCO
+            and prep.scale < CHARUCO_MIN_SCALE):
+        return [CHARUCO_DOWNSCALE_WARNING.format(scale=prep.scale, floor=CHARUCO_MIN_SCALE)]
+    return []
 
 
 def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
@@ -297,9 +339,6 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
 
     f_loc = Path(params["f_loc"])
     upscale_factor = params.get("upscale_factor", 1)
-    rescale_and_gamma = bool(params.get("rescale_and_gamma", False))
-    preprocessing_scale = float(params.get("preprocessing_scale", 0.25))
-    preprocessing_gamma = float(params.get("preprocessing_gamma", 0.5))
     caching = bool(params["caching"])
 
     # Scanned fresh here for the camera-subset selection below -- NOT reused
@@ -319,9 +358,6 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
     log(f"1a  Camera sub-folders: {cam_names}")
     if upscale_factor > 1:
         log(f"1a  Upscale factor: {upscale_factor}x")
-    if rescale_and_gamma:
-        log(f"1a  Rescale and apply gamma: scale={preprocessing_scale}, "
-            f"gamma={preprocessing_gamma}")
 
     if not cam_folders:
         raise RuntimeError("No selected camera sub-folders found.")
@@ -331,11 +367,22 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
             "Camera folders must contain equal non-zero image counts.")
 
     target = target_of_params(params)
-    # The preparation is deliberately a pcube/PuzzleBoard path.  Ignoring the
-    # checkbox for other targets keeps ChArUco2 and the other detectors byte
-    # compatible even when an old settings file carries the new key.
-    if "puzzleboard" not in type(target).__module__.lower():
-        rescale_and_gamma = False
+    # The preparation applies to any target when it is ticked, with per-target
+    # defaults for any value left blank (preparation.py).  Params saved before
+    # that (no rescale_and_gamma_any_target key) keep the old PuzzleBoard-only
+    # rule, so an old run re-detects exactly as it first did.
+    prep = resolve_preparation(params, target)
+    rescale_and_gamma = prep is not None
+    if prep is not None:
+        log(f"1a  Rescale and apply gamma: {prep.describe()}")
+        for warning in preparation_warnings(target, prep):
+            log(f"WARNING: {warning}")
+    elif params.get("rescale_and_gamma", False):
+        log("1a  Rescale and apply gamma is ticked but these settings predate its use "
+            "for non-PuzzleBoard targets; it was not applied.")
+    notices = puzzleboard_rescale_notices(target, rescale_and_gamma)
+    for notice in notices:
+        log(f"NOTE: {notice}")
     cache_name = _cache_name_of(params)
 
     # Scanned again, as late as possible -- immediately before the
@@ -385,9 +432,10 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
             draw=False,
             n_lim=params["n_lim"],
             upscale_factor=upscale_factor,
-            rescale_and_gamma=rescale_and_gamma,
-            preprocessing_scale=preprocessing_scale,
-            preprocessing_gamma=preprocessing_gamma,
+            # rescale_and_gamma=False when off; otherwise the resolved
+            # scale, gamma and 16-bit loader.
+            **({"rescale_and_gamma": False} if prep is None
+               else prep.detect_kwargs()),
             # This run's own selection, fixed above before any staging
             # decision or later race window -- passed through explicitly so
             # detect_datapoints_in_imfile never re-derives it from a fresh
@@ -405,7 +453,8 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
         if root != f_loc and caching:
             # The cache lands beside the images the pass read, i.e. the
             # staging folder -- bring it back to the image folder, where a
-            # rerun of this same subset looks for it. Purely a speed-up for a LATER run: this call's own
+            # rerun of this same subset looks for it. Purely a speed-up for
+            # a LATER run: this call's own
             # (detections, cam_res) below are already final and returned
             # regardless of whether this copy-back succeeds, so the whole
             # thing is best-effort -- any failure here is logged and
@@ -427,6 +476,10 @@ def _detect(params: dict, log: LogFn) -> tuple[object, list, dict, dict]:
         detections, target, image_counts=cam_img_counts, n_lim=params["n_lim"])
 
     diagnostics = _diagnostics(report, detections, cam_res, log)
+    if notices:
+        diagnostics["notices"] = notices
+    if prep is not None:
+        diagnostics["preparation"] = prep.record()
     return detections, cam_res, diagnostics, report.to_dict()
 
 

@@ -25,6 +25,7 @@ _FIELDS = {
     "phase0": ("_floc_edit", "_ws_edit"),
     "phase1": ("_cache_cb", "_upscale_combo", "_rescale_gamma_cb",
                "_preprocessing_scale_edit", "_preprocessing_gamma_edit",
+               "_preprocessing_loader_combo",
                "_hd_cb", "_nlim_edit", "_threads_edit", "_fp_edit", "_po_edit"),
     "phase2": ("_det_pickle_edit", "_cache_cb", "_lens_combo", "_hd_cb",
                "_nlim_edit", "_min_dtct_spin", "_fp_edit"),

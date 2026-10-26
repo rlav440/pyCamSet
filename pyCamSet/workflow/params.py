@@ -69,6 +69,13 @@ def as_positive_float(text: Any, field: str) -> float:
     return value
 
 
+def as_optional_positive_float(text: Any, field: str) -> Optional[float]:
+    """Parse *text* as a finite number greater than zero, or None when it is blank."""
+    if not str(text or "").strip():
+        return None
+    return as_positive_float(text, field)
+
+
 def as_json_object(text: Any, field: str) -> Optional[dict]:
     """Parse *text* as a JSON object, or None when it is blank."""
     raw = str(text or "").strip()

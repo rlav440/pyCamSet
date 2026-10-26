@@ -8,6 +8,9 @@ from tqdm import tqdm
 
 from pyCamSet.cameras import CameraSet
 from pyCamSet.calibration_targets import TargetDetection, AbstractTarget
+from pyCamSet.calibration_targets.core.preparation import (
+    cache_identity as preparation_cache_identity,
+)
 from pyCamSet.calibration.detection_cache import (
     detection_cache_name, load_verified_cache, save_to_cache,
 )
@@ -332,6 +335,7 @@ def detect_datapoints_in_imfile(
     rescale_and_gamma: bool = False,
     preprocessing_scale: float = 0.25,
     preprocessing_gamma: float = 0.5,
+    preprocessing_loader: str = "upper_byte",
 ) -> tuple[TargetDetection, list[tuple]]:
     """
     This function organises the detection of the image datapoints in a folder of images.
@@ -348,6 +352,16 @@ def detect_datapoints_in_imfile(
         fixed before any staging decision), so a folder appearing in or
         vanishing from *f_loc* afterwards cannot join or leave the pass.
         ``None`` scans *f_loc* here instead.
+    :param rescale_and_gamma: preprocess with a rescale-and-gamma pass
+        before detecting rather than plain upscaling.  Applied to whatever
+        target is given; per-target defaults are resolved by the caller
+        (:mod:`pyCamSet.calibration_targets.core.preparation`)
+    :param preprocessing_scale: the rescale factor when *rescale_and_gamma*
+        is set
+    :param preprocessing_gamma: the gamma correction when *rescale_and_gamma*
+        is set
+    :param preprocessing_loader: how *rescale_and_gamma* reduces a 16-bit
+        image to 8 bits: ``"upper_byte"`` (default) or ``"min_max"``
     :return: A target detection.
     """
 
@@ -359,13 +373,12 @@ def detect_datapoints_in_imfile(
     scan_cam_names = cam_names is None
     cam_names = get_subfolder_names(f_loc=f_loc) if scan_cam_names else list(cam_names)
 
-    preprocessing = None
-    if rescale_and_gamma:
-        preprocessing = {
-            "rescale_and_gamma": True,
-            "scale": float(preprocessing_scale),
-            "gamma": float(preprocessing_gamma),
-        }
+    # Folded into the cache identity (not the cache name) so switching this
+    # setting invalidates a stale slot instead of silently reading detections
+    # made under a different preprocessing pass.
+    preprocessing = preparation_cache_identity(
+        rescale_and_gamma, preprocessing_scale, preprocessing_gamma,
+        preprocessing_loader)
     cache_hit = (load_verified_cache(
         cache_path, calibration_target, cam_names, n_lim, camset=camset,
         preprocessing=preprocessing)
@@ -402,6 +415,7 @@ def detect_datapoints_in_imfile(
             rescale_and_gamma=rescale_and_gamma,
             preprocessing_scale=preprocessing_scale,
             preprocessing_gamma=preprocessing_gamma,
+            preprocessing_loader=preprocessing_loader,
         )
 
     if camset is not None:

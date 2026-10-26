@@ -30,6 +30,7 @@ from pyCamSet.calibration_targets.core.parameters import (
     combine,
 )
 from pyCamSet.calibration_targets.core.target_detections import TargetDetection, ImageDetection
+from pyCamSet.calibration_targets.core.preparation import UPPER_BYTE
 
 # The cameras are imported by the methods that build or inspect one, not
 # here.  pyCamSet.cameras brings in pyvista, numba and matplotlib through
@@ -116,18 +117,29 @@ def _looks_like_native_opencv_error(exc: BaseException) -> bool:
 
 
 def _prepare_detection_image(
-    image: np.ndarray, *, rescale_and_gamma: bool,
-    preprocessing_scale: float, preprocessing_gamma: float,
+    image: np.ndarray,
+    *,
+    rescale_and_gamma: bool,
+    preprocessing_scale: float,
+    preprocessing_gamma: float,
+    preprocessing_loader: str = UPPER_BYTE,
 ) -> tuple[np.ndarray, float]:
-    """Prepare an optional PuzzleBoard image and return its scale."""
+    """Prepare one image and return it with the coordinate scale used.
+
+    Applies to whatever target the caller detects; which targets get it, and with
+    which defaults, is decided upstream (:mod:`~pyCamSet.calibration_targets.core.preparation`).
+    """
     if not rescale_and_gamma:
         return image, 1.0
     from pyCamSet.calibration_targets.markers.puzzleboard import (
         preprocess_puzzleboard_image,
     )
-    return preprocess_puzzleboard_image(
+    prepared = preprocess_puzzleboard_image(
         image, enabled=True, scale=preprocessing_scale,
-        gamma=preprocessing_gamma), float(preprocessing_scale)
+        gamma=preprocessing_gamma, loader=preprocessing_loader)
+    return prepared, float(preprocessing_scale)
+
+
 def enumerate_detection_images(file: Path, n_lim: int | None = None) -> list[Path]:
     """Return the exact recursive, natural-sorted image list used by detection."""
     paths = natsorted(glob_ims(Path(file)))
@@ -183,6 +195,7 @@ def detect_in_image(
     target, im, *, draw: bool = False, camera=None, upscale_factor: int = 1,
     rescale_and_gamma: bool = False, preprocessing_scale: float = 0.25,
     preprocessing_gamma: float = 0.5, explain: list | None = None,
+    preprocessing_loader: str = UPPER_BYTE,
 ) -> ImageDetection:
     """Detect *target* in one already-read photo, as Phase 1 does per image.
 
@@ -204,7 +217,8 @@ def detect_in_image(
     im, preparation_scale = _prepare_detection_image(
         im, rescale_and_gamma=rescale_and_gamma,
         preprocessing_scale=preprocessing_scale,
-        preprocessing_gamma=preprocessing_gamma)
+        preprocessing_gamma=preprocessing_gamma,
+        preprocessing_loader=preprocessing_loader)
     if explain is None:
         detection = target.find_in_image(im, draw=draw, camera=camera)
         return _restore_native_coordinates(detection, preparation_scale)
@@ -212,6 +226,7 @@ def detect_in_image(
         "event": "prepared_image", "image": im,
         "preparation_scale": float(preparation_scale),
         "upscale_factor": int(upscale_factor) if upscaled else 1,
+        "loader": preprocessing_loader if rescale_and_gamma else None,
     })
     previous = getattr(target, DETECT_EXPLAIN_ATTRIBUTE, None)
     try:
@@ -234,7 +249,9 @@ def detect_in_image(
 def _process_image(
     im_file: Path, cam_name: str, idx: int, draw: bool, camera: Camera,
     upscale_factor: int = 1, rescale_and_gamma: bool = False,
-    preprocessing_scale: float = 0.25, preprocessing_gamma: float = 0.5):
+    preprocessing_scale: float = 0.25, preprocessing_gamma: float = 0.5,
+    preprocessing_loader: str = UPPER_BYTE,
+):
     """
     Detect one image, in a worker process.
 
@@ -260,7 +277,8 @@ def _process_image(
             worker_detector, im, draw=draw, camera=camera,
             upscale_factor=upscale_factor, rescale_and_gamma=rescale_and_gamma,
             preprocessing_scale=preprocessing_scale,
-            preprocessing_gamma=preprocessing_gamma)
+            preprocessing_gamma=preprocessing_gamma,
+            preprocessing_loader=preprocessing_loader)
     except (cv2.error, ValueError) as exc:
         if isinstance(exc, ValueError) and not _looks_like_native_opencv_error(exc):
             raise
@@ -534,6 +552,7 @@ class AbstractTarget(ABC):
         camera: Camera = None, threads=12, upscale_factor: int = 1,
         rescale_and_gamma: bool = False, preprocessing_scale: float = 0.25,
         preprocessing_gamma: float = 0.5, enumeration_out: dict | None = None,
+        preprocessing_loader: str = UPPER_BYTE,
     ) -> TargetDetection:
         """
         Notes: A function to detect the camera results in the image folder.
@@ -604,7 +623,8 @@ class AbstractTarget(ABC):
                         upscale_factor=upscale_factor,
                         rescale_and_gamma=rescale_and_gamma,
                         preprocessing_scale=preprocessing_scale,
-                        preprocessing_gamma=preprocessing_gamma)
+                        preprocessing_gamma=preprocessing_gamma,
+                        preprocessing_loader=preprocessing_loader)
                 except (cv2.error, ValueError) as exc:
                     if isinstance(exc, ValueError) and not _looks_like_native_opencv_error(exc):
                         raise
@@ -635,6 +655,7 @@ class AbstractTarget(ABC):
         tasks = [(
             im_file, cam_name, idx, draw, camera, upscale_factor,
             rescale_and_gamma, preprocessing_scale, preprocessing_gamma,
+            preprocessing_loader,
         ) for idx, im_file in enumerate(im_locs)]
         if not (processname := multiprocessing.current_process().name) == "MainProcess":
             logger.critical("Python multiprocessing attempted to start an infinite loop. Use the if __name__ == '__main__' idiom in your calling script to prevent this")

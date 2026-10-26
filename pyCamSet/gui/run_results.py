@@ -157,6 +157,8 @@ def _image_points(detections, camera_index: int, image_index: int) -> np.ndarray
     return np.empty((0, 2))
 
 
+
+
 def _camera_images(image_folder: Path, camera: str) -> list[Path]:
     from natsort import natsorted
 

@@ -75,12 +75,13 @@ from pyCamSet.gui.shared_functions import (
     set_parameter_widget,
     show_tab,
 )
+from pyCamSet.calibration_targets.core.preparation import ANY_TARGET_KEY, MIN_MAX, UPPER_BYTE
 from pyCamSet.workflow import phase1 as phase1_workflow
 from pyCamSet.workflow.params import (
     ParamError,
     as_json_object,
+    as_optional_positive_float,
     as_optional_positive_int,
-    as_positive_float,
     require_image_folder,
     require_detector_available,
 )
@@ -112,12 +113,25 @@ def _run_header(params: dict) -> list[str]:
     if params.get("upscale_factor", 1) != 1:
         lines.append(f"upscale      : {params['upscale_factor']}x")
     if params.get("rescale_and_gamma", False):
+        def shown(key):
+            value = params.get(key)
+            return "target default" if value is None else value
         lines.append(
-            f"pcube prep   : scale={params['preprocessing_scale']} "
-            f"gamma={params['preprocessing_gamma']}")
+            f"rescale+gamma: scale={shown('preprocessing_scale')} "
+            f"gamma={shown('preprocessing_gamma')} "
+            f"16-bit loader={shown('preprocessing_loader')}")
     lines.append(f"selected cams: {params['selected_cameras']}")
     lines.append("Starting detection…")
     return lines
+
+
+#: The 16-bit loader combo's entries and the params value each one writes.
+_LOADER_DEFAULT_TEXT = "Target default"
+_LOADER_CHOICES: dict[str, Optional[str]] = {
+    _LOADER_DEFAULT_TEXT: None,
+    "Upper byte": UPPER_BYTE,
+    "Min/max stretch": MIN_MAX,
+}
 
 
 class Phase1Tab(QWidget):
@@ -321,18 +335,42 @@ class Phase1Tab(QWidget):
 
         self._rescale_gamma_cb = QCheckBox("Rescale and apply gamma")
         self._rescale_gamma_cb.setToolTip(
-            "PuzzleBoard/pcube only. For uint16 images, take the upper byte, "
-            "apply gamma once, and resize once before detection. uint8 images "
-            "remain uint8. Default: disabled.")
+            "Any target. Before detection, reduce the image to 8 bits, apply\n"
+            "gamma once and resize once; points are mapped back to the\n"
+            "original pixels. Blank values below take the target's default:\n"
+            "  PuzzleBoard family: scale 0.25, gamma 0.5, upper byte\n"
+            "  ChArUco family (ChArUco, Ccube, CIco, ...): scale 1.0,\n"
+            "    gamma 0.5, min/max (scales below 0.8 lose ChArUco points)\n"
+            "  other targets: scale 1.0, gamma 0.5, upper byte\n"
+            "A value you type always wins. Default: disabled.")
         detect_form.addRow(self._rescale_gamma_cb)
 
-        self._preprocessing_scale_edit = QLineEdit("0.25")
+        self._preprocessing_scale_edit = QLineEdit("")
+        self._preprocessing_scale_edit.setPlaceholderText("target default")
         self._preprocessing_scale_edit.setFixedWidth(100)
         detect_form.addRow("Preprocessing scale:", self._preprocessing_scale_edit)
 
-        self._preprocessing_gamma_edit = QLineEdit("0.5")
+        self._preprocessing_gamma_edit = QLineEdit("")
+        self._preprocessing_gamma_edit.setPlaceholderText("target default")
         self._preprocessing_gamma_edit.setFixedWidth(100)
         detect_form.addRow("Preprocessing gamma:", self._preprocessing_gamma_edit)
+
+        # How a 16-bit photo is reduced to 8 bits before the gamma.  The upper
+        # byte is pyCamSet's historical behaviour; a 12-bit camera stored in
+        # uint16 uses only values up to 4095, so its upper byte has at most 16
+        # grey levels (the 12-bit Ccube sets detect nothing that way).
+        self._preprocessing_loader_combo = QComboBox()
+        self._preprocessing_loader_combo.addItems(list(_LOADER_CHOICES))
+        self._preprocessing_loader_combo.setCurrentText(_LOADER_DEFAULT_TEXT)
+        self._preprocessing_loader_combo.setToolTip(
+            "How rescale-and-gamma reduces a 16-bit photo to 8 bits.\n"
+            "Upper byte: keep bits 8-15 (pyCamSet's historical behaviour).\n"
+            "Min/max stretch: map each photo's darkest..brightest value onto\n"
+            "0..255 (also stretches 8-bit photos). Use it for 12-bit cameras\n"
+            "stored as 16-bit, whose upper byte is nearly black.\n"
+            "Target default: upper byte for PuzzleBoard and other targets,\n"
+            "min/max for the ChArUco family.")
+        detect_form.addRow("16-bit loader:", self._preprocessing_loader_combo)
 
         self._hd_cb = QCheckBox("High Distortion Mode")
         self._hd_cb.setToolTip(
@@ -635,10 +673,16 @@ class Phase1Tab(QWidget):
                 self._threads_edit.text(), "Threads"),
             "upscale_factor": int(self._upscale_combo.currentText().rstrip("x")),
             "rescale_and_gamma": self._rescale_gamma_cb.isChecked(),
-            "preprocessing_scale": as_positive_float(
+            # Marks these params as written by a GUI whose checkbox applies
+            # to every target (see calibration_targets/core/preparation.py).
+            ANY_TARGET_KEY: True,
+            # Blank = the target's default; a typed value always wins.
+            "preprocessing_scale": as_optional_positive_float(
                 self._preprocessing_scale_edit.text(), "Preprocessing scale"),
-            "preprocessing_gamma": as_positive_float(
+            "preprocessing_gamma": as_optional_positive_float(
                 self._preprocessing_gamma_edit.text(), "Preprocessing gamma"),
+            "preprocessing_loader": _LOADER_CHOICES.get(
+                self._preprocessing_loader_combo.currentText()),
             "fixed_params": as_json_object(
                 self._fp_edit.text(), "Fixed params JSON"),
             "problem_options": as_json_object(

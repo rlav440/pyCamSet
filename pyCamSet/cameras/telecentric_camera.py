@@ -60,8 +60,8 @@ class TelecentricCamera(Camera):
     a calibrated telecentric camera's extrinsic:
 
     - The camera's position along its own optical axis is not observable.  The
-      bundle adjustment does not estimate it, and ``extrinsic`` carries
-      whatever the seed put there.
+      bundle adjustment does not estimate it, and a calibrated camera's
+      ``extrinsic`` carries no translation at all.
     - The in-plane position is carried by the principal point, not the
       translation, because the two are degenerate.
     - Only the rotation of ``extrinsic`` is estimated.  Relative camera

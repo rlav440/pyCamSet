@@ -398,6 +398,22 @@ class SelfBundleHandler(TemplateBundleHandler):
 
         prev_primitive = prev_handler.bundlePrimitive
         prev_params = np.asarray(prev_cams.calibration_params, dtype=float)
+        prev_missing = getattr(prev_handler, "missing_poses", None)
+        if (prev_missing is not None and np.any(prev_missing)
+                and not isinstance(prev_primitive, StandardBundlePrimitive)  # templated only; a
+                and prev_params.shape[0] != prev_primitive.pose_end):  # self calibration is refused below
+            # The solve left its missing poses out of the parameter vector (the
+            # template handler marks them fixed while seeding), but a camset read
+            # back from disk rebuilds its bundle primitive with every pose free.
+            # Re-apply the recorded missing poses; accept it only if that is
+            # exactly what the saved vector holds. (A Phase 3 run with
+            # 17 of 99 images unposed once saved 558 parameters against a 660 layout,
+            # and every Phase 4 started from it failed.)
+            masked = (np.asarray(prev_primitive.poses_unfixed, dtype=bool)
+                      & ~np.asarray(prev_missing, dtype=bool))
+            if 6 * int(np.sum(masked)) + prev_primitive.extr_end == prev_params.shape[0]:
+                prev_primitive.poses_unfixed = masked
+                prev_primitive.calc_free_poses()
         if prev_params.shape[0] != prev_primitive.pose_end:
             raise ValueError(
                 f"The previous calibration's {prev_params.shape[0]} parameters "

@@ -86,6 +86,20 @@ def find_gauge_points(points, candidates=None):
     return (int(i0), int(i1), int(inds[furthest])), int(np.argmax(np.abs(normals[furthest])))
 
 
+def gauge_axis_for_indices(points, indices):
+    """Derive the BASE gauge axis for explicitly recorded gauge points."""
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    i0, i1, i2 = (int(index) for index in indices)
+    axis = points[i1] - points[i0]
+    span = float(np.linalg.norm(axis))
+    if span <= 0.0:
+        raise ValueError("Recorded gauge points do not define a baseline.")
+    normal = np.cross(axis / span, points[i2] - points[i0])
+    if float(np.linalg.norm(normal)) < 1e-6 * span:
+        raise ValueError("Recorded gauge points are collinear.")
+    return int(np.argmax(np.abs(normal)))
+
+
 def _gauge_square_size(target) -> float:
     """The square spacing as it occurs in ``point_data``: the most common
     distance from a point to its nearest neighbour, or the declared square size
@@ -253,15 +267,31 @@ class SelfBundleHandler(TemplateBundleHandler):
         seven freedoms against a point nothing constrains.
         """
         n_points = int(np.prod(self.point_data.shape[:-1]))
-        seen_keys = self._flat_detections()[:, 2]
+        seen_keys = self._flat_detections()[:, 2].astype(int)
         # a feature no camera saw cannot be solved for, so it is held fixed
         self.visible_feature_mask = np.isin(np.arange(n_points), seen_keys)
         self.feat_unfixed = np.repeat(self.visible_feature_mask, 3)
-
-        self.fixed_inds, self.gauge_axis = find_gauge_points(
-            self.flat_point_data.reshape((-1, 3)),
-            candidates=np.flatnonzero(self.visible_feature_mask),
-        )
+        recorded = (getattr(self, "problem_opts", {}) or {}).get(
+            "recorded_gauge_indices")
+        if recorded is not None:
+            self.fixed_inds = tuple(int(index) for index in recorded)
+            if len(self.fixed_inds) != 3 or any(
+                    index < 0 or index >= n_points
+                    or not self.visible_feature_mask[index]
+                    for index in self.fixed_inds):
+                raise ValueError(
+                    "Recorded gauge indices are invalid or not visible in this run.")
+            self.gauge_axis = gauge_axis_for_indices(
+                self.flat_point_data.reshape((-1, 3)), self.fixed_inds)
+        else:
+            counts = np.bincount(seen_keys, minlength=n_points)
+            # A point seen once has no measured position to hold the gauge; fall back
+            # to every visible point when fewer than three were seen more than once.
+            candidates = np.flatnonzero(counts >= 2)
+            if len(candidates) < 3:
+                candidates = np.flatnonzero(self.visible_feature_mask)
+            self.fixed_inds, self.gauge_axis = find_gauge_points(
+                self.flat_point_data.reshape((-1, 3)), candidates=candidates)
         i0, i1, i2 = self.fixed_inds
         self.feat_unfixed[3*i0:3*i0+3] = False
         self.feat_unfixed[3*i1:3*i1+3] = False
@@ -572,12 +602,28 @@ class SelfBundleHandler(TemplateBundleHandler):
             new_map = ch.calc_distance_subset(point_estimate, point_estimate, valid_map[:,:2])
             ref_map = ch.calc_distance_subset(ref_points, ref_points, valid_map[:,:2])
         elif valid_map is True:
-            inds = np.triu_indices(point_estimate[vm].shape[0], k=1)
+            visible_indices = np.flatnonzero(vm)
+            inds = np.triu_indices(len(visible_indices), k=1)
             new_map = cdist(point_estimate[vm], point_estimate[vm])[inds]
             ref_map = cdist(ref_points[vm], ref_points[vm])[inds]
             # One square's edge only: every other distance is some multiple of
             # it, and a pair a whole board apart is the least well solved.
+            #
+            # Several target classes keep their declared square size in
+            # millimetres while storing point_data in metres; using the
+            # declaration directly then leaves no valid pair and aborts the
+            # self calibration, so it is read back in point_data's own units.
             mask = np.isclose(ref_map, _gauge_square_size(self.target))
+            scale_rule = (getattr(self, "problem_opts", {}) or {}).get(
+                "target_scale_rule", "legacy_mean_all_edges")
+            if scale_rule == "measured_edges_v1":
+                detections = np.asarray(self._flat_detections())
+                counts = np.bincount(
+                    detections[:, 2].astype(int), minlength=len(vm))
+                measured_visible = counts[visible_indices] >= 2
+                mask &= measured_visible[inds[0]] & measured_visible[inds[1]]
+            elif scale_rule != "legacy_mean_all_edges":
+                raise ValueError(f"Unknown target scale rule: {scale_rule!r}")
             new_map, ref_map = new_map[mask], ref_map[mask]
             if len(ref_map) == 0:
                 raise ValueError(

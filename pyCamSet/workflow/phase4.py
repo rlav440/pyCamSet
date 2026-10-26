@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from scipy import sparse
 
 from pyCamSet.utils.paths import long_path
 from pyCamSet.workflow.diagnostics import per_camera_mean_reprojection
@@ -71,8 +72,13 @@ def run(params: dict,
 
     with captured_output(log):
         try:
+            # A camset that is not the selected run's own output (an override path)
+            # carries none of the run's recorded status: the checks and the quality gate
+            # treat it as a camset alone, as for a headless caller. The run record still
+            # names the selected run.
             camset_out, diagnostics, report = _solve(
-                params, run_dir, Path(phase3_camset), phase3_run, log)
+                params, run_dir, Path(phase3_camset),
+                phase3_run_for_camset(phase3_run, phase3_camset), log)
         except Exception as exc:
             error = str(exc)
             log(f"ERROR: {error}")
@@ -130,6 +136,8 @@ def solve(previous_cams, target, detections, *,
     if not BACKEND_OK:
         raise RuntimeError("pyCamSet optimisation modules are not importable.")
 
+    options = dict(options or {})
+    options.setdefault("target_scale_rule", "measured_edges_v1")
     handler = SelfBundleHandler(
         camset=previous_cams,
         target=target,
@@ -151,10 +159,24 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
         raise RuntimeError("pyCamSet optimisation modules are not importable.")
 
     previous_cams = load_CameraSet(long_path(phase3_camset))
-    if phase3_run is not None and phase3_run.get("status") == "failed":
-        raise RuntimeError(
-            "The selected Phase 3 run failed; refusing to start Phase 4. "
-            "Re-run Phase 3 first.")
+    # Capture values, not Camera references: the self-calibration handler may
+    # mutate the shared Camera objects while producing its output camset.
+    previous_camera_snapshot = _snapshot_camera_parameters(previous_cams)
+    # A headless caller may start from a camset alone, with no Phase 3 run
+    # record; there is then no recorded path or status to check it against.
+    if phase3_run is not None:
+        if phase3_run.get("status") == "failed":
+            raise RuntimeError(
+                "The selected Phase 3 run failed; refusing to start Phase 4. "
+                "Re-run Phase 3 first.")
+        recorded_camset = ((phase3_run.get("artifacts") or {}).get(
+            "optimised_camset") or (phase3_run.get("artifacts") or {}).get(
+                "phase3_camset_used"))
+        if not recorded_camset or not _same_resolved_path(
+                recorded_camset, phase3_camset):
+            raise RuntimeError(
+                "Phase 4 input camset does not verify against the selected "
+                "Phase 3 run; refusing to use its quality status as provenance.")
     selected = list(params.get("selected_cameras") or [])
     if selected and set(previous_cams.get_names()) != set(selected):
         raise RuntimeError(
@@ -165,6 +187,34 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     if previous_handler is None:
         raise RuntimeError(
             "Selected Phase 3 camset has no calibration handler metadata.")
+    from pyCamSet.utils.target_units import (
+        LEGACY_UNVERIFIED, MILLIMETRES, METRES,
+        target_point_data_units,
+    )
+    rebuilt_units = target_point_data_units(previous_handler.target)
+    saved_units = getattr(previous_cams, "_saved_point_data_units", LEGACY_UNVERIFIED)
+    known_units = {METRES, MILLIMETRES}
+    input_notices: list[str] = []
+    if rebuilt_units in known_units and saved_units in known_units:
+        # Both sides know their units: only a real disagreement is refused.
+        if rebuilt_units != saved_units:
+            raise RuntimeError(
+                f"Phase 4 target units changed since Phase 3 ({saved_units} saved, "
+                f"{rebuilt_units} rebuilt); refusing a mixed-unit solve.")
+    elif rebuilt_units in known_units:
+        # A camset saved before units were recorded cannot be checked, and
+        # re-saving it cannot add the record; the rebuilt target's own units
+        # are the best available, so carry on and say so.
+        input_notices.append(
+            "the saved Phase 3 camset predates target-unit records; assumed the "
+            f"rebuilt target's own coordinate units ({rebuilt_units})")
+    else:
+        # The target is not in the unit table, so there is nothing to compare
+        # against; refusing would block it for good.
+        input_notices.append(
+            "the target's coordinate units are not in the known-unit table, so "
+            "they could not be checked against the saved Phase 3 camset "
+            f"(saved record: {saved_units})")
     previous_detection = getattr(previous_handler, "detection", None)
     detection_names = set(getattr(previous_detection, "cam_names", []) or [])
     if detection_names != set(previous_cams.get_names()):
@@ -173,7 +223,14 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
             "refusing to run Phase 4 with silent camera loss.")
 
     options = dict(params.get("problem_options") or {})
-    options.setdefault("fixed_pose", 0)
+    phase3_options = getattr(previous_handler, "problem_opts", {}) or {}
+    phase3_fixed_pose = int(phase3_options.get("fixed_pose", 0))
+    requested_fixed_pose = int(options.get("fixed_pose", phase3_fixed_pose))
+    if requested_fixed_pose != phase3_fixed_pose:
+        raise RuntimeError(
+            "Phase 4 fixed_pose must match Phase 3's fixed_pose; refusing "
+            "to start the rig in a different world frame.")
+    options["fixed_pose"] = phase3_fixed_pose
     options.setdefault("ref_cam", 0)
     options.setdefault("ref_pose", 0)
     options.setdefault("outliers", "n")
@@ -202,7 +259,14 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     diagnostics = _diagnostics(
         optimisation, handler, stats, phase3_run, log,
         out_cams=out_cams, previous_cams=previous_cams,
-        params=params)
+        previous_camera_snapshot=previous_camera_snapshot,
+        params=params, input_notices=input_notices)
+    # Recorded after the gate, which knows nothing of these two facts.  The
+    # camset path was checked above when a run was given (None: nothing to
+    # check it against); its bytes are not hashed.
+    diagnostics["quality_gate"]["phase3_input_camset_path_matches_recorded"] = (
+        True if phase3_run is not None else None)
+    diagnostics["quality_gate"]["phase3_camset_content_verified"] = False
     report = getattr(out_cams, "calibration_report", None)
     return camset_out, diagnostics, (
         report.to_dict() if report is not None else None)
@@ -211,7 +275,9 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
 def _diagnostics(optimisation, handler, stats: dict,
                  phase3_run: Optional[dict], log: LogFn,
                  *, out_cams=None, previous_cams=None,
-                 params: Optional[dict] = None) -> dict:
+                 previous_camera_snapshot=None,
+                 params: Optional[dict] = None,
+                 input_notices: Optional[list] = None) -> dict:
     """The D4 series: how far the target moved, and whether it paid off."""
     # The errors and the solver's own account of the run are the calibration
     # summary's, printed by the solve itself.  What follows is what only this
@@ -250,7 +316,10 @@ def _diagnostics(optimisation, handler, stats: dict,
         optimisation, handler, stats, residual_xy,
         initial_euclid, final_euclid, int(len(detection_data)),
         out_cams=out_cams, previous_cams=previous_cams,
-        params=params, phase3_run=phase3_run)
+        previous_camera_snapshot=previous_camera_snapshot,
+        params=params, phase3_run=phase3_run, input_notices=input_notices)
+    for notice in quality_gate.get("notices", []):
+        log(f"NOTE: {notice}")
 
     diagnostics = {
         "D4.1_n_free_target_points": int(np.sum(visible)),
@@ -293,17 +362,199 @@ def _initial_per_image_errors(handler, stats: dict) -> np.ndarray:
     ], dtype=float)
 
 
+_MAX_REDUCED_BYTES = 64 * 1024 * 1024
+
+
+def _split_jacobian_nullity(jacobian, *,
+                            point_column_start: int,
+                            point_mask: np.ndarray,
+                            detection_data: np.ndarray,
+                            max_reduced_bytes: int = _MAX_REDUCED_BYTES) -> dict:
+    """Measure total nullity and separate point-only from global modes.
+
+    The point-only null space is the kernel of each feature's own residual
+    block with camera/pose columns fixed. The remaining null directions are
+    exactly those whose projection into global columns is non-zero.
+
+    The reduced global Jacobian is reduced by a streamed QR (TSQR): the
+    triangular factor R (globals x globals) is stacked with a chunk of newly
+    reduced rows and re-factorised, so the observations never sit in memory
+    together. ``max_reduced_bytes`` bounds the *stacked block* (R plus one
+    chunk), so ``chunk_rows`` is sized from it. The true peak is a small
+    multiple of that bound: the pending chunk, the stacked copy made from it,
+    and LAPACK's own working copy of the stacked block can coexist (about
+    three times the budget at worst), plus the sparse Jacobian itself.
+
+    Ranks are counted against ``frobenius_norm * max(shape) * eps``. The
+    Frobenius norm is never smaller than the largest singular value, so this
+    tolerance is conservative: it can be larger than the conventional
+    ``sigma_max * max(shape) * eps`` and so may report near-null modes as
+    null (a rank deficit that a tighter tolerance would not show).
+    """
+    matrix = sparse.csr_matrix(jacobian, dtype=float)
+    point_mask = np.asarray(point_mask, dtype=bool)
+    detection_data = np.asarray(detection_data)
+    if len(matrix.shape) != 2 or not matrix.shape[0] or not matrix.shape[1]:
+        raise ValueError("solution Jacobian must be a finite non-empty matrix")
+    if not np.all(np.isfinite(matrix.data)):
+        raise ValueError("solution Jacobian must be a finite non-empty matrix")
+    if point_mask.ndim != 1 or point_mask.size % 3:
+        raise ValueError("point-coordinate mask must contain 3D feature blocks")
+    if detection_data.ndim != 2 or detection_data.shape[1] < 3:
+        raise ValueError("detection rows must include a feature index")
+    if matrix.shape[0] != 2 * detection_data.shape[0]:
+        raise ValueError("Jacobian residual rows do not match detection rows")
+    if point_column_start < 0 or point_column_start > matrix.shape[1]:
+        raise ValueError("point parameter offset is outside the Jacobian")
+
+    global_parameter_count = int(point_column_start)
+    # The reduced global Jacobian is never held whole: its singular values are those of the
+    # triangular factor R of a QR decomposition, built in row chunks (TSQR). Memory is set by
+    # the global parameter count, not by the observations, and unlike J^T J the condition
+    # number is not squared. (A dense (2 x observations) x globals copy exceeded
+    # the old 16 MiB budget on every real 8-camera, 100-image rig, so every Phase 4 run was
+    # gated 'weakly constrained' without being measured.)
+    itemsize = np.dtype(float).itemsize
+    reduced_bytes = int(global_parameter_count * global_parameter_count * itemsize)
+    # Rows of the stacked block (R, then the chunk) that the budget allows. A chunk
+    # under a quarter of R's height would make the repeated QR factorisations
+    # dominate, so that is refused as over budget rather than run for hours.
+    budget_rows = (int(max_reduced_bytes) // (global_parameter_count * itemsize)
+                   if global_parameter_count else 0)
+    chunk_rows = budget_rows - global_parameter_count
+    if global_parameter_count and chunk_rows < max(global_parameter_count // 4, 1):
+        raise ValueError(
+            "the reduced global Jacobian's triangular factor exceeds the "
+            f"{max_reduced_bytes // (1024 * 1024)} MiB measurement budget")
+    # The Frobenius norm upper-bounds sigma_max without densifying the full matrix.
+    norm_bound = float(np.linalg.norm(matrix.data))
+    tolerance = (norm_bound * max(matrix.shape) * np.finfo(float).eps)
+    local_nullity = 0
+    local_rank_sum = 0
+    point_column = point_column_start
+    feature_indices = detection_data[:, 2].astype(int)
+    feature_count = point_mask.size // 3
+    if np.any(feature_indices < 0) or np.any(feature_indices >= feature_count):
+        raise ValueError("detection feature index is outside the target point mask")
+    triangular = np.empty((0, global_parameter_count), dtype=float)
+    pending: list[np.ndarray] = []
+    pending_rows = 0
+
+    def _compress() -> None:
+        nonlocal triangular, pending, pending_rows
+        if pending:
+            stacked = np.vstack([triangular, *pending])
+            triangular = (np.linalg.qr(stacked, mode="r") if stacked.shape[0]
+                          else stacked)
+            pending, pending_rows = [], 0
+
+    # Group the detections by feature once (a stable sort keeps each feature's
+    # observations in detection order) instead of masking every detection per feature.
+    order = np.argsort(feature_indices, kind="stable")
+    group_ends = np.searchsorted(feature_indices[order], np.arange(feature_count), side="right")
+    group_starts = np.concatenate(([0], group_ends[:-1]))
+
+    reduced_row = 0
+    for feature in range(feature_count):
+        free_coordinates = int(np.count_nonzero(point_mask[3 * feature:3 * feature + 3]))
+        columns = np.arange(point_column, point_column + free_coordinates)
+        point_column += free_coordinates
+        observations = order[group_starts[feature]:group_ends[feature]]
+        if not len(observations):
+            # No residual rows: every free coordinate of this feature is null.
+            local_nullity += free_coordinates
+            continue
+        rows = np.column_stack((2 * observations, 2 * observations + 1)).reshape(-1)
+        global_block = matrix[rows, :global_parameter_count].toarray()
+        local_rank = 0
+        if free_coordinates:
+            local_block = matrix[np.ix_(rows, columns)].toarray()
+            local_basis, local_singular_values, _ = np.linalg.svd(
+                local_block, full_matrices=False)
+            local_rank = int(np.count_nonzero(local_singular_values > tolerance))
+            local_rank_sum += local_rank
+            if local_rank:
+                basis = local_basis[:, :local_rank]
+                global_block -= basis @ (basis.T @ global_block)
+        local_nullity += free_coordinates - local_rank
+        if global_parameter_count:
+            # Rows of different features need not stay together for a QR, so a
+            # block longer than a chunk is fed in chunk-sized slices.
+            for start in range(0, len(rows), chunk_rows):
+                piece = global_block[start:start + chunk_rows]
+                if pending_rows + len(piece) > chunk_rows:
+                    _compress()
+                pending.append(piece)
+                pending_rows += len(piece)
+        reduced_row += len(rows)
+
+    if point_column != matrix.shape[1]:
+        raise ValueError("point-coordinate mask does not span the Jacobian point columns")
+    if reduced_row != matrix.shape[0]:
+        raise ValueError("feature blocks do not span the Jacobian residual rows")
+    _compress()
+    reduced_singular_values = (np.linalg.svd(triangular, compute_uv=False)
+                               if triangular.size else np.zeros(0, dtype=float))
+    reduced_rank = int(np.count_nonzero(reduced_singular_values > tolerance))
+    global_nullity = int(global_parameter_count - reduced_rank)
+    rank = int(local_rank_sum + reduced_rank)
+    total_nullity = int(matrix.shape[1] - rank)
+    if total_nullity != local_nullity + global_nullity:
+        raise ValueError("Schur nullity does not reconcile with the point/global split")
+    return {
+        "rank": rank,
+        "free_parameters": int(matrix.shape[1]),
+        "total_nullity": total_nullity,
+        "point_local_nullity": int(local_nullity),
+        "global_nullity": int(global_nullity),
+        "point_local_global_nullity_split": "measured",
+        "tolerance": float(tolerance),
+        "rank_tolerance_method": "frobenius_norm_upper_bound * max(shape) * float64_epsilon",
+        "smallest_singular_values": reduced_singular_values[
+            -min(8, len(reduced_singular_values)):].tolist(),
+        "jacobian_shape": [int(value) for value in matrix.shape],
+        "reduced_global_shape": [int(matrix.shape[0]), int(global_parameter_count)],
+        "reduced_global_method": "streamed QR (TSQR) triangular factor",
+        "reduced_global_bytes": reduced_bytes,
+        "max_reduced_global_bytes": int(max_reduced_bytes),
+        "tsqr_chunk_rows": int(chunk_rows),
+    }
+
+
+def _jacobian_nullity_measurement(optimisation, handler) -> dict:
+    """Measure the sparse final Jacobian already returned by the solver."""
+    matrix = getattr(optimisation, "jac", None)
+    if matrix is None:
+        raise RuntimeError("solver result did not retain its final Jacobian")
+    if not sparse.issparse(matrix):
+        raise RuntimeError("bundle-adjustment Jacobian must remain sparse for bounded measurement")
+    result = _split_jacobian_nullity(
+        matrix,
+        point_column_start=int(handler.bundlePrimitive.pose_end),
+        point_mask=np.asarray(handler.feat_unfixed, dtype=bool),
+        detection_data=np.asarray(handler.get_detection_data(flatten=True)),
+    )
+    result["jacobian_storage"] = "scipy_sparse"
+    return result
+
+
 def _quality_gate(optimisation, handler, stats: dict,
                   residual_xy: np.ndarray, initial_euclid: float,
                   final_euclid: float, observation_count: int, *,
                   out_cams=None, previous_cams=None,
+                  previous_camera_snapshot=None,
                   params: Optional[dict] = None,
-                  phase3_run: Optional[dict] = None) -> dict:
+                  phase3_run: Optional[dict] = None,
+                  input_notices: Optional[list] = None) -> dict:
     """Fail closed when Phase 4 produced no scientifically usable result.
 
     ``phase3_run`` is the run the starting camset came from, or None when the
     caller started from a camset alone; only a given run is checked for a
-    complete status and a run id.
+    complete status and a run id.  ``previous_camera_snapshot`` is the Phase 3
+    cameras' values taken before the solve, which the drift is measured from;
+    without it the drift reads ``previous_cams`` as they stand.
+    ``input_notices`` are non-blocking facts about the inputs, found before the
+    solve, that are listed with the gate's own notices.
     """
     base = solve_quality_gate(
         optimisation, handler, stats, residual_xy, initial_euclid,
@@ -348,6 +599,11 @@ def _quality_gate(optimisation, handler, stats: dict,
     image_coverage = bool(expected_images and not missing_images)
     if expected_images and not image_coverage:
         blocking.append("image observation graph has missing image indices")
+    notices: list[str] = list(input_notices or [])
+    if excluded_images:
+        notices.append(
+            f"{len(excluded_images)} image(s) had no usable target pose and were "
+            f"excluded from the solve: {excluded_images}")
 
     gauge = {
         "fixed_target_point_count": len(getattr(handler, "fixed_inds", [])),
@@ -360,6 +616,41 @@ def _quality_gate(optimisation, handler, stats: dict,
         blocking.append("target gauge does not fix three non-collinear points")
     if gauge["fixed_pose"] is None:
         blocking.append("pose gauge has no fixed reference pose")
+    fixed_pose_observed = (
+        gauge["fixed_pose"] is not None
+        and int(gauge["fixed_pose"]) in set(observed_images))
+    try:
+        nullity_measurement = _jacobian_nullity_measurement(optimisation, handler)
+    except Exception as exc:
+        nullity_measurement = None
+        blocking.append("Jacobian null-space measurement failed at solution")
+        constraint_disposition = {
+            "status": "weakly_constrained",
+            "global_nullity": "not_verified",
+            "point_local_global_nullity_split": "not_verified",
+            "reason": f"Jacobian null-space measurement failed: {exc}",
+        }
+    else:
+        global_nullity = nullity_measurement["global_nullity"]
+        weakly_constrained = bool(global_nullity or not fixed_pose_observed)
+        constraint_disposition = {
+            "status": "weakly_constrained" if weakly_constrained else "constrained",
+            "global_nullity": global_nullity,
+            "point_local_nullity": nullity_measurement["point_local_nullity"],
+            "total_nullity": nullity_measurement["total_nullity"],
+            "rank": nullity_measurement["rank"],
+            "jacobian_shape": nullity_measurement["jacobian_shape"],
+            "rank_tolerance": nullity_measurement["tolerance"],
+            "point_local_global_nullity_split": "measured",
+            "reason": (
+                f"measured {global_nullity} global null directions and "
+                f"{nullity_measurement['point_local_nullity']} point-local directions"),
+        }
+    constraint_disposition.update({
+        "fixed_pose_observed": fixed_pose_observed,
+        "fixed_pose_excluded_or_unobserved": (
+            gauge["fixed_pose"] is not None and not fixed_pose_observed),
+    })
 
     camera_quality = (_camera_quality(out_cams) if out_cams is not None else {
         "physically_plausible": True, "available": False, "cameras": {}})
@@ -370,6 +661,7 @@ def _quality_gate(optimisation, handler, stats: dict,
         **base,
         "status": "complete" if not blocking else "incomplete",
         "blocking_flags": blocking,
+        "notices": notices,
         "phase3_provenance_complete": phase3_provenance_complete,
         "objective_cost_reduced": objective_cost_reduced,
         "image_coverage": image_coverage,
@@ -378,8 +670,12 @@ def _quality_gate(optimisation, handler, stats: dict,
         "excluded_images": excluded_images,
         "expected_image_count": expected_images,
         "gauge": gauge,
+        "constraint_disposition": constraint_disposition,
+        "jacobian_nullity": nullity_measurement,
         "camera_quality": camera_quality,
-        "parameter_drift": _camera_drift(previous_cams, out_cams),
+        "parameter_drift": _camera_drift(
+            previous_camera_snapshot if previous_camera_snapshot is not None
+            else previous_cams, out_cams),
         "fixed_params": sorted((params or {}).get("fixed_params") or {}),
         "lockbox": {"enabled": False, "reason": "Phase 4 self-calibration does not apply Phase 3 lockboxes"},
     }
@@ -414,19 +710,63 @@ def _camera_quality(cams) -> dict:
     return {"physically_plausible": plausible, "cameras": details}
 
 
-def _camera_drift(previous_cams, out_cams) -> dict:
+def phase3_run_for_camset(phase3_run: Optional[dict], phase3_camset) -> Optional[dict]:
+    """
+    The Phase 3 run whose status may stand as provenance for *phase3_camset*.
+
+    That is *phase3_run* only when the camset is the run's own recorded output; a camset
+    from anywhere else (an override path, another run's file) has no recorded status, so
+    Phase 4 starts from the camset alone, as a headless caller does.
+
+    :param phase3_run: the selected Phase 3 run record, or None
+    :param phase3_camset: the camset Phase 4 will start from
+    :return: *phase3_run*, or None
+    """
+    if phase3_run is None:
+        return None
+    artifacts = phase3_run.get("artifacts") or {}
+    recorded = artifacts.get("optimised_camset") or artifacts.get("phase3_camset_used")
+    if recorded and _same_resolved_path(recorded, phase3_camset):
+        return phase3_run
+    return None
+
+
+def _same_resolved_path(first, second) -> bool:
+    """Compare paths after platform-native resolution; uncertainty fails closed."""
+    try:
+        return Path(first).resolve() == Path(second).resolve()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
+def _snapshot_camera_parameters(cams) -> dict[str, dict[str, np.ndarray]]:
+    """Take independent array snapshots before a solve can mutate cameras."""
+    if cams is None:
+        return {}
+    return {
+        name: {
+            label: np.array(getattr(cams[name], label), dtype=float, copy=True)
+            for label in ("intrinsic", "distortion_coefs", "extrinsic")
+        }
+        for name in cams.get_names()
+    }
+
+
+def _camera_drift(previous_snapshot, out_cams) -> dict:
     """Report relative parameter movement between Phase 3 and Phase 4."""
-    if previous_cams is None or out_cams is None:
+    if previous_snapshot is None or out_cams is None:
         return {"available": False, "cameras": {}}
-    old_names = set(previous_cams.get_names())
+    if hasattr(previous_snapshot, "get_names"):
+        previous_snapshot = _snapshot_camera_parameters(previous_snapshot)
+    old_names = set(previous_snapshot)
     new_names = set(out_cams.get_names())
     values: dict[str, dict[str, float]] = {}
     for name in sorted(old_names & new_names):
-        old = previous_cams[name]
+        old = previous_snapshot[name]
         new = out_cams[name]
         values[name] = {}
         for label in ("intrinsic", "distortion_coefs", "extrinsic"):
-            before = np.asarray(getattr(old, label), dtype=float)
+            before = np.asarray(old[label], dtype=float)
             after = np.asarray(getattr(new, label), dtype=float)
             denominator = max(float(np.linalg.norm(before)), 1e-12)
             values[name][label] = float(np.linalg.norm(after - before) / denominator)
@@ -457,6 +797,10 @@ def _target_shape_change(handler, optimisation, visible) -> tuple[float, float]:
     displacement = np.linalg.norm(updated - reference, axis=1)
 
     scale = float(np.nanmedian(ratio)) if ratio.size else float("nan")
-    displacement_mm = (float(np.nanmean(displacement) * 1000.0)
-                       if displacement.size else float("nan"))
+    from pyCamSet.utils.target_units import millimetres_per_point_data_unit
+
+    mm_per_unit = millimetres_per_point_data_unit(handler.target)
+    displacement_mm = (
+        float(np.nanmean(displacement) * mm_per_unit)
+        if displacement.size and mm_per_unit is not None else float("nan"))
     return scale, displacement_mm

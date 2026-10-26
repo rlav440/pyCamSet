@@ -19,6 +19,11 @@ from copy import copy
 
 from pyCamSet.utils.calibration_report import CalibrationReport
 from pyCamSet.utils.paths import long_path
+from pyCamSet.utils.target_units import (
+    LEGACY_UNVERIFIED,
+    saved_solution_units,
+    target_point_data_units,
+)
 from pyCamSet.reconstruction.acmmp_utils import ReconParams, calc_convergence_pair_scores
 
 logger = logging.getLogger(__name__)
@@ -252,6 +257,20 @@ def save_camset(
         target = handler.target
         target_config['target_name'] = target.__class__.__name__
         target_config['target_module'] = target.__class__.__module__
+        # A loaded file's marker is authoritative: the current target code may
+        # rebuild point_data in a different unit than the saved solution used.
+        saved_units = getattr(cams, "_saved_point_data_units", None)
+        if saved_units is None:
+            saved_units = (
+                target_point_data_units(target)
+                if hasattr(cams, "calibration_params")
+                else LEGACY_UNVERIFIED
+            )
+        target_config["point_data_unit_m"] = (
+            {"m": 1.0, "mm": 0.001}.get(saved_units)
+            if saved_units in {"m", "mm"}
+            else saved_units
+        )
         try:
             target_config['input'] = target.input_args
         except AttributeError:
@@ -522,6 +541,10 @@ def load_CameraSet(f_loc: Path|str,
 
     try:
         target_config = optim['target_config']
+        # Preserve legacy uncertainty instead of inferring old solution units
+        # from a target rebuilt by the current version of the code.
+        saved_units = saved_solution_units(target_config)
+        camset._saved_point_data_units = saved_units
         target = instance_obj(
             target_config['target_module'], target_config['target_name'],
             **target_config['input']
@@ -577,6 +600,7 @@ def load_CameraSet(f_loc: Path|str,
             logger.warning(f"Failed to load the calibration report: {e}")
 
     camset.calibration_handler = handler
+    camset._saved_point_data_units = saved_units
     return camset
 
 

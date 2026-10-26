@@ -1084,6 +1084,22 @@ def test_make_connectivity_skips_unplaced_points_but_keeps_row_indices():
     assert _edges(make_connectivity(pts, 1.0)) == {(1, 2)}
 
 
+def test_the_gauge_falls_back_to_visible_points_when_too_few_were_seen_twice(synthetic_problem):
+    """With fewer than three points seen more than once, the gauge holds visible ones."""
+    from pyCamSet.calibration_targets import TargetDetection
+
+    cams, target, detection, _ = synthetic_problem
+    data = detection.get_data()
+    # columns: camera, image, the point's key (one or more columns), x, y
+    _, first = np.unique(data[:, 2:-2], axis=0, return_index=True)
+    once = TargetDetection(cam_names=detection.cam_names, data=data[np.sort(first)],
+                           max_ims=detection.max_ims)
+
+    handler = SelfBundleHandler(camset=cams, target=target, detection=once,
+                                options={"outliers": "n"})
+
+    assert len(handler.fixed_inds) == 3
+    assert all(handler.visible_feature_mask[i] for i in handler.fixed_inds)
 
 
 

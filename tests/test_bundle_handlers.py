@@ -1049,12 +1049,39 @@ def test_the_gauge_moves_a_pinhole_translation_and_no_pixel(synthetic_problem):
     assert np.allclose(new_points, target.point_data.reshape(-1, 3), atol=1e-9)
 
 
+def _edges(lines):
+    flat = np.asarray(lines, dtype=int).reshape(-1, 3)
+    assert (flat[:, 0] == 2).all()
+    return {tuple(row) for row in flat[:, 1:]}
 
 
+def test_make_connectivity_joins_the_neighbours_of_square_and_rectangular_faces():
+    from pyCamSet.optimisation.standard_bundle_handler import make_connectivity
+
+    grid = np.array([[x, y, 0.0] for y in range(3) for x in range(3)]) * 2.5
+    # 3 x 3 square lattice: 6 horizontal + 6 vertical neighbours, no diagonals
+    assert len(_edges(make_connectivity(grid, 2.5))) == 12
+    # a 2 x 4 face with 2.5 spacing along x and 5 along y: only the x pairs at 2.5
+    rect = np.array([[x * 2.5, y * 5.0, 0.0] for y in range(2) for x in range(4)])
+    assert _edges(make_connectivity(rect, 2.5)) == {(0, 1), (1, 2), (2, 3), (4, 5), (5, 6), (6, 7)}
+    # the spacing the points really have is what matters, within a relative tolerance
+    assert len(_edges(make_connectivity(grid * (1 + 1e-4), 2.5))) == 12
+    assert make_connectivity(grid * 1.01, 2.5) == []
 
 
+def test_make_connectivity_degenerate_faces_give_no_lines():
+    from pyCamSet.optimisation.standard_bundle_handler import make_connectivity
+
+    assert make_connectivity(np.zeros((1, 3)), 1.0) == []
+    assert make_connectivity(np.full((4, 3), np.nan), 1.0) == []
+    assert make_connectivity(np.eye(3), float("nan")) == []
 
 
+def test_make_connectivity_skips_unplaced_points_but_keeps_row_indices():
+    from pyCamSet.optimisation.standard_bundle_handler import make_connectivity
+
+    pts = np.array([[np.nan, 0, 0], [0.0, 0, 0], [1.0, 0, 0], [2.0, np.nan, 0], [3.0, 0, 0]])
+    assert _edges(make_connectivity(pts, 1.0)) == {(1, 2)}
 
 
 

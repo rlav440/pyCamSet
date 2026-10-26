@@ -1259,6 +1259,7 @@ class Phase2DiagnosticsTab(QWidget):
         distortion_csv_rows = []
         for i, cam in enumerate(cams, start=1):
             res = np.array(cam.res).astype(int).reshape(-1)
+            # Camera.res is (width, height), OpenCV's imageSize order.
             w = int(res[0]) if res.size >= 2 else 1280
             h = int(res[1]) if res.size >= 2 else 720
             w = max(64, min(1600, w))

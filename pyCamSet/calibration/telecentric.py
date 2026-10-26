@@ -131,7 +131,9 @@ def calibrate_telecentric(object_points: list[np.ndarray],
 
     :param object_points: per view, (n, 3) target points
     :param image_points: per view, (n, 2) detected pixels
-    :param res: the camera resolution, ``(width, height)`` as ``Camera.res``
+    :param res: the camera resolution as ``Camera.res`` holds it,
+        ``(width, height)`` -- not the ``(height, width)`` image shape
+        detection reports, which ``initial_calibration`` converts first
     :return: magnification, principal point, per-view 4x4 poses, per-view rms
     """
     if not object_points:
@@ -144,6 +146,7 @@ def calibrate_telecentric(object_points: list[np.ndarray],
         magnifications.append(np.linalg.norm(A, axis=1))
     magnification = np.median(np.stack(magnifications), axis=0)
 
+    # (width / 2, height / 2) = (c_x, c_y)
     principal_point = np.asarray(res, dtype=float) / 2
     poses, errors = [], []
     for P, uv in zip(object_points, image_points):

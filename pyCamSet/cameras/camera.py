@@ -24,7 +24,25 @@ from pyCamSet.optimisation.compiled_helpers import nb_undistort_arr
 
 from numba import njit, prange
 
+# ``Camera.res`` is ``(width, height)`` in pixels -- OpenCV's ``imageSize``
+# order, not a numpy image shape.  The name a saved set records for this order
+# is ``pyCamSet.utils.saving.RES_ORDER``, the one definition of it.
+
 DEFAULT_RES = [1000, 1000]
+
+
+def res_from_image_shape(shape) -> tuple[int, int]:
+    """
+    The ``Camera.res`` for an image of numpy ``shape``.
+
+    Detection reports each camera's resolution as the image shape,
+    ``(height, width)``; a camera stores ``(width, height)``.  This is the one
+    place that converts between them.
+
+    :param shape: an image shape, ``(height, width[, channels])``
+    :return: ``(width, height)``
+    """
+    return int(shape[1]), int(shape[0])
 DEFAULT_CAMERA_MATRIX = np.array(
     [[1000, 0.0, DEFAULT_RES[0] / 2],
      [0.0, 1000, DEFAULT_RES[1] / 2],
@@ -79,6 +97,13 @@ class Camera:
     An object oriented camera model.
     Using the pinhole camera model this represents the position and imaging characteristics
     of a camera.
+
+    ``res`` is the sensor size as ``(width, height)`` in pixels -- the order
+    OpenCV calls ``imageSize`` and COLMAP writes, and the order of the pixel
+    coordinates ``(u, v)`` it bounds: a pixel is on the sensor when
+    ``0 <= u < res[0]`` and ``0 <= v < res[1]``.  It is *not* a numpy image
+    shape, which is ``(height, width)``; convert one with
+    :func:`res_from_image_shape`.
     """
 
     def __init__(self,
@@ -93,7 +118,7 @@ class Camera:
         
         :param extrinsic: the camera extrinsic matrix
         :param intrinsic: the camera intrinsic matrix
-        :param res: the camera resoluiton
+        :param res: the camera resolution, ``(width, height)`` in pixels
         :param distortion_coefs: 5 parameter distortion model from camera
         :param name: the camera name
         :param minimal: lazy generation of sensor map creation for high resolution cameras intensive work loads
@@ -190,6 +215,10 @@ class Camera:
         '''
         transforms the returned sensormap to be in world coordinates relative to position and view, rather than camera
         gives the sensor map as an offset from the prinicple position because this is much easier.
+
+        The map is indexed ``[u, v]``, so its first two axes are ``res`` =
+        ``(width, height)``; ``get_image_cord_sensor_map`` gives the image-shaped
+        ``[v, u]`` view.
         '''
         pts = np.ones(self.res)[..., np.newaxis]
         # big boy intrinsic multiplication
@@ -307,11 +336,11 @@ class Camera:
 
     def _cam_fov(self):
         """
-        Calculates the fov of the camera
+        Calculates the horizontal fov of the camera
 
-        :return the fov
+        :return the fov, in degrees, across the sensor width
         """
-        return 180 / m.pi * (2 * np.arctan2(self.res[1] / 2,
+        return 180 / m.pi * (2 * np.arctan2(self.res[0] / 2,
                                             self.intrinsic[0, 0]))
 
     def _calc_projection_matrix(self):

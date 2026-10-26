@@ -1850,6 +1850,25 @@ def test_the_detection_options_follow_the_detector_charuco2_forces():
 
 
 @pytest.mark.gui
+def test_a_grid_board_offers_its_corner_refinements_on_the_form():
+    from PySide6.QtWidgets import QComboBox
+
+    tab = _phase1_tab()
+    tab._target_form.set_target_type("ChArUco2")
+    combo = tab._detection_option_widgets["corner_refinement"]
+    assert isinstance(combo, QComboBox)
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "Newton saddle (default)", "aruco2 cornerSubPix only"]
+    assert combo.currentIndex() == 0
+
+    # What the form reads back is the option's value, not its label.
+    combo.setCurrentIndex(1)
+    detector = tab._current_detector_parameterisation()
+    assert detector.parse({"corner_refinement": combo.currentText()}) == {
+        "corner_refinement": "cornersubpix"}
+
+
+@pytest.mark.gui
 @pytest.mark.parametrize("phase", ["phase_2_intrinsics", "phase_3_bundle_adjustment"])
 def test_phases_2_and_3_read_with_the_detector_of_the_run_they_adopt(phase):
     from pyCamSet.gui.shared_functions import DETECTOR_INHERIT

@@ -143,7 +143,12 @@ class rigidTform3d(abstract_function_block):
     @njit(ftemplate, cache=True)
     def compute_jac(params, inp, output, memory): 
         numba_rodrigues_jac(params[:3], memory) #will use 27 points
-        output[:] = 0 
+        # Zeroed by hand rather than with a slice fill.  This body is inlined
+        # into the parfor'd kernel, where a statically bounded slice setitem
+        # leaves numba's array analysis emitting a dead static_slice_size that
+        # the gufunc prelowering pass then rejects as illegal IR.
+        for i_out in range(output.shape[0]):
+            output[i_out] = 0
 
         for op in range(3):
             for ang_comp in range(3):
@@ -184,7 +189,9 @@ class template_points(rigidTform3d):
     @njit(ftemplate, cache=True)
     def compute_jac(params, inp, output, memory): 
         numba_rodrigues_jac(params[:3], memory) #will use 27 points
-        output[:18] = 0 
+        # explicit fill -- see rigidTform3d.compute_jac
+        for i_out in range(output.shape[0]):
+            output[i_out] = 0
         for op in range(3):
             for ang_comp in range(3):
                 k = op * 6 + ang_comp
@@ -223,7 +230,9 @@ class free_point(abstract_function_block):
     @staticmethod
     @njit(ftemplate, cache=True)
     def compute_jac(params, inp, output, memory=0):
-        output[:] = 0
+        # explicit fill -- see rigidTform3d.compute_jac
+        for i_out in range(output.shape[0]):
+            output[i_out] = 0
         output[0] = 1
         output[4] = 1
         output[8] = 1
@@ -364,7 +373,9 @@ class telecentric_extrinsic(rigidTform3d):
     @njit(ftemplate, cache=True)
     def compute_jac(params, inp, output, memory):
         numba_rodrigues_jac(params[:3], memory)  # uses all 27
-        output[:18] = 0
+        # explicit fill -- see rigidTform3d.compute_jac
+        for i_out in range(output.shape[0]):
+            output[i_out] = 0
 
         for op in range(3):
             for ang_comp in range(3):

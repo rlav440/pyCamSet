@@ -145,6 +145,9 @@ def _restore_native_coordinates(detection: ImageDetection, scale: float) -> Imag
     corners: detector pixel ``u`` is centred on native ``(u + 0.5) / scale - 0.5``.
     Dividing by the scale alone would shift every point by
     ``0.5 / scale - 0.5`` native pixels (-1.5 px at the default 0.25).
+
+    The rule holds in the pixel-centre frame, which every target's points
+    are returned in whichever OpenCV is installed.
     """
     if scale == 1.0 or not detection.has_data:
         return detection

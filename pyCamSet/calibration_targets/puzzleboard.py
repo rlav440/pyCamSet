@@ -314,11 +314,17 @@ class PuzzleBoard(AbstractTarget):
             raise ValueError("PuzzleBoard detector positions must have shape (n, 2).")
         if coordinates.ndim != 2 or coordinates.shape[1] != 2:
             raise ValueError("PuzzleBoard detector coordinates must have shape (n, 2).")
+        # Only the printed window: a key outside it is a misdecode (a rotated
+        # or shifted reading of the code), never a corner of this board, and
+        # every one of the 501 x 501 keys has an object point, so it would
+        # otherwise reach the solve as a wrong correspondence. Rows run down
+        # the page from start_y, columns across from start_x, as the cube and
+        # icosahedron already require of their face windows.
         valid = (
-            (positions[:, 0] >= 0)
-            & (positions[:, 0] < _CODE_SIZE)
-            & (positions[:, 1] >= 0)
-            & (positions[:, 1] < _CODE_SIZE)
+            (positions[:, 0] >= self.start_y)
+            & (positions[:, 0] < self.start_y + self.num_squares_y)
+            & (positions[:, 1] >= self.start_x)
+            & (positions[:, 1] < self.start_x + self.num_squares_x)
         )
         positions = positions[valid]
         coordinates = coordinates[valid]

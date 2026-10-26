@@ -83,6 +83,17 @@ accept. A recovered patch narrower than this is discarded before its position
 is decoded. Raising it drops small or oblique views of the board; lowering it
 admits patches too small to decode reliably, and risks mislabelled keys.
 
+What the detector reports is filtered before it is used. A key decoded at more
+than one place in one image is dropped (every copy: nothing says which is
+right), and a key outside the board's printed window — rows `start_y` to
+`start_y + num_squares_y - 1`, columns `start_x` to `start_x + num_squares_x - 1`
+— is dropped as a misdecode, since no corner of this board carries it. The
+window check catches whole-patch rotations and shifts of the code, but not a
+shift small enough to stay inside the window, so it is weaker on a large window
+and does nothing on a board printed over the full 501 × 501 field.
+Detection runs one image at a time per process: the underlying package keeps
+shared state, so concurrent calls from several threads are serialised.
+
 ## Calibrating with it
 
 ```python

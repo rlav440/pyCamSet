@@ -36,7 +36,6 @@ from pyCamSet.calibration_targets.core.abstract_target import EXPORT_KINDS
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     detect_grid_board_corners,
     dictionary_marker_bits,
-    opencv_charuco_pixel_offset,
     grid_board_marker_bits,
     render_grid_board_image,
 )
@@ -78,14 +77,13 @@ def _expected_pixels(target: ChArUco2, px_per_mm: float,
     """Where each corner is in a raster whose pixel (0, 0) starts at the
     band's outer corner, less ``border_mm``.
 
-    ``detect_grid_board_corners`` reports image points in the installed
-    OpenCV's ``CharucoDetector`` convention (see its docstring): a corner on
-    the boundary between pixels n-1 and n is at n - 0.5 in the
-    pixel-*centre* convention, plus ``opencv_charuco_pixel_offset()``.
+    ``detect_grid_board_corners`` reports image points in the pixel-*centre*
+    frame (see its docstring): a corner on the boundary between pixels n-1
+    and n is at n - 0.5.
     """
     band_mm = target.square_size * 1000.0 / 4
     return ((_corner_positions_mm(target) + band_mm + border_mm) * px_per_mm
-            - 0.5 + opencv_charuco_pixel_offset())
+            - 0.5)
 
 
 def _svg_size_mm(text: str) -> tuple[float, float]:

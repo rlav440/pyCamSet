@@ -26,9 +26,15 @@ import numpy as np
 from pyCamSet.calibration_targets import TargetDetection
 from pyCamSet.calibration_targets.core.abstract_target import COORDINATE_MAPPING
 from pyCamSet.calibration_targets.core.target_registry import spec_of
+from pyCamSet.calibration_targets.markers.aruco2 import CHARUCO_SEED_REVISION
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     CHARUCO2_DETECTOR,
     GRID_BOARD_CORNER_REVISION,
+    PIXEL_CONVENTION,
+)
+from pyCamSet.calibration_targets.markers.puzzleboard import (
+    PUZZLEBOARD_DETECTOR,
+    PUZZLEBOARD_KEY_REVISION,
 )
 from pyCamSet.utils.paths import long_path
 
@@ -92,11 +98,28 @@ def _target_identity(calibration_target, cam_names: list[str],
     except ValueError:
         return None
     identity = {"target_spec": spec, "cam_names": sorted(cam_names), "n_lim": n_lim}
+    if getattr(calibration_target, "marker_backend", None) == "aruco2":
+        # A classic ChArUco/Ccube/CIco read with aruco2: its corners depend
+        # on how the marker quads are seeded, so a cache written before the
+        # current revision (no key, or an older one) is a miss.
+        identity["aruco2_charuco_seed"] = CHARUCO_SEED_REVISION
     if CHARUCO2_DETECTOR in (getattr(type(calibration_target), "DETECTOR_BACKENDS", None) or {}).values():
         # A ChArUco2/Ccube2/CIco2 grid board: its corners depend on how the
         # refused ones are re-seeded, so a cache written before the current
         # revision (no key, or an older one) is a miss.
         identity["aruco2_grid_board_corners"] = GRID_BOARD_CORNER_REVISION
+    if PUZZLEBOARD_DETECTOR in (getattr(type(calibration_target), "DETECTOR_BACKENDS", None) or {}).values():
+        # A PuzzleBoard, PuzzleBoardCube or PuzzleBoardIco: which decoded keys
+        # it keeps has changed (duplicates, the planar printed window), so a
+        # cache written before the current revision is a miss.
+        identity["puzzleboard_keys"] = PUZZLEBOARD_KEY_REVISION
+    else:
+        # Every other target (today the ChArUco family): its corners are
+        # pixel-centre whichever OpenCV is installed. A cache written before
+        # the frame was recorded has no such field, so it is a miss rather
+        # than a possible silent 0.5 px shift. PuzzleBoard points were always
+        # pixel-centre.
+        identity["pixel_convention"] = PIXEL_CONVENTION
     if preprocessing is not None:
         identity["preprocessing"] = dict(preprocessing)
         # Version of the detector-to-native coordinate mapping: caches written

@@ -40,6 +40,7 @@ aruco2 = pytest.importorskip("aruco2")
 
 import pyCamSet.calibration_targets.markers.aruco2 as aruco2_backend
 from pyCamSet.calibration_targets.markers import aruco2_gridboard
+from pyCamSet.calibration_targets.markers.aruco_opencv import charuco_corners_to_pixel_centre
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     detect_grid_board_corners,
     opencv_charuco_pixel_offset,
@@ -106,13 +107,12 @@ def _render_and_degrade(
 
 
 def _analytic_corners(corner_ids: np.ndarray, grid_w: int, square_px: float, band_px: float) -> np.ndarray:
-    """Where a corner truly sits, in the convention
+    """Where a corner truly sits, in the pixel-*centre* frame
     ``detect_grid_board_corners`` returns: a corner on the boundary between
-    pixels n-1 and n is at n - 0.5 in the pixel-*centre* convention, plus
-    the installed OpenCV's ``opencv_charuco_pixel_offset()``. Compare its
-    output against this directly, with no further shift."""
+    pixels n-1 and n is at n - 0.5. Compare its output against this
+    directly, with no further shift."""
     lattice = np.stack([corner_ids % (grid_w + 1), corner_ids // (grid_w + 1)], axis=-1)
-    return band_px + lattice * square_px - 0.5 + opencv_charuco_pixel_offset()
+    return band_px + lattice * square_px - 0.5
 
 
 # -- 1. ghost regression --------------------------------------------------------
@@ -124,17 +124,20 @@ def _ghost_case(n: int, bit: int, ids: list[int]) -> tuple[np.ndarray, int, floa
     return image, square_px, square_px / 4.0
 
 
-@pytest.mark.parametrize("n, ids, expected_n", [
-    (3, [0, 1, 2, 3, 688, 5, 6, 7, 17], 13),
-    (5, [*range(100, 125)], 33),
+@pytest.mark.parametrize("n, ids, expected_n, corrupted", [
+    (3, [0, 1, 2, 3, 688, 5, 6, 7, 17], 13, 3),
+    (5, [*range(100, 125)], 34, 2),
 ])
-def test_ghost_regression_is_removed_by_default(n, ids, expected_n) -> None:
+def test_ghost_regression_is_removed_by_default(n, ids, expected_n, corrupted) -> None:
     """
     aruco2's known false-marker-detection ghosts (marker 688 of DICT_4X4_1000
     decoding a patch inside its own square as marker 17) corrupt 3 corners of
     a board carrying both. With refinement and validation on by default,
-    those 3 are gone and everything left is accurate; disabled, the 3
-    corrupted corners come back at 19-68 px off (stage A task A3).
+    the corrupted ones are gone and everything left is accurate; without
+    validation they come back at 19-68 px off (stage A task A3). On the 5x5
+    board, re-seeding a refused corner from its neighbours puts one of the
+    three (gid 22, 18.7 px off in aruco2's output) back on its saddle, so
+    only two remain for validation to remove and one more corner is kept.
     """
     if n == 5:
         ids = list(ids)
@@ -148,14 +151,14 @@ def test_ghost_regression_is_removed_by_default(n, ids, expected_n) -> None:
     error = np.linalg.norm(points - truth, axis=1)
     assert error.max() < 0.5, f"max error {error.max():.4f} px"
 
-    # Proves validation matters: without it, the same 3 ghost corners survive,
-    # tens of pixels off.
+    # Proves validation matters: without it, the ghost corners survive, tens
+    # of pixels off.
     raw_ids, raw_points = detect_grid_board_corners(
         image, (n, n), _DICT_4X4, 1.0, ids=ids, validate=False)
     raw_truth = _analytic_corners(raw_ids, n, square_px, band_px)
     raw_error = np.linalg.norm(raw_points - raw_truth, axis=1)
     assert raw_error.max() > 15.0
-    assert (raw_error > 0.5).sum() == 3
+    assert (raw_error > 0.5).sum() == corrupted
 
 
 # -- 2. validator on exact distorted lattices -----------------------------------
@@ -353,8 +356,8 @@ def test_an_occluder_bar_does_not_move_a_corner_more_than_1px() -> None:
     lattice_cr = np.stack([corner_ids % 13, corner_ids // 13], axis=-1)
     index = _index_by_cr(lattice_cr)
     assert target_cr in index
-    # Pixel-centre truth, moved to the installed OpenCV's convention.
-    truth = np.array([cx, cy]) - 0.5 + opencv_charuco_pixel_offset()
+    # Pixel-centre truth.
+    truth = np.array([cx, cy]) - 0.5
     error = float(np.linalg.norm(points[index[target_cr]] - truth))
     assert error < 1.0, f"occluded corner moved {error:.3f} px"
 
@@ -374,14 +377,15 @@ def test_pixel_convention_matches_opencv_charuco() -> None:
     charuco_image = board.generateImage((6 * square_px, 6 * square_px))
     detector = cv2.aruco.CharucoDetector(board)
     ch_points, ch_ids, _, _ = detector.detectBoard(charuco_image)
-    ch_points, ch_ids = ch_points.reshape(-1, 2), ch_ids.reshape(-1)
+    # The live CharucoDetector reports opencv_charuco_pixel_offset() off the
+    # pixel-centre frame (0.5 before OpenCV 4.14, 0 from it); this checks that the
+    # conversion every ChArUco target applies lands it on the truth.
+    ch_points = np.asarray(charuco_corners_to_pixel_centre(ch_points)).reshape(-1, 2)
+    ch_ids = ch_ids.reshape(-1)
     chess_mm = np.asarray(board.getChessboardCorners()).reshape(-1, 3)[:, :2]
     # A corner on the boundary of pixels n-1 and n is at n - 0.5 in the
-    # pixel-centre convention; the live CharucoDetector reports it
-    # opencv_charuco_pixel_offset() further on (0.5 before OpenCV 4.14, 0 from it),
-    # so this also checks that helper against the installed OpenCV.
-    charuco_truth = (chess_mm / (square_px / 1000.0) * square_px
-                     - 0.5 + opencv_charuco_pixel_offset())
+    # pixel-centre frame.
+    charuco_truth = chess_mm / (square_px / 1000.0) * square_px - 0.5
     charuco_error = np.linalg.norm(ch_points - charuco_truth[ch_ids], axis=1)
 
     bit_size = square_px // 4  # DICT_4X4: marker_bits == 4
@@ -402,6 +406,138 @@ def test_opencv_charuco_pixel_offset_follows_the_version(version, offset) -> Non
     convention, 4.14's and 5.0's the pixel-centre one (measured on synthetic renders)."""
     assert opencv_charuco_pixel_offset(version) == offset
     assert opencv_charuco_pixel_offset() == opencv_charuco_pixel_offset(cv2.__version__)
+
+
+# -- 10. outer-corner parity and re-seeding refused corners --------------------------
+
+
+def _without_reseed(monkeypatch) -> None:
+    """Switch :func:`reseed_refused_corners` off, to prove it matters."""
+    monkeypatch.setattr(aruco2_gridboard, "reseed_refused_corners",
+                        lambda image, lattice, points, accepted, grid_size: (points, accepted))
+
+
+def _warped_render(grid_size, square_px, angle_deg, shape=(700, 900), supersample=6):
+    """
+    A grid board rotated and scaled into an image, with exactly known corners.
+
+    aruco2's raster at bit size 3 (12 px squares for a 4x4 dictionary) puts
+    every printed edge on a whole pixel, so a nearest-neighbour lookup in it
+    is the vector board; it is warped at ``supersample`` x the output
+    resolution and box-averaged down, an area-integrating sensor.
+
+    :return: ``(image, truth)`` -- ``truth`` the ``(N, 2)`` position of
+        every lattice corner, row-major, in the pixel-centre frame
+        ``detect_grid_board_corners`` returns.
+    """
+    master = np.asarray(render_grid_board_image(grid_size, _DICT_4X4, 3), dtype=np.float32)
+    square, band = 12, 3.0
+    h, w = master.shape
+    scale, theta = square_px / square, np.radians(angle_deg)
+    # master pixel-centre coordinates -> output pixel-centre coordinates
+    warp = np.array([[1, 0, shape[1] / 2], [0, 1, shape[0] / 2], [0, 0, 1.0]]) @ np.array([
+        [scale * np.cos(theta), -scale * np.sin(theta), 0],
+        [scale * np.sin(theta), scale * np.cos(theta), 0], [0, 0, 1.0]]) @ np.array(
+        [[1, 0, -w / 2], [0, 1, -h / 2], [0, 0, 1.0]])
+    s = supersample
+    to_hi = np.array([[s, 0, (s - 1) / 2], [0, s, (s - 1) / 2], [0, 0, 1.0]])
+    hi = cv2.warpPerspective(master, to_hi @ warp, (shape[1] * s, shape[0] * s),
+                             flags=cv2.INTER_NEAREST, borderValue=255)
+    image = np.round(cv2.resize(hi, (shape[1], shape[0]), interpolation=cv2.INTER_AREA)).astype(np.uint8)
+    cols, rows = np.meshgrid(np.arange(grid_size[0] + 1), np.arange(grid_size[1] + 1))
+    edge = np.stack([band + cols.ravel() * square, band + rows.ravel() * square], axis=-1) - 0.5
+    return image, cv2.perspectiveTransform(edge[None], warp)[0]
+
+
+@pytest.mark.parametrize("grid_size", [(3, 3), (4, 3), (3, 4), (4, 4), (5, 7), (8, 6), (9, 5), (6, 9)])
+def test_outer_l_corners_are_the_outer_corners_aruco2_prints_as_l_junctions(grid_size) -> None:
+    """Read each outer corner's four quadrants off aruco2's own raster: an X
+    has matching diagonals that differ from each other, anything else is an
+    L. ``outer_l_corners`` must name exactly the L ones (and top-left is
+    always an X, so every board has at least two X outer corners)."""
+    grid_w, grid_h = grid_size
+    raster = np.asarray(render_grid_board_image(grid_size, _DICT_4X4, 3)) > 128
+    l_found = set()
+    for col, row in ((0, 0), (grid_w, 0), (0, grid_h), (grid_w, grid_h)):
+        x, y = 3 + 12 * col, 3 + 12 * row  # the corner's edge coordinate
+        q = [raster[y + dy, x + dx] for dx, dy in ((-1, -1), (0, -1), (0, 0), (-1, 0))]
+        if not (q[0] == q[2] and q[1] == q[3] and q[0] != q[1]):
+            l_found.add((col, row))
+    assert l_found == {tuple(map(int, q)) for q in aruco2_gridboard.outer_l_corners(grid_w, grid_h)}
+    assert (0, 0) not in l_found
+    assert 4 - len(l_found) == (4 if grid_w % 2 and grid_h % 2 else 2)
+
+
+def test_outer_l_corners_are_placed_from_their_neighbours(monkeypatch) -> None:
+    """An 8x6 board's top-right and bottom-left outer corners are L-junctions,
+    which the saddle search refuses; under blur and gamma aruco2's own
+    position for them is over a pixel off. Placed from their refined
+    neighbours they land within 0.05 px, and no other corner moves."""
+    image, square_px, band_px = _render_and_degrade((8, 6), bit_size=12, blur_sigma=1.6, gamma=2.2)
+    image = np.pad(image, 40, constant_values=255)
+    l_ids = {8, 54}
+
+    def errors():
+        ids, points = detect_grid_board_corners(image, (8, 6), _DICT_4X4, 1.0)
+        truth = _analytic_corners(ids, 8, square_px, band_px) + 40
+        return dict(zip(ids.tolist(), np.linalg.norm(points - truth, axis=1)))
+
+    with_reseed = errors()
+    _without_reseed(monkeypatch)
+    without = errors()
+    assert l_ids <= set(with_reseed) and l_ids <= set(without)
+    assert max(with_reseed[i] for i in l_ids) < 0.05
+    assert min(without[i] for i in l_ids) > 1.0
+    others = set(with_reseed) - l_ids
+    assert others == set(without) - l_ids
+    assert max(abs(with_reseed[i] - without[i]) for i in others) < 1e-9
+
+
+def test_reseeding_recovers_outer_corners_pushed_past_the_search_cap(monkeypatch) -> None:
+    """On 18 px squares aruco2's outward push of black-marker corners leaves
+    the outer corners further from their saddle than the search may move, so
+    they are refused, kept biased, and then dropped by validation. Searched
+    again from where their neighbours put them, all four come back within
+    0.3 px, and no corner returned either way is more than 0.3 px off."""
+    image, truth = _warped_render((9, 5), square_px=18, angle_deg=40)
+    outer = {0, 9, 50, 59}
+
+    ids, points = detect_grid_board_corners(image, (9, 5), _DICT_4X4, 1.0)
+    error = dict(zip(ids.tolist(), np.linalg.norm(points - truth[ids], axis=1)))
+    assert outer <= set(error)
+    assert max(error.values()) < 0.3
+
+    _without_reseed(monkeypatch)
+    ids_off, points_off = detect_grid_board_corners(image, (9, 5), _DICT_4X4, 1.0)
+    assert not outer & set(ids_off.tolist())
+    assert set(ids_off.tolist()) < set(ids.tolist())
+    assert np.linalg.norm(points_off - truth[ids_off], axis=1).max() < 0.3
+
+
+def test_reseeding_ignores_a_prediction_from_a_wrong_neighbour() -> None:
+    """A refused corner is searched again only from a homography its
+    neighbours all agree with: one neighbour 3 px off leaves the corner
+    exactly where it was, while the same corner with honest neighbours is
+    moved onto its saddle."""
+    image, square_px, band_px = _render_and_degrade((6, 6), bit_size=12, blur_sigma=0.0, gamma=1.0)
+    cols, rows = np.meshgrid(np.arange(7), np.arange(7))
+    lattice_cr = np.stack([cols.ravel(), rows.ravel()], axis=-1)
+    truth = band_px + lattice_cr * float(square_px) - 0.5
+    target = 3 * 7 + 3  # corner (3, 3)
+    start = truth.copy()
+    start[target] += (1.5, -1.0)  # a refused corner, kept off its saddle
+    accepted = np.ones(len(start), dtype=bool)
+    accepted[target] = False
+
+    moved, ok = aruco2_gridboard.reseed_refused_corners(image, lattice_cr, start, accepted, (6, 6))
+    assert ok[target]
+    assert np.linalg.norm(moved[target] - truth[target]) < 0.05
+
+    wrong = start.copy()
+    wrong[3 * 7 + 4] += (3.0, 0.0)  # neighbour (4, 3), still marked accepted
+    kept, ok_wrong = aruco2_gridboard.reseed_refused_corners(image, lattice_cr, wrong, accepted, (6, 6))
+    assert not ok_wrong[target]
+    assert np.array_equal(kept[target], wrong[target])
 
 
 # -- 2b. validator on exact distorted lattices, beyond stage A's envelope -----------
@@ -597,4 +733,16 @@ def test_a_grid_board_cache_from_an_earlier_corner_revision_is_a_miss(tmp_path, 
         tmp_path, {"type": type_}, revision=aruco2_gridboard.GRID_BOARD_CORNER_REVISION - 1)
     assert cache_matches(path, target, ["cam0"], None) is False
     target, path = _grid_board_cache(tmp_path, {"type": type_})
+    assert cache_matches(path, target, ["cam0"], None) is True
+
+
+@pytest.mark.parametrize("spec", [
+    {"type": "ChArUco", "marker_backend": "aruco1"},
+    {"type": "ChArUco", "marker_backend": "aruco2"},
+    {"type": "Ccube", "marker_backend": "aruco2"},
+], ids=["ChArUco-aruco1", "ChArUco-aruco2", "Ccube-aruco2"])
+def test_classic_targets_caches_do_not_depend_on_the_grid_board_revision(tmp_path, spec):
+    from pyCamSet.calibration.detection_cache import cache_matches
+    target, path = _grid_board_cache(
+        tmp_path, spec, revision=aruco2_gridboard.GRID_BOARD_CORNER_REVISION + 7)
     assert cache_matches(path, target, ["cam0"], None) is True

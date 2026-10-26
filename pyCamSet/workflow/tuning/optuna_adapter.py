@@ -68,8 +68,9 @@ def suggest_for_row(
     if not row.optimise:
         return None
     if parameter.choices:
-        return trial.suggest_categorical(
-            row.key, [choice.value for choice in parameter.choices])
+        # Only the searchable choices: bounds cannot exclude a categorical
+        # value, and a choice may be fine to fix but wrong to search over.
+        return trial.suggest_categorical(row.key, parameter.search_choices)
     if row.lower is None or row.upper is None:
         return None
     lo, hi = parameter.cast(row.lower), parameter.cast(row.upper)

@@ -37,7 +37,6 @@ from pyCamSet.calibration_targets.core.target_registry import (
 )
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     dictionary_marker_bits,
-    opencv_charuco_pixel_offset,
     render_grid_board_image,
 )
 
@@ -65,10 +64,8 @@ def _texture_pixels(cube: Ccube2, local_xy: np.ndarray) -> np.ndarray:
     """Face-local metres to texture pixel coordinates, in the rasteriser's
     own pixel-*centre* convention (``layout.rasterise_rectangles``: pixel
     j's centre sits at ``(j + 0.5) / px_per_unit``), so a point on the
-    boundary between pixels n-1 and n is at n - 0.5. This describes how the
-    texture is drawn, not what a detector reports -- ``detect_grid_board_
-    corners`` reports the installed OpenCV's ``CharucoDetector`` convention
-    (its docstring), ``opencv_charuco_pixel_offset()`` on from this. Used
+    boundary between pixels n-1 and n is at n - 0.5. ``detect_grid_board_
+    corners`` reports corners in the same pixel-centre frame. Used
     unmodified to build homography control points for warping a texture (a
     rasterisation fact); callers comparing this against a detection add the
     offset themselves.
@@ -312,9 +309,8 @@ def test_every_face_is_detected_as_itself(n_points, border_fraction) -> None:
     lattice puts it -- including at the smallest border the band fits in,
     where a tab meets the face's edge line."""
     cube = Ccube2(length=40.0, n_points=n_points, border_fraction=border_fraction)
-    # detect_grid_board_corners reports the installed OpenCV's convention
-    # (see its docstring), opencv_charuco_pixel_offset() from _texture_pixels'.
-    expected = _texture_pixels(cube, _lattice(cube)) + opencv_charuco_pixel_offset()
+    # detect_grid_board_corners reports _texture_pixels' pixel-centre frame.
+    expected = _texture_pixels(cube, _lattice(cube))
     for k, texture in enumerate(cube.textures):
         detection = cube.find_in_image(texture)
         assert detection.data_len == (n_points + 1) ** 2, f"face {k}"
@@ -448,7 +444,6 @@ def test_a_photographed_cube_is_detected_where_its_point_data_projects(direction
     for k in visible:
         assert int(np.sum(keys[:, 0] == k)) == (n + 1) ** 2, f"face {k}"
     expected = _project(cube.point_data[keys[:, 0], keys[:, 1]], intrinsic, rotation, translation)
-    expected = expected + opencv_charuco_pixel_offset()  # projectPoints is pixel-centre
     error = np.linalg.norm(detection.image_points - expected, axis=1)
     assert error.max() < 1.0
 
@@ -618,10 +613,9 @@ def test_a_printed_net_is_detected_face_by_face_with_its_numbers_on(tmp_path: Pa
         cube.apply_affine_xy(lattice[[gid]], cube.net_affine_for_face(face))[0]
         for face, gid in keys])
     # A boundary between pixels n-1 and n is at n - 0.5 in the pixel-centre
-    # convention; detect_grid_board_corners adds the installed OpenCV's offset
-    # (see _texture_pixels).
+    # frame detect_grid_board_corners reports (see _texture_pixels).
     expected = ((expected - net_min + border_mm / 1000) * 1000 * px_per_mm
-                - 0.5 + opencv_charuco_pixel_offset())
+                - 0.5)
     assert np.abs(detection.image_points - expected).max() < 1.0
 
 

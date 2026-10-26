@@ -36,6 +36,7 @@ from pyCamSet.calibration_targets.ccube import Ccube
 from pyCamSet.calibration_targets.markers.aruco_opencv import (
     ARUCO_OPENCV_DETECTOR,
     charuco_corners_to_pixel_centre,
+    detect_board,
 )
 
 
@@ -45,21 +46,16 @@ def _count(det):
     return len(det.keys)
 
 
-def _gt_corner_map(gt_c, gt_ids):
-    """``{corner_id: (2,) float xy}`` from a raw ``detectBoard`` return,
-    in the pixel-centre frame the targets return (OpenCV before 4.14 reports
-    it half a pixel off; see ``charuco_corners_to_pixel_centre``).
-
-    OpenCV 4.x returns ``(N, 1, 2)`` corners and ``(N, 1)`` ids; OpenCV 5
-    squeezes the singleton axis to ``(N, 2)`` / ``(N,)``. Indexing ``[:, 0]``
-    on the 5.x shape silently takes the x column alone, so flatten both to
-    the same shape before pairing them.
-    """
-    if gt_c is None or gt_ids is None:
-        return {}
-    return {int(i): pt for i, pt in zip(
-        np.asarray(gt_ids).reshape(-1),
-        np.asarray(charuco_corners_to_pixel_centre(gt_c), dtype=float).reshape(-1, 2))}
+def _gt_corner_map(gt_corners, gt_ids):
+    """``{corner_id: (2,) float point}`` from ``CharucoDetector.detectBoard``
+    returns, on either OpenCV major version: OpenCV 4 returns (N, 1, 2)
+    corners and (N, 1) ids, OpenCV 5 squeezes them to (N, 2) and (N,).
+    Indexing ``corners[:, 0]`` is only right on OpenCV 4 -- on OpenCV 5 it
+    picks each corner's x alone, which then broadcasts against a full (x, y)
+    point and reports errors of ~|y - x|, hundreds of pixels."""
+    return {int(i): np.asarray(pt, float)
+            for i, pt in zip(np.asarray(gt_ids).reshape(-1),
+                             np.asarray(gt_corners, float).reshape(-1, 2))}
 
 
 def _true_markers_for_board(board, img):
@@ -1151,7 +1147,7 @@ def test_accuracy_vs_charuco_detector():
     # 3.5px threshold.
     for top_frac in (0.6, 0.4):
         warped = _trapezoid_warp(img, top_frac)
-        gt_c, gt_ids, _, _ = gt_det.detectBoard(warped)
+        gt_c, gt_ids, _, _ = detect_board(gt_det, warped)
         det = b.find_in_image(warped)
         assert _count(det) > 0, "aruco2 returned no corners on the warped image"
         assert gt_ids is not None and len(gt_ids) > 0
@@ -1211,7 +1207,7 @@ def test_charuco_aruco2_agrees_tightly_with_aruco1_on_clean_render():
     b1 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0)
     gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
         b1.board, ARUCO_OPENCV_DETECTOR.resolve(None))
-    gt_c, gt_ids, _, _ = gt_det.detectBoard(img)
+    gt_c, gt_ids, _, _ = detect_board(gt_det, img)
     det = b2.find_in_image(img)
     assert _count(det) > 0
     gt_map = _gt_corner_map(gt_c, gt_ids)
@@ -1231,7 +1227,7 @@ def test_ccube_aruco2_agrees_tightly_with_aruco1_on_clean_render():
     c1 = Ccube(n_points=5, length=20.0)
     gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
         c1.boards[0], ARUCO_OPENCV_DETECTOR.resolve(None))
-    gt_c, gt_ids, _, _ = gt_det.detectBoard(tex)
+    gt_c, gt_ids, _, _ = detect_board(gt_det, tex)
     det = c2.find_in_image(tex)
     assert _count(det) > 0
     gt_map = _gt_corner_map(gt_c, gt_ids)
@@ -1264,7 +1260,7 @@ def test_charuco_aruco2_matches_aruco1_under_blur_noise_and_tilt():
     b1 = ChArUco(num_squares_x=5, num_squares_y=5, square_size=10.0)
     gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
         b1.board, ARUCO_OPENCV_DETECTOR.resolve(None))
-    gt_c, gt_ids, _, _ = gt_det.detectBoard(img)
+    gt_c, gt_ids, _, _ = detect_board(gt_det, img)
     det = b2.find_in_image(img)
     assert _count(det) > 0
     assert gt_ids is not None and len(gt_ids) > 0
@@ -1288,7 +1284,7 @@ def test_legacy_even_row_position_level_both_backends():
         assert _count(det) > 0, f"{backend}: no corners"
         gt_det = ARUCO_OPENCV_DETECTOR.build_detector(
             board.board, ARUCO_OPENCV_DETECTOR.resolve(None))
-        gt_c, gt_ids, _, _ = gt_det.detectBoard(img)
+        gt_c, gt_ids, _, _ = detect_board(gt_det, img)
         gt_map = _gt_corner_map(gt_c, gt_ids)
         errs = [float(np.linalg.norm(np.asarray(p, float) - gt_map[int(c)]))
                 for c, p in zip(np.asarray(det.keys).reshape(-1),
@@ -1668,3 +1664,40 @@ def test_the_detection_cache_follows_the_detector_a_real_target_is_read_with():
         assert detector_backend_of(target) == "aruco2"
         assert detection_cache_name(1, detector_backend_of(target)) == \
             "detected_datapoints_aruco2.npz"
+
+
+# Sweeps over the smaller and larger sizes carried over from isolated/education/integration.
+def test_validate_explain_fills_prediction_residual_and_tolerance():
+    """The education view's "Do the neighbours agree?" step reads what the
+    lattice check predicted for each corner.  On a regular lattice a clean
+    corner is predicted exactly where it sits, and a corner pushed well off
+    its neighbours shows a residual above its tolerance.  Passing ``explain``
+    must not change the keep decisions."""
+    from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
+        validate_grid_board_corners,
+    )
+
+    cr = np.array([[c, r] for r in range(7) for c in range(7)], dtype=np.int64)
+    pts = cr * 12.0 + 30.0
+    bad = int(np.flatnonzero((cr == [3, 3]).all(axis=1))[0])
+    pts[bad] += [6.0, -5.0]
+
+    info: dict = {}
+    keep = validate_grid_board_corners(cr, pts, explain=info)
+
+    assert np.array_equal(keep, validate_grid_board_corners(cr, pts)), (
+        "explain must not change the keep decisions")
+    assert not keep[bad]
+    assert info["predicted"].shape == (len(cr), 2)
+    assert info["residual"][bad] > info["tolerance"][bad], (
+        "the displaced corner should sit outside its own tolerance")
+    # Corner (0, 0)'s radius-2 neighbourhood does not reach the displaced corner,
+    # so its prediction is the lattice position it already occupies.
+    assert np.allclose(info["predicted"][0], pts[0], atol=1e-6)
+    assert info["residual"][0] < 1e-6
+    assert np.isfinite(info["tolerance"][0])
+    checked = np.isfinite(info["residual"])
+    assert np.allclose(
+        info["residual"][checked],
+        np.linalg.norm(info["predicted"][checked] - pts[checked], axis=1), atol=1e-6)
+    assert np.asarray(info["unsupported"]).dtype.kind == "i"

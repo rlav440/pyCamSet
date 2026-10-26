@@ -1053,6 +1053,7 @@ def detect_grid_board_corners(
         edge-margin cut, refinement and validation (see
         :mod:`pyCamSet.workflow.education_detect_explain`). Always in the
         unpadded image's pixel-centre frame, as the returned points are.
+        None changes nothing.
     :return: ``(corner_ids, image_points)`` -- ``corner_ids`` a 1D int array
         indexing :data:`ChArUco2.point_data`'s rows, ``image_points`` an
         ``(N, 2)`` float array of where each one was found -- or
@@ -1212,6 +1213,7 @@ def detect_grid_board_corners(
     if corner_ids.shape[0] == 0:
         return None, None
 
+    # Already in the pixel-centre frame: see the docstring's "Pixel convention" note.
     _append_phase1_trace(trace_stages, "grid_board_corners", corner_ids)
     if explain is not None:
         explain.update({"outcome": "found", "final_ids": corner_ids.copy(),

@@ -52,7 +52,7 @@ from pyCamSet.calibration_targets.core.parameters import (
 # path uses, so both are configured alike.
 from pyCamSet.calibration_targets.markers.aruco_opencv import (
     ARUCO_OPENCV_DETECTOR,
-    charuco_corners_to_pixel_centre,
+    detect_board,
 )
 from pyCamSet.calibration_targets.markers.legacy_probe import should_warn_legacy_mismatch
 
@@ -688,7 +688,8 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None, explain=N
         # inside OpenCV's own binding for this call.
         marker_ids = np.asarray(
             [mid for mid, _corners in marker_list], dtype=np.int32).reshape(-1, 1)
-        return detector.detectBoard(image, markerCorners=marker_corners, markerIds=marker_ids)
+        return detect_board(detector, image, markerCorners=marker_corners,
+                            markerIds=marker_ids)
 
     c_corners, c_ids, mloc, mid = _detect(good)
     if explain is not None:
@@ -708,7 +709,8 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None, explain=N
         return None, None
 
     ids = np.asarray(c_ids).reshape(-1).astype(np.int32)
-    pts = np.asarray(charuco_corners_to_pixel_centre(c_corners)).reshape(-1, 2).astype(np.float32)
+    # Already in the pixel-centre frame: detect_board moved them.
+    pts = np.asarray(c_corners).reshape(-1, 2).astype(np.float32)
     return ids, pts
 
 

@@ -374,3 +374,15 @@ def test_prefetch_delivers_a_decode_error_as_a_value_not_an_exception():
     prefetch.shutdown()
 
 
+def test_folder_tif_search_stops_at_the_first_tif_and_skips_flat_folders(tmp_path):
+    pytest.importorskip("PySide6")
+    from pyCamSet.gui.education_phase1 import _has_tif_below
+
+    flat = tmp_path / "flat"
+    flat.mkdir()
+    (flat / "a.jpg").write_bytes(b"x")
+    assert _has_tif_below(flat) is False
+    nested = flat / "sub" / "deeper"
+    nested.mkdir(parents=True)
+    (nested / "scan.TIF").write_bytes(b"x")
+    assert _has_tif_below(flat) is True

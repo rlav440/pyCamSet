@@ -58,6 +58,7 @@ nav:
       - Calibrating a camera set: how-to/calibrate.md
       - Working with camera sets: how-to/camera-sets.md
       - The graphical workflow: how-to/gui.md
+      - Simulated captures: how-to/simulate.md
   - Calibration Targets:
       - Choosing a target: targets/index.md
       - ChArUco: targets/charuco.md
@@ -85,6 +86,7 @@ nav:
       - calibration_targets: api/targets.md
       - optimisation: api/optimisation.md
       - reconstruction: api/reconstruction.md
+      - simulation: api/simulation.md
       - utils: api/utils.md
       - workflow: api/workflow.md
 

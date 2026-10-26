@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from io import BytesIO
 import logging
 from pathlib import Path
@@ -23,8 +24,18 @@ from pyCamSet.calibration_targets.markers.puzzleboard import (
     detect_puzzleboard_image,
 )
 from pyCamSet.calibration_targets.puzzleboard import _CODE_FIELD, _CODE_SIZE
-from pyCamSet.cameras import Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
 from pyCamSet.utils.general_utils import make_4x4h_tform
+
+# The cameras are imported where they are used, not here: importing a
+# target must not import pyvista, numba and matplotlib with it (see
+# core.abstract_target).  The names stay attributes of this module.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import Camera
+
+__getattr__ = lazy_attributes(__name__, {
+    "Camera": ("pyCamSet.cameras", "Camera"),
+})
 
 
 # These transforms use the same face order as the existing Ccube target: front, right, back, left, top, bottom.

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from io import BytesIO
 import logging
 from pathlib import Path
 
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 import svgwrite
@@ -21,7 +21,18 @@ from pyCamSet.calibration_targets.markers.puzzleboard import (
     PUZZLEBOARD_DETECTOR,
     detect_puzzleboard_image,
 )
-from pyCamSet.cameras import Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
+
+# The cameras and matplotlib are imported where they are used, not here:
+# importing a target must not import pyvista, numba and matplotlib with it
+# (see core.abstract_target).  The names stay attributes of this module.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import Camera
+
+__getattr__ = lazy_attributes(__name__, {
+    "Camera": ("pyCamSet.cameras", "Camera"),
+    "plt": ("matplotlib.pyplot", None),
+})
 
 
 _BASE_CODE = (
@@ -322,6 +333,7 @@ class PuzzleBoard(AbstractTarget):
 
     def plot(self, imres: tuple[int, int] = (1000, 1000)) -> None:
         """Display a rasterised preview of the vector target."""
+        from matplotlib import pyplot as plt
         from pyCamSet.utils.cairo_dll_helper import cairosvg_or_explain
         cairosvg = cairosvg_or_explain()
         # Preview the board, not the page it is centred on.  A board smaller

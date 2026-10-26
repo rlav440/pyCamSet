@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 import logging
 import math
 import os
@@ -51,8 +52,18 @@ from pyCamSet.calibration_targets.ccube import (
     TFORMS,
     Ccube,
 )
-from pyCamSet.cameras import Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
 from pyCamSet.utils.general_utils import make_4x4h_tform, downsample_valid
+
+# The cameras are imported where they are used, not here: importing a
+# target must not import pyvista, numba and matplotlib with it (see
+# core.abstract_target).  The names stay attributes of this module.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import Camera
+
+__getattr__ = lazy_attributes(__name__, {
+    "Camera": ("pyCamSet.cameras", "Camera"),
+})
 
 #: The smallest face a cube can have. A ChArUco2 board needs at least two
 #: markers each way to be a board (see ChArUco2's own minimum), and aruco2

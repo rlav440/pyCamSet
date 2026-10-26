@@ -2095,6 +2095,8 @@ def test_every_target_label_names_a_registered_target():
 
 @pytest.mark.gui
 def test_pcube_is_a_presentation_label_but_specs_keep_the_registry_name():
+    """The registry name is what a saved spec carries; ``pcube`` is only
+    ever what the combo shows for it."""
     from PySide6.QtWidgets import QApplication
 
     from pyCamSet.calibration_targets.core.target_registry import target_label

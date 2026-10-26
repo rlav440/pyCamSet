@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.education_preferences import education_mode_enabled
 from pyCamSet.gui.theme import set_text_role
 from pyCamSet.utils.paths import long_path
 from pyCamSet.workflow import phase3 as phase3_workflow
@@ -296,11 +297,11 @@ class Phase3Tab(QWidget):
         self._outliers_combo.setToolTip(
             "Concept: whether to reject outlier poses before bundle adjustment.\n"
             "Outlier poses are those whose initial reprojection error exceeds\n"
-            "a threshold (median + 20 px by default).\n\n"
+            "a threshold (median + 20·MAD by default).\n\n"
             "Default: n (disabled)\n"
             "Choices: n (disabled), y (enabled), ask (auto-resolved to y in GUI)\n"
             "Guidance: enable if you see a few images with very high initial\n"
-            "reprojection error (> median + 20 px in D3.4).  Disabling keeps\n"
+            "reprojection error (> median + 20·MAD in D3.3).  Disabling keeps\n"
             "all poses, which is safer when data is sparse."
         )
         opts_form.addRow("outliers:", self._outliers_combo)
@@ -320,21 +321,15 @@ class Phase3Tab(QWidget):
         self._ref_cam_edit = QLineEdit("0")
         self._ref_cam_edit.setFixedWidth(110)
         self._ref_cam_edit.setToolTip(
-            "Concept: the camera index used as the metric reference.\n\n"
-            "Default: 0\n"
-            "Range: 0 to (num_cameras − 1)\n"
-            "Guidance: leave at 0 unless camera 0 is unusable."
+            "This setting has no effect on the optimisation or its gauge.\n"
+            "Phase 3's rig-consistency check uses camera index 0 as its reference."
         )
         opts_form.addRow("ref_cam:", self._ref_cam_edit)
 
         self._ref_pose_edit = QLineEdit("0")
         self._ref_pose_edit.setFixedWidth(110)
         self._ref_pose_edit.setToolTip(
-            "Concept: the pose (image) index used as the metric reference\n"
-            "for the gauge constraint.\n\n"
-            "Default: 0\n"
-            "Range: 0 to (num_poses − 1)\n"
-            "Guidance: leave at 0 for most setups."
+            "This setting currently has no effect; the reference photo is fixed_pose."
         )
         opts_form.addRow("ref_pose:", self._ref_pose_edit)
 
@@ -490,7 +485,12 @@ class Phase3Tab(QWidget):
         self._set_lockbox_controls_enabled(False)
 
         # ── Action buttons ─────────────────────────────────────────────
-
+        self._record_education_cb = QCheckBox("Record solver steps for this run")
+        self._record_education_cb.setChecked(False)
+        self._record_education_cb.setVisible(False)
+        self._record_education_cb.setToolTip(
+            "Save optional accepted solver steps with this run. Off by default.")
+        form_root.addWidget(self._record_education_cb)
         btn_row = QHBoxLayout()
         run_btn = self._run_btn = make_blue_button("▶  Run Phase 3", self._run_phase3)
         run_btn.setToolTip("Run template bundle adjustment.")
@@ -641,6 +641,23 @@ class Phase3Tab(QWidget):
                 self._diagnostics_tab.refresh()
         self._refresh_phase2_sources()
 
+    def _record_education_requested(self) -> bool:
+        """Whether this run opts into recording, under the current mode.
+
+        The education mode is read here rather than trusted from the widget, so
+        a checkbox hidden in the same tick as a mode change cannot leave a run
+        opted in.
+        """
+        return education_mode_enabled() and self._record_education_cb.isChecked()
+
+    def set_education_enabled(self, enabled: bool) -> None:
+        """Show or hide this tab's per-run recording opt-in."""
+        self._record_education_cb.setVisible(bool(enabled))
+        if not enabled:
+            self._record_education_cb.setChecked(False)
+        if hasattr(self, "_result_panel"):
+            self._result_panel.set_education_run(self._result_panel._education_run_dir)
+
     def _collect_params(self) -> Optional[dict]:
         """Read the form, or say which field is wrong and return None."""
         try:
@@ -656,6 +673,7 @@ class Phase3Tab(QWidget):
         """
         return {
             "f_loc": require_image_folder(self._floc_edit.text()),
+            "record_education": self._record_education_requested(),
             "recover_single_face_telecentric": bool(self._single_face_cb.isChecked()),
             "threads": as_positive_int(
                 self._threads_edit.text().strip() or "1", "Threads"),
@@ -1042,6 +1060,12 @@ class Phase3DiagnosticsTab(QWidget):
 
         top_btn_row = QHBoxLayout()
         top_btn_row.addWidget(make_warning_button("▲ Bundle Settings", self._go_to_settings))
+        self._explain_btn = QPushButton("Explain selected run")
+        self._explain_btn.setToolTip(
+            "Select exactly one Phase 3 run, then open its explanation.")
+        self._explain_btn.clicked.connect(self._explain_selected_run)
+        self._explain_btn.setVisible(False)
+        top_btn_row.addWidget(self._explain_btn)
         top_btn_row.addStretch()
         root.addLayout(top_btn_row)
 
@@ -1088,7 +1112,7 @@ class Phase3DiagnosticsTab(QWidget):
         self._sub_tabs.addTab(self._summary_widget, "Summary (D3.1-D3.10, D3.14)")
 
         self._initial_widget, self._initial_layout, self._initial_scroll = make_scrollable_tab()
-        self._sub_tabs.addTab(self._initial_widget, "Initial Per-image Error (D3.4)")
+        self._sub_tabs.addTab(self._initial_widget, "Initial Per-image Error (D3.3)")
 
         self._residual_widget, self._residual_layout, self._residual_scroll = make_scrollable_tab()
         self._sub_tabs.addTab(self._residual_widget, "Residuals / Per-camera (D3.11-D3.12)")
@@ -1108,6 +1132,26 @@ class Phase3DiagnosticsTab(QWidget):
         root.addLayout(bottom_btn_row)
 
         self.refresh()
+
+    def set_education_enabled(self, enabled: bool) -> None:
+        """Show or hide this tab's explanation entry button."""
+        self._explain_btn.setVisible(bool(enabled))
+        self._explain_btn.setEnabled(bool(enabled))
+
+    def _explain_selected_run(self) -> None:
+        if not self._explain_btn.isEnabled():
+            return
+        selected = self._run_selector.get_selected()
+        if len(selected) != 1:
+            from pyCamSet.gui.run_results import explain_selection_hint
+
+            explain_selection_hint(self._explain_btn, len(selected))
+            return
+        run = selected[0]
+        phase = str(run.get("phase", "phase3"))
+        from pyCamSet.gui.run_results import open_education_run
+
+        open_education_run(run, phase, self._workspace_mgr.workspace_path, self)
 
     def refresh(self) -> None:
         runs = merge_phase3_phase4_runs(
@@ -1259,12 +1303,12 @@ class Phase3DiagnosticsTab(QWidget):
                 item.widget().deleteLater()
 
         if not runs:
-            self._initial_layout.addWidget(QLabel("Select at least one Phase 3 run to view D3.4."))
+            self._initial_layout.addWidget(QLabel("Select at least one Phase 3 run to view D3.3."))
             return
 
         run = next((r for r in reversed(runs) if str(r.get("phase", "phase3")) == "phase3"), None)
         if run is None:
-            self._initial_layout.addWidget(QLabel("Select at least one Phase 3 run to view D3.4."))
+            self._initial_layout.addWidget(QLabel("Select at least one Phase 3 run to view D3.3."))
             return
 
         vals = run.get("diagnostics", {}).get("D3.3_per_image_initial_reprojection", [])
@@ -1319,16 +1363,16 @@ class Phase3DiagnosticsTab(QWidget):
         )
         # User threshold (interactive)
         user_hline = ax.axhline(
-            init_user_thresh, color="#ff7f0e", linestyle="-", linewidth=1.8,
+            init_user_thresh, color="#b04a00", linestyle="-", linewidth=1.8,
             label=f"User threshold ({init_user_thresh:.3f} px)", zorder=5,
         )
 
-        _above_scatter = ax.scatter([], [], color="#ff7f0e", s=28, zorder=6,
+        _above_scatter = ax.scatter([], [], color="#b04a00", s=28, zorder=6,
                                     label="Above threshold")
 
-        ax.set_title(f"D3.4 Per-image initial reprojection error ({run.get('run_id', '?')})")
+        ax.set_title(f"D3.3 Per-image initial reprojection error ({run.get('run_id', '?')})")
         ax.set_xlabel("Image index")
-        ax.set_ylabel("Initial error (aggregated px)")
+        ax.set_ylabel("Mean error per image (px)")
         ax.grid(axis="y", alpha=0.2)
         ax.legend(fontsize=8)
 
@@ -1468,7 +1512,7 @@ class Phase3DiagnosticsTab(QWidget):
 
         self._initial_layout.addWidget(ctrl)
         self._initial_layout.addWidget(MatplotlibFigureCard(
-            f"D3.4 Per-image initial reprojection error ({run.get('run_id', '?')})",
+            f"D3.3 Per-image initial reprojection error ({run.get('run_id', '?')})",
             fig, FigureCanvasQTAgg, parent=self._initial_widget, min_height=320,
             canvas=canvas,
             visual_id="diagnostic:phase3:d3.4-per-image-initial-reprojection",
@@ -1606,7 +1650,12 @@ class Phase3DiagnosticsTab(QWidget):
         fig = Figure(figsize=(9, 4.8), tight_layout=True)
         ax = fig.add_subplot(111)
         bars = ax.bar(np.arange(len(cams)), vals, color="#2ca02c", alpha=0.9)
-        ax.axhline(med, color="#ff7f0e", linestyle="--", linewidth=1.2, label=f"median={med:.4f}")
+        from PySide6.QtWidgets import QApplication
+        from pyCamSet.gui.visual_style import education_palette
+        app = QApplication.instance()
+        active_theme = app.property("pycamsetTheme") if app else "Light"
+        median_colour = education_palette(active_theme)["secondary"]
+        ax.axhline(med, color=median_colour, linestyle="--", linewidth=1.2, label=f"median={med:.4f}")
         ax.set_xticks(np.arange(len(cams)))
         ax.set_xticklabels(cams, rotation=25, ha="right")
         ax.set_ylabel("Mean reprojection error (px)")

@@ -459,3 +459,67 @@ class UndrawableTarget:
 
     def plot(self):
         raise NotImplementedError(f"{type(self).__name__} is not drawn")
+
+
+#: Test modules, beyond ``test_education_*``, that build the Phase 3 / Phase 4 views.
+EDUCATION_VIEW_MODULES: frozenset[str] = frozenset({"test_f2_viewer_playback_export_preferences"})
+
+
+@pytest.fixture
+def education_view_construction() -> None:
+    """Opt out of ``education_views_ready_after_construction``: the test drives the raw,
+    asynchronous constructor itself (busy state, then the stages fill in)."""
+    return None
+
+
+@pytest.fixture(autouse=True)
+def education_views_ready_after_construction(
+        monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    """The phase views prepare their data on a worker thread (pyCamSet.gui.education_worker).
+    Many education tests read a view's data straight after constructing it, as they did when
+    construction was synchronous. Unless a test asks for ``education_view_construction``, the
+    constructor therefore waits for the preparation to finish, the same wait the screenshot
+    tool uses, so those tests still see the finished view.
+
+    It applies only to the education GUI tests (``EDUCATION_VIEW_MODULES`` and every
+    ``test_education_*`` module), so no other test imports the Qt education modules."""
+    module_name = request.module.__name__.rsplit(".", 1)[-1]
+    if not (module_name.startswith("test_education") or module_name in EDUCATION_VIEW_MODULES):
+        return
+    if "education_view_construction" in request.fixturenames:
+        return
+    import importlib
+
+    views = {}
+    for name, class_name in (("education_phase3", "Phase3View"), ("education_phase4", "Phase4View")):
+        try:  # each view on its own: either may be absent (no Qt, or not installed)
+            views[name] = getattr(importlib.import_module(f"pyCamSet.gui.{name}"), class_name)
+        except ImportError:
+            continue
+    for view_class in views.values():
+        original = view_class.__init__
+
+        def constructed(self, *args, _original=original, **kwargs):
+            _original(self, *args, **kwargs)
+            self.wait_until_ready(120)
+
+        monkeypatch.setattr(view_class, "__init__", constructed)
+    if "education_phase4" not in views:
+        return
+    phase4_view = views["education_phase4"]
+
+    # Phase 4 also works out its corner precision on demand (a level-3 or trust-stage visit).
+    # The tests' navigation helpers read the stage straight after moving, so they wait too.
+    def settled(method_name: str):
+        original_method = getattr(phase4_view, method_name)
+
+        def waiting(self, *args, _original=original_method, **kwargs):
+            result = _original(self, *args, **kwargs)
+            self._worker.wait_until_idle(120)
+            return result
+
+        monkeypatch.setattr(phase4_view, method_name, waiting)
+
+    for method_name in ("set_level", "set_stage", "step_back", "step_forward",
+                        "stage_text", "numbers_rows"):
+        settled(method_name)

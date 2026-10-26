@@ -228,6 +228,15 @@ def _continue_clicked(btn: QPushButton, callback: Callable) -> None:
     callback()
 
 
+#: The export size templates every figure offers, as (label, (width mm, dpi)). Index 0 is the
+#: default; a visual's choice is kept per visual id (``bind_export_preset``).
+EXPORT_SIZE_TEMPLATES = (
+    ("Screen template · 160 mm · 150 dpi", (160.0, 150)),
+    ("Publication single-column template · 85 mm · 300 dpi", (85.0, 300)),
+    ("Publication double-column template · 180 mm · 300 dpi", (180.0, 300)),
+)
+
+
 class MatplotlibFigureCard(QWidget):
     """A managed Matplotlib visual with presentation and source-data exports."""
 
@@ -242,12 +251,16 @@ class MatplotlibFigureCard(QWidget):
         csv_disabled_reason: str = "CSV is unavailable: this visual has no tabular source adapter.",
         canvas=None,
         visual_id: str | None = None,
+        provenance: str | None = None,
+        alt_text: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._title = title
         self._fig = fig
         self._canvas_cls = canvas_cls
         self._csv_export = csv_export
+        self._provenance = provenance
+        self._alt_text = alt_text or f"Scientific figure: {title}. Use the figure controls to expand or save it."
         from pyCamSet.gui.theme import apply_matplotlib_theme
         from pyCamSet.gui.visual_style import (
             VisualStyle, apply_visual_style, load_style_for_visual, style_path_for_visual,
@@ -284,9 +297,8 @@ class MatplotlibFigureCard(QWidget):
         save_btn.setAccessibleName(f"Save PNG for {title}")
         save_btn.clicked.connect(self._save_png)
         self._preset = QComboBox()
-        self._preset.addItem("Screen template · 160 mm · 150 dpi", (160.0, 150))
-        self._preset.addItem("Publication single-column template · 85 mm · 300 dpi", (85.0, 300))
-        self._preset.addItem("Publication double-column template · 180 mm · 300 dpi", (180.0, 300))
+        for label, size in EXPORT_SIZE_TEMPLATES:
+            self._preset.addItem(label, size)
         self._preset.setToolTip("Generic sizing templates only; not a claim of compliance with any named journal.")
         from pyCamSet.gui.preferences import bind_export_preset
         bind_export_preset(self._preset, self._visual_id)
@@ -350,9 +362,10 @@ class MatplotlibFigureCard(QWidget):
         # Expose the figure's visible heading to assistive technology without
         # claiming a data summary that the canvas cannot reliably provide.
         self._canvas.setAccessibleName(title)
-        self._canvas.setAccessibleDescription(
-            f"Scientific figure: {title}. Use the figure controls to expand or save it."
-        )
+        description = self._alt_text
+        if provenance:
+            description = f"{description} Provenance: {provenance}"
+        self._canvas.setAccessibleDescription(description)
         layout.addWidget(self._canvas)
 
     def _save_png(self) -> None:

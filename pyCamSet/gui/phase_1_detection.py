@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.education_preferences import education_mode_enabled
 from pyCamSet.gui.theme import set_text_role
 from pyCamSet.utils.paths import long_path
 from pyCamSet.gui.shared_functions import (
@@ -162,6 +163,19 @@ class Phase1Tab(QWidget):
 
     def set_diagnostics_tab(self, tab: "Phase1DiagnosticsTab") -> None:
         self._diagnostics_tab = tab
+
+    def set_education_enabled(self, enabled: bool) -> None:
+        """Show or hide this tab's per-run recording opt-in.
+
+        Called by the main window when the education mode changes; the flag is
+        also re-read when parameters are collected, so a stale ticked checkbox
+        can never opt a run in after the mode was switched off.
+        """
+        self._record_education_cb.setVisible(bool(enabled))
+        if not enabled:
+            self._record_education_cb.setChecked(False)
+        if hasattr(self, "_result_panel"):
+            self._result_panel.set_education_run(self._result_panel._education_run_dir)
 
     def set_cameras(self, camera_names: list[str], selected_cameras: Optional[list[str]] = None) -> None:
         """Populate camera checkboxes from discovered camera names and optional selection."""
@@ -473,6 +487,13 @@ class Phase1Tab(QWidget):
         # Spare height collects below the form, not between its rows.
         form_root.addStretch(1)
 
+        self._record_education_cb = QCheckBox("Record detection stages for this run")
+        self._record_education_cb.setChecked(False)
+        self._record_education_cb.setVisible(False)
+        self._record_education_cb.setToolTip(
+            "Save optional detector-stage evidence with this run. Off by default.")
+        form_root.addWidget(self._record_education_cb)
+
         # ── Action buttons ─────────────────────────────────────────────
         btn_row = QHBoxLayout()
         run_btn = self._run_btn = make_blue_button("▶  Run Phase 1", self._run_phase1)
@@ -646,6 +667,14 @@ class Phase1Tab(QWidget):
             QMessageBox.critical(self, "Validation Error", str(exc))
             return None
 
+    def _record_education_requested(self) -> bool:
+        """Whether this run opts into recording, under the current mode.
+
+        The mode is read here rather than trusted from the widget, so a checkbox
+        hidden in the same tick as a mode change cannot leave a run opted in.
+        """
+        return education_mode_enabled() and self._record_education_cb.isChecked()
+
     def _read_params(self) -> dict:
         """The form as a phase 1 parameter dict.
 
@@ -666,6 +695,9 @@ class Phase1Tab(QWidget):
 
         return {
             "f_loc": require_image_folder(self._floc_edit.text()),
+            # The Phase 1 recording opt-in key. The checkbox is the GUI's
+            # route to it and is only reachable while the education mode is on.
+            "record_phase1_trace": self._record_education_requested(),
             "caching": self._cache_cb.isChecked(),
             "high_distortion": self._hd_cb.isChecked(),
             "n_lim": as_optional_positive_int(self._nlim_edit.text(), "n_lim"),
@@ -809,6 +841,12 @@ class Phase1DiagnosticsTab(QWidget):
         top_btn_row.addWidget(
             make_warning_button("▲ Detection Settings", self._go_to_detection_settings)
         )
+        self._explain_btn = QPushButton("Explain selected run")
+        self._explain_btn.setToolTip(
+            "Select exactly one Phase 1 run, then open its explanation.")
+        self._explain_btn.clicked.connect(self._explain_selected_run)
+        self._explain_btn.setVisible(False)
+        top_btn_row.addWidget(self._explain_btn)
         top_btn_row.addStretch()
         root.addLayout(top_btn_row)
 
@@ -966,6 +1004,28 @@ class Phase1DiagnosticsTab(QWidget):
         root.addLayout(btn_row)
 
         self.refresh()
+
+    def set_education_enabled(self, enabled: bool) -> None:
+        """Show or hide this tab's explanation entry button.
+
+        The button also re-checks the flag when clicked, so hiding it is a
+        courtesy rather than the only guard.
+        """
+        self._explain_btn.setVisible(bool(enabled))
+        self._explain_btn.setEnabled(bool(enabled))
+
+    def _explain_selected_run(self) -> None:
+        if not self._explain_btn.isEnabled():
+            return
+        selected = self._run_selector.get_selected()
+        if len(selected) != 1:
+            from pyCamSet.gui.run_results import explain_selection_hint
+
+            explain_selection_hint(self._explain_btn, len(selected))
+            return
+        from pyCamSet.gui.run_results import open_education_run
+
+        open_education_run(selected[0], "phase1", self._workspace_mgr.workspace_path, self)
 
     def refresh(self) -> None:
         runs = self._workspace_mgr.load_runs("phase1")
@@ -1440,6 +1500,11 @@ class Phase1DiagnosticsTab(QWidget):
                     per_im[int(im_idx)] = pts
             cam_points[cam] = per_im
 
+        # Saved detections remain in the detector's pixel frame; only the
+        # displayed scatter offsets are mapped to the native source image.
+        from pyCamSet.gui.run_results import _detector_to_native_scale
+        overlay_scale = _detector_to_native_scale(chosen.get("params") or {})
+
         if max_images <= 0:
             if show_errors:
                 QMessageBox.warning(self, "No images", "No images found in camera folders.")
@@ -1495,6 +1560,7 @@ class Phase1DiagnosticsTab(QWidget):
             "cams": cams,
             "cam_images": cam_images,
             "cam_points": cam_points,
+            "overlay_scale": overlay_scale,
             "axes": axes,
             "im_art": im_art,
             "sc_art": sc_art,
@@ -1632,7 +1698,8 @@ class Phase1DiagnosticsTab(QWidget):
             sc_art[cam].set_visible(True)
 
             pts = cam_points.get(cam, {}).get(im_idx, empty)
-            sc_art[cam].set_offsets(pts if len(pts) else empty)
+            sc_art[cam].set_offsets(pts / self._draw_state["overlay_scale"]
+                                    if len(pts) else empty)
             ax.set_title(f"{cam} | im {im_idx} | {len(pts)} pts")
 
         # Update the permanent status label (always the same instance)
@@ -1689,6 +1756,7 @@ class Phase1DiagnosticsTab(QWidget):
                     "montage_frame_index": image_index,
                     "image_index_semantics": "row value is each camera's selected local image index",
                     "coordinate_origin": "image coordinate convention used by detector",
+                    "native_overlay_scale": 1.0 / state["overlay_scale"],
                 }, ensure_ascii=False) + "\n")
                 writer = csv.writer(stream)
                 writer.writerow(["camera", "image_index", "image_name", "x_px", "y_px"])

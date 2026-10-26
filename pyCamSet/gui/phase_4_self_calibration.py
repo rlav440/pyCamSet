@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyCamSet.gui.education_preferences import education_mode_enabled
 from pyCamSet.gui.theme import set_text_role
 from pyCamSet.gui.shared_functions import (
     make_solver_combo,
@@ -261,40 +262,32 @@ class Phase4Tab(QWidget):
         self._outliers_combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._outliers_combo.addItems(["n", "y"])
         self._outliers_combo.setCurrentText("n")
+        self._outliers_combo.setEnabled(False)
         self._outliers_combo.setToolTip(
-            "Concept: whether to reject outlier poses before self-calibration.\n\n"
-            "Default: n (disabled)\n"
-            "Choices: n (disabled), y (enabled)\n"
-            "Guidance: enable only if Phase 3 already had clean data.  Outlier\n"
-            "rejection in Phase 4 can discard useful target-shape information."
+            "Outlier rejection is not applied in Phase 4. This control is disabled."
         )
-        opts_form.addRow("outliers:", self._outliers_combo)
+        opts_form.addRow("outliers (no effect in Phase 4):", self._outliers_combo)
 
-        self._fixed_pose_edit = QLineEdit("0")
+        self._fixed_pose_edit = QLineEdit()
         self._fixed_pose_edit.setFixedWidth(110)
         self._fixed_pose_edit.setToolTip(
             "Concept: pose index whose extrinsic is held fixed as the anchor.\n\n"
-            "Default: 0\n"
-            "Range: 0 to (num_poses − 1)\n"
-            "Guidance: should match the value used in Phase 3."
+            "Leave blank to inherit the Phase 3 fixed_pose (N2).\n"
+            "An explicit value must match Phase 3."
         )
         opts_form.addRow("fixed_pose:", self._fixed_pose_edit)
 
         self._ref_cam_edit = QLineEdit("0")
         self._ref_cam_edit.setFixedWidth(110)
         self._ref_cam_edit.setToolTip(
-            "Concept: camera index used as the metric reference.\n\n"
-            "Default: 0\n"
-            "Range: 0 to (num_cameras − 1)"
+            "This setting currently has no effect in Phase 4."
         )
         opts_form.addRow("ref_cam:", self._ref_cam_edit)
 
         self._ref_pose_edit = QLineEdit("0")
         self._ref_pose_edit.setFixedWidth(110)
         self._ref_pose_edit.setToolTip(
-            "Concept: pose index used as the metric reference for the gauge.\n\n"
-            "Default: 0\n"
-            "Range: 0 to (num_poses − 1)"
+            "This setting currently has no effect; the reference photo is fixed_pose."
         )
         opts_form.addRow("ref_pose:", self._ref_pose_edit)
 
@@ -310,10 +303,21 @@ class Phase4Tab(QWidget):
 
         # ── Action buttons ─────────────────────────────────────────────
         form_root.addWidget(make_separator())
+        self._record_education_cb = QCheckBox("Record solver steps for this run")
+        self._record_education_cb.setChecked(False)
+        self._record_education_cb.setVisible(False)
+        self._record_education_cb.setToolTip(
+            "Save optional accepted solver steps with this run. Off by default.")
+        form_root.addWidget(self._record_education_cb)
         btn_row = QHBoxLayout()
         self._run_btn = make_blue_button("▶  Run Phase 4", self._run_phase4)
         self._run_btn.setToolTip("Run self-calibration.")
         btn_row.addWidget(self._run_btn)
+        self._explain_run_btn = QPushButton("Explain finished run")
+        self._explain_run_btn.setEnabled(False)
+        self._explain_run_btn.setVisible(False)
+        self._explain_run_btn.clicked.connect(self._open_education_run)
+        btn_row.addWidget(self._explain_run_btn)
         btn_row.addWidget(make_warning_button("Diagnostics ▼", self._open_diagnostics))
         btn_row.addWidget(make_green_button("Assess Calibration", self._open_assess_calibration))
         btn_row.addStretch()
@@ -426,6 +430,32 @@ class Phase4Tab(QWidget):
         p = str(resolved) if resolved is not None else (run.get("artifacts") or {}).get("optimised_camset")
         self._source_lbl.setText(f"Source: run {rid} -> {p or 'missing camset artifact'}")
 
+    def _record_education_requested(self) -> bool:
+        """Whether this run opts into recording, under the current mode.
+
+        The education mode is read here rather than trusted from the widget, so
+        a checkbox hidden in the same tick as a mode change cannot leave a run
+        opted in.
+        """
+        return education_mode_enabled() and self._record_education_cb.isChecked()
+
+    def set_education_enabled(self, enabled: bool) -> None:
+        """Show or hide the education entry points of this tab.
+
+        The recording opt-in is cleared when the mode goes off so a hidden
+        control cannot leave the run opted in.
+        """
+        self._record_education_cb.setVisible(bool(enabled))
+        self._explain_run_btn.setVisible(bool(enabled))
+        run = getattr(self, "_finished_run", None)
+        run_dir = run.get("_run_dir") if run else None
+        if not run_dir and run and self._workspace_mgr.workspace_path is not None:
+            run_dir = self._workspace_mgr.workspace_path / "phase4_runs" / str(run["run_id"])
+        self._explain_run_btn.setEnabled(
+            bool(enabled and run_dir and Path(run_dir).is_dir()))
+        if not enabled:
+            self._record_education_cb.setChecked(False)
+
     def _collect_params(self) -> Optional[dict]:
         """Read the form, or say which field is wrong and return None."""
         try:
@@ -441,14 +471,15 @@ class Phase4Tab(QWidget):
         """
         return {
             "f_loc": require_image_folder(self._floc_edit.text()),
+            "record_education": self._record_education_requested(),
             "threads": as_positive_int(
                 self._threads_edit.text().strip() or "1", "Threads"),
             "fixed_params": as_json_object(
                 self._fp_edit.text(), "Fixed params JSON"),
             "problem_options": {
                 "verbosity": int(self._verbosity_spin.value()),
-                "fixed_pose": as_int(
-                    self._fixed_pose_edit.text(), "fixed_pose"),
+                **({"fixed_pose": as_int(self._fixed_pose_edit.text(), "fixed_pose")}
+                   if self._fixed_pose_edit.text().strip() else {}),
                 "ref_cam": as_int(self._ref_cam_edit.text(), "ref_cam"),
                 "ref_pose": as_int(self._ref_pose_edit.text(), "ref_pose"),
                 "outliers": as_outlier_mode(self._outliers_combo.currentText()),
@@ -552,8 +583,23 @@ class Phase4Tab(QWidget):
         else:
             self._status_lbl.setText(
                 f"Failed — {metadata.get('error', 'unknown error')}")
+        self._finished_run = metadata
+        run_dir = metadata.get("_run_dir")
+        if not run_dir and self._workspace_mgr.workspace_path is not None and metadata.get("run_id"):
+            run_dir = self._workspace_mgr.workspace_path / "phase4_runs" / str(metadata["run_id"])
+        enabled = education_mode_enabled()
+        self._explain_run_btn.setVisible(enabled)
+        self._explain_run_btn.setEnabled(
+            bool(enabled and run_dir and Path(run_dir).is_dir()))
         if self._diagnostics_tab is not None:
             self._diagnostics_tab.refresh()
+
+    def _open_education_run(self) -> None:
+        from pyCamSet.gui.run_results import open_education_run
+
+        run = getattr(self, "_finished_run", None)
+        if run:
+            open_education_run(run, "phase4", self._workspace_mgr.workspace_path, self)
 
     def _open_diagnostics(self) -> None:
         if self._diagnostics_tab is not None:
@@ -583,6 +629,12 @@ class Phase4DiagnosticsTab(QWidget):
 
         top_btn_row = QHBoxLayout()
         top_btn_row.addWidget(make_warning_button("▲ Self-Calibration Settings", self._go_to_settings))
+        self._explain_btn = QPushButton("Explain selected run")
+        self._explain_btn.setToolTip(
+            "Select exactly one saved run, then open its explanation.")
+        self._explain_btn.clicked.connect(self._explain_selected_run)
+        self._explain_btn.setVisible(False)
+        top_btn_row.addWidget(self._explain_btn)
         top_btn_row.addStretch()
         root.addLayout(top_btn_row)
 
@@ -710,7 +762,7 @@ class Phase4DiagnosticsTab(QWidget):
                     "Gauge accounting:",
                     QLabel(str(gate.get("gauge", "—"))))
                 form.addRow("D4.1 free target points:", QLabel(str(d.get("D4.1_n_free_target_points", "—"))))
-                form.addRow("D4.2 gauge-fixed points:", QLabel(str(d.get("D4.2_gauge_fixed_points", "—"))))
+                form.addRow("D4.2 points removed from the solve for gauge:", QLabel(str(d.get("D4.2_gauge_fixed_points", "—"))))
                 form.addRow("D4.3 initial euclid (px):", QLabel(f"{float(d.get('D4.3_initial_euclid_px', float('nan'))):.5f}"))
                 form.addRow("D4.3 final euclid (px):", QLabel(f"{float(d.get('D4.3_final_euclid_px', float('nan'))):.5f}"))
                 form.addRow("D4.4 vs Phase 3 delta (px):", QLabel(f"{float(d.get('D4.4_vs_phase3_delta_px', float('nan'))):.5f}"))
@@ -744,13 +796,33 @@ class Phase4DiagnosticsTab(QWidget):
                 per_image = d.get("D4.13_per_image_mean_reprojection", {})
                 form.addRow(
                     "D4.13 per-image reprojection:",
-                    QLabel(f"{len(per_image)} images" if isinstance(per_image, dict) else "—"))
+                    QLabel(f"{len(per_image)} images" if isinstance(per_image, dict) and per_image else "No per-image values recorded"))
             if run.get("error"):
                 form.addRow("Error:", QLabel(str(run["error"])))
             self._summary_layout.addLayout(form)
             self._summary_layout.addWidget(make_separator())
             render_predecessor_chain_section(self._summary_layout, self._workspace_mgr, run)
         self._summary_layout.addStretch()
+
+    def set_education_enabled(self, enabled: bool) -> None:
+        """Show or hide this tab's explanation entry button."""
+        self._explain_btn.setVisible(bool(enabled))
+        self._explain_btn.setEnabled(bool(enabled))
+
+    def _explain_selected_run(self) -> None:
+        if not self._explain_btn.isEnabled():
+            return
+        selected = self._run_selector.get_selected()
+        if len(selected) != 1:
+            from pyCamSet.gui.run_results import explain_selection_hint
+
+            explain_selection_hint(self._explain_btn, len(selected))
+            return
+        run = selected[0]
+        phase = str(run.get("phase", "phase4"))
+        from pyCamSet.gui.run_results import open_education_run
+
+        open_education_run(run, phase, self._workspace_mgr.workspace_path, self)
 
     def _assessment_run(self) -> Optional[dict]:
         """The run Assess Calibration shows: the latest of those selected."""

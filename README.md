@@ -96,6 +96,24 @@ To use the PuzzleBoard target, install the optional dependency:
 pip install --no-deps "puzzle_board @ git+https://github.com/PStelldinger/PuzzleBoard.git"
 ```
 
+The aruco2 marker backend, needed for the ChArUco2, Ccube2 and CIco2 targets and for
+`marker_backend="aruco2"`, is not on PyPI either: pip builds it from the
+`third_party/aruco2` submodule, which needs a C++ compiler and an OpenCV 4.9+ development
+package that pip cannot install.
+
+To install all of these at once from a checkout of this repository, run the script for your
+system. Each one installs with pip, checks aruco2's prerequisites, and names anything still
+missing:
+
+```
+setup_scripts/install_optional_linux.sh
+setup_scripts/install_optional_macos.sh
+powershell -ExecutionPolicy Bypass -File setup_scripts\install_optional_windows.ps1
+```
+
+What aruco2's build needs on each system is in the
+[troubleshooting guide](https://rlav440.github.io/pyCamSet/dev/troubleshooting/#aruco2-is-not-installed).
+
 ### Troubleshooting
 
 Native Cairo setup, the optional PuzzleBoard dependency, the

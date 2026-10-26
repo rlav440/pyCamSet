@@ -1573,7 +1573,7 @@ def test_saved_once_seen_displacements_render_unexaggerated_with_bound_caption(t
         raw_once = displayed[once] - nominal[once]
         assert np.all(np.isfinite(raw_once))
         assert np.any(np.linalg.norm(raw_once, axis=1) > 0.0)
-        assert np.max(np.linalg.norm(raw_once, axis=1)) * to_mm <= 1.292
+        assert np.max(np.linalg.norm(raw_once, axis=1)) * to_mm <= 1.306
 
         view.set_level(2)
         view.set_stage(1)

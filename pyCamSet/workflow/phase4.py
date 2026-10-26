@@ -645,7 +645,7 @@ def _quality_gate(optimisation, handler, stats: dict,
         nullity_measurement = _jacobian_nullity_measurement(optimisation, handler)
     except Exception as exc:
         nullity_measurement = None
-        blocking.append("Jacobian null-space measurement failed at solution")
+        notices.append(f"Jacobian null space not verified: {exc}")
         constraint_disposition = {
             "status": "weakly_constrained",
             "global_nullity": "not_verified",

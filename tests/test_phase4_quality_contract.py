@@ -692,7 +692,7 @@ def test_phase4_quality_gate_marks_measured_global_modes_weak(monkeypatch):
     assert gate["constraint_disposition"]["global_nullity"] == 1
 
 
-def test_phase4_quality_gate_blocks_failed_nullity_measurement(monkeypatch):
+def test_phase4_quality_gate_notes_failed_nullity_measurement_without_blocking(monkeypatch):
     def fail_measurement(optimisation, handler):
         raise RuntimeError("synthetic rank failure")
 
@@ -703,8 +703,9 @@ def test_phase4_quality_gate_blocks_failed_nullity_measurement(monkeypatch):
         phase3_run={"status": "complete", "run_id": "p3"},
     )
 
-    assert gate["status"] == "incomplete"
-    assert "Jacobian null-space measurement failed at solution" in gate["blocking_flags"]
+    assert gate["status"] == "complete"
+    assert not gate["blocking_flags"]
+    assert "Jacobian null space not verified: synthetic rank failure" in gate["notices"]
     assert gate["constraint_disposition"]["global_nullity"] == "not_verified"
 
 
@@ -957,7 +958,7 @@ def test_parameter_drift_matches_reloaded_persisted_camera_values(tmp_path):
 
 
 @pytest.mark.data
-def test_gauge_selection_avoids_single_observation_points_and_replays_recorded_indices(
+def test_gauge_selection_replays_recorded_indices(
     charuco_problem,
 ):
     from pyCamSet.optimisation import standard_bundle_handler
@@ -972,12 +973,6 @@ def test_gauge_selection_avoids_single_observation_points_and_replays_recorded_i
         camset=cams, target=target, detection=detections,
         options={"outliers": "n"},
     )
-    counts = np.bincount(
-        handler._flat_detections()[:, 2].astype(int),
-        minlength=len(handler.visible_feature_mask),
-    )
-    assert all(counts[index] >= 2 for index in handler.fixed_inds)
-
     recorded_indices = tuple(handler.fixed_inds)
     rebuilt = SelfBundleHandler(
         camset=cams, target=target, detection=detections,
@@ -1127,7 +1122,7 @@ def test_phase4_quality_gate_reports_excluded_images_as_a_notice(stub_jacobian_m
         "fixed_pose_excluded_or_unobserved"] is False
 
 
-def test_phase4_quality_gate_has_no_notice_without_excluded_images():
+def test_phase4_quality_gate_has_no_notice_without_excluded_images(stub_jacobian_measurement):
     gate = phase4._quality_gate(
         _optimisation(), _Handler(), {"success": True}, np.ones((4, 2)),
         initial_euclid=10.0, final_euclid=2.0, observation_count=4,

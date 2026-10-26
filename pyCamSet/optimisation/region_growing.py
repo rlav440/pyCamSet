@@ -188,7 +188,8 @@ def describe_split(groups: np.ndarray, observed: np.ndarray,
     return message
 
 
-def grow_cameras(links: np.ndarray, spread: np.ndarray) -> np.ndarray:
+def grow_cameras(links: np.ndarray, spread: np.ndarray,
+                 join_order: list[dict] | None = None) -> np.ndarray:
     """
     Place the cameras, joining each one by the link it is most agreed with.
 
@@ -215,6 +216,14 @@ def grow_cameras(links: np.ndarray, spread: np.ndarray) -> np.ndarray:
         joining = outside[best % len(outside)]
 
         extrinsics[joining] = links[joined_from, joining] @ extrinsics[joined_from]
+        if join_order is not None:
+            # Record the selected edge after the same deterministic choice; do
+            # not alter the grow order or any transform arithmetic.
+            join_order.append({
+                "joined_from": int(joined_from),
+                "joining": int(joining),
+                "spread": float(spread[joined_from, joining]),
+            })
         placed[joining] = True
     return extrinsics
 
@@ -278,6 +287,8 @@ def anchored_on(extrinsics: np.ndarray, poses: np.ndarray, reference: int
 def estimate_rig(target_in_camera: np.ndarray, length_scale: float,
                  reference_image: int = 0, seed: int = 0,
                  cam_names: list[str] | None = None,
+                 *, record_join_order: bool = False,
+                 join_order: list[dict] | None = None,
                  ) -> tuple[np.ndarray, np.ndarray]:
     """
     Place every camera and every image from the per view target poses.
@@ -288,6 +299,9 @@ def estimate_rig(target_in_camera: np.ndarray, length_scale: float,
     :param reference_image: the image to anchor the world frame on
     :param seed: samples the shared images of a heavily overlapped link
     :param cam_names: camera names, for naming the cameras in a refusal
+    :param record_join_order: collect the selected grow edges when true
+    :param join_order: caller-owned list receiving those edges; required when
+        ``record_join_order`` is true
     :raises ValueError: when shared views of the target do not connect every
         camera, which leaves the rig with no transform to solve for
     :return: (c, 4, 4) world to camera, and (p, 4, 4) target to world, the
@@ -302,6 +316,17 @@ def estimate_rig(target_in_camera: np.ndarray, length_scale: float,
     if np.max(groups) > 0:
         raise ValueError(describe_split(groups, observed, cam_names))
 
-    extrinsics = grow_cameras(links, spread)
+    if record_join_order and join_order is None:
+        raise ValueError("join_order must be provided when recording is enabled")
+    first_new_event = len(join_order) if record_join_order else 0
+    extrinsics = grow_cameras(links, spread, join_order if record_join_order else None)
+    if record_join_order:
+        # A one-view link has no measurable scatter: camera_links imputes its
+        # numeric spread for sorting. Label that provenance for playback.
+        for event in join_order[first_new_event:]:
+            shared = int(np.count_nonzero(
+                observed[event["joined_from"]] & observed[event["joining"]]))
+            event["shared_views"] = shared
+            event["spread_source"] = "imputed_single_view" if shared == 1 else "measured"
     poses = target_poses(target_in_camera, observed, extrinsics, length_scale)
     return anchored_on(extrinsics, poses, reference_image)

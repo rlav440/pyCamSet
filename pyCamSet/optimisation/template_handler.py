@@ -141,6 +141,7 @@ class TemplateBundleHandler:
                  lockbox_config: Optional[CameraLockboxConfig] = None,
                  lockbox_source_camset: Optional[CameraSet] = None,
                  lockbox_warm_start: bool = True,
+                 record_education: bool = False,
                  ):
         
 
@@ -165,6 +166,8 @@ class TemplateBundleHandler:
         self.lockbox_config = lockbox_config or CameraLockboxConfig(enabled=False)
         self.lockbox_source_camset = lockbox_source_camset
         self.lockbox_warm_start = bool(lockbox_warm_start)
+        self.record_education = bool(record_education)
+        self.seed_join_order: list[dict] = []
         # What the seed's single-face classification found; Phase 3 saves it as D3.14.
         self.single_face_recovery: dict = {}
         self.lockbox_prior: CameraLockboxPrior | None = None
@@ -621,11 +624,15 @@ class TemplateBundleHandler:
         param_array = []
 
         fixed_pose = int(self.problem_opts.get("fixed_pose", 0))
+        # Recomputing the seed must replace, not append to, the opt-in trace.
+        self.seed_join_order.clear()
         cam_poses, target_poses, per_im_error = estimate_camera_relative_poses(
             detection=self.detection,
             cams=self.camset,
             calibration_target=self.target,
             anchor_pose=fixed_pose,
+            record_join_order=self.record_education,
+            join_order=self.seed_join_order,
             recover_single_face_telecentric=bool(
                 self.problem_opts.get("recover_single_face_telecentric", True)),
             single_face_record=self.single_face_recovery,
@@ -647,6 +654,17 @@ class TemplateBundleHandler:
                     f"estimation returned {unposed.size} poses")
             self.missing_poses = marked | unposed
         self.find_and_exclude_transform_outliers(per_im_error)
+
+        # The solver fixes this pose to identity. If seed generation could not
+        # place it, or outlier rejection removes its observations, the solve's
+        # world frame is not tied to the requested reference image.
+        if not 0 <= fixed_pose < len(target_poses):
+            self.starting_state_disposition = "reference image excluded; world frame not fixed"
+        elif (not np.isfinite(target_poses[fixed_pose, 0, 0])
+              or bool(self.missing_poses[fixed_pose])):
+            self.starting_state_disposition = "reference image excluded; world frame not fixed"
+        else:
+            self.starting_state_disposition = "consistent"
 
         if np.any(self.missing_poses):
             self._exclude_poses(self.missing_poses)
@@ -989,6 +1007,8 @@ def estimate_camera_relative_poses(
         max_bad_cams_iter=10,
         prior_poses_and_costs: Optional[tuple[np.ndarray, np.ndarray]] = None,
         *, anchor_pose: int | None = None,
+        record_join_order: bool = False,
+        join_order: list[dict] | None = None,
         recover_single_face_telecentric: bool = True,
         single_face_record: dict | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1016,6 +1036,7 @@ def estimate_camera_relative_poses(
     ref_pose = _seed_reference_pose(target_in_camera, ref_pose, anchor_pose)
     return estimate_initial_rig(
         target_in_camera, cams, ref_pose, calibration_target, detection,
+        record_join_order=record_join_order, join_order=join_order,
         recover_single_face_telecentric=recover_single_face_telecentric,
         single_face_record=single_face_record)
 
@@ -1242,6 +1263,8 @@ def recover_single_face_telecentric_poses(poses: np.ndarray, extrinsics: np.ndar
 def estimate_initial_rig(target_in_camera: np.ndarray, cams: CameraSet,
                          ref_pose: int, calibration_target: AbstractTarget,
                          detection: TargetDetection,
+                         *, record_join_order: bool = False,
+                         join_order: list[dict] | None = None,
                          recover_single_face_telecentric: bool = True,
                          single_face_record: dict | None = None,
                          ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1260,7 +1283,8 @@ def estimate_initial_rig(target_in_camera: np.ndarray, cams: CameraSet,
     """
     extrinsics, poses = estimate_rig(
         target_in_camera, target_radius(calibration_target),
-        reference_image=ref_pose, cam_names=cams.get_names())
+        reference_image=ref_pose, cam_names=cams.get_names(),
+        record_join_order=record_join_order, join_order=join_order)
     # Classified even when off, so the run reports what recovery could have placed.
     poses = recover_single_face_telecentric_poses(
         poses, extrinsics, cams, calibration_target, detection,

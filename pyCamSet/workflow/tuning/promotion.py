@@ -24,6 +24,11 @@ def promote_retained_trial(workspace_mgr: WorkspaceManager, metadata_path: str |
     if stage not in {"phase3", "phase4"}:  # Only successful retained trials have enough artefacts.
         raise RuntimeError(f"Only successful phase3/phase4 trials can be promoted. Found success_stage: {stage!r}.")
     extra = metadata.get("extra") or {}  # Read optional artefact data written by the worker.
+    trial_education = extra.get("education") or {}
+    education = {}
+    if "trial_camset_snapshot_version" in trial_education:
+        education["trial_camset_snapshot_version"] = trial_education[
+            "trial_camset_snapshot_version"]
     artifacts = extra.get("artifacts") or {}  # Pull paths for detection and camset files.
     phase_sources = extra.get("phase_sources") or {}  # Read older/newer phase-link metadata.
     promoted: dict[str, str] = {}  # Track the workspace run ids for caller feedback.
@@ -52,6 +57,7 @@ def promote_retained_trial(workspace_mgr: WorkspaceManager, metadata_path: str |
             "diagnostics": {"promoted_from": str(metadata_file)},
             "error": None,
             "artifacts": {"detected_datapoints_pickle": str(phase1_pickle)},
+            **({"education": dict(education)} if education else {}),
         },
     )
     promoted["phase1"] = phase1_run_id  # Record the promoted phase 1 id.
@@ -79,6 +85,7 @@ def promote_retained_trial(workspace_mgr: WorkspaceManager, metadata_path: str |
                 "initial_camset": str(phase2_camset),
                 "phase1_detection_pickle": str(phase1_pickle),
             },
+            **({"education": dict(education)} if education else {}),
         },
     )
     promoted["phase2"] = phase2_run_id  # Record the promoted phase 2 id.
@@ -113,6 +120,7 @@ def promote_retained_trial(workspace_mgr: WorkspaceManager, metadata_path: str |
                 "phase1_detection_pickle_used": str(phase1_pickle),
                 "phase2_initial_camset_used": str(phase2_camset),
             },
+            **({"education": dict(education)} if education else {}),
         },
     )
     promoted["phase3"] = phase3_run_id  # Record the promoted phase 3 id.
@@ -145,6 +153,7 @@ def promote_retained_trial(workspace_mgr: WorkspaceManager, metadata_path: str |
                     "optimised_camset": str(phase4_camset),
                     "phase3_camset_used": str(phase3_camset),
                 },
+                **({"education": dict(education)} if education else {}),
             },
         )
         promoted["phase4"] = phase4_run_id  # Record the promoted phase 4 id.

@@ -178,6 +178,15 @@ class StandardBundlePrimitive:
         self.pose_end = 6 * self.free_pose + self.extr_end
         self.bdpt_end = 1 * self.free_bdpt + self.pose_end
 
+    def calc_free_poses(self):
+        """The template primitive's name for the same update, after a pose mask change.
+
+        The template handler's seeding masks missing poses through this name, and a self
+        calibration's handler runs that seeding on this primitive. (Rebuilding a
+        Phase 4 run with missing poses once raised AttributeError.)
+        """
+        self.calc_type_inds()
+
     def return_bundle_primitives(self, params):
         """
         Takes an array of parameters and populates all unfixed parameters.

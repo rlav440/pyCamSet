@@ -743,6 +743,26 @@ def test_puzzleboard_cube_printable_name_says_squares_per_face():
     values = {"n_points": 2, "length": 20.0}
     assert PuzzleBoardCube.construction_parameters().parameter("n_points").label == "Squares per face"
     assert PuzzleBoardCube.printable_name(values, "svg").startswith("pcube_2squares_")
+
+
+def test_puzzleboard_cube_default_printable_names_use_the_pcube_label(tmp_path, monkeypatch):
+    from pyCamSet.calibration_targets.puzzleboard_cube import PuzzleBoardCube
+
+    values = {"n_points": 2, "length": 20.0}
+    n_points = PuzzleBoardCube.construction_parameters().parameter("n_points")
+    assert n_points.label == "Squares per face"
+    for kind in ("svg", "pdf_vector", "pdf_raster"):
+        assert PuzzleBoardCube.printable_name(values, kind).startswith("pcube_2squares_")
+
+    monkeypatch.chdir(tmp_path)
+    cube = PuzzleBoardCube(n_points=2, length=20.0)
+    svg_path = cube.save_to_svg(PuzzleBoardCube.printable_name(values, "svg"))
+    pdf_path = cube.save_to_pdf(PuzzleBoardCube.printable_name(values, "pdf_raster"))
+
+    assert svg_path.name.startswith("pcube_2squares_")
+    assert pdf_path.name.startswith("pcube_2squares_")
+
+
 @pytest.mark.parametrize("name,cls", _targets(), ids=[n for n, _ in _targets()])
 def test_every_target_writes_itself_as_every_format(tmp_path, name, cls):
     """One export path, rather than the four copies of the same dispatch

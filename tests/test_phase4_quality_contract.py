@@ -1202,8 +1202,85 @@ def test_phase4_inherits_single_face_recovery_from_the_phase3_handler(
         assert captured[-1]["recover_single_face_telecentric"] is expected
 
 
+def test_phase4_solve_defaults_the_target_scale_rule_and_forwards_recording(
+    monkeypatch
+):
+    seen = {}
+
+    class _RecordingHandler:
+        def __init__(self, **kwargs):
+            seen["options"] = kwargs["options"]
+
+        def set_from_templated_camset(self, _cams):
+            pass
+
+    def fake_run(handler, *, threads, record_education):
+        seen["record_education"] = record_education
+        return "optimisation", "out_cams", {"stats": True}
+
+    monkeypatch.setattr(phase4, "BACKEND_OK", True)
+    monkeypatch.setattr(phase4, "SelfBundleHandler", _RecordingHandler)
+    monkeypatch.setattr(phase4, "run_bundle_adjustment_with_stats", fake_run)
+    caller_options = {"outliers": "n"}
+
+    phase4.solve("cams", "target", "detections", options=caller_options,
+                 record_education=True)
+
+    assert seen["options"]["target_scale_rule"] == "measured_edges_v1"
+    assert seen["record_education"] is True
+    assert "target_scale_rule" not in caller_options
+
+    phase4.solve("cams", "target", "detections",
+                 options={"target_scale_rule": "legacy_mean_all_edges"})
+
+    assert seen["options"]["target_scale_rule"] == "legacy_mean_all_edges"
+    assert seen["record_education"] is False
 
 
+def test_phase4_writes_the_accepted_step_trace_only_when_recording(
+    tmp_path, monkeypatch
+):
+    camset_path = tmp_path / "phase3.camset"
+    run_dir = tmp_path / "run-p4"
+    run_dir.mkdir()
+    collection = _phase3_camera_collection()
+    payload = {"steps": []}
+    handler = SimpleNamespace(education_step_trace=payload)
+    written = []
+
+    def fake_write_trace(directory, run_id, phase, kind, step_payload, *,
+                         enabled):
+        written.append((directory, run_id, phase, kind, step_payload, enabled))
+        return directory / "trace.bin"
+
+    monkeypatch.setattr(phase4, "load_CameraSet", lambda _path: collection)
+    monkeypatch.setattr(phase4, "write_trace", fake_write_trace)
+    monkeypatch.setattr(
+        phase4, "solve", lambda *_args, **_kwargs: (
+            handler, "optimisation", collection, {}))
+    monkeypatch.setattr(
+        phase4, "_diagnostics",
+        lambda *_args, **_kwargs: {"quality_gate": {"status": "complete"}})
+    run = {"run_id": "p3", "status": "complete",
+           "artifacts": {"optimised_camset": str(camset_path)}}
+
+    _, diagnostics, _ = phase4._solve(
+        {"problem_options": {}, "record_education": True}, run_dir,
+        camset_path, run, lambda _line: None)
+
+    assert diagnostics["education_trace"] == str(run_dir / "trace.bin")
+    assert written[0][1:4] == ("run-p4", "phase4", "accepted_step")
+    assert payload["run_id"] == "run-p4" and payload["phase"] == "phase4"
+    gate = diagnostics["quality_gate"]
+    assert gate["phase3_input_camset_path_matches_recorded"] is True
+    assert gate["phase3_camset_content_verified"] is False
+
+    written.clear()
+    _, diagnostics, _ = phase4._solve(
+        {"problem_options": {}}, run_dir, camset_path, run, lambda _line: None)
+
+    assert not written
+    assert "education_trace" not in diagnostics
 
 
 def test_phase4_takes_the_run_as_provenance_only_for_its_own_camset(tmp_path):

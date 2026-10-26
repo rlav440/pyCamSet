@@ -378,6 +378,7 @@ def test_a_study_writes_a_summary_and_a_record_per_success(tmp_path, dataset):
     assert len(records) == 1
     written = json.loads(records[0].read_text())
     assert written["identity"]["success_stage"] == "phase3"
+    assert written["extra"]["education"]["trial_camset_snapshot_version"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +436,7 @@ def test_a_retained_trial_becomes_a_chain_of_workspace_runs(tmp_path):
 
     assert set(promoted) == {"phase1", "phase2", "phase3"}
     phase3 = workspace.find_run("phase3", promoted["phase3"])
+    assert phase3["education"]["trial_camset_snapshot_version"] == 1
     for phase, artifact_key, filename in (
         ("phase2", "initial_camset", "camset_phase2.json"),
         ("phase3", "optimised_camset", "camset_phase3.json"),
@@ -448,6 +450,9 @@ def test_a_retained_trial_becomes_a_chain_of_workspace_runs(tmp_path):
         assert np.array_equal(promoted_camset["cam0"].extrinsic, reference["extrinsic"])
         assert np.array_equal(
             promoted_camset["cam0"].distortion_coefs, reference["distortion"])
+    for phase, run_id in promoted.items():
+        assert workspace.find_run(phase, run_id)["education"][
+            "trial_camset_snapshot_version"] == 1
     assert phase3["inputs"]["phase2_run_id"] == promoted["phase2"]
     assert workspace.find_run("phase2", promoted["phase2"])["inputs"][
         "phase1_run_id"] == promoted["phase1"]

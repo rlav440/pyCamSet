@@ -909,6 +909,27 @@ def test_set_from_templated_camset_reads_a_reloaded_solve_with_missing_poses(
     assert handler.missing_poses is not None and bool(np.asarray(handler.missing_poses)[-1])
 
 
+def test_set_from_templated_camset_still_refuses_a_self_calibration_with_missing_poses(
+        synthetic_problem):
+    """The missing-pose re-mask is for templated layouts only (the education
+    rebuild of a Phase 4 run hit it with a self calibration's StandardBundlePrimitive)."""
+    cams, target, detection, _ = _solved_camset(synthetic_problem)
+    handler = SelfBundleHandler(
+        camset=cams, target=target, detection=detection, options={"outliers": "n"})
+    handler.set_from_templated_camset(cams)
+    missing = np.zeros(handler.bundlePrimitive.poses.shape[0], dtype=bool)
+    missing[-1] = True
+    handler.missing_poses = missing
+    cams.calibration_handler = handler
+    cams.calibration_params = handler.initial_params
+
+    with pytest.raises(ValueError, match="self calibration"):
+        SelfBundleHandler(
+            camset=cams, target=target, detection=detection,
+            options={"outliers": "n"},
+        ).set_from_templated_camset(cams)
+
+
 def test_set_from_templated_camset_needs_parameters_to_read(synthetic_problem):
     cams, target, detection, _ = _solved_camset(synthetic_problem)
     cams.calibration_params = None

@@ -18,6 +18,7 @@ detections (:mod:`pyCamSet.calibration.detection_cache`).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -44,6 +45,7 @@ from pyCamSet.calibration.detection_cache import (
 )
 from pyCamSet.calibration_targets import TargetDetection
 from pyCamSet.calibration_targets.core.target_registry import build_target
+from pyCamSet.utils.paths import long_path
 from pyCamSet.workflow.detections import staged_camera_root
 from pyCamSet.workflow.workspace import (
     WorkspaceManager,
@@ -716,6 +718,140 @@ def test_a_cache_written_by_a_pass_reads_back_as_a_hit(tmp_path):
     assert _rows(detected) == 1
     assert detected.cam_names == ["cam0", "cam1"]
     assert cam_res == [(8, 12), (8, 12)]
+
+
+def test_cache_hit_returns_slot_enumeration_and_digest_from_same_open(tmp_path):
+    target = build_target({"type": "ChArUco2"})
+    cache_path = tmp_path / "detected_datapoints_aruco2.npz"
+    enumeration = {"schema_version": 1, "recordable": True,
+                   "cameras": {"cam0": [{"name": "frame1.png", "size": 8,
+                                          "mtime_ns": 17}],
+                               "cam1": [{"name": "frame1.png", "size": 8,
+                                          "mtime_ns": 17}]}}
+    save_to_cache(_a_detection(), [(8, 12), (8, 12)], cache_path, target,
+                  ["cam0", "cam1"], None, image_enumeration=enumeration)
+    expected_digest = hashlib.sha256(cache_path.read_bytes()).hexdigest()
+    side_channel = {}
+    result = load_verified_cache(cache_path, target, ["cam0", "cam1"], None,
+                                 side_channel=side_channel)
+    assert isinstance(result, tuple) and len(result) == 2
+    assert side_channel == {"cache_hit": True, "cache_sha256": expected_digest,
+                            "enumeration": enumeration}
+
+
+@pytest.mark.parametrize("with_side_channel", [False, True])
+def test_hit_digest_and_enumeration_stay_on_open_cache_during_copyback(
+        tmp_path, monkeypatch, with_side_channel):
+    """A mid-read in-place copy-back is observed through the same open."""
+    target, cache_path = _seeded_cache(tmp_path, {"type": "ChArUco2"})
+    enum_a = {"schema_version": 1, "recordable": True,
+              "cameras": {"cam0": [{"name": "old.png", "size": 3,
+                                     "mtime_ns": 1}],
+                          "cam1": [{"name": "old.png", "size": 3,
+                                     "mtime_ns": 1}]}}
+    save_to_cache(_a_detection(), [(8, 12), (8, 12)], cache_path, target,
+                  ["cam0", "cam1"], None, image_enumeration=enum_a)
+    original_digest = hashlib.sha256(cache_path.read_bytes()).hexdigest()
+    replacement = tmp_path / "replacement.npz"
+    replacement_detection = TargetDetection(
+        cam_names=["cam0", "cam1"],
+        data=np.array([[0, 0, 0, 91.0, 92.0]]))
+    save_to_cache(replacement_detection, [(8, 12), (8, 12)], replacement,
+                  target, ["cam0", "cam1"], None,
+                  image_enumeration={"schema_version": 1, "recordable": True,
+                                     "cameras": {"cam0": [], "cam1": []}})
+    real_open = open
+    open_count = {"cache": 0}
+    replaced = {"done": False}
+
+    class ReplaceAfterRead:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def read(self, size=-1):
+            data = self.stream.read(size)
+            if not replaced["done"]:
+                cache_path.write_bytes(replacement.read_bytes())
+                replaced["done"] = True
+            return data
+
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+
+    def racing_open(file, *args, **kwargs):
+        stream = real_open(file, *args, **kwargs)
+        if str(file) == str(long_path(cache_path)):
+            open_count["cache"] += 1
+            return ReplaceAfterRead(stream)
+        return stream
+
+    monkeypatch.setattr("builtins.open", racing_open)
+    side_channel = {} if with_side_channel else None
+    loaded = load_verified_cache(cache_path, target, ["cam0", "cam1"], None,
+                                 side_channel=side_channel)
+    assert loaded is not None
+    assert open_count["cache"] == 1
+    if with_side_channel:
+        assert np.array_equal(loaded[0].get_data(), _a_detection().get_data())
+        assert side_channel["cache_sha256"] == original_digest
+        assert side_channel["enumeration"] == enum_a
+    else:
+        assert side_channel is None
+        assert np.array_equal(loaded[0].get_data(), replacement_detection.get_data())
+    assert hashlib.sha256(cache_path.read_bytes()).hexdigest() != original_digest
+
+
+def test_side_channel_none_preserves_legacy_cache_hit_contract(tmp_path):
+    target, cache_path = _seeded_cache(tmp_path, {"type": "ChArUco2"})
+    result = load_verified_cache(cache_path, target, ["cam0", "cam1"], None,
+                                 side_channel=None)
+    assert isinstance(result, tuple) and len(result) == 2
+
+
+def test_real_detection_cache_hit_preserves_results_and_reports_deleted_source(
+        corpus_images, tmp_path):
+    """Exercise real ChArUco detection, then prove the hit uses writer names."""
+    from pyCamSet.calibration.camera_calibrator import detect_datapoints_in_imfile
+    from pyCamSet.workflow.education_manifest import verify
+    from pyCamSet.workflow.education_trace import trace_path, write_trace
+
+    target = build_target(CHARUCO_SPEC)
+    camera_names = sorted(path.name for path in corpus_images.iterdir()
+                          if path.is_dir())
+    trace_off = tmp_path / "trace_off"
+    assert write_trace(trace_off, "probe-off", "phase1", "stage", {},
+                       enabled=False) is None
+    assert not trace_path(trace_off).exists()
+    first, first_res = detect_datapoints_in_imfile(
+        corpus_images, target, caching=True, n_lim=3, threads=1,
+        cam_names=camera_names)
+    for camera in camera_names:
+        images = sorted((corpus_images / camera).glob("*.jpg"))
+        images[-1].unlink()
+
+    provenance = {}
+    trace_on = tmp_path / "trace_on"
+    trace_file = write_trace(trace_on, "probe-on", "phase1", "stage", {},
+                             enabled=True)
+    assert trace_file == trace_path(trace_on) and trace_file.is_file()
+    second, second_res = detect_datapoints_in_imfile(
+        corpus_images, target, caching=True, n_lim=3, threads=1,
+        cam_names=camera_names, side_channel=provenance)
+    first_data = first.get_data()
+    second_data = second.get_data()
+    assert first_data is not None and first_data.shape[0] > 0
+    assert (first_data is None and second_data is None) or np.array_equal(
+        first_data, second_data, equal_nan=True)
+    assert float(np.max(np.abs(first_data - second_data))) == 0.0
+    assert first.cam_names == second.cam_names
+    assert first.max_ims == second.max_ims
+    assert first_res == second_res
+    assert provenance["cache_hit"] is True
+    assert len(provenance["cache_sha256"]) == 64
+    result = verify(provenance["enumeration"], corpus_images, camera_names,
+                    n_lim=3)
+    assert result.status == "mismatch"
+    assert all(result.unavailable[camera] for camera in camera_names)
 
 
 def test_a_cache_for_a_different_target_is_a_miss(tmp_path):

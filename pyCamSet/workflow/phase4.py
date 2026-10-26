@@ -16,6 +16,7 @@ from scipy import sparse
 
 from pyCamSet.utils.paths import long_path
 from pyCamSet.workflow.diagnostics import per_camera_mean_reprojection
+from pyCamSet.workflow.education_trace import write_trace
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
 from pyCamSet.workflow.phase3 import solve_quality_gate
 from pyCamSet.workflow.workspace import (
@@ -64,6 +65,8 @@ def run(params: dict,
 
     run_id = make_run_id()
     run_dir = workspace.run_dir("phase4", run_id)
+    params = dict(params)
+    params["record_education"] = bool(params.get("record_education", False))
 
     diagnostics: dict = {}
     report: Optional[dict] = None
@@ -117,7 +120,8 @@ def run(params: dict,
 def solve(previous_cams, target, detections, *,
           fixed_params: Optional[dict] = None,
           options: Optional[dict] = None,
-          threads: int = 1):
+          threads: int = 1,
+          record_education: bool = False):
     """
     Self-calibrate from a solved camera set, from objects in hand.
 
@@ -131,6 +135,7 @@ def solve(previous_cams, target, detections, *,
     :param fixed_params: parameters to pin rather than solve for
     :param options: the solver options, as the handler reads them
     :param threads: Jacobian evaluation threads
+    :param record_education: keep the accepted-step trace on the handler
     :return: the handler, the solver result, the solved cameras, the stats
     """
     if not BACKEND_OK:
@@ -147,7 +152,7 @@ def solve(previous_cams, target, detections, *,
     )
     handler.set_from_templated_camset(previous_cams)
     optimisation, out_cams, stats = run_bundle_adjustment_with_stats(
-        handler, threads=threads)
+        handler, threads=threads, record_education=record_education)
     return handler, optimisation, out_cams, stats
 
 
@@ -244,6 +249,7 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
         fixed_params=params.get("fixed_params"),
         options=options,
         threads=int(params.get("threads", 1)),
+        record_education=bool(params.get("record_education", False)),
     )
 
     # A fixed short filename, so a long source folder does not push the run
@@ -271,6 +277,18 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     diagnostics["quality_gate"]["phase3_input_camset_path_matches_recorded"] = (
         True if phase3_run is not None else None)
     diagnostics["quality_gate"]["phase3_camset_content_verified"] = False
+    step_payload = getattr(handler, "education_step_trace", None)
+    if params.get("record_education") and step_payload is not None:
+        step_payload["run_id"] = run_dir.name
+        step_payload["phase"] = "phase4"
+        # Opt-in teaching material: an unwritable trace does not fail a finished solve.
+        try:
+            trace_path = write_trace(
+                run_dir, run_dir.name, "phase4", "accepted_step",
+                step_payload, enabled=True)
+            diagnostics["education_trace"] = str(trace_path) if trace_path else None
+        except (OSError, ValueError) as exc:
+            diagnostics["education_trace"] = f"unavailable: {exc}"
     report = getattr(out_cams, "calibration_report", None)
     return camset_out, diagnostics, (
         report.to_dict() if report is not None else None)

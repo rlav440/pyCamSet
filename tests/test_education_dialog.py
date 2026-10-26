@@ -77,6 +77,22 @@ def test_zero_one_and_multiple_selection_routes_to_chooser_then_phase_factory(mo
         dialog.deleteLater()
 
 
+@pytest.mark.gui
+def test_phase_factory_import_is_lazy_and_uses_fixed_contract(monkeypatch):
+    _application()
+    from PySide6.QtWidgets import QLabel
+    from pyCamSet.gui.education_dialog import EducationRunView, discover_phase_view
+
+    run = EducationRunView("phase4", "r", Path("."), "complete", {}, object())
+    calls = []
+    module = types.ModuleType("pyCamSet.gui.education_phase4")
+    module.create_education_phase_view = lambda context, parent=None: (
+        calls.append((context, parent)) or QLabel("mock phase view", parent))
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    assert calls == []
+    parent = QLabel()
+    assert discover_phase_view(run, parent).text() == "mock phase view"
+    assert calls == [(run, parent)]
 
 
 @pytest.mark.gui

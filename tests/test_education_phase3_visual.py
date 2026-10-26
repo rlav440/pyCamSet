@@ -415,3 +415,26 @@ def test_eps_is_shown_in_phase4s_unit():
     assert eps_per_metre(1.0, None) is None
 
 
+def test_telecentric_bend_centre_is_the_principal_point_not_the_lens_axis():
+    """P1-3: the distortion of a telecentric lens is centred on the principal point, which is
+    the image of the optical axis. The copy must not say the centre is "not the lens axis"; it
+    must give the principal point and say that the target origin lands there by construction
+    (no translation in a telecentric camera). Checked against the model's source text: the
+    projection applies the distortion to the un-offset coordinates, then adds (c_x, c_y)."""
+    import re
+    gui = Path(__file__).resolve().parents[1] / "pyCamSet" / "gui" / "education_phase3.py"
+    text = gui.read_text(encoding="utf-8")
+    assert "not the lens axis" not in text and "target origin's image" not in text
+    assert "where the model bends around (the principal point, the image of the optical axis)" \
+        in text
+    assert "+ is the bend centre: the principal point, the image of the optical axis" in text
+    assert "bend centre (px)" in text and "A telecentric camera has no" in text
+    assert "its value depends on the frame the run was solved in" in text
+    # the lens model itself: distortion about the un-offset coordinates, then the principal point
+    model = (Path(__file__).resolve().parents[1] / "pyCamSet" / "optimisation"
+             / "function_block_implementations.py").read_text(encoding="utf-8")
+    assert re.search(r"xs = m_x\*inp\[0\]\*w", model) and "output[0] = xs*den + c_x" in model
+    # the sideways-shift caveat is named for the telecentricity term times depth
+    phase4 = (Path(__file__).resolve().parents[1] / "pyCamSet" / "gui"
+              / "education_phase4.py").read_text(encoding="utf-8")
+    assert "telecentricity term)" in phase4 and "lens's bending" not in phase4

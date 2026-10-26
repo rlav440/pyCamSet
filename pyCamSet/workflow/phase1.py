@@ -19,6 +19,7 @@ from pyCamSet.workflow.detections import (
     selected_camera_folders,
     staged_camera_root,
 )
+from pyCamSet.calibration_targets.core.abstract_target import COORDINATE_MAPPING
 from pyCamSet.workflow.logs import LogFn, captured_output, discard
 from pyCamSet.workflow.targets import (
     detector_backend_of_spec,
@@ -115,6 +116,7 @@ def run(params: dict,
             "complete"
         ),
         "params": params,
+        "coordinate_mapping": COORDINATE_MAPPING,
         "diagnostics": diagnostics,
         "report": report,
         "error": error,

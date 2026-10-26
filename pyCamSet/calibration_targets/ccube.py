@@ -657,6 +657,10 @@ class Ccube(AbstractTarget):
 
         """
 
+        trace_enabled = bool(getattr(self, "phase1_trace_enabled", False))
+        if trace_enabled:
+            self._last_phase1_trace = None
+        trace_stages = []
         image = np.asarray(image)
         if image.dtype != np.uint8:
             convertible = (
@@ -692,10 +696,17 @@ class Ccube(AbstractTarget):
                 im_idea = np.tile(im_idea[..., None], (1, 1, 3))
 
 
+        # Education view only (see AbstractTarget's detect_in_image): None
+        # in every normal run, which then calls exactly as before.
+        explain = getattr(self, "_detect_explain", None)
+
         if self.marker_backend == "aruco2":
             # Detect once with the parent dictionary, then interpolate per
             # face with that face's own board.
             markers = detect_markers(image, self._aruco_dict_int)
+            if explain is not None:
+                explain.append({"event": "aruco2_markers", "markers": [
+                    (int(mid), np.asarray(c, dtype=np.float64).copy()) for mid, c in markers]})
             seen_keys = []
             seen_data = []
             for idb, board in enumerate(self.boards):
@@ -708,6 +719,11 @@ class Ccube(AbstractTarget):
                 ]
                 if not face_markers:
                     continue
+                face_explain = None
+                if explain is not None:
+                    face_explain = {}
+                    explain.append({"event": "charuco_face", "face": int(idb),
+                                    "detail": face_explain})
                 c_ids, c_pts = interpolate_board_corners(
                     image,
                     board,
@@ -720,9 +736,16 @@ class Ccube(AbstractTarget):
                         None if self.given_legacy_warning else
                         (lambda _i=idb, _b=board: self._warn_legacy_once(_i, _b))
                     ),
+                    **({} if face_explain is None else {"explain": face_explain}),
                 )
                 if c_ids is None:
                     continue
+                if trace_enabled:
+                    trace_stages.append({
+                        "name": "aruco2_face_corners",
+                        "face_index": int(idb),
+                        "corner_ids": np.asarray(c_ids).reshape(-1).astype(int).tolist(),
+                    })
                 for cid, corner in zip(c_ids, c_pts):
                     seen_keys.append([idb, int(cid)])
                     seen_data.append(corner)
@@ -744,6 +767,16 @@ class Ccube(AbstractTarget):
             c_corners, c_ids, mloc, mid =  bd.detectBoard(image)
             # Into the pixel-centre frame (OpenCV before 4.14 is half a pixel off it).
             c_corners = charuco_corners_to_pixel_centre(c_corners)
+            if explain is not None:
+                explain.append({"event": "charuco_face", "face": int(idb), "detail": {
+                    "detect_board": (c_corners, c_ids, mloc, mid)}})
+            if trace_enabled:
+                trace_stage = {"name": "opencv_face", "face_index": int(idb)}
+                if mid is not None:
+                    trace_stage["marker_ids"] = np.asarray(mid).reshape(-1).astype(int).tolist()
+                if c_ids is not None:
+                    trace_stage["corner_ids"] = np.asarray(c_ids).reshape(-1).astype(int).tolist()
+                trace_stages.append(trace_stage)
             if c_corners is None and mloc is not None:
                 # A mismatch warns but never retries under the other
                 # pattern, and never takes corners from it. The probe costs
@@ -772,6 +805,9 @@ class Ccube(AbstractTarget):
         if draw:
             cv2.imshow('detections', im_idea)
             cv2.waitKey(wait_len)
+
+        if trace_enabled:
+            self._last_phase1_trace = trace_stages
 
         return ImageDetection(keys=seen_keys, image_points=seen_data)
 

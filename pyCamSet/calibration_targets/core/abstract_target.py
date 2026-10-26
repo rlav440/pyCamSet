@@ -97,7 +97,9 @@ def init_worker(detector_class, input_args): #: Optional['AbstractTarget']):
     """
     multiprocessing.freeze_support()
     global worker_detector
+    trace_enabled = bool(input_args.pop("__phase1_trace_enabled__", False))
     worker_detector = detector_class(**input_args)
+    worker_detector.phase1_trace_enabled = trace_enabled
 
 def _looks_like_native_opencv_error(exc: BaseException) -> bool:
     """
@@ -126,6 +128,10 @@ def _prepare_detection_image(
     return preprocess_puzzleboard_image(
         image, enabled=True, scale=preprocessing_scale,
         gamma=preprocessing_gamma), float(preprocessing_scale)
+def enumerate_detection_images(file: Path, n_lim: int | None = None) -> list[Path]:
+    """Return the exact recursive, natural-sorted image list used by detection."""
+    paths = natsorted(glob_ims(Path(file)))
+    return paths if n_lim is None else paths[:n_lim]
 
 
 #: Version tag of the detector-to-native coordinate mapping below. Phase 1 run
@@ -157,6 +163,74 @@ def _restore_native_coordinates(detection: ImageDetection, scale: float) -> Imag
     return detection
 
 
+def read_detection_image(im_file, rescale_and_gamma: bool = False):
+    """Read one photo exactly as Phase 1's detection pass does.
+
+    16-bit photos keep their full depth when the rescale-and-gamma preparation
+    will reduce them itself; otherwise OpenCV's 8-bit colour read is used.
+    Returns ``None`` for an unreadable file, as ``cv2.imread`` does.
+    """
+    return cv2.imread(
+        str(im_file), cv2.IMREAD_UNCHANGED if rescale_and_gamma else cv2.IMREAD_COLOR)
+
+
+#: The attribute a target reads its optional detection-explanation collector
+#: from (see :func:`detect_in_image`). Absent, or None, in every normal run.
+DETECT_EXPLAIN_ATTRIBUTE = "_detect_explain"
+
+
+def detect_in_image(
+    target, im, *, draw: bool = False, camera=None, upscale_factor: int = 1,
+    rescale_and_gamma: bool = False, preprocessing_scale: float = 0.25,
+    preprocessing_gamma: float = 0.5, explain: list | None = None,
+) -> ImageDetection:
+    """Detect *target* in one already-read photo, as Phase 1 does per image.
+
+    The one per-image path shared by ``find_in_imfolder`` (single process),
+    its worker processes and the education explainer: optional upscaling,
+    the optional rescale-and-gamma preparation, the target's own
+    ``find_in_image`` and the mapping back to native pixels.
+
+    :param explain: optional list that, when given, receives the prepared
+        image and is handed to the target (as ``target._detect_explain``) for
+        the duration of this one call, so instrumented detectors append what
+        each of their steps saw. ``None`` -- every normal run -- changes
+        nothing.
+    """
+    upscaled = False
+    if upscale_factor > 1 and not rescale_and_gamma:
+        im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
+        upscaled = True
+    im, preparation_scale = _prepare_detection_image(
+        im, rescale_and_gamma=rescale_and_gamma,
+        preprocessing_scale=preprocessing_scale,
+        preprocessing_gamma=preprocessing_gamma)
+    if explain is None:
+        detection = target.find_in_image(im, draw=draw, camera=camera)
+        return _restore_native_coordinates(detection, preparation_scale)
+    explain.append({
+        "event": "prepared_image", "image": im,
+        "preparation_scale": float(preparation_scale),
+        "upscale_factor": int(upscale_factor) if upscaled else 1,
+    })
+    previous = getattr(target, DETECT_EXPLAIN_ATTRIBUTE, None)
+    try:
+        setattr(target, DETECT_EXPLAIN_ATTRIBUTE, explain)
+        detection = target.find_in_image(im, draw=draw, camera=camera)
+    finally:
+        try:
+            if previous is None:
+                delattr(target, DETECT_EXPLAIN_ATTRIBUTE)
+            else:
+                setattr(target, DETECT_EXPLAIN_ATTRIBUTE, previous)
+        except AttributeError:
+            pass
+    explain.append({"event": "detector_output", "keys": np.asarray(detection.keys),
+                    "image_points": np.asarray(detection.image_points, dtype=np.float64),
+                    "preparation_scale": float(preparation_scale)})
+    return _restore_native_coordinates(detection, preparation_scale)
+
+
 def _process_image(
     im_file: Path, cam_name: str, idx: int, draw: bool, camera: Camera,
     upscale_factor: int = 1, rescale_and_gamma: bool = False,
@@ -174,28 +248,26 @@ def _process_image(
     process, so the caller logs once it has every result.
 
     :return: cam_name, idx, the detection, what went wrong, whether the file
-        was unreadable, and any warning the target stashed on
-        ``legacy_warning_message`` for the caller to log
+        was unreadable, any warning the target stashed on
+        ``legacy_warning_message`` for the caller to log, and the target's
+        optional Phase 1 trace record (None unless tracing was asked for)
     """
-    im = cv2.imread(
-        im_file, cv2.IMREAD_UNCHANGED if rescale_and_gamma else cv2.IMREAD_COLOR)
+    im = read_detection_image(im_file, rescale_and_gamma)
     if im is None:
-        return cam_name, idx, ImageDetection(), "unreadable or undecodable", True, None
+        return cam_name, idx, ImageDetection(), "unreadable or undecodable", True, None, None
     try:
-        if upscale_factor > 1 and not rescale_and_gamma:
-            im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
-        im, preparation_scale = _prepare_detection_image(
-            im, rescale_and_gamma=rescale_and_gamma,
+        detection = detect_in_image(
+            worker_detector, im, draw=draw, camera=camera,
+            upscale_factor=upscale_factor, rescale_and_gamma=rescale_and_gamma,
             preprocessing_scale=preprocessing_scale,
             preprocessing_gamma=preprocessing_gamma)
-        detection = worker_detector.find_in_image(im, draw=draw, camera=camera)
-        detection = _restore_native_coordinates(detection, preparation_scale)
     except (cv2.error, ValueError) as exc:
         if isinstance(exc, ValueError) and not _looks_like_native_opencv_error(exc):
             raise
-        return cam_name, idx, ImageDetection(), str(exc), False, None
+        return cam_name, idx, ImageDetection(), str(exc), False, None, None
     warning_message = getattr(worker_detector, "legacy_warning_message", None)
-    return cam_name, idx, detection, None, False, warning_message
+    trace_record = getattr(worker_detector, "_last_phase1_trace", None)
+    return cam_name, idx, detection, None, False, warning_message, trace_record
 
 
 def _report_folder_detection_failures(
@@ -461,7 +533,8 @@ class AbstractTarget(ABC):
         self, file: Path, cam_names, draw=False, n_lim=None,
         camera: Camera = None, threads=12, upscale_factor: int = 1,
         rescale_and_gamma: bool = False, preprocessing_scale: float = 0.25,
-        preprocessing_gamma: float = 0.5) -> TargetDetection:
+        preprocessing_gamma: float = 0.5, enumeration_out: dict | None = None,
+    ) -> TargetDetection:
         """
         Notes: A function to detect the camera results in the image folder.
         generally a process wrapper around the previous function
@@ -477,15 +550,19 @@ class AbstractTarget(ABC):
 
         """
         cam_name = file.parts[-1]
-        im_locs = [str(x) for x in glob_ims(file)]
+        image_paths = enumerate_detection_images(file, n_lim)
+        im_locs = [str(x) for x in image_paths]
 
         if len(im_locs) == 0:
             raise ValueError(f"No images were found in the given folder {file}")
 
+        if (getattr(self, "phase1_trace_enabled", False)
+                and not hasattr(self, "phase1_trace_records")):
+            self.phase1_trace_records = []
 
-        im_locs = natsorted(im_locs)
-        if n_lim is not None:
-            im_locs = im_locs[:n_lim]
+
+        if enumeration_out is not None:
+            enumeration_out["paths"] = tuple(image_paths)
 
         if cam_names is None:
             cam_names = [cam_name]
@@ -498,9 +575,7 @@ class AbstractTarget(ABC):
             n_unreadable = 0
             n_detect_error = 0
             for idx, im_file in enumerate(im_locs):
-                im = cv2.imread(
-                    im_file,
-                    cv2.IMREAD_UNCHANGED if rescale_and_gamma else cv2.IMREAD_COLOR)
+                im = read_detection_image(im_file, rescale_and_gamma)
                 if im is None:
                     # cv2.imread returns None rather than raising.
                     logger.warning(
@@ -510,21 +585,26 @@ class AbstractTarget(ABC):
                     )
                     n_unreadable += 1
                     detections.add_detection(cam_name, idx, ImageDetection())
+                    if getattr(self, "phase1_trace_enabled", False):
+                        # Keep the trace index aligned even when decoding failed.
+                        self.phase1_trace_records.append({
+                            "camera": cam_name, "image_index": idx,
+                            "trace_status": "missing", "stages": [],
+                        })
                     continue
                 # One frame's OpenCV failure must not abort the folder.
                 # aruco2's detector reports the same failure as a
                 # ValueError, isolated only when it carries OpenCV's own
                 # message shape; any other ValueError is a programming
                 # error and surfaces.
+                self._last_phase1_trace = None
                 try:
-                    if upscale_factor > 1 and not rescale_and_gamma:
-                        im = cv2.resize(im, None, fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
-                    im, preparation_scale = _prepare_detection_image(
-                        im, rescale_and_gamma=rescale_and_gamma,
+                    detection = detect_in_image(
+                        self, im, draw=draw, camera=camera,
+                        upscale_factor=upscale_factor,
+                        rescale_and_gamma=rescale_and_gamma,
                         preprocessing_scale=preprocessing_scale,
                         preprocessing_gamma=preprocessing_gamma)
-                    detection = self.find_in_image(im, draw=draw, camera=camera)
-                    detection = _restore_native_coordinates(detection, preparation_scale)
                 except (cv2.error, ValueError) as exc:
                     if isinstance(exc, ValueError) and not _looks_like_native_opencv_error(exc):
                         raise
@@ -535,6 +615,13 @@ class AbstractTarget(ABC):
                     n_detect_error += 1
                     detection = ImageDetection()
                 detections.add_detection(cam_name, idx, detection)
+                if getattr(self, "phase1_trace_enabled", False):
+                    trace = getattr(self, "_last_phase1_trace", None)
+                    self.phase1_trace_records.append({
+                        "camera": cam_name, "image_index": idx,
+                        "trace_status": "captured" if trace is not None else "missing",
+                        "stages": trace or [],
+                    })
             _report_folder_detection_failures(cam_name, file, n_unreadable, n_detect_error, len(im_locs))
             return detections
 
@@ -553,7 +640,10 @@ class AbstractTarget(ABC):
             logger.critical("Python multiprocessing attempted to start an infinite loop. Use the if __name__ == '__main__' idiom in your calling script to prevent this")
             raise RuntimeError()
 
-        with multiprocessing.Pool(processes=threads, initializer=init_worker, initargs=(self.__class__, self.input_args)) as pool:
+        worker_args = dict(self.input_args)
+        worker_args["__phase1_trace_enabled__"] = bool(
+            getattr(self, "phase1_trace_enabled", False))
+        with multiprocessing.Pool(processes=threads, initializer=init_worker, initargs=(self.__class__, worker_args)) as pool:
             results = pool.starmap(_process_image, tasks)
         n_unreadable = 0
         n_detect_error = 0
@@ -562,8 +652,14 @@ class AbstractTarget(ABC):
         # its own target and so fires the same once-per-target warning,
         # while a multi-face target can raise several distinct ones.
         warning_messages: dict[str, None] = {}
-        for cam, idx, detection, error, unreadable, warning_message in results:
+        for cam, idx, detection, error, unreadable, warning_message, trace_record in results:
             detections.add_detection(cam, idx, detection)
+            if getattr(self, "phase1_trace_enabled", False):
+                self.phase1_trace_records.append({
+                    "camera": cam, "image_index": idx,
+                    "trace_status": "captured" if trace_record is not None else "missing",
+                    "stages": trace_record or [],
+                })
             if error is not None:
                 if unreadable:
                     logger.warning(

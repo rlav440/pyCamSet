@@ -227,9 +227,33 @@ class ChArUco2(AbstractTarget):
         :return ImageDetection: the corners found, keyed by the row-major
             index :attr:`point_data` was built with.
         """
-        corner_ids, image_points = detect_grid_board_corners(
-            image, self.grid_size, self._aruco_dict_int, self.square_size)
+        trace_enabled = bool(getattr(self, "phase1_trace_enabled", False))
+        # Education view only (see AbstractTarget's detect_in_image).
+        explain = getattr(self, "_detect_explain", None)
+        if explain is not None:
+            face_explain = {}
+            explain.append({"event": "grid_board_face", "face": 0,
+                            "ids": None, "detail": face_explain})
+            if trace_enabled:
+                self._last_phase1_trace = None
+            trace_stages = [] if trace_enabled else None
+            corner_ids, image_points = detect_grid_board_corners(
+                image, self.grid_size, self._aruco_dict_int, self.square_size,
+                trace_stages=trace_stages, explain=face_explain)
+        elif trace_enabled:
+            # A miss or exception must never expose the prior frame's stages.
+            self._last_phase1_trace = None
+            trace_stages = []
+            corner_ids, image_points = detect_grid_board_corners(
+                image, self.grid_size, self._aruco_dict_int, self.square_size,
+                trace_stages=trace_stages)
+        else:
+            # Preserve the legacy call path unless Phase 1 recording is opted in.
+            corner_ids, image_points = detect_grid_board_corners(
+                image, self.grid_size, self._aruco_dict_int, self.square_size)
         if corner_ids is None:
+            if trace_enabled:
+                self._last_phase1_trace = trace_stages
             return ImageDetection()
 
         # point_data gains a leading "face" axis once built (a single face
@@ -245,6 +269,9 @@ class ChArUco2(AbstractTarget):
                 int((~valid).sum()), n_corners)
             corner_ids = corner_ids[valid]
             image_points = image_points[valid]
+
+        if trace_enabled:
+            self._last_phase1_trace = trace_stages
 
         if draw:
             display_im = image.copy() if hasattr(image, "copy") else np.asarray(image).copy()

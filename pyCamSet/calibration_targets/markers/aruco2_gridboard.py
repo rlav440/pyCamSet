@@ -207,6 +207,21 @@ _REFINE_COARSE_SIGMA = 3.0
 #: or another non-corner feature nearby fails this).
 _REFINE_MIN_SYMMETRY = 0.3
 
+# Keep a single education-trace stage small even for an unusually large board.
+_PHASE1_TRACE_MAX_IDS = 4096
+
+
+def _append_phase1_trace(trace_stages, name: str, ids) -> None:
+    """Append observed IDs, explicitly marking a bounded/truncated stage."""
+    if trace_stages is None:
+        return
+    observed = np.asarray(ids).reshape(-1)
+    key = "marker_ids" if name == "aruco_markers" else "corner_ids"
+    stage = {"name": name, key: observed[:_PHASE1_TRACE_MAX_IDS].astype(int).tolist()}
+    if len(observed) > _PHASE1_TRACE_MAX_IDS:
+        stage["truncated"] = True
+    trace_stages.append(stage)
+
 
 def _lattice_coords(corner_ids: np.ndarray, grid_w: int) -> np.ndarray:
     """``corner_ids`` (``row * (grid_w+1) + col``) as ``(N, 2)`` ``(col, row)``."""
@@ -356,6 +371,7 @@ def refine_grid_board_corners(
     image: np.ndarray, lattice_cr: np.ndarray, image_points: np.ndarray,
     sigma: float = _REFINE_SIGMA, coarse_sigma: float = _REFINE_COARSE_SIGMA,
     min_symmetry: float = _REFINE_MIN_SYMMETRY,
+    explain: dict | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Move each corner to the saddle point of the Gaussian-smoothed image
@@ -389,6 +405,8 @@ def refine_grid_board_corners(
         non-finite input point is always refused (and returned as-is): it
         cannot be searched from, and is excluded from the bounding box and
         from other corners' local-spacing estimate rather than raising.
+    :param explain: optional dict that, when given, is filled with what
+        each step decided per corner (education view); None changes nothing.
     """
     grey = np.asarray(image)
     if grey.ndim == 3:
@@ -436,6 +454,14 @@ def refine_grid_board_corners(
     refined = fine + (x0, y0)
     symmetry = _point_symmetry(grey.astype(np.float32), refined, square)
     accepted = ok_fine & (symmetry >= min_symmetry) & finite
+    if explain is not None:
+        explain.update({
+            "before": pts.copy(), "saddle": refined.copy(),
+            "retried": retry.copy(), "saddle_found": ok_fine.copy(),
+            "symmetry": symmetry.copy(), "min_symmetry": float(min_symmetry),
+            "accepted": accepted.copy(), "square_px": square.copy(),
+            "sigma": float(sigma), "coarse_sigma": float(coarse_sigma),
+        })
     return np.where(accepted[:, None], refined, pts), accepted
 
 
@@ -757,6 +783,7 @@ def validate_grid_board_corners(
     radius: int = _VALIDATE_RADIUS, tau_rel: float = _VALIDATE_TAU_REL,
     tau_abs: float = _VALIDATE_TAU_ABS, irls_iterations: int = _VALIDATE_IRLS_ITERATIONS,
     min_neighbours: int = _VALIDATE_MIN_NEIGHBOURS,
+    explain: dict | None = None,
 ) -> np.ndarray:
     """
     Leave-one-out lattice-consistency check: keep a corner only where its
@@ -793,12 +820,25 @@ def validate_grid_board_corners(
     :param image_points: ``(N, 2)`` image positions (post-refinement). A
         non-finite position is dropped up front rather than crashing or
         being treated as verified.
+    :param explain: optional dict, filled when given for the education view
+        (``None`` changes nothing).  ``predicted`` is the ``(N, 2)`` image
+        position each corner's neighbourhood predicts at the moment it was last
+        scored, ``residual`` and ``tolerance`` the matching distance and
+        threshold (``max(tau_abs, tau_rel * square) + model_uncertainty``), all
+        NaN for a corner that could not be checked.  ``unsupported`` lists the
+        corners dropped for having too few neighbours to check; ``points``,
+        ``keep``, ``radius`` and ``min_neighbours`` are the inputs and result.
     :return: an ``(N,)`` bool keep mask.
     """
     lattice_cr = np.asarray(lattice_cr, dtype=np.int64).reshape(-1, 2)
     pts = np.asarray(image_points, dtype=np.float64).reshape(-1, 2)
     n = len(lattice_cr)
     if n == 0:
+        if explain is not None:
+            explain.update({"predicted": np.zeros((0, 2)), "residual": np.zeros(0),
+                            "tolerance": np.zeros(0), "unsupported": np.zeros(0, dtype=np.int64),
+                            "points": pts.copy(), "keep": np.zeros(0, dtype=bool),
+                            "radius": int(radius), "min_neighbours": int(min_neighbours)})
         return np.zeros(0, dtype=bool)
     offsets = _neighbour_offsets(radius)
     # The immediate (Chebyshev radius 1) ring of ``offsets``, used for the
@@ -812,6 +852,8 @@ def validate_grid_board_corners(
     grid_w = int(lattice_cr[:, 0].max()) + 1
     grid = -np.ones((grid_h, grid_w), dtype=np.int64)
     grid[lattice_cr[:, 1], lattice_cr[:, 0]] = np.arange(n)
+    # Filled by every score() call, for the education view only.
+    predicted = np.full((n, 2), np.nan)
 
     def score(
         indices: np.ndarray, alive_mask: np.ndarray,
@@ -907,6 +949,7 @@ def validate_grid_board_corners(
         model_uncertainty = np.where(near_ok, _VALIDATE_MODEL_ERROR_SCALE * disagreement, 0.0)
 
         residual = np.linalg.norm(prediction - pts[indices], axis=1)
+        predicted[indices] = np.where(verifiable[:, None], prediction, np.nan)
         return (
             np.where(verifiable, residual, np.nan),
             np.where(verifiable, square, np.nan),
@@ -957,6 +1000,18 @@ def validate_grid_board_corners(
     dropped_unsupported = int((~final_verifiable).sum())
     alive[unsupported[~final_verifiable]] = False
 
+    if explain is not None:
+        explain.update({
+            "predicted": predicted,
+            "residual": residual.copy(),
+            "tolerance": np.where(verifiable, threshold_of(square, uncertainty), np.nan),
+            "unsupported": unsupported[~final_verifiable].copy(),
+            "points": pts.copy(),
+            "keep": alive.copy(),
+            "radius": int(radius),
+            "min_neighbours": int(min_neighbours),
+        })
+
     _LOG.debug(
         "aruco2 grid-board validation: %d corner(s) removed, %d readmitted, "
         "%d dropped for having fewer than %d non-collinear neighbours; %d kept.",
@@ -967,6 +1022,7 @@ def validate_grid_board_corners(
 def detect_grid_board_corners(
     image, grid_size: tuple[int, int], dict_int: int, marker_size: float,
     ids=None, *, refine: bool = True, validate: bool = True,
+    trace_stages: list | None = None, explain: dict | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """
     Detect a ChArUco2 grid board and map it to pyCamSet's stable corner ids.
@@ -989,6 +1045,14 @@ def detect_grid_board_corners(
     :param validate: run :func:`validate_grid_board_corners` afterwards,
         dropping corners its lattice neighbours disagree with. On by
         default; ChArUco2 and Ccube2 use the default.
+    :param trace_stages: optional list cleared and populated with observed
+        aruco2 marker IDs and surviving row-major corner IDs; each stage is
+        bounded to ``_PHASE1_TRACE_MAX_IDS`` and marks truncation explicitly.
+    :param explain: optional dict that, when given, is filled with what each
+        step saw -- aruco2's accepted markers, its raw corners, the
+        edge-margin cut, refinement and validation (see
+        :mod:`pyCamSet.workflow.education_detect_explain`). Always in the
+        unpadded image's pixel-centre frame, as the returned points are.
     :return: ``(corner_ids, image_points)`` -- ``corner_ids`` a 1D int array
         indexing :data:`ChArUco2.point_data`'s rows, ``image_points`` an
         ``(N, 2)`` float array of where each one was found -- or
@@ -1007,6 +1071,9 @@ def detect_grid_board_corners(
         marker of the dictionary per square.
     """
     _require_aruco2()
+    if trace_stages is not None:
+        # A miss is an empty trace, never stale evidence from the prior frame.
+        trace_stages.clear()
     board_ids = _grid_board_ids(grid_size, ids, dict_int)
     img = _as_uint8_image(image)
     grid_w, grid_h = int(grid_size[0]), int(grid_size[1])
@@ -1018,6 +1085,10 @@ def detect_grid_board_corners(
     padded = cv2.copyMakeBorder(
         img, pad, pad, pad, pad, cv2.BORDER_CONSTANT,
         value=(_PAD_VALUE,) * (img.shape[2] if img.ndim == 3 else 1))
+    if explain is not None:
+        explain.update({"pad": int(pad), "grid_size": (grid_w, grid_h),
+                        "dict_int": int(dict_int), "board_ids": board_ids,
+                        "outcome": "searching"})
     try:
         if board_ids is None:
             found, board = aruco2.detect_grid_board(
@@ -1038,9 +1109,21 @@ def detect_grid_board_corners(
             "so no corners are returned for it: %s",
             grid_w, grid_h, img.shape[1], img.shape[0],
             str(err).strip().splitlines()[-1] if str(err).strip() else type(err).__name__)
+        if explain is not None:
+            explain["outcome"] = "aruco2 error at the image edge"
         return None, None
     if not found or not board.markers:
+        if explain is not None:
+            explain["outcome"] = "no connected group of this board's markers"
         return None, None
+    if explain is not None:
+        explain["markers"] = [
+            (int(marker.id), np.asarray(marker.corners, dtype=np.float64).reshape(4, 2) - pad)
+            for marker in board.markers]
+
+    # IDs accepted into aruco2's returned board, not merely the requested set.
+    _append_phase1_trace(
+        trace_stages, "aruco_markers", [marker.id for marker in board.markers])
 
     obj_points, img_points = aruco2.get_solve_pnp_points(
         board, marker_size=float(marker_size))
@@ -1071,6 +1154,9 @@ def detect_grid_board_corners(
     col = np.round(obj_points[:, 0] / float(marker_size)).astype(np.int64)
     row = np.round(obj_points[:, 1] / float(marker_size)).astype(np.int64)
     corner_ids = row * (grid_w + 1) + col
+    if explain is not None:
+        explain["raw_ids"] = corner_ids.copy()
+        explain["raw_points"] = img_points.copy()
 
     # Refined over a window reaching past the image edge, so pulled off
     # position: 1-4 px at the median against 0.2-0.3 px further in. Not
@@ -1081,15 +1167,28 @@ def detect_grid_board_corners(
     inside = ((img_points[:, 0] >= margin) & (img_points[:, 1] >= margin)
               & (img_points[:, 0] <= width - 1 - margin)
               & (img_points[:, 1] <= height - 1 - margin))
+    if explain is not None:
+        explain["inside_margin"] = inside.copy()
+        explain["edge_margin_px"] = int(margin)
     if not np.any(inside):
+        if explain is not None:
+            explain["outcome"] = "every corner too close to the image edge"
         return None, None
     corner_ids = corner_ids[inside]
     img_points = img_points[inside].astype(np.float64)
 
     if refine or validate:
         lattice_cr = _lattice_coords(corner_ids, grid_w)
+        if explain is not None:
+            explain["lattice_cr"] = lattice_cr.copy()
+            explain["candidate_ids"] = corner_ids.copy()
         if refine:
-            refined_points, refined_mask = refine_grid_board_corners(img, lattice_cr, img_points)
+            if explain is None:
+                refined_points, refined_mask = refine_grid_board_corners(img, lattice_cr, img_points)
+            else:
+                explain["refine"] = {}
+                refined_points, refined_mask = refine_grid_board_corners(
+                    img, lattice_cr, img_points, explain=explain["refine"])
             refined_points, refined_mask = reseed_refused_corners(
                 img, lattice_cr, refined_points, refined_mask, (grid_w, grid_h))
             _LOG.debug(
@@ -1097,8 +1196,15 @@ def detect_grid_board_corners(
                 int(refined_mask.sum()), len(corner_ids))
             img_points = refined_points
         if validate:
-            keep = validate_grid_board_corners(lattice_cr, img_points)
+            if explain is None:
+                keep = validate_grid_board_corners(lattice_cr, img_points)
+            else:
+                explain["validate"] = {}
+                keep = validate_grid_board_corners(
+                    lattice_cr, img_points, explain=explain["validate"])
             if not np.any(keep):
+                if explain is not None:
+                    explain["outcome"] = "no corner agreed with its neighbours"
                 return None, None
             corner_ids = corner_ids[keep]
             img_points = img_points[keep]
@@ -1106,6 +1212,10 @@ def detect_grid_board_corners(
     if corner_ids.shape[0] == 0:
         return None, None
 
+    _append_phase1_trace(trace_stages, "grid_board_corners", corner_ids)
+    if explain is not None:
+        explain.update({"outcome": "found", "final_ids": corner_ids.copy(),
+                        "final_points": img_points.copy()})
     return corner_ids, img_points
 
 

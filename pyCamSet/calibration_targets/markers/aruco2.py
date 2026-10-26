@@ -497,7 +497,7 @@ def _seed_quads(image: np.ndarray, board, markers: list) -> list:
 
     Every other marker keeps aruco2's quad: out of the window's reach it is
     not biased this way, and swapping it for OpenCV's coarser contour corners
-    made larger-square real data (M_Nebula, ~57 px squares) measurably worse.
+    made larger-square real data (~57 px squares) measurably worse.
 
     Deterministic: no randomness, and the result depends only on the image,
     the board and the marker list.
@@ -530,7 +530,7 @@ def _seed_quads(image: np.ndarray, board, markers: list) -> list:
             for (mid, _corners), quad in zip(markers, seeded)]
 
 
-def detect_charuco_corners(image, board, dict_int, warn_legacy=None):
+def detect_charuco_corners(image, board, dict_int, warn_legacy=None, explain=None):
     """D4/D5: detect markers with aruco2 and interpolate ChArUco corners.
 
     :param image: the (uint8) image to detect in.
@@ -538,14 +538,21 @@ def detect_charuco_corners(image, board, dict_int, warn_legacy=None):
     :param dict_int: the dictionary int used for detection.
     :param warn_legacy: optional zero-arg callable; see
         :func:`interpolate_board_corners`.
+    :param explain: optional dict for the education view; see
+        :func:`interpolate_board_corners`. None changes nothing.
     :return: (corner_ids 1D int array, pts (N,2) float32) or (None, None).
     """
     image = _as_uint8_image(image)
     markers = detect_markers(image, dict_int)
-    return interpolate_board_corners(image, board, markers, warn_legacy=warn_legacy)
+    if explain is None:
+        return interpolate_board_corners(image, board, markers, warn_legacy=warn_legacy)
+    explain["aruco2_markers"] = [(int(mid), np.asarray(c, dtype=np.float64).copy())
+                                 for mid, c in markers]
+    return interpolate_board_corners(image, board, markers, warn_legacy=warn_legacy,
+                                     explain=explain)
 
 
-def interpolate_board_corners(image, board, markers, warn_legacy=None):
+def interpolate_board_corners(image, board, markers, warn_legacy=None, explain=None):
     """D4: interpolate ChArUco corners from aruco2-detected markers.
 
     An adapter, not a reimplementation: aruco2's marker quads, corrected
@@ -615,6 +622,9 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
         probe itself, not just the (no-op) callback, so a caller should
         stop passing a real callable once its own de-duplication state
         says the warning has already fired.
+    :param explain: optional dict that, when given, receives the markers
+        handed to ``detectBoard``, any duplicate ids dropped and
+        ``detectBoard``'s own outputs (education view). None changes nothing.
     :return: (corner_ids 1D int32 array, pts (N,2) float32) or (None, None).
         The points are in the pixel-centre frame
         (:data:`~pyCamSet.calibration_targets.markers.aruco_opencv.PIXEL_CONVENTION`)
@@ -659,6 +669,10 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
     if duplicate_ids:
         _LOG.debug("aruco2: dropping duplicate-id marker(s) %s", sorted(duplicate_ids))
         good = [(mid, corners) for mid, corners in good if mid not in duplicate_ids]
+    if explain is not None:
+        explain["duplicate_ids"] = sorted(int(i) for i in duplicate_ids)
+        explain["markers_used"] = [(int(mid), np.asarray(c, dtype=np.float64).copy())
+                                   for mid, c in good]
     if not good:
         return None, None
 
@@ -677,6 +691,8 @@ def interpolate_board_corners(image, board, markers, warn_legacy=None):
         return detector.detectBoard(image, markerCorners=marker_corners, markerIds=marker_ids)
 
     c_corners, c_ids, mloc, mid = _detect(good)
+    if explain is not None:
+        explain["detect_board"] = (c_corners, c_ids, mloc, mid)
 
     if c_corners is None and mloc is not None:
         # No retry: the configured pattern's "no corners" stands, and the

@@ -22,6 +22,7 @@ from pathlib import Path
 from pyCamSet.utils.general_utils import h_tform, get_close_square_tuple
 from pyCamSet.utils.gui_safety import refuse_window_inside_qt
 from pyCamSet.utils.calibration_report import reprojection_residuals
+from pyCamSet.utils.target_units import millimetres_per_point_data_unit
 from pyCamSet.optimisation.compiled_helpers import n_htform_prealloc, n_inv_pose
 
 logger = logging.getLogger(__name__)
@@ -454,8 +455,15 @@ def _feature_consistency(target, feature_locs: dict, feature_errs: dict):
         precision.append(np.mean(_reject_outliers(
             np.linalg.norm(dif - np.mean(dif, axis=0), axis=1))))
         errors.append(np.mean(errs))
-    # the library works in metres and a printed target is discussed in mm
-    return (np.array(accuracy) * 1000, np.array(precision) * 1000,
+    # Convert using the target's declared point-data contract, not a family-wide assumption.
+    mm_per_unit = millimetres_per_point_data_unit(target)
+    if mm_per_unit is None:
+        # A target the units table does not know: keep the long-standing
+        # assumption (metres) rather than refuse the whole assessment.
+        logger.warning("Target point-data units are unknown; reporting accuracy and "
+                       "precision assuming metres.")
+        mm_per_unit = 1000.0
+    return (np.array(accuracy) * mm_per_unit, np.array(precision) * mm_per_unit,
             np.array(errors))
 
 
@@ -501,8 +509,10 @@ def per_camera_coverage(diagnostics: CalibrationDiagnostics) -> plt.Figure:
         ax[cam_n].set_title(
             f"{detection.cam_names[cam_n]}\nmean error {np.mean(error):.2f} px",
             fontsize=8)
-        ax[cam_n].set_xlim([0, cams[cam_n].res[0]])
-        ax[cam_n].set_ylim([0, cams[cam_n].res[1]])
+        # Camera.res is (width, height), the same order as the axes' (x, y).
+        width, height = cams[cam_n].res
+        ax[cam_n].set_xlim([0, width])
+        ax[cam_n].set_ylim([height, 0])
         ax[cam_n].set_aspect('equal')
 
     if n_cams > 15:

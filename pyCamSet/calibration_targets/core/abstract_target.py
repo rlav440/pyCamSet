@@ -127,11 +127,29 @@ def _prepare_detection_image(
         gamma=preprocessing_gamma), float(preprocessing_scale)
 
 
+#: Version tag of the detector-to-native coordinate mapping below. Phase 1 run
+#: metadata and detection-cache identities record it; a run without it was
+#: mapped by dividing by the scale (biased by ``0.5 / scale - 0.5`` px).
+COORDINATE_MAPPING = "pixel-centre-v2"
+
+
+def legacy_mapping_shift(scale: float) -> float:
+    """Native-pixel shift that moves a divide-by-scale point to the current mapping."""
+    return 0.5 / float(scale) - 0.5
+
+
 def _restore_native_coordinates(detection: ImageDetection, scale: float) -> ImageDetection:
-    """Map detector points back to the native image coordinate system."""
-    if scale != 1.0 and detection.has_data:
-        detection.image_points = np.asarray(
-            detection.image_points, dtype=np.float64) / scale
+    """Map detector points back to native pixels without changing point IDs.
+
+    ``cv2.resize`` with ``fx=fy=scale`` aligns pixel centres, not pixel
+    corners: detector pixel ``u`` is centred on native ``(u + 0.5) / scale - 0.5``.
+    Dividing by the scale alone would shift every point by
+    ``0.5 / scale - 0.5`` native pixels (-1.5 px at the default 0.25).
+    """
+    if scale == 1.0 or not detection.has_data:
+        return detection
+    points = np.asarray(detection.image_points, dtype=np.float64)
+    detection.image_points = (points + 0.5) / scale - 0.5
     return detection
 
 

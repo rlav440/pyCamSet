@@ -33,6 +33,7 @@ sub-pixel image-point reprojection error.
 from __future__ import annotations
 
 import logging
+import re
 import warnings
 
 import cv2
@@ -154,6 +155,26 @@ def _grid_board_padding(width: int) -> int:
         if needed <= pad:
             return pad
         pad = needed
+
+
+def opencv_charuco_pixel_offset(version: str | None = None) -> float:
+    """
+    How far the installed OpenCV's ``CharucoDetector`` reports a corner from
+    the pixel-*centre* convention (pixel ``(i, j)``'s centre at ``(i, j)``),
+    on both axes, in pixels.
+
+    Measured on synthetic ChArUco renders: OpenCV 4.11, 4.12 and 4.13
+    report corners 0.5 px further on (the pixel-*corner* convention);
+    OpenCV 4.14 and 5.0 report them at pixel centres. So 0.5 below 4.14
+    and 0.0 from it on.
+
+    :param version: an OpenCV version string to judge instead of the
+        installed ``cv2.__version__``.
+    """
+    text = cv2.__version__ if version is None else version
+    # "5.1.0-pre" and the like: the leading digits of the first two fields.
+    major, minor = (int(re.match(r"\d+", part).group()) for part in str(text).split(".")[:2])
+    return 0.0 if (major, minor) >= (4, 14) else 0.5
 
 
 def _edge_margin() -> int:
@@ -728,6 +749,14 @@ def validate_grid_board_corners(
     return alive
 
 
+#: Revision of the corners :func:`detect_grid_board_corners` returns. Part of
+#: a detection cache's identity for a target read through it (ChArUco2,
+#: Ccube2, CIco2), so a cache written by an earlier revision is a miss rather
+#: than reused. Bump it whenever the corners a given image yields can change.
+#: 1: corners returned in the pixel-centre frame on every OpenCV version.
+GRID_BOARD_CORNER_REVISION = 1
+
+
 def detect_grid_board_corners(
     image, grid_size: tuple[int, int], dict_int: int, marker_size: float,
     ids=None, *, refine: bool = True, validate: bool = True,
@@ -760,13 +789,14 @@ def detect_grid_board_corners(
         board aruco2 fails on (which is logged as a warning), so a board cut
         by the image edge costs its edge corners, not the image.
 
-        **Pixel convention:** points are returned in OpenCV's pixel-*corner*
-        convention, 0.5 px from aruco2's own pixel-*centre* one on both
-        axes. ChArUco and Ccube inherit it by going through
-        ``CharucoDetector``; ChArUco2 and Ccube2 never do, so the +0.5 below
-        puts them on it explicitly, last, after refinement and validation.
-        Every ArUco-based target then shares one convention, so a
-        calibration does not depend on which read the image.
+        **Pixel convention:** points are returned in the same convention as
+        the installed OpenCV's ``CharucoDetector``, so ChArUco/Ccube and
+        ChArUco2/Ccube2 agree whichever OpenCV is installed. aruco2 and the
+        refinement work in the pixel-*centre* convention (pixel ``(i, j)``'s
+        centre is at ``(i, j)``; a corner on the boundary between pixels
+        n-1 and n is at n - 0.5); :func:`opencv_charuco_pixel_offset` is
+        added last, after refinement and validation: 0.0 from OpenCV 4.14
+        (pixel-centre), 0.5 before it (pixel-*corner*: that corner at n).
     :raises ValueError: when ``ids`` is given and is not one distinct
         marker of the dictionary per square.
     """
@@ -870,8 +900,7 @@ def detect_grid_board_corners(
 
     # See the docstring's "Pixel convention" note: applied last, so it moves
     # the position refinement/validation actually settled on.
-    img_points = img_points + 0.5
-    return corner_ids, img_points
+    return corner_ids, img_points + opencv_charuco_pixel_offset()
 
 
 def render_grid_board_image(

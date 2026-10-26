@@ -24,8 +24,13 @@ from typing import Any
 import numpy as np
 
 from pyCamSet.calibration_targets import TargetDetection
+from pyCamSet.calibration_targets.core.abstract_target import COORDINATE_MAPPING
 from pyCamSet.calibration_targets.core.target_registry import spec_of
 from pyCamSet.calibration_targets.markers.aruco2 import CHARUCO_SEED_REVISION
+from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
+    CHARUCO2_DETECTOR,
+    GRID_BOARD_CORNER_REVISION,
+)
 from pyCamSet.utils.paths import long_path
 
 logger = logging.getLogger(__name__)
@@ -93,8 +98,16 @@ def _target_identity(calibration_target, cam_names: list[str],
         # on how the marker quads are seeded, so a cache written before the
         # current revision (no key, or an older one) is a miss.
         identity["aruco2_charuco_seed"] = CHARUCO_SEED_REVISION
+    if CHARUCO2_DETECTOR in (getattr(type(calibration_target), "DETECTOR_BACKENDS", None) or {}).values():
+        # A ChArUco2/Ccube2/CIco2 grid board: its corners depend on how the
+        # refused ones are re-seeded, so a cache written before the current
+        # revision (no key, or an older one) is a miss.
+        identity["aruco2_grid_board_corners"] = GRID_BOARD_CORNER_REVISION
     if preprocessing is not None:
         identity["preprocessing"] = dict(preprocessing)
+        # Version of the detector-to-native coordinate mapping: caches written
+        # by the earlier divide-by-scale mapping (no tag) are now a miss.
+        identity["preprocessing"].setdefault("coordinate_mapping", COORDINATE_MAPPING)
     return identity
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import logging
 
@@ -18,11 +18,9 @@ import os
 import signal
 
 from pyCamSet.utils.general_utils import ask_yes_no, glob_ims, h_tform, make_4x4h_tform, mad_outlier_detection, plane_fit
-from pyCamSet.cameras import CameraSet, Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
 from pyCamSet.calibration.telecentric import calibrate_telecentric
-from pyCamSet.cameras.lens_models import LENS_MODELS
 from pyCamSet.calibration.zhang import calibrate_zhang
-from pyCamSet.cameras.telecentric_camera import TelecentricCamera
 from pyCamSet.calibration.telecentric import is_planar, pose_from_affine
 from pyCamSet.calibration_targets.core.parameters import (
     NO_PARAMETERS,
@@ -31,6 +29,23 @@ from pyCamSet.calibration_targets.core.parameters import (
     combine,
 )
 from pyCamSet.calibration_targets.core.target_detections import TargetDetection, ImageDetection
+
+# The cameras are imported by the methods that build or inspect one, not
+# here.  pyCamSet.cameras brings in pyvista, numba and matplotlib through
+# CameraSet's visualisation, and every target imports this module, so an
+# eager import made finding a board in an image cost all three.  The names
+# stay attributes of this module, and annotations still name them.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import CameraSet, Camera
+    from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+
+__getattr__ = lazy_attributes(__name__, {
+    "CameraSet": ("pyCamSet.cameras", "CameraSet"),
+    "Camera": ("pyCamSet.cameras", "Camera"),
+    "LENS_MODELS": ("pyCamSet.cameras.lens_models", "LENS_MODELS"),
+    "TelecentricCamera": (
+        "pyCamSet.cameras.telecentric_camera", "TelecentricCamera"),
+})
 
 
 #: The printable formats a target can be written as, by the name the
@@ -112,11 +127,29 @@ def _prepare_detection_image(
         gamma=preprocessing_gamma), float(preprocessing_scale)
 
 
+#: Version tag of the detector-to-native coordinate mapping below. Phase 1 run
+#: metadata and detection-cache identities record it; a run without it was
+#: mapped by dividing by the scale (biased by ``0.5 / scale - 0.5`` px).
+COORDINATE_MAPPING = "pixel-centre-v2"
+
+
+def legacy_mapping_shift(scale: float) -> float:
+    """Native-pixel shift that moves a divide-by-scale point to the current mapping."""
+    return 0.5 / float(scale) - 0.5
+
+
 def _restore_native_coordinates(detection: ImageDetection, scale: float) -> ImageDetection:
-    """Map detector points back to the native image coordinate system."""
-    if scale != 1.0 and detection.has_data:
-        detection.image_points = np.asarray(
-            detection.image_points, dtype=np.float64) / scale
+    """Map detector points back to native pixels without changing point IDs.
+
+    ``cv2.resize`` with ``fx=fy=scale`` aligns pixel centres, not pixel
+    corners: detector pixel ``u`` is centred on native ``(u + 0.5) / scale - 0.5``.
+    Dividing by the scale alone would shift every point by
+    ``0.5 / scale - 0.5`` native pixels (-1.5 px at the default 0.25).
+    """
+    if scale == 1.0 or not detection.has_data:
+        return detection
+    points = np.asarray(detection.image_points, dtype=np.float64)
+    detection.image_points = (points + 0.5) / scale - 0.5
     return detection
 
 
@@ -742,6 +775,10 @@ class AbstractTarget(ABC):
         :param model: the lens model to fit, "pinhole" or "telecentric"
         :return: A camera object.
         """
+        from pyCamSet.cameras import Camera
+        from pyCamSet.cameras.lens_models import LENS_MODELS
+        from pyCamSet.cameras.telecentric_camera import TelecentricCamera
+
         if model not in LENS_MODELS:
             offered = ", ".join(repr(m) for m in LENS_MODELS)
             raise ValueError(f"Unknown lens model {model!r}; expected {offered}")
@@ -975,6 +1012,8 @@ class AbstractTarget(ABC):
                 "Inadequate number of corners for pose estimation")
         if len(object_points) < 12:
             logger.warning("Low number of points used for pose estimation")
+
+        from pyCamSet.cameras.telecentric_camera import TelecentricCamera
 
         if isinstance(cam, TelecentricCamera):
             return self._affine_pose(object_points, image_points, cam, n_im[0])

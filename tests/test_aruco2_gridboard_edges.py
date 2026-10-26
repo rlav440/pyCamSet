@@ -27,6 +27,7 @@ from pyCamSet.calibration_targets.ccube2 import Ccube2
 from pyCamSet.calibration_targets.markers import aruco2_gridboard
 from pyCamSet.calibration_targets.markers.aruco2_gridboard import (
     detect_grid_board_corners,
+    opencv_charuco_pixel_offset,
     rotation_ambiguous_marker_ids,
 )
 
@@ -55,14 +56,13 @@ def _in_from_edge(points: np.ndarray, shape) -> np.ndarray:
 
 def _board_pixels(target: ChArUco2, px_per_mm: float, border_mm: float) -> np.ndarray:
     """Where each corner of ``target._render(dpi, border_mm)`` is, in the
-    pixel-*corner* convention ``detect_grid_board_corners`` returns (see its
-    "Pixel convention" docstring note): a corner on the boundary between
-    pixels n-1 and n is at exactly n, matching pyCamSet's OpenCV-backed
-    ChArUco/Ccube. (0.5 px from aruco2's own raw pixel-*centre* convention,
-    where that same corner is at n - 0.5.)"""
+    convention ``detect_grid_board_corners`` returns (see its "Pixel
+    convention" docstring note): a corner on the boundary between pixels n-1
+    and n is at n - 0.5 in the pixel-*centre* convention, plus the installed
+    OpenCV's ``opencv_charuco_pixel_offset()``."""
     band_mm = target.square_size * 1000.0 / 4
     corners_mm = target.point_data.reshape(-1, 3)[:, :2] * 1000.0
-    return (corners_mm + band_mm + border_mm) * px_per_mm
+    return (corners_mm + band_mm + border_mm) * px_per_mm - 0.5 + opencv_charuco_pixel_offset()
 
 
 # -- a board cut by the image edge ----------------------------------------------
@@ -98,7 +98,7 @@ def test_a_ccube2_face_cut_by_the_image_edge_is_read_where_it_is(side, cut) -> N
     cropped, shift = _crop(cube.textures[0], side, cut)
     lattice = layout.grid_board_corners(
         cube.grid_size, cube.square_size, origin=(cube.margin, cube.margin))
-    expected = lattice * (cube.draw_res[0] / cube.length) - 0.5 + shift
+    expected = lattice * (cube.draw_res[0] / cube.length) - 0.5 + opencv_charuco_pixel_offset() + shift
 
     detection = cube.find_in_image(cropped)
 
@@ -113,8 +113,9 @@ def test_a_ccube2_face_cut_by_the_image_edge_is_read_where_it_is(side, cut) -> N
 def test_padding_leaves_a_full_frame_detection_where_it_was(monkeypatch) -> None:
     """aruco2 is handed a padded image, and the corners come back in the
     caller's pixels: the same, to float precision, as aruco2 finds unpadded
-    (once the +0.5 pixel-convention shift -- applied regardless of padding --
-    is accounted for). Called with refine/validate off, so this isolates
+    (once the installed OpenCV's pixel-convention offset -- applied
+    regardless of padding -- is accounted for). Called with refine/validate
+    off, so this isolates
     padding's own effect from refinement's."""
     target = ChArUco2(num_squares_x=5, num_squares_y=5, square_size=10.0)
     image, _ = target._render(300, border_width=10.0)
@@ -145,8 +146,8 @@ def test_padding_leaves_a_full_frame_detection_where_it_was(monkeypatch) -> None
     assert sorted(ids.tolist()) == sorted(unpadded_by_id)
     for gid, point in zip(ids.tolist(), points):
         # float32 corners carried 'pad' pixels further out: a few 1e-4 px,
-        # plus the deliberate +0.5 pixel-convention shift.
-        assert np.abs(point - (unpadded_by_id[gid] + 0.5)).max() < 1e-3
+        # plus the installed OpenCV's pixel-convention offset.
+        assert np.abs(point - (unpadded_by_id[gid] + opencv_charuco_pixel_offset())).max() < 1e-3
 
 
 @pytest.mark.parametrize("width", [640, 1499, 2448, 4000, 8192])

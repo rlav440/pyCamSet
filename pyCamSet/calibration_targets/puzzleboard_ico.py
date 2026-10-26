@@ -27,6 +27,7 @@ the many patches a face shows at once, not in the margin of any one of them.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 import logging
 from pathlib import Path
 
@@ -47,6 +48,7 @@ from pyCamSet.calibration_targets.core.parameters import (
 from pyCamSet.calibration_targets.markers.puzzleboard import (
     PUZZLEBOARD_DETECTOR,
     detect_puzzleboard_image,
+    drop_duplicate_keys,
 )
 from pyCamSet.calibration_targets.polyhedra import (
     TRIANGLE_HEIGHT,
@@ -58,7 +60,17 @@ from pyCamSet.calibration_targets.polyhedra import (
     make_icosahedral,
 )
 from pyCamSet.calibration_targets.puzzleboard import _CODE_FIELD, _CODE_SIZE
-from pyCamSet.cameras import Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
+
+# The cameras are imported where they are used, not here: importing a
+# target must not import pyvista, numba and matplotlib with it (see
+# core.abstract_target).  The names stay attributes of this module.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import Camera
+
+__getattr__ = lazy_attributes(__name__, {
+    "Camera": ("pyCamSet.cameras", "Camera"),
+})
 
 logger = logging.getLogger(__name__)
 
@@ -600,6 +612,9 @@ class PuzzleBoardIco(AbstractTarget):
             keys.append([face_index, index])
             image_points.append(coordinate[::-1])
 
+        # One position decoded at two places is ambiguous: every copy goes.
+        keys, image_points = drop_duplicate_keys(
+            keys, image_points, "PuzzleBoardIco")
         if not keys:
             return ImageDetection()
         image_points_array = np.asarray(image_points, dtype=np.float64)

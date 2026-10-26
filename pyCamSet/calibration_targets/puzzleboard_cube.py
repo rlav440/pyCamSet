@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from io import BytesIO
 import logging
 from pathlib import Path
@@ -21,10 +22,21 @@ from pyCamSet.calibration_targets.core.parameters import (
 from pyCamSet.calibration_targets.markers.puzzleboard import (
     PUZZLEBOARD_DETECTOR,
     detect_puzzleboard_image,
+    drop_duplicate_keys,
 )
 from pyCamSet.calibration_targets.puzzleboard import _CODE_FIELD, _CODE_SIZE
-from pyCamSet.cameras import Camera
+from pyCamSet.utils.lazy_imports import lazy_attributes
 from pyCamSet.utils.general_utils import make_4x4h_tform
+
+# The cameras are imported where they are used, not here: importing a
+# target must not import pyvista, numba and matplotlib with it (see
+# core.abstract_target).  The names stay attributes of this module.
+if TYPE_CHECKING:
+    from pyCamSet.cameras import Camera
+
+__getattr__ = lazy_attributes(__name__, {
+    "Camera": ("pyCamSet.cameras", "Camera"),
+})
 
 
 # These transforms use the same face order as the existing Ccube target: front, right, back, left, top, bottom.
@@ -235,6 +247,18 @@ class PuzzleBoardCubeDetection(DetectorParameterisation):
             return ["face_reassignment needs plane_consistency_gate: the "
                     "gate is what separates the cluster it relabels."]
         return []
+
+
+def _drop_duplicate_keys(keys: list, image_points: list) -> tuple[list, list]:
+    """Drop every target point the decoder assigned to more than one place in one image.
+
+    Two image locations for one (face, point) key cannot both be right, and nothing here
+    says which one is, so both are dropped rather than fed to the solve as a conflicting
+    observation. (Found live: pcube 5_squares, 8 keys placed twice, 100-250 px apart, in
+    16,295 detections.)  The rule is shared by every PuzzleBoard target; see
+    :func:`~pyCamSet.calibration_targets.markers.puzzleboard.drop_duplicate_keys`.
+    """
+    return drop_duplicate_keys(keys, image_points, "PuzzleBoard cube")
 
 
 class PuzzleBoardCube(AbstractTarget):
@@ -1136,6 +1160,7 @@ class PuzzleBoardCube(AbstractTarget):
             keys, image_points = self._run_face_reassignment(keys, image_points, image_shape=np.asarray(image).shape if image is not None else None)
         elif self.plane_consistency_gate:  # Drop geometrically inconsistent merged face points (opt-in gate).
             keys, image_points = self._run_plane_consistency_gate(keys, image_points)
+        keys, image_points = _drop_duplicate_keys(keys, image_points)
         if not keys:
             return ImageDetection()
         image_points_array = np.asarray(image_points, dtype=np.float64)

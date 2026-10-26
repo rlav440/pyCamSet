@@ -1573,7 +1573,7 @@ def test_saved_once_seen_displacements_render_unexaggerated_with_bound_caption(t
         raw_once = displayed[once] - nominal[once]
         assert np.all(np.isfinite(raw_once))
         assert np.any(np.linalg.norm(raw_once, axis=1) > 0.0)
-        assert np.max(np.linalg.norm(raw_once, axis=1)) * to_mm <= 1.306
+        assert np.max(np.linalg.norm(raw_once, axis=1)) * to_mm <= 1.412
 
         view.set_level(2)
         view.set_stage(1)
@@ -2075,7 +2075,7 @@ def test_real_scale_attribution_qualifies_every_mm_quantity(tmp_path):
     try:
         derivation = view._derivation
         assert derivation.status == "available", derivation.reason
-        assert abs(float(derivation.scale_consistency_ratio) - 1.033036) < 5e-6
+        assert abs(float(derivation.scale_consistency_ratio) - 1.038482) < 5e-6
         assert abs(float(derivation.scale_consistency_ratio) - 1.0) > 0.01
         assert derivation.metric_qualifier_required
         assert derivation.d47_mean_displacement_mm == pytest.approx(

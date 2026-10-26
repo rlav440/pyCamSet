@@ -12,8 +12,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QStandardPaths
-
 _SCHEMA = "pycamset.gui-preferences"
 _VERSION = 1
 #: A visual id: two or more lower-case ``:``-separated segments, such as
@@ -33,10 +31,59 @@ def initialise_application_identity(application) -> None:
 
 
 def config_directory() -> Path:
-    """Return Qt's stable, per-user application config directory."""
+    """Return the per-user application config directory.
+
+    Resolution order: ``PYCAMSET_CONFIG_DIR``, then Qt's ``AppConfigLocation``,
+    then :func:`pyCamSet.workflow.user_config.config_dir`.
+
+    Qt is consulted whenever it is importable, whether or not a ``QApplication``
+    exists yet.  Qt builds ``AppConfigLocation`` from the same
+    organisation/application statics a launched GUI sets, so a GUI-less process
+    -- the education sidecar, a helper script -- resolves the directory the GUI
+    itself uses rather than a different one.  Those statics are filled in below
+    when they are still empty: an empty pair makes Qt answer a bare
+    ``<Local AppData>`` (or the interpreter's own name) instead of pyCamSet's
+    own folder, which is not what any caller wants.
+
+    The fallback is the per-user setting the recent-folders and recent-targets
+    memory uses.  The two are *different* directories, and which differ is
+    platform-dependent.  Observed on Windows (PySide6 6.11): Qt answers
+    ``%LOCALAPPDATA%\\pyCamSet\\pyCamSet`` while :func:`config_dir` answers
+    ``%APPDATA%\\pyCamSet`` (Roaming).  On Linux Qt's ``AppConfigLocation`` is
+    under ``$XDG_CONFIG_HOME`` (default ``~/.config``) like :func:`config_dir`,
+    but Qt appends organisation and application names, so with the identity set
+    here it is expected to be one level deeper (``.../pyCamSet/pyCamSet``).  On
+    macOS Qt's ``AppConfigLocation`` is documented as under
+    ``~/Library/Preferences``, whereas :func:`config_dir` uses
+    ``~/Library/Application Support``.  The Linux and macOS statements come from
+    Qt's documentation and were not run on those systems.  Nowhere should the two
+    be assumed to agree, so a preferences file written through one is not visible
+    to the other.  The fallback is therefore reached only where Qt is genuinely
+    unavailable: PySide6 not installed (the lean install of requirements_core.txt,
+    which must still be able to import the education sidecar) or installed but
+    unable to load its Qt libraries.  Every branch honours the override.
+    """
     override = os.environ.get("PYCAMSET_CONFIG_DIR")
     if override:
         return Path(override)
+    try:
+        from PySide6.QtCore import QCoreApplication, QStandardPaths
+    except ImportError:
+        # No GUI toolkit: the education sidecar must still import.  This is the
+        # Roaming fallback noted above, which is why the two must not be
+        # described as agreeing.  Imported here because ``pyCamSet.workflow``
+        # pulls in every phase, which the GUI-less preference read need not pay for.
+        from pyCamSet.workflow.user_config import config_dir as _fallback_config_dir
+        return _fallback_config_dir()
+    # Qt resolves the application directory from these statics, and names a
+    # directory only after they are set.  Setting them here is the same call
+    # :func:`initialise_application_identity` makes on a real launch, so a
+    # process that never builds a window still lands in the GUI's own
+    # directory.  An identity deliberately set by someone else is left alone.
+    if not QCoreApplication.organizationName():
+        QCoreApplication.setOrganizationName("pyCamSet")
+    if not QCoreApplication.applicationName():
+        QCoreApplication.setApplicationName("pyCamSet")
     location = QStandardPaths.writableLocation(
         QStandardPaths.StandardLocation.AppConfigLocation)
     if not location:

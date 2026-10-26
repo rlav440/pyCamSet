@@ -36,6 +36,17 @@ imports `cairosvg` first imports
 module, which locates the conda environment's library directory and registers
 it. It is a no-op where Cairo already loads.
 
+On Windows only, if `cairosvg` still cannot find Cairo at the moment a target is
+drawn (a plain virtualenv built on a conda interpreter, or a headless process
+that never inherited an activated environment on its `PATH`), a wider search
+runs once, inside `cairosvg_or_explain`, not at import time. It tries each
+conda environment and installation the process can see, but only a
+`Library\bin` that holds a DLL under a name `cairocffi` loads (`cairo-2.dll`,
+`cairo.dll` or `libcairo-2.dll`), so `cairo-gobject.dll` alone does not
+qualify. A directory that does not make the import work is unregistered again,
+and `PATH` is left as it was. A machine with no Cairo at all is still reported
+honestly, and the tests that need it skip rather than fail.
+
 When that is not enough, install the native library for your platform:
 
 | Platform | Command |

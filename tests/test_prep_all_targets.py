@@ -219,8 +219,41 @@ def test_charuco_detection_cache_records_the_loader(tmp_path):
     assert not cache_matches(cache, target, ["cam0"], None)
 
 
+def test_explainer_shows_the_preparation_for_a_charuco_target():
+    from pyCamSet.calibration_targets.core.abstract_target import detect_in_image
+    from pyCamSet.workflow.education_detect_explain import explain_detection
+
+    target = _charuco_target()
+    photo = _dark_twelve_bit(target)
+    saved = detect_in_image(target, photo, **resolve_preparation(ON, target).detect_kwargs())
+    ex = explain_detection(photo, target, rescale_and_gamma=True, saved_detection=saved)
+    assert "rescale_gamma" in ex.step_keys
+    step = ex.step("rescale_gamma")
+    assert step.counts["scale"] == 1.0 and step.counts["gamma"] == 0.5
+    assert step.counts["16-bit loader"] == MIN_MAX
+    assert "full size" in step.caption
+    assert ex.consistency.ok, ex.consistency.message
 
 
+def test_load_phase1_photo_resolves_the_run_preparation(tmp_path):
+    """A new ChArUco run re-explains with its defaults; a legacy one stays unprepared."""
+    import json
+
+    from pyCamSet.workflow.education_detect_explain import load_phase1_photo
+
+    spec = {"type": "ChArUco", "num_squares_x": 5, "num_squares_y": 4, "square_size": 10.0,
+            "marker_backend": "aruco1"}
+    for params, expected in (
+            (dict(ON, target=spec), (True, 1.0, 0.5, MIN_MAX)),
+            ({"rescale_and_gamma": True, "target": spec}, (False, None, None, None))):
+        run = tmp_path / ("new" if expected[0] else "old")
+        run.mkdir()
+        (run / "metadata.json").write_text(json.dumps({"params": params}), encoding="utf-8")
+        photo = load_phase1_photo(run, "cam0", 0)
+        assert photo.rescale_and_gamma is expected[0]
+        if expected[0]:
+            assert (photo.preprocessing_scale, photo.preprocessing_gamma,
+                    photo.preprocessing_loader) == expected[1:]
 
 
 

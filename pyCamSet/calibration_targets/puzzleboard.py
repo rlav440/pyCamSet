@@ -20,6 +20,7 @@ from pyCamSet.calibration_targets.core.parameters import (
 from pyCamSet.calibration_targets.markers.puzzleboard import (
     PUZZLEBOARD_DETECTOR,
     detect_puzzleboard_image,
+    drop_duplicate_keys,
 )
 from pyCamSet.utils.lazy_imports import lazy_attributes
 
@@ -323,6 +324,9 @@ class PuzzleBoard(AbstractTarget):
         coordinates = coordinates[valid]
         keys = positions[:, 0] * _CODE_SIZE + positions[:, 1]
         image_points = coordinates[:, ::-1]  # the detector reports [row, column]
+        keys, image_points = drop_duplicate_keys(keys, image_points, "PuzzleBoard")
+        if len(keys) == 0:
+            return ImageDetection()
         if draw:
             display_im = np.asarray(image).copy()
             for x, y in image_points:

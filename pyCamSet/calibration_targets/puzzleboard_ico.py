@@ -48,6 +48,7 @@ from pyCamSet.calibration_targets.core.parameters import (
 from pyCamSet.calibration_targets.markers.puzzleboard import (
     PUZZLEBOARD_DETECTOR,
     detect_puzzleboard_image,
+    drop_duplicate_keys,
 )
 from pyCamSet.calibration_targets.polyhedra import (
     TRIANGLE_HEIGHT,
@@ -611,6 +612,9 @@ class PuzzleBoardIco(AbstractTarget):
             keys.append([face_index, index])
             image_points.append(coordinate[::-1])
 
+        # One position decoded at two places is ambiguous: every copy goes.
+        keys, image_points = drop_duplicate_keys(
+            keys, image_points, "PuzzleBoardIco")
         if not keys:
             return ImageDetection()
         image_points_array = np.asarray(image_points, dtype=np.float64)

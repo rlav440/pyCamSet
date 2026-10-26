@@ -37,6 +37,44 @@ def test_run_directory_view_is_read_only_and_metadata_is_recursively_immutable(t
     assert sorted(path.name for path in run_dir.parent.parent.iterdir()) == ["phase1_runs"]
 
 
+@pytest.mark.gui
+def test_zero_one_and_multiple_selection_routes_to_chooser_then_phase_factory(monkeypatch):
+    _application()
+    from PySide6.QtWidgets import QLabel
+    from pyCamSet.gui.education_dialog import EducationDialog, EducationRunView
+
+    runs = [EducationRunView("phase2", f"run-{i}", Path("."), "complete", {}, object())
+            for i in (1, 2)]
+    factory_calls = []
+    fake_module = types.ModuleType("pyCamSet.gui.education_phase2")
+
+    def make_view(context, parent=None):
+        factory_calls.append((context.run_id, parent))
+        return QLabel(f"view for {context.run_id}", parent)
+
+    fake_module.create_education_phase_view = make_view
+    monkeypatch.setitem(sys.modules, fake_module.__name__, fake_module)
+
+    empty = EducationDialog([])
+    assert empty._run_list.count() == 1
+    assert not empty._open_button.isEnabled()
+    chooser = EducationDialog(runs, [])
+    assert chooser._stack.currentIndex() == 0
+    chooser._open_selection()
+    assert chooser._active.run_id == "run-1"
+    assert chooser._stack.currentWidget() is chooser._detail
+    assert factory_calls[-1][0] == "run-1"
+    single = EducationDialog(runs, ["run-2"])
+    assert single._active.run_id == "run-2"
+    assert factory_calls[-1][0] == "run-2"
+    # The header and chooser name the phase as a learner reads it, not by its slug.
+    assert single._header_label.text() == (
+        "Run run-2 · Phase 2 — Calibrate individual cameras · complete")
+    assert chooser._run_list.item(0).text() == (
+        "run-1 — Phase 2 — Calibrate individual cameras — complete")
+    for dialog in (empty, chooser, single):
+        dialog.close()
+        dialog.deleteLater()
 
 
 
@@ -443,6 +481,55 @@ def test_qtinteractor_suppresses_representation_and_stereo_keys_across_styles():
     host.deleteLater()
 
 
+@pytest.mark.gui
+def test_close_cancels_slow_child_work_before_a_reopened_dialog_can_receive_frames():
+    """A delayed renderer callback from a closed shell must not leak into its replacement."""
+    app = _application()
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QLabel
+    from pyCamSet.gui.education_dialog import EducationDialog, EducationRunView
+
+    frames = []
+
+    class SlowDerivation(QLabel):
+        _next_generation = 0
+
+        def __init__(self, parent=None):
+            super().__init__("deriving", parent)
+            type(self)._next_generation += 1
+            self.generation = type(self)._next_generation
+            self.timer = QTimer(self)
+            self.timer.setSingleShot(True)
+            self.timer.timeout.connect(lambda: frames.append(self.generation))
+            self.timer.start(100)
+
+        def stop_for_context_change(self):
+            self.timer.stop()
+
+    run = EducationRunView("phase2", "slow-close", Path("."), "complete", {}, object())
+    module = types.ModuleType("pyCamSet.gui.education_phase2")
+    module.create_education_phase_view = lambda context, parent=None: SlowDerivation(parent)
+    old_modules = sys.modules.get(module.__name__)
+    sys.modules[module.__name__] = module
+    try:
+        first = EducationDialog([run], [run.run_id])
+        first.show()
+        app.processEvents()
+        assert first._view.timer.isActive()
+        first.close()
+        second = EducationDialog([run], [run.run_id])
+        second.show()
+        QTest = __import__("PySide6.QtTest", fromlist=["QTest"]).QTest
+        QTest.qWait(140)
+        assert frames == [second._view.generation], "closed dialog leaked a stale frame into the reopened view"
+        second.close()
+        first.deleteLater()
+        second.deleteLater()
+    finally:
+        if old_modules is None:
+            sys.modules.pop(module.__name__, None)
+        else:
+            sys.modules[module.__name__] = old_modules
 
 
 @pytest.mark.gui
@@ -559,6 +646,71 @@ def test_figure_card_provenance_is_part_of_accessible_description():
 
 
 
+@pytest.mark.gui
+def test_dialog_scrolls_tall_explanations_and_playback_controls_fit_minimum_width(
+        tmp_path, monkeypatch):
+    """At 853x480 a tall view scrolls to its caption; controls never overlap at 560 px."""
+    app = _application()
+    from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+    from pyCamSet.gui import education_preferences
+    from pyCamSet.gui.education_dialog import (
+        EducationDialog, EducationRunView, RecordedStep, RecordedStepControls,
+    )
+
+    monkeypatch.setattr(education_preferences, "preferences_path",
+                        lambda: tmp_path / "education_preferences.json")
+    built = {}
+
+    def make_view(context, parent=None):
+        view = QWidget(parent)
+        layout = QVBoxLayout(view)
+        figure = QWidget(view)
+        figure.setMinimumHeight(900)  # taller than the window, like Phase 4
+        layout.addWidget(figure)
+        built["caption"] = QLabel("Caption that explains the figure.", view)
+        built["caption"].setWordWrap(True)
+        layout.addWidget(built["caption"])
+        built["controls"] = RecordedStepControls(
+            [RecordedStep(1, "a"), RecordedStep(2, "b")], parent=view, reduce_motion=False)
+        layout.addWidget(built["controls"])
+        return view
+
+    module = types.ModuleType("pyCamSet.gui.education_phase2")
+    module.create_education_phase_view = make_view
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    run = EducationRunView("phase2", "tall", Path("."), "complete", {}, object())
+    dialog = EducationDialog([run], ["tall"])
+    try:
+        available = dialog.screen().availableGeometry()
+        assert dialog.height() <= max(dialog.minimumHeight(), int(available.height() * 0.9))
+        for width, height in ((853, 480), (560, 420)):
+            dialog.resize(width, height)
+            dialog.show()
+            app.processEvents()
+            scroll = dialog._phase_scroll
+            assert scroll.verticalScrollBar().maximum() > 0
+            # Offscreen test fonts are about twice as wide as Segoe UI, so the
+            # reachability check runs at the reviewer's 853 px size; the
+            # no-overlap check below runs at the 560 px minimum as well.
+            for widget in ((built["caption"], built["controls"]._play) if width == 853 else ()):
+                scroll.ensureWidgetVisible(widget)
+                app.processEvents()
+                top_left = widget.mapTo(scroll.viewport(), widget.rect().topLeft())
+                bottom_right = widget.mapTo(scroll.viewport(), widget.rect().bottomRight())
+                assert scroll.viewport().rect().contains(top_left), (width, widget)
+                assert scroll.viewport().rect().contains(bottom_right), (width, widget)
+            controls = built["controls"]
+            parts = [controls._first, controls._previous, controls._next, controls._play,
+                     controls._scrubber, controls._status]
+            rects = [part.geometry().translated(part.parentWidget().mapTo(controls, part.pos())
+                                                - part.pos()) for part in parts]
+            assert all(not left.intersects(right)
+                       for index, left in enumerate(rects) for right in rects[index + 1:]), width
+            assert all(controls.rect().contains(rect) for rect in rects), width
+            dialog.hide()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
 
 
 @pytest.mark.gui
@@ -638,8 +790,49 @@ def test_open_education_run_lists_every_saved_run_so_change_run_can_switch(tmp_p
                               ("phase2", "20260101_000000_bbbbbb")]
 
 
+@pytest.mark.gui
+def test_change_run_selects_the_open_run_in_the_chooser(monkeypatch):
+    _application()
+    from PySide6.QtWidgets import QLabel
+    from pyCamSet.gui.education_dialog import EducationDialog, EducationRunView
+
+    fake_module = types.ModuleType("pyCamSet.gui.education_phase2")
+    fake_module.create_education_phase_view = lambda context, parent=None: QLabel(context.run_id, parent)
+    monkeypatch.setitem(sys.modules, fake_module.__name__, fake_module)
+    runs = [EducationRunView("phase2", f"run-{i}", Path("."), "complete", {}, object())
+            for i in (1, 2, 3)]
+    dialog = EducationDialog(runs, ["run-3"])
+    dialog._change_run()
+    assert dialog._stack.currentIndex() == 0
+    assert dialog._run_list.currentRow() == 2
+    dialog._run_list.setCurrentRow(0)
+    dialog._open_selection()
+    assert dialog._active.run_id == "run-1"
+    dialog.deleteLater()
 
 
+@pytest.mark.gui
+def test_dialog_opens_at_reading_size_not_the_views_minimal_hint(monkeypatch):
+    """A small size hint must not make the dialog open cramped; the 90% cap still holds."""
+    _application()
+    from PySide6.QtWidgets import QLabel
+    from pyCamSet.gui.education_dialog import EducationDialog, EducationRunView
+
+    fake_module = types.ModuleType("pyCamSet.gui.education_phase2")
+    fake_module.create_education_phase_view = lambda context, parent=None: QLabel("small", parent)
+    monkeypatch.setitem(sys.modules, fake_module.__name__, fake_module)
+    run = EducationRunView("phase2", "small", Path("."), "complete", {}, object())
+    dialog = EducationDialog([run], ["small"])
+    try:
+        available = dialog.screen().availableGeometry()
+        target_width, target_height = EducationDialog._TARGET_SIZE
+        assert dialog.width() == max(dialog.minimumWidth(),
+                                     min(target_width, int(available.width() * 0.9)))
+        assert dialog.height() == max(dialog.minimumHeight(),
+                                      min(target_height, int(available.height() * 0.9)))
+    finally:
+        dialog.close()
+        dialog.deleteLater()
 
 
 @pytest.mark.gui

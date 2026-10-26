@@ -820,6 +820,46 @@ def test_camera_6_on_dark_is_filled_on_every_mark():
             assert np.abs(got - fill).max() < 0.06, (point, got, fill)
 
 
+def test_one_face_palette_with_square_tags():
+    """UX2-2 / ED2-8: neutral face shades (no hue), same face -> same shade/shape/tag in every
+    phase, square "F" tags, distinct from every camera's round badge."""
+    pytest.importorskip("PySide6")
+    import matplotlib
+    from matplotlib.figure import Figure
+    from pyCamSet.gui import education_style as es
+    from pyCamSet.gui.education_phase1 import face_colours as p1_faces
+    from pyCamSet.gui.education_phase2 import _face_colours as p2_faces
+    assert es.face_label(0) == "F1" and es.face_label(5, short=False) == "Face 6"
+    for theme in ("Light", "Dark", "Sepia"):
+        t = es.stage_tokens(theme)
+        shades = es.face_colours(theme, 6)
+        assert p1_faces(theme, 6) == shades == p2_faces(t)[:6]
+        assert es.face_colour(1, theme) == shades[1]
+        for shade in set(shades):
+            _l, a, b = es._lab(shade)
+            assert np.hypot(a, b) <= 4.0, (theme, shade)        # neutral, no hue
+            assert es.contrast(shade, t["stage"]) >= 2.2, (theme, shade)
+        distinct = sorted(set(shades))
+        assert len(distinct) == 3
+        assert min(es.colour_distance(a, b) for i, a in enumerate(distinct)
+                   for b in distinct[i + 1:]) >= 18
+    assert len(set(es.face_marker(k) for k in range(6))) == 6
+    assert "o" not in [es.face_marker(k) for k in range(6)]
+    with matplotlib.rc_context(es.figure_style("Light")):
+        fig = Figure(figsize=(4, 3), dpi=100)
+        es.align_panel_titles(fig)
+        ax = fig.add_subplot()
+        ax.imshow(np.ones((8, 6)))
+        es.face_ticks(ax, range(6), range(6), selected=[1])
+        es.badge_ticks_y(ax, range(8), range(8), size=9)
+        tags = es.draw_face_tags(ax, [(2.5, 3.5)], [3])
+        es.panel_title(ax, "C", "Which camera sees which face", "")
+        assert es.text_collisions(fig) == []
+    labels = ax.get_xticklabels()
+    assert [lab.get_text() for lab in labels] == [f"F{k}" for k in range(1, 7)]
+    assert all("square" in type(lab.get_bbox_patch().get_boxstyle()).__name__.lower()
+               for lab in labels)
+    assert tags[0].get_text() == "F4" and tags[0].get_gid() == "edu:facetag"
 
 
 def test_local_value_range_scale():

@@ -1103,11 +1103,46 @@ def test_the_gauge_falls_back_to_visible_points_when_too_few_were_seen_twice(syn
 
 
 
+def _views(seen):
+    """(cameras, images, 4, 4) target poses: identity where seen[c][p], NaN where not."""
+    seen = np.asarray(seen, dtype=bool)
+    out = np.full(seen.shape + (4, 4), np.nan)
+    out[seen] = np.eye(4)
+    return out
 
 
+def test_the_seed_anchors_the_world_on_the_fixed_pose():
+    """The image the solve holds at the identity is the one the seed puts there."""
+    from pyCamSet.optimisation.template_handler import _seed_reference_pose
+
+    every_camera_saw_all = _views([[1, 1, 1], [1, 1, 1]])
+    assert _seed_reference_pose(every_camera_saw_all, 0, anchor_pose=2) == 2
 
 
+def test_the_seed_anchors_on_a_fixed_pose_only_one_camera_saw():
+    """Feasibility wanted an image every camera saw; any usable view now holds it."""
+    from pyCamSet.optimisation.template_handler import _seed_reference_pose
+
+    one_camera_saw_image_2 = _views([[1, 1, 1], [1, 1, 0]])
+    assert _seed_reference_pose(one_camera_saw_image_2, 0, anchor_pose=2) == 2
 
 
+def test_the_seed_falls_back_when_the_fixed_pose_was_not_seen():
+    """An anchor no camera saw (or one out of range) cannot hold the world."""
+    from pyCamSet.optimisation.template_handler import (
+        _seed_reference_pose, check_feasiblity_and_update_refpose)
+
+    nobody_saw_image_2 = _views([[1, 1, 0], [1, 1, 0]])
+    rule, _ = check_feasiblity_and_update_refpose(nobody_saw_image_2, 0)
+    assert _seed_reference_pose(nobody_saw_image_2, 0, anchor_pose=2) == rule
+    assert _seed_reference_pose(nobody_saw_image_2, 0, anchor_pose=7) == rule
 
 
+def test_the_seed_without_an_anchor_keeps_the_feasibility_rule():
+    from pyCamSet.optimisation.template_handler import (
+        _seed_reference_pose, check_feasiblity_and_update_refpose)
+
+    image_0_partly_seen = _views([[1, 1, 1], [0, 1, 1]])
+    rule, _ = check_feasiblity_and_update_refpose(image_0_partly_seen, 0)
+    assert _seed_reference_pose(image_0_partly_seen, 0, anchor_pose=None) == rule
+    assert rule != 0

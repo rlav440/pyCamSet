@@ -235,6 +235,10 @@ def _solve(params: dict, run_dir: Path, phase3_camset: Path,
     options.setdefault("ref_pose", 0)
     options.setdefault("outliers", "n")
     options.setdefault("max_nfev", 100)
+    # Phase 4 re-seeds from the Phase 3 cameras: place the same single-face
+    # images Phase 3 did, or they drop out of this solve.
+    options.setdefault("recover_single_face_telecentric",
+                       bool(phase3_options.get("recover_single_face_telecentric", False)))
     handler, optimisation, out_cams, stats = solve(
         previous_cams, previous_handler.target, previous_handler.detection,
         fixed_params=params.get("fixed_params"),

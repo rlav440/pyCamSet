@@ -202,8 +202,135 @@ def test_telecentric_cameras_are_drawn_at_a_fixed_distance_along_their_axis():
         assert np.allclose(-pose["R"].T @ pose["t"], centres[cam])
 
 
+@pytest.mark.gui
+def test_phase3_view_plays_the_recorded_steps_on_real_data(pinhole_run, monkeypatch):
+    """The real run in the view: every stage draws, the player walks the recorded states."""
+    _app()
+    from pyCamSet.gui import education_phase3
+    from pyCamSet.gui.education_scene3d import ScenePlayer
+    from test_education_copy_lint import _rules, learner_copy_findings, lint_copy
+    from test_education_phase3 import _available_derivation, _context
+
+    monkeypatch.setattr(education_phase3, "derive_phase3", lambda _c: _available_derivation())
+    context = _context(pinhole_run.run_dir.parent.parent, {
+        "params": {"record_education": True},
+        "artifacts": {"phase2_initial_camset_used": str(pinhole_run.phase2),
+                      "initial_state": str(pinhole_run.initial),
+                      "initial_state_sha256": hashlib.sha256(
+                          pinhole_run.initial.read_bytes()).hexdigest()},
+    })
+    context.artifact = lambda _phase=None: pinhole_run.phase3
+    view = education_phase3.Phase3View(context)
+    try:
+        assert view._visual is not None and view._visual.source == "recorded steps"
+        assert view.stage_keys() == ["graph", "first", "solver", "lens", "result"]
+        from pyCamSet.gui.education_style import text_collisions
+        for level in (1, 2, 3):
+            view.stage_view.set_level(level)
+            for key in view.stage_keys():
+                view.show_stage(key)
+                caption = view.stage_view.caption.text()
+                assert caption and learner_copy_findings(caption, level) == [], (key, level)
+                assert lint_copy(caption, "education_phase3.py", f"{key}.L{level}", _rules()) == []
+                assert view.stage_view.caption_issues == [], (key, level, caption)
+                if level == 1:
+                    assert caption.count(". ") <= 2, caption  # two short sentences (+ next step)
+                shown = view.stage_view.visual.currentWidget()
+                figure = (view._split.pane.figure if shown is view._split
+                          else view.stage_view.figure())
+                figure.set_size_inches(*((12.2, 5.6) if figure is view.stage_view.figure()
+                                         else (7.0, 5.6)))  # the 1280 x 800 dialog
+                figure.canvas.draw()  # as the dialog does before it is seen (layout settles)
+                issues = text_collisions(figure)
+                assert issues == [], (key, level, issues)
+        view.stage_view.set_level(3)
+        view.show_stage("solver")
+        player = view._player
+        assert isinstance(player, ScenePlayer)
+        assert len(player.frames) == len(view._visual.states)
+        titles = [ax.get_title(loc="left").split(chr(10))[0] for ax in view._split.pane.figure.axes]
+        assert "D  What the solver solves" in titles and "E  The camera system" in titles
+        player.go_to(len(player.frames) - 1, animate=False)
+        assert view._solver_state() == len(view._visual.states) - 1
+        # UX2-6: each camera leaves a trail that grows with the playback position.
+        assert {f"trail{i}" for i in range(view._visual.n_cameras)} <= set(view._scene.names())
+        view._grow_trails(0.5)  # must not raise (Scene3D.render is QWidget.render)
+        path = view._motion(view._motion_factor())["C"][:, 0]
+        assert np.allclose(view._scene._impl.items["trail0"]["verts"][-1],
+                           (path[0] + path[1]) / 2)
+        # The photo panel's dots sit at the saved result's predictions at the end.
+        photo = view._solver_artists["photo"]
+        observed = view._visual.rows_xy[photo["rows"]]
+        # (a few-pixel gap on a large photo is enlarged, labelled "gap ×N" in the subtitle)
+        expected = observed + photo["magnify"] * view._visual.final_residual_xy[photo["rows"]]
+        assert np.allclose(photo["dots"].get_offsets(), expected, atol=1e-4)
+        view.stage_view.set_level(2)
+        view.show_stage("solver")
+        bars = next(ax for ax in view._split.pane.figure.axes
+                    if ax.get_title(loc="left").startswith("D"))
+        heights = [patch.get_height() for patch in bars.patches]
+        assert np.allclose(heights, view._visual.states[-1].camera_mean_px)
+        chips = [chip.label for chip in view.stage_view.chips.chips()]
+        assert "steps recorded" in chips and "mean error" in chips
+    finally:
+        view.stop_for_context_change()
+        view.close()
 
 
+def test_fractional_playback_positions_move_panels_B_C_D_and_the_counter(pinhole_run, monkeypatch):
+    """UX3-6 / P3-1: a half-way frame updates the 2D panels, not only the 3D. Two different
+    fractions between the start and step 1 give different B titles, D bar heights and
+    counter text; a frame that comes sooner than the redraw interval is deferred, not dropped."""
+    _app()
+    from types import SimpleNamespace
+    from pyCamSet.gui import education_phase3
+    from test_education_phase3 import _available_derivation, _context
+
+    monkeypatch.setattr(education_phase3, "derive_phase3", lambda _c: _available_derivation())
+    context = _context(pinhole_run.run_dir.parent.parent, {
+        "params": {"record_education": True},
+        "artifacts": {"phase2_initial_camset_used": str(pinhole_run.phase2),
+                      "initial_state": str(pinhole_run.initial),
+                      "initial_state_sha256": hashlib.sha256(
+                          pinhole_run.initial.read_bytes()).hexdigest()},
+    })
+    context.artifact = lambda _phase=None: pinhole_run.phase3
+    view = education_phase3.Phase3View(context)
+    try:
+        view.stage_view.set_level(2)
+        view.show_stage("solver")
+        # Every frame counts as "enough time has passed", so each call draws at once.
+        view._cursor_clock = SimpleNamespace(elapsed=lambda: 10 ** 6, restart=lambda: None)
+
+        def subtitle(ax):
+            # es.panel_title keeps the subtitle as a text artist tagged "edu:subtitle".
+            return " ".join(t.get_text() for t in ax.texts if t.get_gid() == "edu:subtitle")
+
+        def panels(position):
+            view._on_solver_frame(position, None)
+            fig = view._split.pane.figure
+            b_ax = next(ax for ax in fig.axes if ax.get_title(loc="left").startswith("B"))
+            d_ax = next(ax for ax in fig.axes if ax.get_title(loc="left").startswith("D"))
+            heights = [patch.get_height() for patch in d_ax.patches]
+            return subtitle(b_ax), heights, subtitle(d_ax)
+
+        first = panels(0.3)
+        second = panels(0.7)
+        assert first[0] != second[0] and "between" in first[0] and "between" in second[0]
+        assert not np.allclose(first[1], second[1])
+        assert "between" in first[2]
+
+        # Deferred, not dropped: a fractional frame that arrives too soon is drawn later.
+        view._cursor_clock = SimpleNamespace(elapsed=lambda: 0, restart=lambda: None)
+        view._on_solver_frame(0.9, None)
+        assert view._pending_position == pytest.approx(0.9)
+        view._cursor_clock = SimpleNamespace(elapsed=lambda: 10 ** 6, restart=lambda: None)
+        view._draw_pending_position()
+        assert view._pending_position is None
+        assert not np.allclose(panels(0.9)[1], second[1])
+    finally:
+        view.stop_for_context_change()
+        view.close()
 
 
 # --- Round-1 review: one target in the rig, the photo view, the lens and agreement pictures ---

@@ -26,6 +26,7 @@ The guide's transferable constraints are applied here: data and chrome have sepa
 
 ## Export behavior
 
+- Education stages have a **Save figure** button in the stage header (PNG at the phase's export size; the ▾ menu holds Save SVG, Save PDF and the export size, sharing the card's presets). It saves the figure on screen at the current stage, level and step, named such as `phase4_stage4_L2`; a stage with a PyVista 3D panel also saves that render as `<name>_3d.png`, and the alt text is kept in the file's Description (PNG, SVG) or Subject (PDF) field.
 - Matplotlib cards offer Save PNG (camera icon), Save SVG and Save PDF (in the ▾ menu beside it, with the export size), and Save CSV. Vector formats are for Matplotlib line art; bitmap image artists remain raster-embedded. SVG/PDF use Matplotlib's vector backend and do not claim all artists become vector paths.
 - PNG card presets preserve the live figure size after export and compute exact rounded pixel dimensions from the selected width, original aspect ratio, and DPI. The Phase 1 detection montage and Assess Calibration batch now use generic width/DPI presets.
 - CSV is disabled on cards without an explicit source adapter, with a tooltip reason. CSV files begin with one JSON metadata comment, then a conventional CSV header and rows. Metadata identifies phase/run/diagnostic, data kind, units, and axes where known.

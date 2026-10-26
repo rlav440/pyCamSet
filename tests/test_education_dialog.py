@@ -660,6 +660,35 @@ def test_figure_card_provenance_is_part_of_accessible_description():
         card.deleteLater()
 
 
+@pytest.mark.gui
+def test_playback_shortcuts_are_shown_in_tooltips_and_documented(tmp_path, monkeypatch):
+    """F3 item 27: every playback chord is visible on its control and in the how-to."""
+    _application()
+    from pyCamSet.gui import education_preferences
+    from pyCamSet.gui.education_dialog import (
+        PLAYBACK_SHORTCUTS, RecordedStep, RecordedStepControls, shortcut_text,
+    )
+
+    monkeypatch.setattr(education_preferences, "preferences_path",
+                        lambda: tmp_path / "education_preferences.json")
+    controls = RecordedStepControls([RecordedStep(1, "a"), RecordedStep(2, "b")],
+                                    reduce_motion=False)
+    try:
+        for button, action in ((controls._previous, "previous"), (controls._next, "next"),
+                               (controls._play, "toggle")):
+            assert shortcut_text(action) in button.toolTip()
+        # The shortcut switch lives in the dialog header's Settings menu (UX-3).
+        from pyCamSet.gui.education_dialog import EducationDialog
+        dialog = EducationDialog([])
+        assert all(shortcut_text(action) in dialog._shortcuts_action.toolTip()
+                   for action in PLAYBACK_SHORTCUTS)
+        dialog.deleteLater()
+    finally:
+        controls.deleteLater()
+    guide = (Path(__file__).resolve().parents[1] / "docs" / "how-to" / "gui.md").read_text(
+        encoding="utf-8")
+    for chord in PLAYBACK_SHORTCUTS.values():
+        assert f"| {chord} |" in guide
 
 
 @pytest.mark.gui

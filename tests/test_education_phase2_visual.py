@@ -175,6 +175,57 @@ def _numbers(view):
     return headers, rows
 
 
+@pytest.mark.gui
+def test_every_stage_and_level_draws_a_figure_of_this_run(synthetic_run):
+    """Acceptance: each stage at each level shows a picture made from this run (never only
+    text), with a short caption, and the copy passes the learner-copy lint."""
+    _app()
+    from test_education_copy_lint import learner_copy_findings
+    from pyCamSet.gui import education_style as es
+    from pyCamSet.gui.education_phase2 import STAGES, Phase2View, _BoardScene
+
+    view = Phase2View(synthetic_run.context)
+    view.resize(1400, 900)
+    try:
+        assert [view.stage_view.stepper.stage_name(i) for i in range(5)] == list(STAGES)
+        assert view.camera_picker.count() == 2 and view.view_picker.count() > 0
+        captions: dict[int, list[str]] = {}
+        for level in (1, 2, 3):
+            view.stage_view.set_level(level)
+            captions[level] = []
+            for stage in range(5):
+                view.stage_view.set_current_stage(stage)
+                visual = view.stage_view.visual.currentWidget()
+                if stage == 1:
+                    assert isinstance(visual, _BoardScene)
+                    assert visual.scene.names(), "the 3D stage drew nothing"
+                    assert visual.side_figure.axes
+                    assert es.text_collisions(visual.side_figure) == [], (stage, level)
+                else:
+                    figure = view.stage_view.figure()
+                    assert visual is view.stage_view.canvas
+                    drawn = [ax for ax in figure.axes
+                             if ax.images or ax.collections or ax.lines or ax.patches]
+                    assert drawn, (stage, level)
+                    # Levels add panels: L2/L3 never draw fewer than L1.
+                    titled = [ax for ax in figure.axes if ax.get_title(loc="left").strip()]
+                    assert len(titled) >= {1: 2, 2: 2, 3: 3}[level] or stage == 0
+                    # UX-1: no text runs off the figure or over other text.
+                    assert es.text_collisions(figure) == [], (stage, level)
+                assert view.stage_view.caption_issues == [], (stage, level)
+                caption = view.stage_view.caption.text()
+                captions[level].append(caption)
+                assert caption and learner_copy_findings(caption, level) == [], caption
+                headers, _rows = _numbers(view)
+                assert not any(learner_copy_findings(h, 3) for h in headers), headers
+        # L1 captions are at most two sentences; levels only add to them.
+        for caption in captions[1]:
+            assert caption.count(". ") + caption.count("; ") <= 3, caption
+        for low, high in ((1, 2), (2, 3)):
+            assert all(high_text.startswith(low_text[:40])
+                       for low_text, high_text in zip(captions[low], captions[high]))
+    finally:
+        view.close()
 
 
 @pytest.mark.gui

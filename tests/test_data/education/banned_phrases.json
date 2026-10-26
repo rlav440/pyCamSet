@@ -1,0 +1,29 @@
+{
+  "schema": "pycamset.education-banned-phrases",
+  "version": 1,
+  "source_artifact": "A1-copy.md",
+  "source_sha256": "5b1b134ff5eb68ad107ae9a6956f87ac1b18b6f8852b7b083f5a6df947dff077",
+  "patterns": [
+    {"key": "physical_target_motion", "regex": "\\btarget\\s+(?:moved|deformed)\\b", "reason": "Use estimated-shape wording; do not claim physical motion."},
+    {"key": "physical_camera_motion", "regex": "\\bcameras?\\s+(?:moved|shifted)\\b", "reason": "A changed estimate is not physical camera movement."},
+    {"key": "solver_measurement", "regex": "\\b(?:measured|measurement)\\s+(?:camera|target|rig|solver|calibration)\\b", "reason": "Solver outputs are estimated or recalculated, not physical measurements."},
+    {"key": "near_zero_seed", "regex": "\\bnear-zero\\s+seed\\b", "reason": "State the actual seed metric with source and units."},
+    {"key": "promoted_pass", "regex": "\\bpromoted\\s+(?:pass|approved|successful)\\b", "reason": "Promoted runs require the full Optimisation-tab trial warning."},
+    {"key": "quality_check_omission", "regex": "\\bno\\s+quality\\s+check\\s+was\\s+run\\b", "reason": "Use the exact normal Phase N quality-check disposition."},
+    {"key": "gauge_anchor", "regex": "\\b(?:gauge-fixed\\s+points|reference\\s+points)\\b", "reason": "Do not describe gauge points as well-observed anchors."},
+    {"key": "printed_board_identity", "regex": "\\bprinted\\s+board\\s+(?:was|is|as)\\s+(?:the\\s+)?(?:phase|input|target)\\b", "reason": "Use the design entered or measurement-advice wording."},
+    {"key": "universal_detection", "regex": "\\bfound\\s+the\\s+board\\s+again\\s+in\\s+every\\s+image\\b", "reason": "State returned detections and counts; no universal guarantee."},
+    {"key": "rhetorical_setting", "regex": "\\bdespite\\s+the\\s+setting['’]s\\s+name\\b", "reason": "Describe observable behaviour and source, not rhetoric."},
+    {"key": "rig_distance_expectation", "regex": "\\bexpected\\s+(?:of|from)\\s+a\\s+rigid\\s+rig\\b", "reason": "A bare distance is not a physical expectation."},
+    {"key": "unsupported_detector_rejection", "regex": "\\b(?:detector|opencv|aruco)\\s+rejected\\s+(?:the\\s+)?(?:candidate|point|corner|board)\\b", "reason": "Only claim rejection when the run recorded that decision."},
+    {"key": "physical_scale_claim", "regex": "\\b(?:refit|gauge)\\s+scale\\s+(?:measures?|is)\\s+(?:the\\s+)?(?:printed\\s+)?board\\s+size\\b", "reason": "Display scale is not a board-size measurement."},
+    {"key": "phase2_pose_origin", "regex": "\\b(?:pose|camera|target)\\s+(?:was\\s+)?(?:estimated|derived|taken)\\s+from\\s+phase\\s+2\\b", "reason": "Phase 3 seed poses are built independently."},
+    {"key": "shape_only_attribution", "regex": "\\b(?:all|the\\s+whole)\\s+(?:error|fit)\\s+(?:drop|change)\\s+(?:is|was)\\s+(?:due|because)\\s+to\\s+(?:the\\s+)?shape\\b", "reason": "State objective/loss and other changed settings."},
+    {"key": "better_calibration_claim", "regex": "\\b(?:improved|better)\\s+calibration\\b", "reason": "A lower cost/error alone does not prove a better calibration."},
+    {"key": "phase4_outlier_claim", "regex": "\\bphase\\s+4\\b.{0,50}\\boutlier\\s+rejection\\s+(?:acts|runs|is\\s+applied)\\b", "reason": "The Phase 4 outliers option has no effect in the solve."},
+    {"key": "time_or_motion_claim", "regex": "\\b(?:over\\s+time|camera\\s+motion|target\\s+deformation)\\b", "reason": "Playback is accepted solver steps, not physical motion or a continuous trajectory."},
+    {"key": "rotation_only_agreement", "regex": "\\b(?:cameras?\\s+agree|yes,?\\s+the\\s+cameras?\\s+agree)\\b.{0,80}\\brotation\\b", "reason": "Rotation scatter alone cannot answer the position agreement question."},
+    {"key": "unsupported_photo_mismatch", "regex": "\\bno\\s+longer\\s+matches\\b", "reason": "Use only when the detector-list comparison proves a mismatch.", "requires_evidence": "detector_list_comparison"},
+    {"key": "mixed_phase_objective", "regex": "\\bphase\\s+3\\s+(?:and|vs\\.?|versus)\\s+phase\\s+4\\s+(?:costs?|objectives?)\\b.{0,80}\\b(?:same|comparable|directly\\s+compare)\\b", "reason": "Phase objectives with different losses are not comparable."}
+  ]
+}

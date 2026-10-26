@@ -607,6 +607,42 @@ def test_choose_view_separates_cameras_and_keeps_selected_unblocked():
     assert not np.any(near & (centres @ d > centres[1] @ d))
 
 
+@pytest.mark.gui
+def test_fit_view_frames_everything_with_badges_inside_and_axis_lines_to_target():
+    import sys
+    from pathlib import Path
+    from pyCamSet.gui.education_scene3d import Scene3D, camera_centre
+    app = _app()
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "edu_release"))
+    from foundation_gallery import cube_points, ring_rig
+    scene = Scene3D(theme="Dark")
+    scene.resize(900, 600)
+    scene.show()
+    _settle(app)
+    for k, (R, t) in enumerate(ring_rig()):
+        scene.add_camera(f"cam{k}", k, R, t, scale=0.24, telecentric=k % 2 == 1,
+                         label=f"({0.3 + k / 10:.2f})")
+    pts = cube_points()
+    scene.add_points(pts, np.linspace(0.2, 30, len(pts)), name="target", scalar_bar="px",
+                     log_scale=True, clim=(0.1, 100))
+    scene.fit_view(selected=5)
+    scene.figure.canvas.draw()
+    positions = scene.badge_positions()
+    assert sorted(positions) == [f"cam{k}" for k in range(8)]       # every camera badged
+    box = scene._impl.ax.bbox
+    for x, y in positions.values():
+        assert box.x0 <= x <= box.x1 and box.y0 <= y <= box.y1
+    values = np.array(list(positions.values()))
+    gaps = [np.hypot(*(values[i] - values[j])) for i in range(8) for j in range(i + 1, 8)]
+    assert min(gaps) > 15
+    # Viewing-direction lines end level with the target centre.
+    item = scene._impl.items["cam3"]
+    seg = np.asarray(item["axis"]._segments3d[0])  # get_segments() is 2D after a draw
+    R, t = item["pose"]
+    assert np.isclose((np.zeros(3) - camera_centre(R, t)) @ R[2],
+                      np.linalg.norm(seg[1] - seg[0]), rtol=1e-6)
+    assert scene._impl.badges.entries["cam5"]["highlight"] is True
+    assert scene._impl.items["cam0"]["badge"].get_text() == "1"
 
 
 @pytest.mark.gui
@@ -1280,3 +1316,16 @@ def test_trail_arrowhead_and_ghost_stay_small():
     assert len(bare[2]) == len(full[2]) - 4
 
 
+def test_visual_content_grid_and_blank_rectangle():
+    """UX3-5: the screenshot tool's drawn-content estimate and its largest blank area."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "edu_release"))
+    import edu_screenshots as shots
+    rgb = np.full((160, 320, 3), 255, np.uint8)
+    rgb[10:60, 10:120] = 0                       # one chart top-left
+    grid = shots.content_grid(rgb, (255, 255, 255), 16)
+    assert grid.shape == (10, 20) and grid[0, 0] and not grid[-1, -1]
+    area, r, c, h, w = shots._largest_empty_rectangle(~grid)
+    assert area == h * w and area / grid.size > shots.EMPTY_AREA_LIMIT
+    assert not grid[r:r + h, c:c + w].any()

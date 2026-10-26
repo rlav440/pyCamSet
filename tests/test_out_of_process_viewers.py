@@ -129,6 +129,54 @@ def test_finished_viewers_are_not_left_behind(monkeypatch, tmp_path):
     assert viewer_process._VIEWER_PROCESSES == []
 
 
+def test_the_blocking_renderer_reports_the_childs_own_words(monkeypatch):
+    """run_viewer hands back stderr, not an exception, when the child fails.
+
+    Export hand-off draws through this path; a crash inside the renderer has
+    to reach the caller as a message, because a raise inside the Qt slot is
+    exactly the failure surface this module exists to avoid.
+    """
+    def _fail(command, capture_output, text, timeout):
+        return subprocess.CompletedProcess(
+            command, 3, stdout="partial output", stderr="renderer exploded")
+
+    monkeypatch.setattr(viewer_process.subprocess, "run", _fail)
+
+    ok, detail = viewer_process.run_viewer(
+        "pyCamSet.utils.visualise_camset", ["run.camset"])
+
+    assert ok is False
+    assert "renderer exploded" in detail
+
+
+def test_the_blocking_renderer_reports_its_timeout(monkeypatch):
+    """A renderer that never finishes is reported, never waited on forever."""
+    def _hang(command, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd=command, timeout=timeout)
+
+    monkeypatch.setattr(viewer_process.subprocess, "run", _hang)
+
+    ok, detail = viewer_process.run_viewer(
+        "pyCamSet.utils.visualise_camset", ["run.camset"], timeout=9.0)
+
+    assert ok is False
+    assert "9s" in detail
+
+
+def test_the_blocking_renderer_hands_back_the_childs_stdout(monkeypatch):
+    """A successful file-producing run passes the child's report through."""
+    def _finish(command, capture_output, text, timeout):
+        return subprocess.CompletedProcess(command, 0, stdout=" wrote 4 figures\n")
+
+    monkeypatch.setattr(viewer_process.subprocess, "run", _finish)
+
+    ok, detail = viewer_process.run_viewer(
+        "pyCamSet.utils.visualise_camset", ["run.camset"])
+
+    assert ok is True
+    assert detail == "wrote 4 figures"
+
+
 @pytest.mark.data
 # The one test in this file that draws rather than checking that something
 # else does not: it runs the viewer's main in process, on purpose, and the

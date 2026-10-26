@@ -125,3 +125,13 @@ print("```")
 The cost function operates over an unrolled representation of the object
 geometry, of the form `(i, x, 3)`, where `i` is the number of images, `x` is the
 number of unrolled keys, and 3 is the world coordinate.
+
+!!! note "Teach it in the education mode"
+
+    Phases 3 and 4 show the loss and the solver. `loss_settings_from_options`
+    (`pyCamSet/workflow/education_trace.py`) reads the saved loss, and
+    `pyCamSet/workflow/education_playback.py` records the steps. `_objective_header`
+    (`pyCamSet/gui/education_phase3.py`) and `cost_column_title`
+    (`pyCamSet/gui/education_phase4.py`) word the objective. Add a `loss` or `solver`
+    entry to `pyCamSet/workflow/education_coverage.py`, then run
+    `python -m pytest -k education -q`.

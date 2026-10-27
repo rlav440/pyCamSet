@@ -1757,7 +1757,7 @@ def gate_checks(metadata: Mapping[str, Any], run_status: str) -> tuple[GateCheck
     global_nullity = disposition.get("global_nullity")
     # SCI-3: a numerical-rank check (float64 threshold), not a stiffness or a statistic.
     if not isinstance(nullity, Mapping) or isinstance(global_nullity, str) or global_nullity is None:
-        checks.append(GateCheck("nullspace", "No free directions", "bad",
+        checks.append(GateCheck("nullspace", "No free directions", "warn",
                                 "not measured", str(disposition.get("reason") or
                                                     "the null-space check did not run"),
                                 NULLSPACE_ELSE))

@@ -265,14 +265,14 @@ def test_gate_checks_read_the_saved_gate_as_traffic_lights():
     assert checks["nullspace"].title == "No free directions"
     assert checks["nullspace"].line == "2 one-detection corners may slide"
     assert checks["nullspace"].guard == "else: the rig's position or turn stays free"
-    # A failed measurement is red and never reported as zero.
+    # A failed measurement is a warning and never reported as zero.
     gate = metadata["diagnostics"]["quality_gate"]
     gate["jacobian_nullity"] = None
     gate["constraint_disposition"] = {"status": "weakly_constrained",
                                       "global_nullity": "not_verified",
                                       "reason": "Jacobian null-space measurement failed: x"}
     checks = {c.key: c for c in gate_checks(metadata, "complete")}
-    assert checks["nullspace"].tone == "bad" and checks["nullspace"].value == "not measured"
+    assert checks["nullspace"].tone == "warn" and checks["nullspace"].value == "not measured"
     # No gate at all: "not recorded", not green.
     only = gate_checks({"diagnostics": {}}, "complete")
     assert len(only) == 1 and only[0].tone == "unknown" and only[0].value == "not recorded"

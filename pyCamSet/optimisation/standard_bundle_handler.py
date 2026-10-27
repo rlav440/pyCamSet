@@ -293,14 +293,9 @@ class SelfBundleHandler(TemplateBundleHandler):
             self.gauge_axis = gauge_axis_for_indices(
                 self.flat_point_data.reshape((-1, 3)), self.fixed_inds)
         else:
-            counts = np.bincount(seen_keys, minlength=n_points)
-            # A point seen once has no measured position to hold the gauge; fall back
-            # to every visible point when fewer than three were seen more than once.
-            candidates = np.flatnonzero(counts >= 2)
-            if len(candidates) < 3:
-                candidates = np.flatnonzero(self.visible_feature_mask)
             self.fixed_inds, self.gauge_axis = find_gauge_points(
-                self.flat_point_data.reshape((-1, 3)), candidates=candidates)
+                self.flat_point_data.reshape((-1, 3)),
+                candidates=np.flatnonzero(self.visible_feature_mask))
         i0, i1, i2 = self.fixed_inds
         self.feat_unfixed[3*i0:3*i0+3] = False
         self.feat_unfixed[3*i1:3*i1+3] = False
